@@ -1,0 +1,182 @@
+% Shorthand command for upright sans-serif terms in math mode
+\newcommand{\T}[1]{\ensuremath{\mathsf{#1}}}
+\newcommand{\mi}[1]{\ensuremath{\mathit{#1}}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Basic math
+
+% Numeric domains
+\newcommand{\N}{\ensuremath{\mathbb{N}}}
+\newcommand{\Npos}{\ensuremath{\mathbb{N}^{+}}}
+\newcommand{\Z}{\ensuremath{\mathbb{Z}}}
+\newcommand{\R}{\ensuremath{\mathbb{R}}}
+\newcommand{\Rnn}{\ensuremath{\mathbb{R}^{\geq 0}}}
+
+% Intervals
+\newcommand{\unitInterval}{\ensuremath{[0,~1]}}
+\newcommand{\unitIntervalNonNull}{\ensuremath{(0,~1]}}
+\newcommand{\nonnegReals}{\ensuremath{[0,~\infty)}}
+\newcommand{\posReals}{\ensuremath{(0,~\infty)}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Primitive types
+\newcommand{\Bool}{\T{Bool}}
+\newcommand{\True}{\T{True}}
+\newcommand{\False}{\T{False}}
+%
+\newcommand{\Integer}{\T{Integer}}
+%
+\newcommand{\Nothing}{\ensuremath{\Diamond}}
+%
+\newcommand{\ByteString}{\T{ByteString}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Container types
+\newcommand{\List}[1]{\T{List}[#1]}
+\newcommand{\Map}[1]{\T{Map}[#1]}
+\newcommand{\Maybe}[1]{\T{Maybe}\,#1}
+\newcommand{\Set}[1]{\T{Set}[#1]}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Cardano ledger types
+
+
+% Transaction
+\newcommand{\Tx}{\T{Tx}}
+\newcommand{\TxBody}{\T{TxBody}}
+\newcommand{\TxWitness}{\T{TxWitness}}
+\newcommand{\Metadata}{\T{Metadata}}
+\newcommand{\AuxiliaryData}{\T{AuxiliaryData}}
+\newcommand{\IsValid}{\T{IsValid}}
+
+% Transaction info and body
+\newcommand{\TxId}{\T{TxId}}
+\newcommand{\TxInfo}{\T{TxInfo}}
+\newcommand{\TxIn}{\T{TxIn}}
+\newcommand{\Ix}{\T{Ix}}
+\newcommand{\DCert}{\T{DCert}}
+\newcommand{\ValidityInterval}{\T{ValidityInterval}}
+\newcommand{\Wdrl}{\T{Wdrl}}
+\newcommand{\ScriptIntegrityHash}{\T{ScriptIntegrityHash}}
+\newcommand{\AuxiliaryDataHash}{\T{AuxiliaryDataHash}}
+\newcommand{\Network}{\T{Network}}
+\newcommand{\Update}{\T{Update}}
+
+% Transaction witnesses
+\newcommand{\Script}{\T{Script}}
+\newcommand{\ScriptHash}{\T{ScriptHash}}
+\newcommand{\Datum}{\T{Datum}}
+\newcommand{\DatumHash}{\T{DatumHash}}
+\newcommand{\Rdmrs}{\T{Rdmrs}}
+\newcommand{\Redeemer}{\T{Redeemer}}
+\newcommand{\RdmrPtr}{\T{RdmrPtr}}
+
+% Utxo
+\newcommand{\UTxO}{\T{Utxo}}
+\newcommand{\Utxo}{\T{Utxo}}
+\newcommand{\TxOut}{\T{TxOut}}
+\newcommand{\Output}{\T{Output}}
+\newcommand{\OutputRef}{\T{OutputRef}}
+\newcommand{\OutRef}{\T{OutRef}}
+
+% Address and network ID
+\newcommand{\Addr}{\T{Addr}}
+\newcommand{\NetworkId}{\T{NetworkId}}
+\newcommand{\PaymentCredential}{\T{Credential}_\T{pay}}
+\newcommand{\StakeCredential}{\T{Credential}_\T{stake}}
+\newcommand{\RewardAcnt}{\T{RewardAcnt}}
+
+% Value
+\newcommand{\Coin}{\T{Coin}}
+\newcommand{\Value}{\T{Value}}
+\newcommand{\AssetId}{\T{AssetId}}
+\newcommand{\PolicyId}{\T{PolicyId}}
+\newcommand{\AssetName}{\T{AssetName}}
+\newcommand{\Quantity}{\T{Quantity}}
+
+
+% Cryptographic primitives
+\newcommand{\Credential}{\T{Credential}}
+\newcommand{\Tag}{\T{Tag}}
+\newcommand{\Signature}{\T{Sig}}
+\newcommand{\Sig}{\T{Sig}}
+\newcommand{\MSig}{\T{MSig}}
+%
+\newcommand{\SKey}{\T{SKey}}
+\newcommand{\VKey}{\T{VKey}}
+\newcommand{\KeyHash}{\T{KeyHash}}
+\newcommand{\PublicKey}{\T{PubKey}}
+\newcommand{\PublicKeyHash}{\T{PubKeyHash}}
+%
+\newcommand{\KeyHashGen}{\T{KeyHash_G}}
+\newcommand{\KeyPair}{\T{KeyPair}}
+\newcommand{\KeyPairEv}{\T{KeyPair_{ev}}}
+\newcommand{\Seed}{\T{Seed}}
+
+% Time and slots
+\newcommand{\Block}{\T{Block}}
+\newcommand{\Slot}{\T{Slot}}
+\newcommand{\SlotId}{\T{SlotId}}
+%
+\newcommand{\SystemStart}{\T{SystemStart}}
+\newcommand{\UTCTime}{\T{UTCTime}}
+\newcommand{\Duration}{\T{Duration}}
+%
+\newcommand{\Epoch}{\T{Epoch}}
+\newcommand{\EpochInfo}{\T{EpochInfo}}
+
+% Plutus
+\newcommand{\ScriptPlutus}{\T{Script}_{uplc}}
+\newcommand{\ScriptPhOne}{\T{Script^{ph1}}}
+\newcommand{\ScriptPhTwo}{\T{Script^{ph2}}}
+\newcommand{\ScriptPurpose}{\T{ScriptPurpose}}
+\newcommand{\ExUnits}{\T{ExUnits}}
+\newcommand{\CostMod}{\T{CostModel}}
+\newcommand{\Data}{\T{Data}}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Functions
+\newcommand{\txins}{\T{\txins}}
+\newcommand{\txouts}{\T{\txouts}}
+\newcommand{\txcerts}{\T{\txcerts}}
+\newcommand{\txid}{\T{\txid}}
+\newcommand{\outs}{\T{\outs}}
+\newcommand{\values}{\T{\values}}
+\newcommand{\ubalance}{\T{\ubalance}}
+\newcommand{\txttl}{\T{\txttl}}
+\newcommand{\firstSlot}{\T{\firstSlot}}
+\newcommand{\deposited}{\T{\deposited}}
+\newcommand{\decayedKey}{\T{\decayedKey}}
+\newcommand{\decayedTx}{\T{\decayedTx}}
+\newcommand{\keyRefund}{\T{\keyRefund}}
+\newcommand{\refund}{\T{\refund}}
+\newcommand{\keyRefunds}{\T{\keyRefunds}}
+\newcommand{\consumed}{\T{\consumed}}
+\newcommand{\produced}{\T{\produced}}
+\newcommand{\applyFun}{\T{\applyFun}}
+%
+\newcommand{\inputs}{\T{\inputs}}
+\newcommand{\txwits}{\T{\txwits}}
+\newcommand{\verify}{\T{\verify}}
+\newcommand{\sign}{\T{\sign}}
+\newcommand{\verifyEv}{\T{\verifyEv}}
+\newcommand{\signEv}{\T{\signEv}}
+\newcommand{\serialised}{\T{\serialised}}
+\newcommand{\hashKey}{\T{\hashKey}}
+\newcommand{\txbody}{\T{\txbody}}
+\newcommand{\txfee}{\T{\txfee}}
+\newcommand{\txwdrls}{\T{\txwdrls}}
+\newcommand{\minfee}{\T{\minfee}}
+\newcommand{\slotminus}{\T{\slotminus}}
+% 
+\newcommand{\lookupTx}{\T{lookupTx}}
+\newcommand{\paymentCredential}{\T{paymentCredential}}
+\newcommand{\hashBlake}{\T{blake2b\_256}}
+
+% Floor brackets
+\DeclarePairedDelimiter\floor{\lfloor}{\rfloor}
+
+% Wildcard parameter (underscore)
+\newcommand{\wcard}[0]{\underline{\phantom{a}}}
+

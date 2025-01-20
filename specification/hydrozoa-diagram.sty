@@ -1,0 +1,27 @@
+\usepackage{tikz}
+\usetikzlibrary{arrows, calc, positioning, shapes, arrows.meta}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% State diagrams
+\tikzstyle{state} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm,text centered, draw=black, fill=gray!20]
+\tikzstyle{initialstate} = [state, fill=orange!30]
+\tikzstyle{finalstate} = [state, fill=blue!20]
+
+\tikzstyle{alphastate} = [circle, fill=gray!130, draw=gray!130]
+\tikzstyle{omegastate} = [circle, fill=gray!130, draw=gray!130, double distance=1.5pt, very thick]
+
+\tikzstyle{invisible} = [draw=none]
+
+\tikzstyle{arrow} = [thick,->,>=stealth]
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Merkle tree diagrams
+
+\tikzstyle{merklenode} = [fill=gray!20, draw, thick, rounded corners, align=center, font=\sffamily\small]
+
+\tikzstyle{merkleroot} = [merklenode, fill=purple!30]
+
+\tikzstyle{merkleleaf} = [merklenode, fill=green!20]
+
+\tikzstyle{merkledata} = [merklenode, fill=white]

@@ -1,6 +1,7 @@
-dist
-dist-*
-cabal-dev
+# Haskell
+dist/
+dist-*/
+cabal-dev/
 *.o
 *.hi
 *.hie
@@ -21,3 +22,10 @@ cabal.project.local
 cabal.project.local~
 .HTF/
 .ghc.environment.*
+
+# Direnv
+.direnv
+
+# Aiken
+build/
+artifacts

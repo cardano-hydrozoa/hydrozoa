@@ -1,0 +1,153 @@
+\documentclass[../hydrozoa.tex]{subfiles}
+\graphicspath{{\subfix{../images/}}}
+\begin{document}
+
+\section{Rule-based regime}%
+\label{h:rule-based-regime}%
+\newcommand{\disputeTokenNum}[0]{3477}
+If the peers stop responding to each other in the offchain consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed snapshot.
+It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when offchain consensus breaks down.
+
+In the rule-based regime, the Hydrozoa head's treasury is managed by a suite of Plutus scripts:
+\begin{itemize}
+  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest offchain snapshot confirmed by the offchain consensus protocol before it stalled.
+  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved snapshot.
+\end{itemize}
+
+The rule-based regime does not manage any unabsorbed deposits left over from the multisig regime.
+Depositors can retrieve them with post-dated refund transactions (\cref{h:multisig-refund}) from the multisig regime.
+
+\subsection{Utxo state}%
+\label{h:rule-based-utxo-state}
+
+\subsubsection{Treasury state}%
+\label{h:rule-based-treasury-state}
+In the rule-based regime, the head's treasury utxo is at the head's Plutus-based treasury address (\cref{h:rule-based-treasury}).
+It holds the head's beacon token and all treasury funds from the multisig regime (\cref{h:multisig-utxo-state}).
+
+The treasury utxo must have the following datum type, which defines its unresolved and resolved states in the rule-based regime:
+\begin{equation*}
+\begin{split}
+  \T{RuleBasedTreasuryDatum} \coloneq&\;
+    \T{Resolved} \; \T{ResolvedDatum} \\\mid&\;
+    \T{Unresolved} \; \T{UnresolvedDatum} \\
+  \T{ResolvedDatum} \coloneq&\;\left\{
+    \begin{array}{lll}
+      \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+      \T{version} &::& (\T{Int}, \T{Int}) \\
+      \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
+    \end{array}\right\} \\
+  \T{UnresolvedDatum} \coloneq&\;\left\{
+    \begin{array}{lll}
+      \T{disputeId} &::& \T{AssetName} \\
+      \T{nPeers} &::& \T{Int} \\
+      \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
+    \end{array}\right\}
+\end{split}
+\end{equation*}
+
+The resolved treasury's datum is the same as the multisig treasury's datum, except that the single-integer \code{majorVersion} field is replaced by the full \code{version} field, which includes both the major and minor version numbers of the resolved snapshot.
+
+The unresolved treasury's datum fields are interpreted as follows:
+\begin{description}
+  \item[dispute ID.] A unique identifier used as the asset name of the dispute tokens (\cref{h:rule-based-dispute-resolution-state}).
+  \item[n peers.] The number of peers in the head, each of which gets a single vote in the dispute.
+  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's offchain consensus parameters (\cref{h:offchain-consensus-protocol}).
+\end{description}
+
+\subsubsection{Dispute resolution state}%
+\label{h:rule-based-dispute-resolution-state}
+Besides the treasury utxo, the head's state in the rule-based regime also includes the dispute resolution utxos.
+Each of these utxos is at the head's Plutus-based dispute resolution address and holds one or more of the dispute's fungible tokens:
+\begin{itemize}
+  \item The policy ID corresponds to the head's native script (in minting policy form) (\cref{h:multisig-regime}).
+  \item The first four bytes of the asset name are equal to the CIP-67
+    \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
+    prefix for class label \inlineColored{\disputeTokenNum}, which corresponds to Hydrozoa head dispute tokens.%
+    \footnote{We chose \inlineColored{\disputeTokenNum} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
+  \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:rule-based-transition}).
+\end{itemize}
+
+Each dispute resolution utxo has the following datum type:
+\begin{equation*}
+\begin{split}
+  \T{DisputeResolutionDatum} &\coloneq \left\{
+    \begin{array}{lll}
+      \T{key}  &::& \T{Word64} \\
+      \T{link} &::& \T{Word64} \\
+      \T{deadline} &::& \T{PosixTime} \\
+      \T{peer} &::& \T{Maybe} \; \T{PubKeyHash} \\
+      \T{vote} &::& \T{Maybe} \; \T{Vote}
+    \end{array}\right\}\\
+  \T{Vote} &\coloneq \left\{
+    \begin{array}{lll}
+      \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+      \T{version} &::& (\T{Int}, \T{Int})
+    \end{array}\right\}
+\end{split}
+\end{equation*}
+
+These fields are interpreted as follows:
+\begin{description}
+  \item[key.] An unsigned integer, represented by a 64-bit word, that uniquely identifies the dispute resolution utxo.
+  \item[link.] An unsigned integer, represented by a 64-bit word, that uniquely references another dispute resolution utxo by its \code{key}.
+  \item[deadline.] The deadline for the dispute to be resolved. Votes must be cast before this POSIX time.
+  \item[peer.] Optionally, the public-key hash of the peer who can cast the vote in this utxo. It is only empty for the dispute resolution utxo (with \code{key} 0) that contains the default vote, which is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
+  \item[vote.] Optionally, the peer's vote.
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the snapshot voted by the peer.
+  \item[version.] The full version of the snapshot voted by the peer.
+\end{description}
+
+Collectively, the dispute resolution utxos constitute a shrinking linked list (\cref{h:shrinking-linked-list}).
+The voting process and list transitions are managed by the Plutus-based dispute resolution scripts (\cref{h:rule-based-dispute-resolution}).
+
+\subsection{Transition to rule-based regime}%
+\label{h:rule-based-transition}
+
+% TODO Init. Move treasury to plutus script and init shrinking list for dispute.
+
+\subsection{Dispute resolution}%
+\label{h:rule-based-dispute-resolution}
+
+% TODO Dispute resolution
+
+% TODO - Vote
+% Vote before the voting deadline.
+
+% TODO - Tally
+% Remove a node if both it and its parent contain a vote, or if the transaction validity starts at or after the voting deadline.
+
+% TODO - Resolve
+% Remove the singleton node if the treasury utxo is also spent.
+
+% TODO - Cleanup
+% Deinitialize the shrinking list, which requires all list tokens to be burned.
+
+% TODO - Multisig override
+% Do whatever you want if the transaction is multi-signed by all peers.
+
+\subsection{Treasury}%
+\label{h:rule-based-treasury}
+
+% TODO Treasury
+
+% TODO - Resolve
+% Compare the full version number between the treasury datum and the singleton node from dispute resolution:
+%   - if the singleton node's version is greater, update the treasury datum to its version number and active_utxo field.
+%   - otherwise, keep the treasury datum unchanged.
+
+% TODO - Withdraw
+% - Spend the treasury utxo.
+% - Output an updated treasury utxo.
+% - Output a withdrawal.
+% - Prove that the new treasury's active_utxo results from
+%   removing the withdrawn utxo from the old treasury's active_utxo.
+
+% TODO - Deinit
+% - Spend the treasury utxo.
+% - Prove that the treasury's active_utxo is empty.
+
+% TODO - Multisig override
+% Do whatever you want if the transaction is multi-signed by all peers.
+
+\end{document}

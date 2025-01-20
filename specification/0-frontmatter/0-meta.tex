@@ -1,0 +1,29 @@
+\newcommand{\hydrozoatitle}{Hydrozoa: Lightweight state channels for Cardano}
+\newcommand{\hydrozoacovertitle}{Hydrozoa: Lightweight state channels for Cardano\par}
+
+% \newcommand{\hydrozoaversion}{1.0}
+
+
+\newcommand{\hydrozoaauthors}[4]{
+    \begin{contributors}{#1}{#2}{#3}{#4}
+        \contributor{George Flerovsky}{}
+    \end{contributors}
+}
+
+% \newcommand{\hydrozoacontributors}[4]{
+%    \begin{contributors}{#1}{#2}{#3}{#4}
+%    \end{contributors}
+% }
+
+\hypersetup{
+  pdftitle={\hydrozoatitle~(DRAFT~\today)},
+  pdfauthor={George Flerovsky},
+  pdfpublisher={George Flerovsky},
+  pdfsubject={Cardano blockchain Layer 2 scaling},
+  pdfkeywords={Cardano blockchain L2 scaling Hydrozoa state channel Hydra},
+}
+
+\ifthenelse{\isundefined{\hydrozoaversion}}{}{\hypersetup{
+  pdftitle={\hydrozoatitle~(v\hydrozoaversion)},
+  pdfversionid = {\hydrozoaversion}
+}}
