@@ -4,7 +4,6 @@
 
 \section{Rule-based regime}%
 \label{h:rule-based-regime}%
-\newcommand{\disputeTokenNum}[0]{3477}
 If the peers stop responding to each other in the offchain consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed snapshot.
 It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when offchain consensus breaks down.
 
@@ -20,27 +19,30 @@ Depositors can retrieve them with post-dated refund transactions (\cref{h:multis
 \subsection{Utxo state}%
 \label{h:rule-based-utxo-state}
 
-\subsubsection{Treasury state}%
-\label{h:rule-based-treasury-state}
+\subsubsection{Treasury state}
+
 In the rule-based regime, the head's treasury utxo is at the head's Plutus-based treasury address (\cref{h:rule-based-treasury}).
 It holds the head's beacon token and all treasury funds from the multisig regime (\cref{h:multisig-utxo-state}).
 
 The treasury utxo must have the following datum type, which defines its unresolved and resolved states in the rule-based regime:
 \begin{equation*}
 \begin{split}
-  \T{RuleBasedTreasuryDatum} \coloneq&\;
-    \T{Resolved} \; \T{ResolvedDatum} \\\mid&\;
+  \T{RuleBasedTreasuryDatum} &\coloneq\;
+    \T{Resolved} \; \T{ResolvedDatum} \mid
     \T{Unresolved} \; \T{UnresolvedDatum} \\
-  \T{ResolvedDatum} \coloneq&\;\left\{
+  \T{ResolvedDatum} &\coloneq\;\left\{
     \begin{array}{lll}
       \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
       \T{version} &::& (\T{Int}, \T{Int}) \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\} \\
-  \T{UnresolvedDatum} \coloneq&\;\left\{
+  \T{UnresolvedDatum} &\coloneq\;\left\{
     \begin{array}{lll}
       \T{disputeId} &::& \T{AssetName} \\
+      \T{peers} &::& \T{[VerificationKey]} \\
       \T{nPeers} &::& \T{Int} \\
+      \T{votingDeadline} &::& \T{PosixTime} \\
+      \T{majorVersion} &::& \T{Int} \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\}
 \end{split}
@@ -50,52 +52,53 @@ The resolved treasury's datum is the same as the multisig treasury's datum, exce
 
 The unresolved treasury's datum fields are interpreted as follows:
 \begin{description}
-  \item[dispute ID.] A unique identifier used as the asset name of the dispute tokens (\cref{h:rule-based-dispute-resolution-state}).
-  \item[n peers.] The number of peers in the head, each of which gets a single vote in the dispute.
+  \item[dispute ID.] The unique identifier used as the asset name of the dispute tokens (see below).
+  \item[peers.] The peers' public keys.
+  \item[n peers.] The number of peers in the head.
+  \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
+  \item[major version.] The treasury's major version when it transitioned to the rule-based regime.
   \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's offchain consensus parameters (\cref{h:offchain-consensus-protocol}).
 \end{description}
 
-\subsubsection{Dispute resolution state}%
-\label{h:rule-based-dispute-resolution-state}
-Besides the treasury utxo, the head's state in the rule-based regime also includes the vote utxos for dispute resolution.
-Each of these utxos is at the head's Plutus-based dispute resolution address and holds one or more of the dispute's fungible tokens:
+\subsubsection{Dispute state}
+
+Besides the treasury utxo, the head's state in the rule-based regime also includes the vote utxos for the dispute.
+Each of these utxos is at the head's Plutus-based dispute address and holds one or more of the dispute's fungible tokens:
 \begin{itemize}
   \item The policy ID corresponds to the head's native script (in minting policy form) (\cref{h:multisig-regime}).
   \item The first four bytes of the asset name are equal to the CIP-67
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
-    prefix for class label \inlineColored{\disputeTokenNum}, which corresponds to Hydrozoa head dispute tokens.%
-    \footnote{We chose \inlineColored{\disputeTokenNum} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
+    prefix for class label \inlineColored{3477}, which corresponds to Hydrozoa head dispute tokens.%
+    \footnote{We chose \inlineColored{3477} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
   \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:rule-based-transition}).
 \end{itemize}
 
-Each vote utxo has the following datum type:
+Each vote utxo has this datum type:
 \begin{equation*}
 \begin{split}
   \T{VoteDatum} &\coloneq \left\{
     \begin{array}{lll}
-      \T{key}  &::& \T{Word64} \\
-      \T{link} &::& \T{Word64} \\
-      \T{deadline} &::& \T{PosixTime} \\
+      \T{key}  &::& \T{Int} \\
+      \T{link} &::& \T{Int} \\
       \T{peer} &::& \T{Maybe} \; \T{PubKeyHash} \\
       \T{vote} &::& \T{Maybe} \; \T{Vote}
     \end{array}\right\}\\
   \T{Vote} &\coloneq \left\{
     \begin{array}{lll}
       \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
-      \T{version} &::& (\T{Int}, \T{Int})
+      \T{minorVersion} &::& \T{Int}
     \end{array}\right\}
 \end{split}
 \end{equation*}
 
 These fields are interpreted as follows:
 \begin{description}
-  \item[key.] An unsigned integer, represented by a 64-bit word, that uniquely identifies the vote utxo.
-  \item[link.] An unsigned integer, represented by a 64-bit word, that uniquely references another vote utxo by its \code{key}.
-  \item[deadline.] A POSIX time before which votes can be cast in the dispute.
+  \item[key.] An integer that uniquely identifies the vote utxo.
+  \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
   \item[vote.] The vote (if any) cast in this vote utxo.
   \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the snapshot voted by the peer.
-  \item[version.] The full version of the snapshot voted by the peer.
+  \item[minor version.] The minor version of the minor snapshot voted by the peer. This snapshot's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
 
 Collectively, the vote utxos constitute a linked list data structure onchain.
@@ -112,53 +115,43 @@ In that case, every peer should trigger the transition to the rule-based regime 
 The transaction body is as follows:
 \begin{enumerate}
   \item Spend the multisig treasury utxo (\code{multisigTreasury}).
+    Let \code{mt} be its datum.
   \item Let \code{headMp} be the head's native script minting policy.
-  \item Let \code{peersList} be a list of the peers' public-key hashes.
-  \item Let \code{deadline} be the voting deadline for this dispute, as defined by the offchain consensus for this transition to the rule-based regime.
+  \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the offchain consensus for this transition to the rule-based regime.
   \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash of the \code{multisigTreasury} output reference.
-  \item Let \code{nPeers} be the number of peers in the head.
-  \item Let \code{params} be the \code{params} field value of \code{multisigTreasury}.
+  \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.
   \item Mint \code{(nPeers + 1)} dispute tokens of \code{(headMp, disputeId)}.
-  \item Create the rule-based treasury utxo (\code{ruleBasedTreasury}), containing the funds and beacon token from the \code{multisigTreasury} and the following datum:
+  \item Create the rule-based treasury utxo (\code{ruleBasedTreasury}), containing the funds and beacon token from the \code{multisigTreasury} and this datum:
     \begin{equation*}
     \begin{split}
-      \T{initRuleBasedDatum} &\coloneq \T{Unresolved} \;\left\{
+      \T{transitionTreasuryDatum} \coloneq \T{Unresolved} \;\left\{
         \begin{array}{lll}
           \T{disputeId} &=& \T{disputeId} \\
+          \T{peers} &=& \T{peers} \\
           \T{nPeers} &=& \T{nPeers} \\
-          \T{params} &=& \T{params}
+          \T{votingDeadline} &=& \T{votingDeadline} \\
+          \T{majorVersion} &=& \T{mt.majorVersion} \\
+          \T{params} &=& \T{mt.params}
         \end{array}\right\}
     \end{split}
     \end{equation*}
-  \item Create the default vote utxo, containing one dispute token and the following datum:
+  \item For \inlineColored{$i$} iterated from 0 to \code{nPeers}, create a vote utxo with one dispute token and this datum:%
+    \footnote{The indices of the \inlineColored{peers} list start from 1.}
     \begin{equation*}
     \begin{split}
-      \T{defaultVoteDatum} &\coloneq \left\{
-        \begin{array}{lll}
-          \T{key}  &=& 0 \\
-          \T{link} &=& 0 < \T{nPeers} \;?\; 1 : 0 \\
-          \T{deadline} &=& \T{deadline} \\
-          \T{peer} &=& \T{Nothing} \\
-          \T{vote} &=& \T{Just} \; \T{vote}
-        \end{array}\right\}\\
-      \T{vote} &\coloneq \left\{
-        \begin{array}{lll}
-          \T{activeUtxos} &=& \T{multisigTreasury.activeUtxos} \\
-          \T{version} &=& (\T{multisigTreasury.majorVersion}, 0)
-        \end{array}\right\}
-    \end{split}
-    \end{equation*}
-  \item For each public-key hash \inlineColored{$k$} in \code{peersList}, indexed by \inlineColored{$i$} (starting with 1), create a vote utxo with one dispute token and the following datum:
-    \begin{equation*}
-    \begin{split}
-      \T{initVoteDatum} \; i \; k \coloneq \left\{
+      \T{initVoteDatum} \; \T{mt} \; i &\coloneq \left\{
         \begin{array}{lll}
           \T{key}  &=& i \\
           \T{link} &=& i < \T{nPeers} \;?\; (i + 1) : 0 \\
-          \T{deadline} &=& \T{deadline} \\
-          \T{peer} &=& k \\
-          \T{vote} &=& \T{Nothing}
+          \T{peer} &=& 0 < i \;?\; \T{Just} \; (\mathcal{H}_{32} \; \T{peers}[i]) : \T{Nothing} \\
+          \T{vote} &=& \T{vote} \; i
         \end{array}\right\}\\
+      \T{vote} \; 0 &\coloneq \T{Just} \; \left\{
+        \begin{array}{lll}
+          \T{activeUtxos} &=& \T{mt.activeUtxos} \\
+          \T{minorVersion} &=& 0
+        \end{array}\right\}\\
+      \T{vote} \; \_ &\coloneq \T{Nothing}
     \end{split}
     \end{equation*}
 \end{enumerate}
@@ -166,23 +159,86 @@ The transaction body is as follows:
 \subsection{Dispute resolution}%
 \label{h:rule-based-dispute-resolution}
 
-% TODO Dispute resolution
+% TODO clarify that only minor snapshots matching the major snapshot of transition are eligible.
+
+During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor snapshot confirmed by the offchain consensus protocol before it stalled.
+After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest snapshot among the votes.
 
 % Spending validator handles voting and forwards tallying to staking validator.
 % Staking validator handles tallying consecutive vote utxos:
 % - before voting deadline, both vote utxos being tallied must contain votes.
 % - afterward, any consecutive vote utxos can be tallied.
 
-\subsubsection{Voting}%
-\label{h:voting}
+\subsubsection{Spending validator for voting and resolution}
 
-% TODO - Vote
-% Vote before the voting deadline.
+Voting and resolution are handled by the Plutus-based spending validator of the dispute address.
+Redeemers:
+\begin{description}
+  \item[Vote.] Replace the input's empty vote with a valid vote for a minor snapshot. Conditions:
+    \begin{itemize}
+      \item Verify the vote utxo spent input:
+        \begin{enumerate}
+          \item Let \code{inputVoteOutref} be the output reference of the input being spent.
+          \item Let \code{inputVote} be the input being spent.
+            There must not be any other spent input matching \code{inputVoteOutref} on tx hash.
+          \item The \code{vote} field of \code{inputVote} must be empty.
+          \item The transaction must be signed by the \code{peer} field of \code{inputVote}, if it is non-empty.
+          \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{inputVote}.
+        \end{enumerate}
+      \item Verify the treasury reference input:
+        \begin{enumerate}[resume]
+          \item Let \code{treasury} be the only reference input matching \code{inputVoteOutref} on tx hash.
+          \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
+          \item \code{disputeId} must match the \code{disputeId} field of \code{treasury}.
+          \item The transaction's time-validity upper bound must not exceed the \code{votingDeadline} field of \code{treasury}.
+        \end{enumerate}
+      \item Verify the snapshot redeemer:
+        \begin{enumerate}[resume]
+          \item Let \code{voteRedeemer} be a redeemer argument with this type:
+            \begin{equation*}
+            \begin{split}
+              \T{VoteRedeemer} &\coloneq \left\{
+                \begin{array}{lll}
+                  \T{minorSnapshot} &::& \T{MinorSnapshot} \\
+                  \T{multisig} &::& [\T{Signature}]
+                \end{array}\right\}\\
+              \T{MinorSnapshot} &\coloneq \left\{
+              \begin{array}{lll}
+                \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+                \T{majorVersion} &::& \T{Int} \\
+                \T{minorVersion} &::& \T{Int}
+              \end{array}\right\}
+            \end{split}
+            \end{equation*}
+          \item The \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorSnapshot} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
+        \end{enumerate}
+      \item Verify the vote utxo output:
+        \begin{enumerate}[resume]
+          \item Let \code{outputVote} be an output with the same number of \code{(headMp, disputeId)} tokens as \code{inputVote}. It must not hold any other non-ADA tokens.
+          \item The \code{vote} field of \code{outputVote} must match on the \code{activeUtxos} and \code{minorVersion} fields with \code{voteRedeemer}.
+        \end{enumerate}
+    \end{itemize}
+  \item[Tally.] Refer validation to the staking validator of the dispute address.
+    Conditions:
+    \begin{enumerate}
+      \item Let \code{tallyValidator} be the script hash of the staking validator for tallying, provided as a static parameter to the spending validator for voting.
+      \item Let \code{inputVoteOutref} be the output reference of the input being spent.
+      \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw 0 with a redeemer that mentions the tx hash of \code{inputVoteOutref}.
+    \end{enumerate}
+  \item[Resolve.] Resolve the dispute when the treasury utxo is spent together with the last remaining vote utxo.
+    Conditions:
+    \begin{enumerate}
+      \item % TODO
+    \end{enumerate}
+\end{description}
 
-% Spending validator
+\subsubsection{Staking validator for tallying}
 
-\subsubsection{Tallying}%
-\label{h:tallying}
+Tallying is handled by the Plutus-based staking validator of the dispute address.
+Redeemers:
+\begin{description}
+  \item[Tally.]
+\end{description}
 
 % TODO - Tally
 % Remove a node if both it and its parent contain a vote, or if the transaction validity starts at or after the voting deadline.

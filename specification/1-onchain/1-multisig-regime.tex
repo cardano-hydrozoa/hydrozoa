@@ -4,7 +4,6 @@
 
 \section{Multisig regime}%
 \label{h:multisig-regime}%
-\newcommand{\headBeaconTokenNum}[0]{4937}
 Every Hydrozoa head uniquely corresponds to the set of its peers' public key hashes.
 In the multisig regime, the head's native script simply requires signatures from all these public key hashes:%
 \footnote{Here, we're using the native script constructors defined in the Cardano Mary era specification \citep{PolinaVinogradovaAndreKnispelFormalSpecificationCardano2020}.}
@@ -28,15 +27,15 @@ Among these utxos, the head's treasury utxo is uniquely identified as the one ho
   \item The policy ID corresponds to the head's native script (in minting policy form).
   \item The first four bytes of the asset name are equal to the CIP-67
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
-    prefix for class label \inlineColored{\headBeaconTokenNum}, which corresponds to Hydrozoa head beacon tokens.%
-    \footnote{We chose \inlineColored{\headBeaconTokenNum} because it spells ``HYDR'' (short for Hydra/Hydrozoa) on a phone dial pad.}
+    prefix for class label \inlineColored{4937}, which corresponds to Hydrozoa head beacon tokens.%
+    \footnote{We chose \inlineColored{4937} because it spells ``HYDR'' (short for Hydra/Hydrozoa) on a phone dial pad.}
   \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the utxo nonce spent in the head's initialization transaction (\cref{h:multisig-init}).
 \end{enumerate}
 No other utxo at the head's native script address should hold any tokens that meet the policy ID and CIP-67 prefix conditions above. In other words, there must only be one head at the address.%
 \footnote{It may seem redundant to use a 28-byte unique nonce in the beacon token's asset name, given that only one head is allowed per native script address at any given time.
   However, the unique nonce is helpful to distinguish between different heads that may exist at the same address across time.}
 
-The treasury utxo must have the following datum type:
+The treasury utxo must have this datum:
 \begin{equation*}
   \T{MultisigTreasuryDatum} \coloneq \left\{
     \begin{array}{lll}
@@ -68,7 +67,7 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
 \begin{itemize}
   \item Mints the head's beacon token.
   \item Spends the utxo nonce reference by hash in the last 28 bytes of the beacon token's asset name.
-  \item Creates the treasury utxo at the head's native script address, placing the beacon token into it (with min-ADA) with the following datum:
+  \item Creates the treasury utxo at the head's native script address, placing the beacon token into it (with min-ADA) with this datum:
     \begin{equation*}
     \begin{split}
       \T{initMultisigTreasuryDatum} &:: \mathcal{H}_{32} \; \T{HeadParams} -> \T{MultisigTreasuryDatum} \\
@@ -87,7 +86,7 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
 
 \subsection{Deposit}%
 \label{h:multisig-deposit}
-Peers can deposit funds into a Hydrozoa head by sending utxos to its native script address, specifying their instructions in the following datum type:
+Peers can deposit funds into a Hydrozoa head by sending utxos to its native script address, specifying their instructions in this datum type:
 \begin{equation*}
   \T{DepositDatum} \coloneq \left\{
   \begin{array}{lll}
