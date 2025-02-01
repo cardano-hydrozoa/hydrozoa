@@ -5,7 +5,10 @@
 \chapter{Offchain consensus protocol}%
 \label{h:offchain-consensus-protocol}
 
-\section{Parameters}%
+\section{Setup}%
+\label{h:consensus-setup}
+
+\subsection{Parameters}%
 \label{h:consensus-parameters}
 
 % TODO parameters for offchain consensus
@@ -17,7 +20,7 @@
 % Bob: Acknowledged. Here's my pubkey.
 % Charlie: Acknowledged. Here's my pubkey.
 
-\section{Initialization}%
+\subsection{Initialization}%
 \label{h:consensus-intitialization}
 
 % TODO ReqInit
@@ -28,38 +31,44 @@
 % Charlie: here's my signature.
 % (Everyone): (Submits the multisigned init transaction to Cardano)
 
-\section{Deposit}%
+\section{Ledger}%
+\label{h:consensus-ledger}
+
+\subsection{Deposit}%
 \label{h:consensus-deposit}
 
 % TODO ReqDeposit
 
 % TODO AckDeposit
 
-\section{Transaction}%
+\subsection{Transaction}%
 \label{h:consensus-transaction}
 
 % TODO ReqTx
 
-\section{Withdrawal}%
+\subsection{Withdrawal}%
 \label{h:consensus-withdrawal}
 
 % TODO ReqWithdrawal
 
-\section{Minor snapshot}%
+\section{Snapshots}%
+\label{h:consensus-snapshots}
+
+\subsection{Minor snapshot}%
 \label{h:consensus-minor-snapshot}
 
 % TODO ReqMinor
 
 % TODO AckMinor
 
-\section{Major snapshot}%
+\subsection{Major snapshot}%
 \label{h:consensus-major-snapshot}
 
 % TODO ReqMajor
 
 % TODO AckMajor
 
-\section{Final snapshot}%
+\subsection{Final snapshot}%
 \label{h:consensus-final-snapshot}
 
 % TODO ReqFinal
