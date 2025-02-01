@@ -81,9 +81,10 @@ Each vote utxo has this datum type:
       \T{key}  &::& \T{Int} \\
       \T{link} &::& \T{Int} \\
       \T{peer} &::& \T{Maybe} \; \T{PubKeyHash} \\
-      \T{vote} &::& \T{Maybe} \; \T{Vote}
+      \T{voteStatus} &::& \T{VoteStatus}
     \end{array}\right\}\\
-  \T{Vote} &\coloneq \left\{
+  \T{VoteStatus} &\coloneq \T{NoVote} \mid \T{Abstain} \mid \T{Vote} \; \T{VoteDetails} \\
+  \T{VoteDetails} &\coloneq \left\{
     \begin{array}{lll}
       \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
       \T{minorVersion} &::& \T{Int}
@@ -96,7 +97,7 @@ These fields are interpreted as follows:
   \item[key.] An integer that uniquely identifies the vote utxo.
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
-  \item[vote.] The vote (if any) cast in this vote utxo.
+  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor snapshot.
   \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the snapshot voted by the peer.
   \item[minor version.] The minor version of the minor snapshot voted by the peer. This snapshot's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
@@ -144,14 +145,14 @@ The transaction body is as follows:
           \T{key}  &=& i \\
           \T{link} &=& i < \T{nPeers} \;?\; (i + 1) : 0 \\
           \T{peer} &=& 0 < i \;?\; \T{Just} \; (\mathcal{H}_{32} \; \T{peers}[i]) : \T{Nothing} \\
-          \T{vote} &=& \T{vote} \; i
+          \T{voteStatus} &=& \T{voteStatus} \; i
         \end{array}\right\}\\
-      \T{vote} \; 0 &\coloneq \T{Just} \; \left\{
+      \T{voteStatus} \; 0 &\coloneq \T{Vote} \; \left\{
         \begin{array}{lll}
           \T{activeUtxos} &=& \T{mt.activeUtxos} \\
           \T{minorVersion} &=& 0
         \end{array}\right\}\\
-      \T{vote} \; \_ &\coloneq \T{Nothing}
+      \T{voteStatus} \; \_ &\coloneq \T{NoVote}
     \end{split}
     \end{equation*}
 \end{enumerate}
@@ -159,29 +160,22 @@ The transaction body is as follows:
 \subsection{Dispute resolution}%
 \label{h:rule-based-dispute-resolution}
 
-% TODO clarify that only minor snapshots matching the major snapshot of transition are eligible.
-
 During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor snapshot confirmed by the offchain consensus protocol before it stalled.
 After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest snapshot among the votes.
 
-% Spending validator handles voting and forwards tallying to staking validator.
-% Staking validator handles tallying consecutive vote utxos:
-% - before voting deadline, both vote utxos being tallied must contain votes.
-% - afterward, any consecutive vote utxos can be tallied.
+\subsubsection{Spending validator for voting}
 
-\subsubsection{Spending validator for voting and resolution}
-
-Voting and resolution are handled by the Plutus-based spending validator of the dispute address.
+Voting is handled by the Plutus-based spending validator of the dispute address.
 Redeemers:
 \begin{description}
-  \item[Vote.] Replace the input's empty vote with a valid vote for a minor snapshot. Conditions:
+  \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a snapshot. Conditions:
     \begin{itemize}
       \item Verify the vote utxo spent input:
         \begin{enumerate}
           \item Let \code{inputVoteOutref} be the output reference of the input being spent.
           \item Let \code{inputVote} be the input being spent.
             There must not be any other spent input matching \code{inputVoteOutref} on tx hash.
-          \item The \code{vote} field of \code{inputVote} must be empty.
+          \item The \code{voteStatus} field of \code{inputVote} must be empty.
           \item The transaction must be signed by the \code{peer} field of \code{inputVote}, if it is non-empty.
           \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{inputVote}.
         \end{enumerate}
@@ -189,12 +183,12 @@ Redeemers:
         \begin{enumerate}[resume]
           \item Let \code{treasury} be the only reference input matching \code{inputVoteOutref} on tx hash.
           \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
-          \item \code{disputeId} must match the \code{disputeId} field of \code{treasury}.
+          \item \code{disputeId} must match the \code{disputeId} field of the \code{Unresolved} datum in \code{treasury}.
           \item The transaction's time-validity upper bound must not exceed the \code{votingDeadline} field of \code{treasury}.
         \end{enumerate}
-      \item Verify the snapshot redeemer:
+      \item Verify the redeemer:
         \begin{enumerate}[resume]
-          \item Let \code{voteRedeemer} be a redeemer argument with this type:
+          \item Let \code{voteRedeemer} be an \emph{optional} redeemer argument with this type:
             \begin{equation*}
             \begin{split}
               \T{VoteRedeemer} &\coloneq \left\{
@@ -210,12 +204,14 @@ Redeemers:
               \end{array}\right\}
             \end{split}
             \end{equation*}
-          \item The \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorSnapshot} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
+          \item If \code{voteRedeemer} is provided, then the \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorSnapshot} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
         \end{enumerate}
       \item Verify the vote utxo output:
         \begin{enumerate}[resume]
-          \item Let \code{outputVote} be an output with the same number of \code{(headMp, disputeId)} tokens as \code{inputVote}. It must not hold any other non-ADA tokens.
-          \item The \code{vote} field of \code{outputVote} must match on the \code{activeUtxos} and \code{minorVersion} fields with \code{voteRedeemer}.
+          \item Let \code{outputVote} be an output with the same number of \code{(headMp, disputeId)} tokens and same address as \code{inputVote}. It must not hold any other non-ADA tokens.
+          \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{outputVote} must be a \code{Vote} matching \code{voteRedeemer} on the \code{activeUtxos} and \code{minorVersion} fields.
+            Otherwise, it must be \code{Abstain}.
+          \item All other datum fields must match between \code{inputVote} and \code{outputVote}.
         \end{enumerate}
     \end{itemize}
   \item[Tally.] Refer validation to the staking validator of the dispute address.
@@ -223,12 +219,14 @@ Redeemers:
     \begin{enumerate}
       \item Let \code{tallyValidator} be the script hash of the staking validator for tallying, provided as a static parameter to the spending validator for voting.
       \item Let \code{inputVoteOutref} be the output reference of the input being spent.
-      \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw 0 with a redeemer that mentions the tx hash of \code{inputVoteOutref}.
+      \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw-zero with a redeemer that mentions the tx hash of \code{inputVoteOutref}.
     \end{enumerate}
-  \item[Resolve.] Resolve the dispute when the treasury utxo is spent together with the last remaining vote utxo.
+  \item[Resolve.] The remaining vote utxo can be spent when the treasury utxo is spent.
     Conditions:
     \begin{enumerate}
-      \item % TODO
+      \item Let \code{inputVoteOutref} be the output reference of the input being spent.
+      \item Let \code{treasury} be the only reference input matching \code{inputVoteOutref} on tx hash.
+      \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
     \end{enumerate}
 \end{description}
 
@@ -246,15 +244,6 @@ Redeemers:
 % Spending validator -> staking validator
 % staking validator looks for exactly 2 inputs with dispute tokens.
 % dispute ID of these tokens must match redeemer.
-
-% TODO - Resolve
-% Remove the singleton node if the treasury utxo is also spent.
-
-% TODO - Cleanup
-% Deinitialize the shrinking list, which requires all list tokens to be burned.
-
-% TODO - Multisig override
-% Do whatever you want if the transaction is multi-signed by all peers.
 
 \subsection{Treasury}%
 \label{h:rule-based-treasury}

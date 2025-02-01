@@ -81,9 +81,6 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
     \end{equation*}
 \end{itemize}
 
-% In the offchain consensus protocol, the head parameters are negotiated via the \code{ReqParams} and \code{AckParams} messages.
-% The multi-signed initialization transaction is produced via the \code{ReqInit} and \code{AckInit} messages.
-
 \subsection{Deposit}%
 \label{h:multisig-deposit}
 Peers can deposit funds into a Hydrozoa head by sending utxos to its native script address, specifying their instructions in this datum type:
@@ -136,8 +133,6 @@ It outputs the remaining withdrawals' aggregate funds as a single ``rollout node
 
 The rollout node is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout node with the aggregate funds of the rest of the withdrawals, if any remain.
 Further rollout transactions spend the shrinking rollout node, until all the withdrawals have been paid out.
-
-% The offchain consensus protocol produces the multi-signed settlement and rollout transactions for every major snapshot confirmed by the peers via the \code{ReqMajor} and \code{AckMajor} messages (\cref{h:offchain-consensus-protocol}).
 
 \subsection{Finalization}%
 \label{h:multisig-finalize}
