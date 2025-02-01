@@ -98,8 +98,7 @@ These fields are interpreted as follows:
   \item[version.] The full version of the snapshot voted by the peer.
 \end{description}
 
-Collectively, the dispute resolution utxos constitute a shrinking linked list (\cref{h:shrinking-linked-list}).
-The voting process and list transitions are managed by the Plutus-based dispute resolution scripts (\cref{h:rule-based-dispute-resolution}).
+Collectively, the vote utxos constitute a linked list data structure onchain.
 
 \subsection{Transition to rule-based regime}%
 \label{h:rule-based-transition}
@@ -137,7 +136,7 @@ The transaction body is as follows:
       \T{defaultVoteDatum} &\coloneq \left\{
         \begin{array}{lll}
           \T{key}  &=& 0 \\
-          \T{link} &=& 0 < \T{nPeers} \;?\; \T{Just} \; 1 : \T{Nothing} \\
+          \T{link} &=& 0 < \T{nPeers} \;?\; 1 : 0 \\
           \T{deadline} &=& \T{deadline} \\
           \T{peer} &=& \T{Nothing} \\
           \T{vote} &=& \T{Just} \; \T{vote}
@@ -155,7 +154,7 @@ The transaction body is as follows:
       \T{initVoteDatum} \; i \; k \coloneq \left\{
         \begin{array}{lll}
           \T{key}  &=& i \\
-          \T{link} &=& i < \T{nPeers} \;?\; \T{Just} \; (i + 1) : \T{Nothing} \\
+          \T{link} &=& i < \T{nPeers} \;?\; (i + 1) : 0 \\
           \T{deadline} &=& \T{deadline} \\
           \T{peer} &=& k \\
           \T{vote} &=& \T{Nothing}
