@@ -170,18 +170,18 @@ Redeemers:
 \begin{description}
   \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a snapshot. Conditions:
     \begin{itemize}
-      \item Verify the vote utxo spent input:
+      \item Verify the vote inputs:
         \begin{enumerate}
-          \item Let \code{inputVoteOutref} be the output reference of the input being spent.
-          \item Let \code{inputVote} be the input being spent.
-            There must not be any other spent input matching \code{inputVoteOutref} on tx hash.
-          \item The \code{voteStatus} field of \code{inputVote} must be empty.
-          \item The transaction must be signed by the \code{peer} field of \code{inputVote}, if it is non-empty.
-          \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{inputVote}.
+          \item Let \code{voteOutref} be the output reference of the input being spent.
+          \item Let \code{voteInput} be the input being spent.
+            There must not be any other spent input matching \code{voteOutref} on tx hash.
+          \item The \code{voteStatus} field of \code{voteInput} must be empty.
+          \item The transaction must be signed by the \code{peer} field of \code{voteInput}, if it is non-empty.
+          \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
         \end{enumerate}
       \item Verify the treasury reference input:
         \begin{enumerate}[resume]
-          \item Let \code{treasury} be the only reference input matching \code{inputVoteOutref} on tx hash.
+          \item Let \code{treasury} be the only reference input matching \code{voteOutref} on tx hash.
           \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
           \item \code{disputeId} must match the \code{disputeId} field of the \code{Unresolved} datum in \code{treasury}.
           \item The transaction's time-validity upper bound must not exceed the \code{votingDeadline} field of \code{treasury}.
@@ -206,44 +206,80 @@ Redeemers:
             \end{equation*}
           \item If \code{voteRedeemer} is provided, then the \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorSnapshot} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
         \end{enumerate}
-      \item Verify the vote utxo output:
+      \item Verify the vote output:
         \begin{enumerate}[resume]
-          \item Let \code{outputVote} be an output with the same number of \code{(headMp, disputeId)} tokens and same address as \code{inputVote}. It must not hold any other non-ADA tokens.
-          \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{outputVote} must be a \code{Vote} matching \code{voteRedeemer} on the \code{activeUtxos} and \code{minorVersion} fields.
+          \item Let \code{voteOutput} be an output with the same number of \code{(headMp, disputeId)} tokens and same address as \code{voteInput}. It must not hold any other non-ADA tokens.
+          \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{voteOutput} must be a \code{Vote} matching \code{voteRedeemer} on the \code{activeUtxos} and \code{minorVersion} fields.
             Otherwise, it must be \code{Abstain}.
-          \item All other datum fields must match between \code{inputVote} and \code{outputVote}.
+          \item All other datum fields must match between \code{voteInput} and \code{voteOutput}.
         \end{enumerate}
     \end{itemize}
   \item[Tally.] Refer validation to the staking validator of the dispute address.
     Conditions:
     \begin{enumerate}
       \item Let \code{tallyValidator} be the script hash of the staking validator for tallying, provided as a static parameter to the spending validator for voting.
-      \item Let \code{inputVoteOutref} be the output reference of the input being spent.
-      \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw-zero with a redeemer that mentions the tx hash of \code{inputVoteOutref}.
+      \item Let \code{voteOutref} be the output reference of the input being spent.
+      \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw-zero with a redeemer that mentions \code{voteOutref} in one of its fields.
     \end{enumerate}
   \item[Resolve.] The remaining vote utxo can be spent when the treasury utxo is spent.
     Conditions:
     \begin{enumerate}
-      \item Let \code{inputVoteOutref} be the output reference of the input being spent.
-      \item Let \code{treasury} be the only reference input matching \code{inputVoteOutref} on tx hash.
+      \item Let \code{voteOutref} be the output reference of the input being spent.
+      \item Let \code{treasury} be the only reference input matching \code{voteOutref} on tx hash.
       \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
     \end{enumerate}
 \end{description}
 
 \subsubsection{Staking validator for tallying}
 
-Tallying is handled by the Plutus-based staking validator of the dispute address.
+Tallying is handled by the Plutus-based staking validator of the dispute address, via the withdraw-zero script purpose.
 Redeemers:
 \begin{description}
-  \item[Tally.]
+  \item[Tally.] Combine two vote utxos into one, selecting the highest vote.
+    Conditions:
+    \begin{itemize}
+      \item Verify the vote inputs:
+        \begin{enumerate}
+          \item Let \code{tallyRedeemer} be a redeemer argument with this type:
+            \begin{equation*}
+              \T{TallyRedeemer} \coloneq \left\{
+              \begin{array}{lll}
+                \T{continuingOutref} &::& \T{OutputReference} \\
+                \T{removedOutref} &::& \T{OutputReference}
+              \end{array}\right\}
+            \end{equation*}
+          \item Let \code{continuingInput} and \code{removedInput} be spent inputs with the respective output references of \code{tallyRedeemer}.
+          \item \code{continuingInput} and \code{removedInput} must match on address.
+          \item \code{continuingInput} and \code{removedInput} must have non-ADA tokens of only one asset class, which must match between them and satisfy both of the following:
+            \begin{enumerate}
+              \item The minting policy (\code{headMp}) must be a native script.
+              \item The asset name (\code{disputeId}) must have the CIP-67 prefix \inlineColored{3477}.
+            \end{enumerate}
+          \item There must be no other spent inputs from the same address as \code{continuingInput} or holding any tokens of \code{headMp}.
+        \end{enumerate}
+      \item Verify the vote output:
+        \begin{enumerate}[resume]
+          \item Let \code{continuingOutput} be an output with the same address and the sum of all tokens (including ADA) in \code{continuingInput} and \code{removedInput}.
+          \item The \code{voteStatus} field of \code{continuingOutput} must match the highest \code{voteStatus} of \code{continuingInput} and \code{removedInput}, totally ordered as follows:
+            \begin{equation*}
+            \begin{split}
+              &\forall a, b \in \T{VoteDetails}:\\
+              &\quad a \T{.minorVersion} \leq b \T{.minorVersion} \implies\\
+              &\qquad \T{NoVote} < \T{Abstain} < \T{Vote} \; a \leq \T{Vote} \; b  
+            \end{split}
+            \end{equation*}
+        \end{enumerate}
+      \item Do not interfere with voting before the voting deadline:
+        \begin{enumerate}[resume]
+          \item If the \code{voteStatus} of either \code{continuingInput} or \code{removedInput} is \code{NoVote}, all of the following must be satisfied:
+            \begin{enumerate}
+              \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
+              \item \code{disputeId} must match the \code{disptueId} field of the \code{Unresolved} datum in \code{treasury}.
+              \item The \code{votingDeadline} field of \code{treasury} must not exceed the transaction's time-validity lower bound.
+            \end{enumerate}
+        \end{enumerate}
+    \end{itemize}
 \end{description}
-
-% TODO - Tally
-% Remove a node if both it and its parent contain a vote, or if the transaction validity starts at or after the voting deadline.
-
-% Spending validator -> staking validator
-% staking validator looks for exactly 2 inputs with dispute tokens.
-% dispute ID of these tokens must match redeemer.
 
 \subsection{Treasury}%
 \label{h:rule-based-treasury}
