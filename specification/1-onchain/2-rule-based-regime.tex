@@ -211,7 +211,7 @@ Redeemers:
           \item Let \code{voteOutput} be an output with the same number of \code{(headMp, disputeId)} tokens and same address as \code{voteInput}. It must not hold any other non-ADA tokens.
           \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{voteOutput} must be a \code{Vote} matching \code{voteRedeemer} on the \code{activeUtxos} and \code{minorVersion} fields.
             Otherwise, it must be \code{Abstain}.
-          \item All other datum fields must match between \code{voteInput} and \code{voteOutput}.
+          \item All other fields of \code{voteInput} and \code{voteOutput} must match.
         \end{enumerate}
     \end{itemize}
   \item[Tally.] Refer validation to the staking validator of the dispute address.
@@ -255,8 +255,17 @@ Redeemers:
               \item The minting policy (\code{headMp}) must be a native script.
               \item The asset name (\code{disputeId}) must have the CIP-67 prefix \inlineColored{3477}.
             \end{enumerate}
+          \item The \code{key} field of \code{removedInput} must be greater than the \code{key} field and equal to the \code{link} field of \code{continuingInput}.
           \item There must be no other spent inputs from the same address as \code{continuingInput} or holding any tokens of \code{headMp}.
         \end{enumerate}
+      \item Verify the treasury reference input:
+        \begin{enumerate}[resume]
+          \item If the \code{voteStatus} of either \code{continuingInput} or \code{removedInput} is \code{NoVote}, all of the following must be satisfied:
+            \begin{enumerate}
+              \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
+              \item \code{disputeId} must match the \code{disptueId} field of the \code{Unresolved} datum in \code{treasury}.
+              \item The \code{votingDeadline} field of \code{treasury} must not exceed the transaction's time-validity lower bound.
+            \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]
           \item Let \code{continuingOutput} be an output with the same address and the sum of all tokens (including ADA) in \code{continuingInput} and \code{removedInput}.
@@ -268,15 +277,9 @@ Redeemers:
               &\qquad \T{NoVote} < \T{Abstain} < \T{Vote} \; a \leq \T{Vote} \; b  
             \end{split}
             \end{equation*}
+          \item The \code{link} field of \code{removedInput} and \code{continuingOutput} must match.
+          \item All other fields of \code{continuingInput} and \code{continuingOutput} must match.
         \end{enumerate}
-      \item Do not interfere with voting before the voting deadline:
-        \begin{enumerate}[resume]
-          \item If the \code{voteStatus} of either \code{continuingInput} or \code{removedInput} is \code{NoVote}, all of the following must be satisfied:
-            \begin{enumerate}
-              \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
-              \item \code{disputeId} must match the \code{disptueId} field of the \code{Unresolved} datum in \code{treasury}.
-              \item The \code{votingDeadline} field of \code{treasury} must not exceed the transaction's time-validity lower bound.
-            \end{enumerate}
         \end{enumerate}
     \end{itemize}
 \end{description}
