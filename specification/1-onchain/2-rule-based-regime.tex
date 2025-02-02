@@ -32,12 +32,14 @@ The treasury utxo must have the following datum type, which defines its unresolv
     \T{Unresolved} \; \T{UnresolvedDatum} \\
   \T{ResolvedDatum} &\coloneq\;\left\{
     \begin{array}{lll}
+      \T{headMp} &::& \T{PolicyId} \\
       \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
       \T{version} &::& (\T{Int}, \T{Int}) \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\} \\
   \T{UnresolvedDatum} &\coloneq\;\left\{
     \begin{array}{lll}
+      \T{headMp} &::& \T{PolicyId} \\
       \T{disputeId} &::& \T{AssetName} \\
       \T{peers} &::& \T{[VerificationKey]} \\
       \T{nPeers} &::& \T{Int} \\
@@ -48,10 +50,15 @@ The treasury utxo must have the following datum type, which defines its unresolv
 \end{split}
 \end{equation*}
 
-The resolved treasury's datum is the same as the multisig treasury's datum, except that the single-integer \code{majorVersion} field is replaced by the full \code{version} field, which includes both the major and minor version numbers of the resolved snapshot.
+The resolved treasury's datum is the same as the multisig treasury's datum, with these exceptions:
+\begin{description}
+  \item[head MP.] The policy ID of the head's native script minting policy.
+  \item[version.] The full version of the resolved snapshot, which includes both the major and minor version numbers. This replaces the \code{majorVersion} field of the multisig treasury.
+\end{description}
 
 The unresolved treasury's datum fields are interpreted as follows:
 \begin{description}
+  \item[head MP.] The policy ID of the head's native script minting policy.
   \item[dispute ID.] The unique identifier used as the asset name of the dispute tokens (see below).
   \item[peers.] The peers' public keys.
   \item[n peers.] The number of peers in the head.
@@ -121,7 +128,7 @@ The transaction body is as follows:
   \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the offchain consensus for this transition to the rule-based regime.
   \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash of the \code{multisigTreasury} output reference.
   \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.
-  \item Mint \code{(nPeers + 1)} dispute tokens of \code{(headMp, disputeId)}.
+  \item Mint (\code{nPeers} + 1) dispute tokens of (\code{headMp}, \code{disputeId}).
   \item Create the rule-based treasury utxo (\code{ruleBasedTreasury}), containing the funds and beacon token from the \code{multisigTreasury} and this datum:
     \begin{equation*}
     \begin{split}
@@ -177,13 +184,13 @@ Redeemers:
             There must not be any other spent input matching \code{voteOutref} on tx hash.
           \item The \code{voteStatus} field of \code{voteInput} must be empty.
           \item The transaction must be signed by the \code{peer} field of \code{voteInput}, if it is non-empty.
-          \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
+          \item Let (\code{headMp}, \code{disputeId}) be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
         \end{enumerate}
       \item Verify the treasury reference input:
         \begin{enumerate}[resume]
           \item Let \code{treasury} be the only reference input matching \code{voteOutref} on tx hash.
           \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
-          \item \code{disputeId} must match the \code{disputeId} field of the \code{Unresolved} datum in \code{treasury}.
+          \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
           \item The transaction's time-validity upper bound must not exceed the \code{votingDeadline} field of \code{treasury}.
         \end{enumerate}
       \item Verify the redeemer:
@@ -208,7 +215,7 @@ Redeemers:
         \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]
-          \item Let \code{voteOutput} be an output with the same number of \code{(headMp, disputeId)} tokens and same address as \code{voteInput}. It must not hold any other non-ADA tokens.
+          \item Let \code{voteOutput} be an output with the same number of (\code{headMp}, \code{disputeId}) tokens and same address as \code{voteInput}. It must not hold any other non-ADA tokens.
           \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{voteOutput} must be a \code{Vote} matching \code{voteRedeemer} on the \code{activeUtxos} and \code{minorVersion} fields.
             Otherwise, it must be \code{Abstain}.
           \item All other fields of \code{voteInput} and \code{voteOutput} must match.
@@ -224,12 +231,11 @@ Redeemers:
   \item[Resolve.] The sole remaining vote utxo can be spent when the treasury utxo is spent.
     Conditions:
     \begin{enumerate}
-      \item Let \code{voteOutref} be the output reference of the input being spent.
       \item Let \code{voteInput} be the input being spent.
-      \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
+      \item Let (\code{headMp}, \code{disputeId}) be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
       \item Let \code{treasury} be a spent input that holds a head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
-      \item \code{disputeId} must match the \code{disputeId} field of the \code{Unresolved} datum in \code{treasury}.
-  \end{enumerate}
+      \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
+\end{enumerate}
 \end{description}
 
 \subsubsection{Staking validator for tallying}
@@ -265,9 +271,10 @@ Redeemers:
           \item If the \code{voteStatus} of either \code{continuingInput} or \code{removedInput} is \code{NoVote}, all of the following must be satisfied:
             \begin{enumerate}
               \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
-              \item \code{disputeId} must match the \code{disptueId} field of the \code{Unresolved} datum in \code{treasury}.
+              \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
               \item The \code{votingDeadline} field of \code{treasury} must not exceed the transaction's time-validity lower bound.
             \end{enumerate}
+        \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]
           \item Let \code{continuingOutput} be an output with the same address and the sum of all tokens (including ADA) in \code{continuingInput} and \code{removedInput}.
@@ -282,32 +289,73 @@ Redeemers:
           \item The \code{link} field of \code{removedInput} and \code{continuingOutput} must match.
           \item All other fields of \code{continuingInput} and \code{continuingOutput} must match.
         \end{enumerate}
-        \end{enumerate}
     \end{itemize}
 \end{description}
 
 \subsection{Treasury}%
 \label{h:rule-based-treasury}
 
-% TODO Treasury
-
-% TODO - Resolve
-% Compare the full version number between the treasury datum and the singleton node from dispute resolution:
-%   - if the singleton node's version is greater, update the treasury datum to its version number and active_utxo field.
-%   - otherwise, keep the treasury datum unchanged.
-
-% TODO - Withdraw
-% - Spend the treasury utxo.
-% - Output an updated treasury utxo.
-% - Output a withdrawal.
-% - Prove that the new treasury's active_utxo results from
-%   removing the withdrawn utxo from the old treasury's active_utxo.
-
-% TODO - Deinit
-% - Spend the treasury utxo.
-% - Prove that the treasury's active_utxo is empty.
-
-% TODO - Multisig override
-% Do whatever you want if the transaction is multi-signed by all peers.
+The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved snapshot.
+Peers can then withdraw funds from the treasury by creating utxos on L1 and showing Merkle proofs of equivalent utxos being removed from the treasury's active utxo set.
+Redeemers:
+\begin{description}
+  \item[Resolve.] Resolve the treasury's state based on the sole remaining vote utxo.
+    Conditions:
+    \begin{enumerate}
+      \item Let \code{treasuryInput} be the input being spent.
+      \item Let \code{headMp}, \code{disputeId}, \code{nPeers}, and \code{majorVersion} be the corresponding fields of \code{treasuryInput}.
+      \item Let \code{voteInput} be a spent input with (\code{nPeers} + 1) tokens of (\code{headMp}, \code{disputeId}) and no other non-ADA tokens.
+      \item Let \code{treasuryOutput} be an output with the same address as \code{treasuryInput} and the sum of all tokens (including ADA) in \code{treasuryInput} and \code{voteInput}.
+      \item Let \code{voteStatus} be the corresponding field of \code{voteInput}.
+      \item If \code{voteStatus} is \code{Abstain}:
+        \begin{enumerate}
+          \item The \code{version} field of \code{treasuryOutput} must match (\code{majorVersion}, 0).
+          \item \code{treasuryInput} and \code{treasuryOutput} must match on \code{activeUtxos}.
+        \end{enumerate}
+      \item If \code{voteStatus} is \code{Vote}:
+        \begin{enumerate}
+          \item Let \code{minorVersion} be the corresponding field in \code{voteStatus}.
+          \item The \code{version} field of \code{treasuryOutput} must match (\code{majorVersion}, \code{minorVersion}).
+          \item \code{voteStatus} and \code{treasuryOutput} must match on \code{activeUtxos}.
+        \end{enumerate}
+      \item \code{treasuryInput} and \code{treasuryOutput} must match on all other fields.
+    \end{enumerate}
+  \item[Withdraw.] Withdraw treasury funds and update its active utxo set accordingly.
+    Conditions:
+    \begin{enumerate}
+      \item Let \code{treasuryInput} be the input being spent.
+      \item Let \code{headMp} be the corresponding field in \code{treasuryInput}.
+      \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \inlineColored{4937}.
+      \item Let \code{treasuryOutput} be the output holding the (\code{headMp}, \code{headId}) beacon token.
+      \item Let \code{withdrawals} be a list of triples. In each triple:
+        \begin{itemize}
+          \item The \code{key} is an output reference of a utxo in the active utxo set corresponding to the \code{activeUtxos} field of \code{treasuryInput}.
+          \item The \code{value} is an output of this transaction.
+          \item The \code{proof} is a Merkle inclusion proof.
+        \end{itemize}
+      \item Starting with the \code{activeUtxos} field in \code{treasuryInput}, folding over \code{withdrawals} with the Merkle library's \code{delete} function must produce a result that matches the \code{activeUtxos} field of \code{treasuryOutput}:%
+        \footnote{The details of the \inlineColored{delete} function depend on the Merkle library that will be used by the Hydrozoa implementation. For example, see the \inlineColored{delete} function in the Merkle Patricia Forestry library \citep{MatthiasBenkortMerklePatriciaForestry2024}.}
+        \begin{equation*}
+        \begin{split}
+          &\T{validWithdrawals} \; \T{in} \; \T{ws} \; \T{out} \coloneq
+            (\T{foldl} \; \T{delete} \; \T{in} \; \T{ws} = \T{out}) \\
+          &\T{delete} ::
+            \mathcal{RH}_{32} \; \T{UtxoSet} ->
+            (\T{OutputReference}, \T{Output}, \T{Proof}) ->
+            \mathcal{RH}_{32} \; \T{UtxoSet}
+        \end{split}
+        \end{equation*}
+      \item \code{treasuryInput} must hold the sum of all tokens in \code{treasuryOutput} and the outputs of \code{withdrawals}.
+    \end{enumerate}
+  \item[Deinit.] De-initialize the head, removing all traces of it.
+    Conditions:%
+    \footnote{This redeemer does not require the treasury's active utxo set to be empty, but it does implicitly require the transaction to be multi-signed by all peers to burn the \inlineColored{headMp} tokens.
+      Thus, the peers can also use this redeemer to override the treasury's spending validator with their multi-signature.}
+    \begin{enumerate}
+      \item Let \code{treasury} be the input being spent.
+      \item Let \code{headMp} be the corresponding field in \code{treasury}.
+      \item All \code{headMp} tokens in \code{treasury} with CIP-67 prefixes of \inlineColored{3477} or \inlineColored{4937} must be burned.
+    \end{enumerate}
+\end{description}
 
 \end{document}
