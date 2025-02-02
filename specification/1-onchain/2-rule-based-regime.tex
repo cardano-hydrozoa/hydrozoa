@@ -221,13 +221,15 @@ Redeemers:
       \item Let \code{voteOutref} be the output reference of the input being spent.
       \item The transaction's redeemers list must show \code{tallyValidator} being invoked to withdraw-zero with a redeemer that mentions \code{voteOutref} in one of its fields.
     \end{enumerate}
-  \item[Resolve.] The remaining vote utxo can be spent when the treasury utxo is spent.
+  \item[Resolve.] The sole remaining vote utxo can be spent when the treasury utxo is spent.
     Conditions:
     \begin{enumerate}
       \item Let \code{voteOutref} be the output reference of the input being spent.
-      \item Let \code{treasury} be the only reference input matching \code{voteOutref} on tx hash.
-      \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
-    \end{enumerate}
+      \item Let \code{voteInput} be the input being spent.
+      \item Let \code{(headMp, disputeId)} be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
+      \item Let \code{treasury} be a spent input that holds a head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
+      \item \code{disputeId} must match the \code{disputeId} field of the \code{Unresolved} datum in \code{treasury}.
+  \end{enumerate}
 \end{description}
 
 \subsubsection{Staking validator for tallying}
