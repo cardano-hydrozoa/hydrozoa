@@ -12,6 +12,43 @@
   langid = {english}
 }
 
+@misc{DiSarroCIP112ObserveScript2024,
+  type = {Cardano {{Improvement Proposal}}},
+  title = {{{CIP-112}}: {{Observe Script Type}}},
+  author = {DiSarro, Philip},
+  year = {2024},
+  month = jan,
+  number = {CIP-112},
+  publisher = {Cardano Foundation},
+  url = {https://github.com/cardano-foundation/CIPs/tree/master/CIP-0112},
+  urldate = {2024-12-02},
+  abstract = {We propose to introduce a new Plutus scripts type Observe in addition to those currently available (spending, certifying, rewarding, minting, drep). The purpose of this script type is to allow arbitrary validation logic to be decoupled from any ledger action. Since observe validators are decoupled from actions, you can run them in a transaction without needing to perform any associated action (ie you don't need to consume a script input, or mint a token, or withdraw from a staking script just to execute this validator). Additionally, we propose to introduce a new assertion to native scripts that they can use to check that a particular script hash is in required\_observers (which in turn enforces that the script must be executed successfully in the transaction). This addresses a number of technical issues discussed in other CIPs and CPS such as the redundant execution of spending scripts, and the inability to effectively use native scripts in conjunction with Plutus scripts.},
+  langid = {english}
+}
+
+@misc{IntersectMBOCardanoLedgerV117402025,
+  title = {Cardano {{Ledger}} v1.17.4.0: {{Conway-era}}, {{Plomin}} Hardfork},
+  author = {{IntersectMBO}},
+  year = {2025},
+  month = feb,
+  url = {https://github.com/IntersectMBO/cardano-ledger/tree/cardano-ledger-conway-1.17.4.0},
+  urldate = {2025-02-03},
+  abstract = {The ledger implementation and specifications of the Cardano blockchain. - IntersectMBO/cardano-ledger},
+  copyright = {Apache-2.0}
+}
+
+@misc{IOGExcludePhantomTokens2025,
+  title = {Exclude Phantom Tokens from Snapshots ({{Github}} Issue \#358)},
+  author = {{IOG}},
+  year = {2025},
+  month = feb,
+  url = {https://github.com/cardano-scaling/hydra/issues/358},
+  urldate = {2025-02-03},
+  abstract = {Implementation of the Hydra Head protocol},
+  copyright = {Apache-2.0},
+  howpublished = {Cardano Scaling}
+}
+
 @misc{MatthiasBenkortMerklePatriciaForestry2024,
   type = {Code Documentation},
   title = {Merkle {{Patricia Forestry}} - {{Aiken Docs}}},

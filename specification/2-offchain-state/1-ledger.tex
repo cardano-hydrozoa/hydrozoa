@@ -16,9 +16,10 @@ The offchain ledger state has this type:
 These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] The set of utxos that can be spent in transactions or withdrawn.
-    These utxos are created by onchain deposits and offchain transactions.
+    These utxos are created by offchain transactions and settlements.
   \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled onchain in the multisig regime.
-    Utxos are removed from this set whenever the peers multi-sign a major snapshot that settles the utxos onchain.
+    Offchain settlement events empty this set (\cref{h:ledger-settlement}).
+    
 \end{description}
 
 Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
@@ -37,33 +38,112 @@ In practice, we equivalently represent a utxo set as a map from output reference
 An output reference is a tuple that uniquely identifies an output by a hash of the ledger event that created it (either a transaction or a deposit) and its index among the outputs of that event (always zero for deposits):
 \begin{equation*}
     \T{OutputRef} \coloneq \left\{
-    \begin{array}{ll}
-        \T{id} : & \T{TxId} \\
-        \T{index} : & \T{Int}
+    \begin{array}{lll}
+      \T{id} &::& \T{TxId} \\
+        \T{index} &::& \T{Int}
     \end{array} \right\}
 \end{equation*}
 
 An output is a tuple describing a bundle of tokens, data, and a script that have been placed by a transaction at an address in the ledger:
 \begin{equation*}
     \T{Output} \coloneq \left\{
-    \begin{array}{ll}
-        \T{addr} : & \T{Address} \\
-        \T{value} : & \T{Value} \\
-        \T{datum} : & \T{Option(Data)} \\
-        \T{script} : & \T{Option(Script)}
+    \begin{array}{lll}
+      \T{addr} &::& \T{Address} \\
+        \T{value} &::& \T{Value} \\
+        \T{datum} &::& \T{Option(Data)} \\
+        \T{script} &::& \T{Option(Script)}
     \end{array} \right\}
 \end{equation*}
-
-\subsection{Deposit}%
-\label{h:ledger-deposit}
-
-\subsection{Withdrawal}%
-\label{h:ledger-withdrawal}
+Note that this type definition of an \code{Output} does not allow datum hashes in the \code{datum} field, as they are not allowed in Hydrozoa offchain transactions (\cref{h:ledger-transaction}).
 
 \subsection{Transaction}%
 \label{h:ledger-transaction}
 
-\subsection{Reset withdrawals}%
-\label{h:ledger-reset-withdrawals}
+In the offchain ledger, every transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
+The rules for Hydrozoa's offchain transactions are the same as Cardano's ledger rules for onchain transactions,%
+\footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
+but with the following additions:
+\begin{description}
+    \item[No staking or governance actions.]
+      Hydrozoa's consensus protocol is not based on Ouroboros proof-of-stake, and its governance protocol is not based on Cardano's hard-fork-combinator update mechanism.
+      Furthermore, Hydrozoa's onchain scripts cannot authorize arbitrary staking or governance actions on behalf of users.
+      For this reason, staking and governance actions cannot be used in offchain transactions.%
+      \footnote{We are aware that many dApps on Cardano rely on withdraw-zero staking validators (for performance gains), which are not available without staking actions.
+        However, instead of conjuring a complex workaround, Hydrozoa will wait for the implementation of CIP-112 \citep{DiSarroCIP112ObserveScript2024} in an upcoming hardfork.
+        The observer scripts of CIP-112 allow dApp developers to implement the same functionality without withdraw-zero staking validators in a more principled and performant way.}
+        % TODO add minting subsection to future work section
+    \item[No pre-Conway features.] Hydrozoa does not need to maintain backwards compatibility with pre-Conway eras.
+      Offchain utxos cannot use bootstrap addresses or Shelley addresses with Plutus versions older than Plutus V3.
+
+      Public key hash credentials, native scripts, and Plutus scripts at or above V3 are allowed.
+    \item[No datum hashes in outputs.] Hydrozoa requires all utxo datums to be inline, which avoids the need to index the datum-hash to datum map from transactions' datum witnesses.
+    \item[No minting or burning of tokens.]
+      Hydrozoa's onchain scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when offchain state is settled onchain.
+      Thus, offchain transactions cannot mint or burn tokens.%
+      \footnote{We are also aware that many dApps on Cardano rely on token minting and burning to authenticate their internal state.
+        However, supporting this feature opens up a range of difficult issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
+        Fortunately, the Midgard team is exploring a new approach to this problem, which we may adopt in future extensions to Hydrozoa.}
+    \item[Different network ID.] Hydrozoa offchain transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
+\end{description}
+Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
+Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
+The hydra node software rejects (with an error message) offchain transactions that violate these requirements, while peers simply ignore \code{ReqTx} messages (\cref{h:consensus-transaction}) that broadcast such transactions.
+
+In the following type listing:
+\begin{itemize}
+  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
+  \item We indicate fields that must be omitted in Hydrozoa offchain transactions by prefixing their field names with an empty-set symbol (\code{$\varnothing$}).
+\end{itemize}
+\begingroup
+\allowdisplaybreaks
+\begin{align*}
+    \T{Tx} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{body} &::& \T{TxBody} \\
+        \T{wits} &::& \T{TxWits} \\
+        \T{is\_valid} &::& \T{Bool} \\
+        \T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
+    \end{array} \right\} \\
+    \T{TxBody} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{spend\_inputs} &::& \T{Set(OutputRef)} \\
+        \T{collateral\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
+        \T{outputs} &::& \T{[Output]} \\
+        \T{collateral\_return} &::& \quad?\;\T{Output} \\
+        \T{total\_collateral} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set(Certificate) ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map(RewardAccount, Coin)} \\
+        \T{fee} &::& \T{Coin} \\
+        \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
+        \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
+        \T{mint} &::& \quad?\;\T{Value} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{Hash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{Hash} \\
+        \T{network\_id} &::& \quad?\;\T{Network} \\
+        \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set(ProposalProcedure)} \\
+        \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
+    \end{array} \right\}\\
+    \T{TxWits} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{addr\_tx\_wits} &::& \quad?\;\T{Set(VKey, Signature, VKeyHash)} \\
+        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set(BootstrapWitness)} \\
+        \T{script\_tx\_wits} &::& \quad?\;\T{Map(ScriptHash, Script)} \\
+        \varnothing\;\T{data\_tx\_wits} &::& \quad?\;\T{TxDats} \\
+        \T{redeemer\_tx\_wits} &::& \quad?\;\T{Redeemers}
+    \end{array} \right\}\\
+    \T{Script} \coloneq\;& \T{TimelockScript}(\T{Timelock}) \\
+                          \mid\;& \T{PlutusScript}(\T{PlutusVersion},\T{PlutusBinary}) \\
+    \T{PlutusVersion} \coloneq\;& \T{PlutusV3}
+\end{align*}
+\endgroup
+
+\subsection{Withdrawal}%
+\label{h:ledger-withdrawal}
+
+\subsection{Settlement}%
+\label{h:ledger-settlement}
 
 \end{document}
