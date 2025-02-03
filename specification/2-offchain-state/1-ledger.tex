@@ -5,7 +5,54 @@
 \section{Ledger}%
 \label{h:offchain-ledger}
 
-% TODO ledger state
+The offchain ledger state has this type:
+\begin{equation*}
+  \T{LedgerState} \coloneq \left\{
+  \begin{array}{lll}
+    \T{activeUtxos} &::& \T{UtxoSet} \\
+    \T{withdrawnUtxos} &::& \T{UtxoSet}
+  \end{array}\right\}
+\end{equation*}
+These fields are interpreted as follows:
+\begin{description}
+  \item[active utxos.] The set of utxos that can be spent in transactions or withdrawn.
+    These utxos are created by onchain deposits and offchain transactions.
+  \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled onchain in the multisig regime.
+    Utxos are removed from this set whenever the peers multi-sign a major snapshot that settles the utxos onchain.
+\end{description}
+
+Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
+In practice, we equivalently represent a utxo set as a map from output reference to output:
+\begin{equation*}
+\begin{split}
+  \T{UtxoSet} &\coloneq \T{Map(OutputRef, Output)} \\
+    &\coloneq \left\{
+      (k_i :: \T{OutputRef}, v_i :: \T{Output})
+      \;\middle|\;
+      \forall i \neq j.\; k_i \neq k_j
+    \right\}
+\end{split}
+\end{equation*}
+
+An output reference is a tuple that uniquely identifies an output by a hash of the ledger event that created it (either a transaction or a deposit) and its index among the outputs of that event (always zero for deposits):
+\begin{equation*}
+    \T{OutputRef} \coloneq \left\{
+    \begin{array}{ll}
+        \T{id} : & \T{TxId} \\
+        \T{index} : & \T{Int}
+    \end{array} \right\}
+\end{equation*}
+
+An output is a tuple describing a bundle of tokens, data, and a script that have been placed by a transaction at an address in the ledger:
+\begin{equation*}
+    \T{Output} \coloneq \left\{
+    \begin{array}{ll}
+        \T{addr} : & \T{Address} \\
+        \T{value} : & \T{Value} \\
+        \T{datum} : & \T{Option(Data)} \\
+        \T{script} : & \T{Option(Script)}
+    \end{array} \right\}
+\end{equation*}
 
 \subsection{Deposit}%
 \label{h:ledger-deposit}
@@ -15,5 +62,8 @@
 
 \subsection{Transaction}%
 \label{h:ledger-transaction}
+
+\subsection{Reset withdrawals}%
+\label{h:ledger-reset-withdrawals}
 
 \end{document}
