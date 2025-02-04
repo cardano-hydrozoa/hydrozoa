@@ -35,7 +35,7 @@ In practice, we equivalently represent a utxo set as a map from output reference
 \end{split}
 \end{equation*}
 
-An output reference is a tuple that uniquely identifies an output by a hash of the ledger event that created it (either a transaction or a deposit) and its index among the outputs of that event (always zero for deposits):
+An output reference is a tuple that uniquely identifies an output by a hash of the ledger event that created it (either a transaction or a deposit) and its index among the outputs of that event:
 \begin{equation*}
     \T{OutputRef} \coloneq \left\{
     \begin{array}{lll}
@@ -223,5 +223,22 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 
 \subsection{Settlement}%
 \label{h:ledger-settlement}
+
+Offchain settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major snapshot.
+The effect of this event is to empty the \code{withdrawnUtxo} set and add new utxos to the \code{activeUtxo} set.
+
+These new utxos correspond to the deposits absorbed by the settlement transaction (\cref{h:multisig-settle}) of the major snapshot, with the \code{Output} fields of each new utxo set as follows:
+\begin{description}
+  \item[addr.] Set equal to the \code{address} field in the corresponding onchain deposit's datum.
+  \item[value.] Set equal to the value of the corresponding onchain deposit.
+  \item[datum.] Set equal to the \code{datum} field in the corresponding onchain deposit's datum.
+  \item[script.] Empty.
+\end{description}
+
+The \code{OutputReference} fields of each of these new utxos is as follows:
+\begin{description}
+  \item[id.] Set equal to the Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the transaction ID of the major snapshot's settlement transaction.
+  \item[index.] Set equal to the onchain deposit's index among the absorbed deposits of the major snapshot, in ascending order of onchain \code{OutputReference}, starting from zero.
+\end{description}
 
 \end{document}
