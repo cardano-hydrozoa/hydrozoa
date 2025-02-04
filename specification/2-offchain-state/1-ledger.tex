@@ -117,7 +117,7 @@ In the following type listing:
         \T{fee} &::& \T{Coin} \\
         \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
         \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
-        \T{mint} &::& \quad?\;\T{Value} \\
+        \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
         \T{script\_integrity\_hash} &::& \quad?\;\T{Hash} \\
         \T{auxiliary\_data\_hash} &::& \quad?\;\T{Hash} \\
         \T{network\_id} &::& \quad?\;\T{Network} \\
@@ -142,6 +142,84 @@ In the following type listing:
 
 \subsection{Withdrawal}%
 \label{h:ledger-withdrawal}
+
+A withdrawal is an offchain ledger event that spends one or more utxos in \code{activeUtxos} and creates identical utxos (with the same output references) in \code{withdrawnUtxos}.
+The offchain ledger rules for withdrawals are similar to transactions, but with the following modifications:
+\begin{description}
+  \item[No outputs.] Withdrawals cannot create utxos in \code{activeUtxos}.
+  \item[No fees.] Withdrawals do not pay transaction fees.
+  \item[No collateral.] Withdrawals do not provide collateral for phase-2 validation.
+  \item[No metadata.] Withdrawals cannot contain transaction metadata.
+\end{description}
+
+Similar to offchain transactions, we can express the modified rules for withdrawals (relative to Cardano ledger rules) as requirements for certain fields to be omitted or restricted:%
+\footnote{Here, ``omitting'' the \inlineColored{outputs} and \inlineColored{fee} fields means setting them to an empty list and zero, respectively.}
+\begingroup
+\allowdisplaybreaks
+\begin{align*}
+    \T{Tx} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{body} &::& \T{TxBody} \\
+        \T{wits} &::& \T{TxWits} \\
+        \T{is\_valid} &::& \T{Bool} \\
+        \varnothing\;\T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
+    \end{array} \right\} \\
+    \T{TxBody} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{spend\_inputs} &::& \T{Set(OutputRef)} \\
+        \varnothing\;\T{collateral\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
+        \varnothing\;\T{outputs} &::& \T{[Output]} \\
+        \varnothing\;\T{collateral\_return} &::& \quad?\;\T{Output} \\
+        \varnothing\;\T{total\_collateral} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set(Certificate) ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map(RewardAccount, Coin)} \\
+        \varnothing\;\T{fee} &::& \T{Coin} \\
+        \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
+        \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
+        \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{Hash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{Hash} \\
+        \T{network\_id} &::& \quad?\;\T{Network} \\
+        \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set(ProposalProcedure)} \\
+        \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
+    \end{array} \right\}\\
+    \T{TxWits} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{addr\_tx\_wits} &::& \quad?\;\T{Set(VKey, Signature, VKeyHash)} \\
+        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set(BootstrapWitness)} \\
+        \T{script\_tx\_wits} &::& \quad?\;\T{Map(ScriptHash, Script)} \\
+        \varnothing\;\T{data\_tx\_wits} &::& \quad?\;\T{TxDats} \\
+        \T{redeemer\_tx\_wits} &::& \quad?\;\T{Redeemers}
+    \end{array} \right\}\\
+    \T{Script} \coloneq\;& \T{TimelockScript}(\T{Timelock}) \\
+                          \mid\;& \T{PlutusScript}(\T{PlutusVersion},\T{PlutusBinary}) \\
+    \T{PlutusVersion} \coloneq\;& \T{PlutusV3}
+\end{align*}
+\endgroup
+
+Unfortunately, Cardano's ledger rules do not allow the \code{fee} to be zero, and they do not allow the \code{collateral\_inputs}, \code{collateral\_return}, and \code{total\_collateral} fields to be omitted in transactions containing Plutus scripts.
+Thus, when validating offchain withdrawals, we must \emph{deactivate} the following Cardano ledger rules:
+\begin{itemize}
+  \item Minimum fee amount
+  \item Minimum collateral amount
+  \item Non-empty collateral inputs (if Plutus scripts used)
+  \item Collateral balancing:
+    \begin{equation*}
+      \sum \T{lovelace} (\T{collateral\_inputs}) =
+      \T{lovelace} (\T{collateral\_return}) + \T{total\_collateral}
+    \end{equation*}
+  \item Transaction balancing:
+    \begin{equation*}
+      \sum \T{value} (\T{inputs}) + \T{mint} =
+      \sum \T{value} (\T{outputs}) + \T{fee}
+    \end{equation*}
+\end{itemize}
+
+Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting certain protocol parameters to zero.
+However, since the non-empty collateral inputs and transaction balancing rules are not affected by protocol parameters, forking Cardano's ledger rules is unavoidable for offchain withdrawals.
 
 \subsection{Settlement}%
 \label{h:ledger-settlement}
