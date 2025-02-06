@@ -127,7 +127,8 @@ The transaction body is as follows:
   \item Let \code{headMp} be the head's native script minting policy.
   \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the offchain consensus for this transition to the rule-based regime.
   \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the \code{multisigTreasury} output reference.
-  \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.
+  \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.%
+    \footnote{The indices of the \code{peers} list (and all other lists in this specification) start from \inlineColored{1}.}
   \item Mint (\code{nPeers} + 1) dispute tokens of (\code{headMp}, \code{disputeId}).
   \item Create the rule-based treasury utxo (\code{ruleBasedTreasury}), containing the funds and beacon token from \code{multisigTreasury} and this datum:
     \begin{equation*}
@@ -144,24 +145,29 @@ The transaction body is as follows:
         \end{array}\right\}
     \end{split}
     \end{equation*}
-  \item For \inlineColored{$i$} iterated from 0 to \code{nPeers}, create a vote utxo with one dispute token and this datum:%
-    \footnote{The indices of the \inlineColored{peers} list start from 1.}
+  \item Create the default vote utxo, containing a vote for the major snapshot's active utxo set:
     \begin{equation*}
-    \begin{split}
-      \T{initVoteDatum} \; \T{mt} \; i &\coloneq \left\{
+      \T{defaultVoteDatum} \coloneq \left\{
+      \begin{array}{lll}
+        \T{key} &=& 0 \\
+        \T{link} &=& 0 < \T{nPeers} \;?\; 1 : 0 \\
+        \T{peer} &=& \T{Nothing} \\
+        \T{voteStatus} &=& \T{Vote} \left\{
+        \begin{array}{lll}
+            \T{activeUtxos} &=& \T{mt.activeUtxos} \\
+            \T{minorVersion} &=& 0
+        \end{array}\right\}
+      \end{array}\right\}
+    \end{equation*}
+  \item For \inlineColored{$i$} iterated from 1 to \code{nPeers}, create a vote utxo with one dispute token and this datum:%
+    \begin{equation*}
+      \T{initVoteDatum} \; i \coloneq \left\{
         \begin{array}{lll}
           \T{key}  &=& i \\
           \T{link} &=& i < \T{nPeers} \;?\; (i + 1) : 0 \\
-          \T{peer} &=& 0 < i \;?\; \T{Just} \; (\mathcal{H}_{32} \; \T{peers}[i]) : \T{Nothing} \\
-          \T{voteStatus} &=& \T{voteStatus} \; i
+          \T{peer} &=& \T{Just} \; (\mathcal{H}_{32} \; \T{peers}[i]) \\
+          \T{voteStatus} &=& \T{NoVote}
         \end{array}\right\}\\
-      \T{voteStatus} \; 0 &\coloneq \T{Vote} \; \left\{
-        \begin{array}{lll}
-          \T{activeUtxos} &=& \T{mt.activeUtxos} \\
-          \T{minorVersion} &=& 0
-        \end{array}\right\}\\
-      \T{voteStatus} \; \_ &\coloneq \T{NoVote}
-    \end{split}
     \end{equation*}
 \end{enumerate}
 
