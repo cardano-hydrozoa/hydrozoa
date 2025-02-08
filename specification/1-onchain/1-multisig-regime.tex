@@ -16,8 +16,8 @@ In the multisig regime, the head's native script simply requires signatures from
 \end{equation*}
 
 We could end this section here, as no other conditions are enforced by onchain scripts in the multisig regime.
-Nonetheless, we will describe the expected states and transitions in this regime, which are enforced during normal operation of the Hydrozoa offchain consensus protocol (\cref{h:offchain-consensus-protocol}).%
-\footnote{Of course, the peers can always manually override the offchain consensus protocol by unanimous consent.}
+Nonetheless, we will describe the expected states and transitions in this regime, which are enforced during normal operation of the Hydrozoa L2 consensus protocol (\cref{h:l2-consensus-protocol}).%
+\footnote{Of course, the peers can always manually override the L2 consensus protocol by unanimous consent.}
 
 \subsection{Utxo state}%
 \label{h:multisig-utxo-state}%
@@ -46,9 +46,9 @@ The treasury utxo must have this datum:
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the latest major offchain block settled onchain (\cref{h:multisig-settle}).
-  \item[major version.] The version number of the latest major offchain block settled onchain.
-  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's offchain consensus parameters (\cref{h:offchain-consensus-protocol}).
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the L2 ledger's active utxo set, as of the latest major L2 block settled onchain (\cref{h:multisig-settle}).
+  \item[major version.] The version number of the latest major L2 block settled onchain.
+  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 
 Non-treasury utxos at the head's native script address are recognized as follows:
@@ -62,7 +62,7 @@ Unrecognized utxos are ignored by the Hydrozoa protocol.
 
 \subsection{Initialization}%
 \label{h:multisig-init}
-Before initializing a Hydrozoa head, the peers should agree on the offchain consensus parameters they want to use (\cref{h:offchain-consensus-protocol}).
+Before initializing a Hydrozoa head, the peers should agree on the L2 consensus parameters they want to use (\cref{h:l2-consensus-protocol}).
 Initialization is achieved with a single transaction, multi-signed by all the peers, that:
 \begin{itemize}
   \item Mints the head's beacon token.
@@ -98,35 +98,35 @@ Peers can deposit funds into a Hydrozoa head by sending utxos to its native scri
 The \code{deadline} field defines a POSIX time before which the deposit should be absorbed into the head's treasury via a settlement transaction (\cref{h:multisig-settle}).
 After the deadline, the deposit should be refunded to the peer (\cref{h:multisig-refund}).
 
-The \code{address} and \code{datum} fields define the address and datum at which the utxo in the offchain ledger should be created, if the deposit is absorbed into the head's treasury.
-The new utxo in the offchain ledger should contain the same funds as the deposit utxo.
+The \code{address} and \code{datum} fields define the address and datum at which the utxo in the L2 ledger should be created, if the deposit is absorbed into the head's treasury.
+The new utxo in the L2 ledger should contain the same funds as the deposit utxo.
 
 The \code{refundAddress} and \code{refundDatum} fields define the address and datum to which the deposit's funds should be sent, if the deposit is refunded.
 
 \subsection{Refund}%
 \label{h:multisig-refund}
 A refund is a transaction, multi-signed by all peers, that sends a deposit utxo's funds to the deposit's \code{refundAddress} and \code{refundDatum}.
-As long as the peers are following the offchain consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that are past their deadline.
+As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that are past their deadline.
 
 However, a peer should obtain the other peers' signatures for a post-dated refund transaction before submitting the deposit transaction to Cardano.
 This transaction's validity interval should start at the deposit's \code{deadline}.
 The post-dated refund ensures that the peer can still retrieve the deposited funds if they haven not been absorbed by the deadline, even if the other peers stop responding.
 
-Peers can request and receive signatures for post-dated refund transactions via the \code{ReqDeposit} and \code{AckDeposit} messages of the offchain consensus protocol (\cref{h:offchain-consensus-protocol}).
+Peers can request and receive signatures for post-dated refund transactions via the \code{ReqDeposit} and \code{AckDeposit} messages of the L2 consensus protocol (\cref{h:l2-consensus-protocol}).
 In other words, if the peer requests permission to submit the deposit (\code{ReqDeposit}), then the peers confirm their readiness to absorb it into the head and assure the refund in case they fail to do so (\code{AckDeposit}).
 
 \subsection{Settlement and rollout}%
 \label{h:multisig-settle}
-A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major offchain block (\cref{h:offchain-blocks}).%
+A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major L2 block (\cref{h:l2-blocks}).%
 \footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
-It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major offchain block, while keeping the \code{params} field unchanged.
+It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block, while keeping the \code{params} field unchanged.
 
 The absorbed deposit utxos are spent inputs in the settlement transaction.
-This means that Cardano's transaction size limit constrains the number of deposits settled per major offchain block.
+This means that Cardano's transaction size limit constrains the number of deposits settled per major L2 block.
 
-On the other hand, the number of withdrawals per major offchain block is unconstrained.
-Given a set of withdrawn utxos in a major offchain block, the deterministic utxo rollout algorithm (\cref{h:deterministic-utxo-rollout}) assigns them to be outputs of the settlement and rollup transactions.
-Overall, they are paid out in the ascending order of their output references in the offchain ledger.
+On the other hand, the number of withdrawals per major L2 block is unconstrained.
+Given a set of withdrawn utxos in a major L2 block, the deterministic utxo rollout algorithm (\cref{h:deterministic-utxo-rollout}) assigns them to be outputs of the settlement and rollup transactions.
+Overall, they are paid out in the ascending order of their output references in the L2 ledger.
 
 The settlement transaction greedily pays out as many withdrawals as it can, using the transaction size remaining after fitting the deposit inputs and the fixed transaction overhead.
 It outputs the remaining withdrawals' aggregate funds as a single ``rollout node'' output, sent to the head's native script address without a datum.
@@ -141,11 +141,11 @@ The finalization transaction is similar to the settlement transaction, except th
   \item It burns the head's beacon token.
   \item It spends the head's treasury utxo without outputting a new treasury utxo.
   \item It does not absorb any deposits.
-  \item It withdraws all utxos in the final offchain block's ledger, including those in the active utxo set, using a rollout node output if necessary.
+  \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using a rollout node output if necessary.
 \end{itemize}
 
-The offchain consensus protocol produces the multi-signed finalization transaction via the \code{ReqFinal} and \code{AckFinal} messages (\cref{h:offchain-consensus-protocol}).
-To complement the finalization transaction, the protocol also produces multi-signed immediate refund transactions for all deposits that have not been confirmed in the blocks preceding the final offchain block.
+The L2 consensus protocol produces the multi-signed finalization transaction via the \code{ReqFinal} and \code{AckFinal} messages (\cref{h:l2-consensus-protocol}).
+To complement the finalization transaction, the protocol also produces multi-signed immediate refund transactions for all deposits that have not been confirmed in the blocks preceding the final L2 block.
 Post-dated refund transactions can handle any deposits that still remain after these immediate refunds, if the depositors bothered to obtain them before creating their deposits.
 
 Thus, the finalization and immediate/post-dated refund transactions remove any trace of the Hydrozoa head from Cardano's ledger.

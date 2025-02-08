@@ -4,13 +4,13 @@
 
 \section{Rule-based regime}%
 \label{h:rule-based-regime}%
-If the peers stop responding to each other in the offchain consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed block.
-It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when offchain consensus breaks down.
+If the peers stop responding to each other in the L2 consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed block.
+It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when L2 consensus breaks down.
 
 In the rule-based regime, the Hydrozoa head's treasury is managed by a suite of Plutus scripts:
 \begin{itemize}
-  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest offchain block confirmed by the offchain consensus protocol before it stalled.
-  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved offchain block.
+  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest L2 block confirmed by the L2 consensus protocol before it stalled.
+  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved L2 block.
 \end{itemize}
 
 The rule-based regime does not manage any unabsorbed deposits left over from the multisig regime.
@@ -53,7 +53,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
 The resolved treasury's datum is the same as the multisig treasury's datum, with these exceptions:
 \begin{description}
   \item[head MP.] The policy ID of the head's native script minting policy.
-  \item[version.] The full version of the resolved offchain block, which includes both the major and minor version numbers. This replaces the \code{majorVersion} field of the multisig treasury.
+  \item[version.] The full version of the resolved L2 block, which includes both the major and minor version numbers. This replaces the \code{majorVersion} field of the multisig treasury.
 \end{description}
 
 The unresolved treasury's datum fields are interpreted as follows:
@@ -64,7 +64,7 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[n peers.] The number of peers in the head.
   \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
   \item[major version.] The treasury's major version when it transitioned to the rule-based regime.
-  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's offchain consensus parameters (\cref{h:offchain-consensus-protocol}).
+  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 
 \subsubsection{Dispute state}
@@ -104,9 +104,9 @@ These fields are interpreted as follows:
   \item[key.] An integer that uniquely identifies the vote utxo.
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
-  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor offchain block.
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the block voted by the peer.
-  \item[minor version.] The minor version of the minor offchain block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
+  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor L2 block.
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the L2 ledger's active utxo set, as of the block voted by the peer.
+  \item[minor version.] The minor version of the minor L2 block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
 
 Collectively, the vote utxos constitute a linked list data structure onchain.
@@ -114,10 +114,10 @@ Collectively, the vote utxos constitute a linked list data structure onchain.
 \subsection{Transition to rule-based regime}%
 \label{h:rule-based-transition}
 
-The offchain consensus protocol pairs every multisig treasury utxo that it creates with a post-dated transaction that transitions the treasury to the rule-based regime (\cref{h:offchain-consensus-protocol}).
+The L2 consensus protocol pairs every multisig treasury utxo that it creates with a post-dated transaction that transitions the treasury to the rule-based regime (\cref{h:l2-consensus-protocol}).
 
-While offchain consensus holds, the peers store these post-dated transactions without submitting.
-However, if the multisig utxo is not spent by the time its corresponding post-dated transaction becomes valid, then offchain consensus is assumed to have stalled.
+While L2 consensus holds, the peers store these post-dated transactions without submitting.
+However, if the multisig utxo is not spent by the time its corresponding post-dated transaction becomes valid, then L2 consensus is assumed to have stalled.
 In that case, every peer should trigger the transition to the rule-based regime by submitting the transaction to Cardano.
 
 The transaction body is as follows:
@@ -125,7 +125,7 @@ The transaction body is as follows:
   \item Spend the multisig treasury utxo (\code{multisigTreasury}).
     Let \code{mt} be its datum.
   \item Let \code{headMp} be the head's native script minting policy.
-  \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the offchain consensus for this transition to the rule-based regime.
+  \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the L2 consensus for this transition to the rule-based regime.
   \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the \code{multisigTreasury} output reference.
   \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.%
     \footnote{The indices of the \code{peers} list (and all other lists in this specification) start from \inlineColored{1}.}
@@ -145,7 +145,7 @@ The transaction body is as follows:
         \end{array}\right\}
     \end{split}
     \end{equation*}
-  \item Create the default vote utxo, containing a vote for the major offchain block's active utxo set:
+  \item Create the default vote utxo, containing a vote for the major L2 block's active utxo set:
     \begin{equation*}
       \T{defaultVoteDatum} \coloneq \left\{
       \begin{array}{lll}
@@ -174,7 +174,7 @@ The transaction body is as follows:
 \subsection{Dispute resolution}%
 \label{h:rule-based-dispute-resolution}
 
-During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor offchain block confirmed by the offchain consensus protocol before it stalled.
+During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor L2 block confirmed by the L2 consensus protocol before it stalled.
 After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest block among the votes.
 
 \subsubsection{Spending validator for voting}
@@ -302,7 +302,7 @@ Redeemers:
 \subsection{Treasury}%
 \label{h:rule-based-treasury}
 
-The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved offchain block.
+The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved L2 block.
 Peers can then withdraw funds from the treasury by creating utxos on L1 and showing Merkle proofs of equivalent utxos being removed from the treasury's active utxo set.
 Redeemers:
 \begin{description}

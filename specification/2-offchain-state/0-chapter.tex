@@ -2,19 +2,19 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\chapter{Offchain state}%
-\label{h:offchain-state}
+\chapter{L2 state}%
+\label{h:l2-state}
 
-Each peer in a Hydrozoa head must locally keep some offchain state to ensure that the events witnessed by the peers in the offchain consensus protocol can be accurately settled onchain.
-This state is also needed to participate in the offchain consensus protocol.
+Each peer in a Hydrozoa head must locally keep some L2 state to ensure that the events witnessed by the peers in the L2 consensus protocol can be accurately settled onchain.
+This state is also needed to participate in the L2 consensus protocol.
 It consists of:
 \begin{itemize}
-  \item Parameters for the offchain consensus protocol (discussed in \cref{h:consensus-setup}).
-  \item The offchain ledger and the events that transition its state (\cref{h:offchain-ledger}).
-  \item Blocks of the offchain ledger, which the peers periodically generate and multi-sign so that they can be settled onchain (\cref{h:offchain-blocks}).
+  \item Parameters for the L2 consensus protocol (discussed in \cref{h:consensus-setup}).
+  \item The L2 ledger and the events that transition its state (\cref{h:l2-ledger}).
+  \item Blocks of the L2 ledger, which the peers periodically generate and multi-sign so that they can be settled onchain (\cref{h:l2-blocks}).
 \end{itemize}
 
-In principle, a peer could choose to permanently store all offchain parameters, ledger events, ledger states, and blocks for a Hydrozoa head.
-However, in practice, the offchain consensus protocol (\cref{h:offchain-consensus-protocol}) dictates the lifecycle of this data -- when it must be kept by peers and when it is safe to discard.
+In principle, a peer could choose to permanently store all L2 parameters, ledger events, ledger states, and blocks for a Hydrozoa head.
+However, in practice, the L2 consensus protocol (\cref{h:l2-consensus-protocol}) dictates the lifecycle of this data -- when it must be kept by peers and when it is safe to discard.
 
 \end{document}
