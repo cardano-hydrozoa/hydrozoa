@@ -5,13 +5,13 @@
 \chapter{L2 state}%
 \label{h:l2-state}
 
-Each peer in a Hydrozoa head must locally keep some L2 state to ensure that the events witnessed by the peers in the L2 consensus protocol can be accurately settled onchain.
+Each peer in a Hydrozoa head must locally keep some L2 state to ensure that the events witnessed by the peers in the L2 consensus protocol can be accurately settled on L1.
 This state is also needed to participate in the L2 consensus protocol.
 It consists of:
 \begin{itemize}
   \item Parameters for the L2 consensus protocol (discussed in \cref{h:consensus-setup}).
   \item The L2 ledger and the events that transition its state (\cref{h:l2-ledger}).
-  \item Blocks of the L2 ledger, which the peers periodically generate and multi-sign so that they can be settled onchain (\cref{h:l2-blocks}).
+  \item Blocks of the L2 ledger, which the peers periodically generate and multi-sign so that they can be settled on L1 (\cref{h:l2-blocks}).
 \end{itemize}
 
 In principle, a peer could choose to permanently store all L2 parameters, ledger events, ledger states, and blocks for a Hydrozoa head.

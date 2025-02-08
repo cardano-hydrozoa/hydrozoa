@@ -2,14 +2,14 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\chapter{Onchain protocol}%
-\label{h:onchain-protocol}
+\chapter{L1 protocol}%
+\label{h:l1-protocol}
 
-The Hydrozoa onchain protocol has two distinct operating regimes.
+The Hydrozoa L1 protocol has two distinct operating regimes.
 Every head is initialized by its peers in the \textbf{multisig} regime, in which all funds and state are stored at a native script address controlled by the unanimous multi-signature of its peers.
 Deposits into the head are created by sending utxos to this address, which are either absorbed into the head's treasury or refunded to depositors by multi-signed transactions.
-Similarly, withdrawals are settled onchain by multi-signed transactions that send utxos out of the head's treasury.
-Thus, the multisig regime's onchain script defers entirely to the L2 consensus protocol between the peers, which it perceives as a black box mechanism that produces multi-signed transactions to modify the onchain state.
+Similarly, withdrawals are settled on L1 by multi-signed transactions that send utxos out of the head's treasury.
+Thus, the multisig regime's L1 script defers entirely to the L2 consensus protocol between the peers, which it perceives as a black box mechanism that produces multi-signed transactions to modify the L1 state.
 
 Ideally, a head spends its entire life cycle in the multisig regime, right up to the final transaction that withdraws all remaining funds out of the head and de-initializes it.
 However, the multisig regime may stall if the peers stop multi-signing transactions before reaching finalization.

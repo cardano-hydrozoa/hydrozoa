@@ -15,13 +15,13 @@ In the multisig regime, the head's native script simply requires signatures from
 \end{split}
 \end{equation*}
 
-We could end this section here, as no other conditions are enforced by onchain scripts in the multisig regime.
+We could end this section here, as no other conditions are enforced by L1 scripts in the multisig regime.
 Nonetheless, we will describe the expected states and transitions in this regime, which are enforced during normal operation of the Hydrozoa L2 consensus protocol (\cref{h:l2-consensus-protocol}).%
 \footnote{Of course, the peers can always manually override the L2 consensus protocol by unanimous consent.}
 
 \subsection{Utxo state}%
 \label{h:multisig-utxo-state}%
-In the multisig regime, a head's entire onchain state resides in utxos at its native script address.
+In the multisig regime, a head's entire L1 state resides in utxos at its native script address.
 Among these utxos, the head's treasury utxo is uniquely identified as the one holding the head's beacon token:
 \begin{enumerate}
   \item The policy ID corresponds to the head's native script (in minting policy form).
@@ -46,8 +46,8 @@ The treasury utxo must have this datum:
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the L2 ledger's active utxo set, as of the latest major L2 block settled onchain (\cref{h:multisig-settle}).
-  \item[major version.] The version number of the latest major L2 block settled onchain.
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the L2 ledger's active utxo set, as of the latest major L2 block settled on L1 (\cref{h:multisig-settle}).
+  \item[major version.] The version number of the latest major L2 block settled on L1.
   \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 

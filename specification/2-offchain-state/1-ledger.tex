@@ -17,7 +17,7 @@ These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] The set of utxos that can be spent in transactions or withdrawn.
     These utxos are created by L2 transactions and settlements.
-  \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled onchain in the multisig regime.
+  \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled on L1 in the multisig regime.
     L2 settlement events empty this set (\cref{h:ledger-settlement}).
     
 \end{description}
@@ -60,13 +60,13 @@ Note that this type definition of an \code{Output} does not allow datum hashes i
 \label{h:ledger-transaction}
 
 In the L2 ledger, every transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
-The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for onchain transactions,%
+The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions,%
 \footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
 but with the following additions:
 \begin{description}
     \item[No staking or governance actions.]
       Hydrozoa's consensus protocol is not based on Ouroboros proof-of-stake, and its governance protocol is not based on Cardano's hard-fork-combinator update mechanism.
-      Furthermore, Hydrozoa's onchain scripts cannot authorize arbitrary staking or governance actions on behalf of users.
+      Furthermore, Hydrozoa's L1 scripts cannot authorize arbitrary staking or governance actions on behalf of users.
       For this reason, staking and governance actions cannot be used in L2 transactions.%
       \footnote{We are aware that many dApps on Cardano rely on withdraw-zero staking validators (for performance gains), which are not available without staking actions.
         However, instead of conjuring a complex workaround, Hydrozoa will wait for the implementation of CIP-112 \citep{DiSarroCIP112ObserveScript2024} in an upcoming hardfork.
@@ -78,7 +78,7 @@ but with the following additions:
       Public key hash credentials, native scripts, and Plutus scripts at or above V3 are allowed.
     \item[No datum hashes in outputs.] Hydrozoa requires all utxo datums to be inline, which avoids the need to index the datum-hash to datum map from transactions' datum witnesses.
     \item[No minting or burning of tokens.]
-      Hydrozoa's onchain scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when L2 state is settled onchain.
+      Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when L2 state is settled on L1.
       Thus, L2 transactions cannot mint or burn tokens.%
       \footnote{We are also aware that many dApps on Cardano rely on token minting and burning to authenticate their internal state.
         However, supporting this feature opens up a range of difficult issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
@@ -229,16 +229,16 @@ The effect of this event is to empty the \code{withdrawnUtxo} set and add new ut
 
 These new utxos correspond to the deposits absorbed by the settlement transaction (\cref{h:multisig-settle}) of the major L2 block, with the \code{Output} fields of each new utxo set as follows:
 \begin{description}
-  \item[addr.] Set equal to the \code{address} field in the corresponding onchain deposit's datum.
-  \item[value.] Set equal to the value of the corresponding onchain deposit.
-  \item[datum.] Set equal to the \code{datum} field in the corresponding onchain deposit's datum.
+  \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
+  \item[value.] Set equal to the value of the corresponding L1 deposit.
+  \item[datum.] Set equal to the \code{datum} field in the corresponding L1 deposit's datum.
   \item[script.] Empty.
 \end{description}
 
 The \code{OutputReference} fields of each of these new utxos is as follows:
 \begin{description}
   \item[id.] Set equal to the Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the transaction ID of the major L2 block's settlement transaction.
-  \item[index.] Set equal to the onchain deposit's index among the absorbed deposits of the major L2 block, in ascending order of onchain \code{OutputReference}, starting from zero.
+  \item[index.] Set equal to the L1 deposit's index among the absorbed deposits of the major L2 block, in ascending order of L1 \code{OutputReference}, starting from zero.
 \end{description}
 
 \end{document}
