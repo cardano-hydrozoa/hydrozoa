@@ -11,10 +11,10 @@ It consists of:
 \begin{itemize}
   \item Parameters for the offchain consensus protocol (discussed in \cref{h:consensus-setup}).
   \item The offchain ledger and the events that transition its state (\cref{h:offchain-ledger}).
-  \item Snapshots of the offchain ledger, which the peers periodically generate and multi-sign so that they can be settled onchain (\cref{h:offchain-snapshots}).
+  \item Blocks of the offchain ledger, which the peers periodically generate and multi-sign so that they can be settled onchain (\cref{h:offchain-blocks}).
 \end{itemize}
 
-In principle, a peer could choose to permanently store all offchain parameters, ledger events, ledger states, and snapshots for a Hydrozoa head.
+In principle, a peer could choose to permanently store all offchain parameters, ledger events, ledger states, and blocks for a Hydrozoa head.
 However, in practice, the offchain consensus protocol (\cref{h:offchain-consensus-protocol}) dictates the lifecycle of this data -- when it must be kept by peers and when it is safe to discard.
 
 \end{document}

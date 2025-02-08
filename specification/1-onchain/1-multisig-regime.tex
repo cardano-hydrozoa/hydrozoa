@@ -46,8 +46,8 @@ The treasury utxo must have this datum:
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the latest major snapshot settled onchain (\cref{h:multisig-settle}).
-  \item[major version.] The version number of the latest major snapshot settled onchain.
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the latest major offchain block settled onchain (\cref{h:multisig-settle}).
+  \item[major version.] The version number of the latest major offchain block settled onchain.
   \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's offchain consensus parameters (\cref{h:offchain-consensus-protocol}).
 \end{description}
 
@@ -117,15 +117,15 @@ In other words, if the peer requests permission to submit the deposit (\code{Req
 
 \subsection{Settlement and rollout}%
 \label{h:multisig-settle}
-A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major offchain snapshot (\cref{h:offchain-snapshots}).%
-\footnote{A snapshot is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding snapshots.}
-It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major snapshot, while keeping the \code{params} field unchanged.
+A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major offchain block (\cref{h:offchain-blocks}).%
+\footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
+It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major offchain block, while keeping the \code{params} field unchanged.
 
 The absorbed deposit utxos are spent inputs in the settlement transaction.
-This means that Cardano's transaction size limit constrains the number of deposits settled per major snapshot.
+This means that Cardano's transaction size limit constrains the number of deposits settled per major offchain block.
 
-On the other hand, the number of withdrawals per major snapshot is unconstrained.
-Given a set of withdrawn utxos in a major snapshot, the deterministic utxo rollout algorithm (\cref{h:deterministic-utxo-rollout}) assigns them to be outputs of the settlement and rollup transactions.
+On the other hand, the number of withdrawals per major offchain block is unconstrained.
+Given a set of withdrawn utxos in a major offchain block, the deterministic utxo rollout algorithm (\cref{h:deterministic-utxo-rollout}) assigns them to be outputs of the settlement and rollup transactions.
 Overall, they are paid out in the ascending order of their output references in the offchain ledger.
 
 The settlement transaction greedily pays out as many withdrawals as it can, using the transaction size remaining after fitting the deposit inputs and the fixed transaction overhead.
@@ -141,11 +141,11 @@ The finalization transaction is similar to the settlement transaction, except th
   \item It burns the head's beacon token.
   \item It spends the head's treasury utxo without outputting a new treasury utxo.
   \item It does not absorb any deposits.
-  \item It withdraws all utxos in the final snapshot's ledger, including those in the active utxo set, using a rollout node output if necessary.
+  \item It withdraws all utxos in the final offchain block's ledger, including those in the active utxo set, using a rollout node output if necessary.
 \end{itemize}
 
 The offchain consensus protocol produces the multi-signed finalization transaction via the \code{ReqFinal} and \code{AckFinal} messages (\cref{h:offchain-consensus-protocol}).
-To complement the finalization transaction, the protocol also produces multi-signed immediate refund transactions for all deposits that have not been confirmed in the snapshots preceding the final snapshot.
+To complement the finalization transaction, the protocol also produces multi-signed immediate refund transactions for all deposits that have not been confirmed in the blocks preceding the final offchain block.
 Post-dated refund transactions can handle any deposits that still remain after these immediate refunds, if the depositors bothered to obtain them before creating their deposits.
 
 Thus, the finalization and immediate/post-dated refund transactions remove any trace of the Hydrozoa head from Cardano's ledger.

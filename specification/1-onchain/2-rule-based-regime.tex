@@ -4,13 +4,13 @@
 
 \section{Rule-based regime}%
 \label{h:rule-based-regime}%
-If the peers stop responding to each other in the offchain consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed snapshot.
+If the peers stop responding to each other in the offchain consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed block.
 It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when offchain consensus breaks down.
 
 In the rule-based regime, the Hydrozoa head's treasury is managed by a suite of Plutus scripts:
 \begin{itemize}
-  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest offchain snapshot confirmed by the offchain consensus protocol before it stalled.
-  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved snapshot.
+  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest offchain block confirmed by the offchain consensus protocol before it stalled.
+  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved offchain block.
 \end{itemize}
 
 The rule-based regime does not manage any unabsorbed deposits left over from the multisig regime.
@@ -53,7 +53,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
 The resolved treasury's datum is the same as the multisig treasury's datum, with these exceptions:
 \begin{description}
   \item[head MP.] The policy ID of the head's native script minting policy.
-  \item[version.] The full version of the resolved snapshot, which includes both the major and minor version numbers. This replaces the \code{majorVersion} field of the multisig treasury.
+  \item[version.] The full version of the resolved offchain block, which includes both the major and minor version numbers. This replaces the \code{majorVersion} field of the multisig treasury.
 \end{description}
 
 The unresolved treasury's datum fields are interpreted as follows:
@@ -104,9 +104,9 @@ These fields are interpreted as follows:
   \item[key.] An integer that uniquely identifies the vote utxo.
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
-  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor snapshot.
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the snapshot voted by the peer.
-  \item[minor version.] The minor version of the minor snapshot voted by the peer. This snapshot's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
+  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor offchain block.
+  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the offchain ledger's active utxo set, as of the block voted by the peer.
+  \item[minor version.] The minor version of the minor offchain block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
 
 Collectively, the vote utxos constitute a linked list data structure onchain.
@@ -145,7 +145,7 @@ The transaction body is as follows:
         \end{array}\right\}
     \end{split}
     \end{equation*}
-  \item Create the default vote utxo, containing a vote for the major snapshot's active utxo set:
+  \item Create the default vote utxo, containing a vote for the major offchain block's active utxo set:
     \begin{equation*}
       \T{defaultVoteDatum} \coloneq \left\{
       \begin{array}{lll}
@@ -174,15 +174,15 @@ The transaction body is as follows:
 \subsection{Dispute resolution}%
 \label{h:rule-based-dispute-resolution}
 
-During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor snapshot confirmed by the offchain consensus protocol before it stalled.
-After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest snapshot among the votes.
+During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor offchain block confirmed by the offchain consensus protocol before it stalled.
+After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest block among the votes.
 
 \subsubsection{Spending validator for voting}
 
 Voting is handled by the Plutus-based spending validator of the dispute address.
 Redeemers:
 \begin{description}
-  \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a snapshot. Conditions:
+  \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a block. Conditions:
     \begin{itemize}
       \item Verify the vote inputs:
         \begin{enumerate}
@@ -207,10 +207,10 @@ Redeemers:
             \begin{split}
               \T{VoteRedeemer} &\coloneq \left\{
                 \begin{array}{lll}
-                  \T{minorSnapshot} &::& \T{MinorSnapshot} \\
+                  \T{minorBlock} &::& \T{MinorBlock} \\
                   \T{multisig} &::& [\T{Signature}]
                 \end{array}\right\}\\
-              \T{MinorSnapshot} &\coloneq \left\{
+              \T{MinorBlock} &\coloneq \left\{
               \begin{array}{lll}
                 \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
                 \T{majorVersion} &::& \T{Int} \\
@@ -218,7 +218,7 @@ Redeemers:
               \end{array}\right\}
             \end{split}
             \end{equation*}
-          \item If \code{voteRedeemer} is provided, then the \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorSnapshot} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
+          \item If \code{voteRedeemer} is provided, then the \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorBlock} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
         \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]
@@ -302,7 +302,7 @@ Redeemers:
 \subsection{Treasury}%
 \label{h:rule-based-treasury}
 
-The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved snapshot.
+The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved offchain block.
 Peers can then withdraw funds from the treasury by creating utxos on L1 and showing Merkle proofs of equivalent utxos being removed from the treasury's active utxo set.
 Redeemers:
 \begin{description}

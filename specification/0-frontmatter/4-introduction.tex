@@ -20,17 +20,17 @@ and withdrawals are settled by multi-signed settlement transactions that send ut
 A refund mechanism assures deposits against being stranded if consensus fails.
 
 If peers cannot multi-sign any more transactions, Hydrozoa's state timeout mechanism transfers control over the head from the native script to a Plutus script.
-The Plutus script resolves the peers' dispute by allowing each peer to submit a multi-signed ledger snapshot version, from which it selects the latest one.
-With the latest snapshot established, peers can unilaterally execute their own withdrawals by interacting with the snapshot's utxo Merkle tree.
+The Plutus script resolves the peers' dispute by allowing each peer to submit a multi-signed ledger block version, from which it selects the latest one.
+With the latest block established, peers can unilaterally execute their own withdrawals by interacting with the block's utxo Merkle tree.
 
-Offchain, Hydrozoa broadcasts requests among peers and generates a sequence of multi-signed snapshots.
-Each snapshot is versioned and consists of a sequence of settlement transactions and a Merkle root hash of its active utxo set.
+Offchain, Hydrozoa broadcasts requests among peers and generates a sequence of multi-signed blocks.
+Each block is versioned and consists of a sequence of settlement transactions and a Merkle root hash of its active utxo set.
 The settlement transactions recognize new deposits in the L2 state and settle withdrawals from L2 to L1.
-The Merkle root hash defines the snapshot's not-yet-withdrawn L2 utxos, which can later be unilaterally withdrawn if the Plutus script selects this as the last snapshot.
+The Merkle root hash defines the block's not-yet-withdrawn L2 utxos, which can later be unilaterally withdrawn if the Plutus script selects this as the last block.
 
-As long as one of the peers is honest, the offchain protocol guarantees that a snapshot's L2 ledger state is derived by applying its events (deposits, transactions, and withdrawals) to the previous snapshot's ledger state.
-It also guarantees that future snapshots never contradict a multi-signed snapshot's settlement transactions.
-This makes settlement transactions deterministic and provides instant finality for a snapshot's events as soon as it is multi-signed.
+As long as one of the peers is honest, the offchain protocol guarantees that a block's L2 ledger state is derived by applying its events (deposits, transactions, and withdrawals) to the previous block's ledger state.
+It also guarantees that future blocks never contradict a multi-signed block's settlement transactions.
+This makes settlement transactions deterministic and provides instant finality for a block's events as soon as it is multi-signed.
 
 Overall, a Hydrozoa Head excels at facilitating fast and frequent interactions for its peers with each other and Cardano.
 Its main incentive to interoperate with other L2s is to expand its peers' reach beyond their small group and allow them to interact with large smart-contract-based applications.
