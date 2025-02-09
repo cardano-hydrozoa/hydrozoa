@@ -4,12 +4,15 @@
 
 \section{Rule-based regime}%
 \label{h:rule-based-regime}%
-If the peers stop responding to each other in the L2 consensus protocol, the rule-based regime ensures that their funds can still be withdrawn from the Hydrozoa treasury according to the latest confirmed block.
+If the peers stop responding to each other in the L2 consensus protocol, the rule-based regime ensures that the peers can still withdraw their funds from the Hydrozoa head's treasury.
 It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when L2 consensus breaks down.
 
-In the rule-based regime, the Hydrozoa head's treasury is managed by a suite of Plutus scripts:
+The transition from the multisig regime to the rule-based regime pins the L1 treasury's major version, disqualifying any L2 blocks with lesser or greater major versions.%
+\footnote{Blocks with lesser major versions are disqualified because they assume a total treasury balance of funds that may no longer exist due to deposits and withdrawals adding/removing funds from the treasury.
+  Blocks with greater major versions are disqualified because the transition to the rule-based regime precludes their settlement transactions from being confirmed on L1 (utxo contention over the multisig treasury).}
+The rule-based regime then proceeds via the following suite of Plutus scripts:
 \begin{itemize}
-  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest L2 block confirmed by the L2 consensus protocol before it stalled.
+  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest confirmed L2 block matching the L1 treasury's major version.
   \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved L2 block.
 \end{itemize}
 
@@ -63,7 +66,7 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[peers.] The peers' public keys.
   \item[n peers.] The number of peers in the head.
   \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
-  \item[major version.] The treasury's major version when it transitioned to the rule-based regime.
+  \item[major version.] The treasury's major version, pinned by the transition to the rule-based regime.
   \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 
