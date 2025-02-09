@@ -2,9 +2,9 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\section{Rule-based regime}%
-\label{h:rule-based-regime}%
-If the peers stop responding to each other in the L2 consensus protocol, the rule-based regime ensures that the peers can still withdraw their funds from the Hydrozoa head's treasury.
+\chapter{L1 rule-based regime}%
+\label{h:l1-rule-based-regime}%
+If the peers stop responding to each other in the L2 consensus protocol, the L1~rule-based~regime ensures that the peers can still withdraw their funds from the Hydrozoa head's treasury.
 It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when L2 consensus breaks down.
 
 The transition from the multisig regime to the rule-based regime pins the L1 treasury's major version, disqualifying any L2 blocks with lesser or greater major versions.%
@@ -12,20 +12,20 @@ The transition from the multisig regime to the rule-based regime pins the L1 tre
   Blocks with greater major versions are disqualified because the transition to the rule-based regime precludes their settlement transactions from being confirmed on L1 (utxo contention over the multisig treasury).}
 The rule-based regime then proceeds via the following suite of Plutus scripts:
 \begin{itemize}
-  \item The dispute resolution scripts (\cref{h:rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest confirmed L2 block matching the L1 treasury's major version.
-  \item The treasury spending validator (\cref{h:rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved L2 block.
+  \item The dispute resolution scripts (\cref{h:l1-rule-based-dispute-resolution}) arbitrate the peers' dispute about the latest confirmed L2 block matching the L1 treasury's major version.
+  \item The treasury spending validator (\cref{h:l1-rule-based-treasury}) awaits resolution and then manages withdrawals from the head's treasury based on the resolved L2 block.
 \end{itemize}
 
 The rule-based regime does not manage any unabsorbed deposits left over from the multisig regime.
-Depositors can retrieve them with post-dated refund transactions (\cref{h:multisig-refund}) from the multisig regime.
+Depositors can retrieve them with post-dated refund transactions (\cref{h:l1-multisig-refund}) from the multisig regime.
 
-\subsection{Utxo state}%
-\label{h:rule-based-utxo-state}
+\section{Utxo state}%
+\label{h:l1-rule-based-utxo-state}
 
-\subsubsection{Treasury state}
+\subsection{Treasury state}
 
-In the rule-based regime, the head's treasury utxo is at the head's Plutus-based treasury address (\cref{h:rule-based-treasury}).
-It holds the head's beacon token and all treasury funds from the multisig regime (\cref{h:multisig-utxo-state}).
+In the rule-based regime, the head's treasury utxo is at the head's Plutus-based treasury address (\cref{h:l1-rule-based-treasury}).
+It holds the head's beacon token and all treasury funds from the multisig regime (\cref{h:l1-multisig-utxo-state}).
 
 The treasury utxo must have the following datum type, which defines its unresolved and resolved states in the rule-based regime:
 \begin{equation*}
@@ -70,17 +70,17 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 
-\subsubsection{Dispute state}
+\subsection{Dispute state}
 
 Besides the treasury utxo, the head's state in the rule-based regime also includes the vote utxos for the dispute.
 Each of these utxos is at the head's Plutus-based dispute address and holds one or more of the dispute's fungible tokens:
 \begin{itemize}
-  \item The policy ID corresponds to the head's native script (in minting policy form) (\cref{h:multisig-regime}).
+  \item The policy ID corresponds to the head's native script (in minting policy form) (\cref{h:l1-multisig-regime}).
   \item The first four bytes of the asset name are equal to the CIP-67
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
     prefix for class label \inlineColored{3477}, which corresponds to Hydrozoa head dispute tokens.%
     \footnote{We chose \inlineColored{3477} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
-  \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:rule-based-transition}).
+  \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
 \end{itemize}
 
 Each vote utxo has this datum type:
@@ -106,7 +106,7 @@ These fields are interpreted as follows:
 \begin{description}
   \item[key.] An integer that uniquely identifies the vote utxo.
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
-  \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
+  \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
   \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor L2 block.
   \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the block voted by the peer.
   \item[minor version.] The minor version of the minor L2 block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
@@ -114,8 +114,8 @@ These fields are interpreted as follows:
 
 Collectively, the vote utxos constitute a linked list data structure on L1.
 
-\subsection{Transition to rule-based regime}%
-\label{h:rule-based-transition}
+\section{Transition to rule-based regime}%
+\label{h:l1-rule-based-transition}
 
 The L2 consensus protocol pairs every multisig treasury utxo that it creates with a post-dated transaction that transitions the treasury to the rule-based regime (\cref{h:l2-consensus-protocol}).
 
@@ -174,13 +174,13 @@ The transaction body is as follows:
     \end{equation*}
 \end{enumerate}
 
-\subsection{Dispute resolution}%
-\label{h:rule-based-dispute-resolution}
+\section{Dispute resolution}%
+\label{h:l1-rule-based-dispute-resolution}
 
 During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor L2 block confirmed by the L2 consensus protocol before it stalled.
 After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest block among the votes.
 
-\subsubsection{Spending validator for voting}
+\subsection{Spending validator for voting}
 
 Voting is handled by the Plutus-based spending validator of the dispute address.
 Redeemers:
@@ -248,7 +248,7 @@ Redeemers:
 \end{enumerate}
 \end{description}
 
-\subsubsection{Staking validator for tallying}
+\subsection{Staking validator for tallying}
 
 Tallying is handled by the Plutus-based staking validator of the dispute address, via the withdraw-zero script purpose.
 Redeemers:
@@ -302,8 +302,8 @@ Redeemers:
     \end{itemize}
 \end{description}
 
-\subsection{Treasury}%
-\label{h:rule-based-treasury}
+\section{Treasury}%
+\label{h:l1-rule-based-treasury}
 
 The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved L2 block.
 Peers can then withdraw funds from the treasury by creating utxos on L1 and showing Merkle proofs of equivalent utxos being removed from the treasury's active utxo set.

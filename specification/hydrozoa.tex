@@ -7,27 +7,23 @@
 \begin{document}
 
 \frontmatter
-\subfileinclude{0-frontmatter/1-cover-page}
-\subfileinclude{0-frontmatter/2-abstract}
-\subfileinclude{0-frontmatter/3-toc}
+\subfileinclude{frontmatter/01-cover-page}
+\subfileinclude{frontmatter/02-abstract}
+\subfileinclude{frontmatter/03-toc}
 \mainmatter
-% \subfileinclude{0-frontmatter/4-introduction}
+\subfile{frontmatter/04-overview}
 
-\subfile{1-L1/0-chapter}
-\subfile{1-L1/1-multisig-regime}
-\subfileinclude{1-L1/2-rule-based-regime}
+\subfile{chapters/1-l1-multisig-regime}
 
-\subfile{2-L2-state/0-chapter}
-\subfile{2-L2-state/1-ledger}
-\subfileinclude{2-L2-state/2-blocks}
+\subfile{chapters/2-l1-rule-based-regime}
 
-\subfile{3-L2-consensus/0-chapter}
+\subfile{chapters/3-l2-ledger}
 
-\appendix
+\subfile{chapters/4-l2-blocks}
 
-\subfile{A-appendix/0-chapter}
-\subfile{A-appendix/1-deterministic-utxo-rollout}
-\subfile{A-appendix/a-future-work}
+\subfile{chapters/5-l2-consensus}
+
+\subfile{backmatter/a-future-work}
 
 \cleardoublepage
 \phantomsection
