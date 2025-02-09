@@ -9,57 +9,22 @@ The L2 ledger state has this type:
 \begin{equation*}
   \T{LedgerState} \coloneq \left\{
   \begin{array}{lll}
-    \T{activeUtxos} &::& \T{UtxoSet} \\
-    \T{withdrawnUtxos} &::& \T{UtxoSet}
+    \T{activeUtxos} &::& \T{UtxoSet^{L2}} \\
+    \T{withdrawnUtxos} &::& \T{UtxoSet^{L2}}
   \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] The set of utxos that can be spent in transactions or withdrawn.
+  \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
     These utxos are created by L2 transactions and settlements.
   \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled on L1 in the multisig regime.
     L2 settlement events empty this set (\cref{h:ledger-settlement}).
     
 \end{description}
 
-Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
-In practice, we equivalently represent a utxo set as a map from output reference to output:
-\begin{equation*}
-\begin{split}
-  \T{UtxoSet} &\coloneq \T{Map(OutputRef, Output)} \\
-    &\coloneq \left\{
-      (k_i :: \T{OutputRef}, v_i :: \T{Output})
-      \;\middle|\;
-      \forall i \neq j.\; k_i \neq k_j
-    \right\}
-\end{split}
-\end{equation*}
+\subsection{Ledger rules}%
+\label{h:l2-ledger-rules}
 
-An output reference is a tuple that uniquely identifies an output by a hash of the ledger event that created it (either a transaction or a deposit) and its index among the outputs of that event:
-\begin{equation*}
-    \T{OutputRef} \coloneq \left\{
-    \begin{array}{lll}
-      \T{id} &::& \T{TxId} \\
-        \T{index} &::& \T{Int}
-    \end{array} \right\}
-\end{equation*}
-
-An output is a tuple describing a bundle of tokens, data, and a script that have been placed by a transaction at an address in the ledger:
-\begin{equation*}
-    \T{Output} \coloneq \left\{
-    \begin{array}{lll}
-      \T{addr} &::& \T{Address} \\
-        \T{value} &::& \T{Value} \\
-        \T{datum} &::& \T{Option(Data)} \\
-        \T{script} &::& \T{Option(Script)}
-    \end{array} \right\}
-\end{equation*}
-Note that this type definition of an \code{Output} does not allow datum hashes in the \code{datum} field, as they are not allowed in Hydrozoa L2 transactions (\cref{h:ledger-transaction}).
-
-\subsection{Transaction}%
-\label{h:ledger-transaction}
-
-In the L2 ledger, every transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
 The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions,%
 \footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
 but with the following additions:
@@ -87,8 +52,61 @@ but with the following additions:
 \end{description}
 Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
 Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
-The hydra node software rejects (with an error message) L2 transactions that violate these requirements, while peers simply ignore \code{ReqTx} messages (\cref{h:consensus-transaction}) that broadcast such transactions.
 
+The hydra node software rejects (with an error message) L2 transactions that violate these requirements, while peers simply ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
+
+\subsection{Utxo set}%
+\label{h:l2-utxo-set}
+
+Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
+In practice, we equivalently represent a utxo set as a map from output reference to output:
+\begin{equation*}
+\begin{split}
+  \T{UtxoSet^{L2}} &\coloneq \T{Map(OutputRef, Output^{L2})} \\
+    &\coloneq \left\{
+      (k_i :: \T{OutputRef}, v_i :: \T{Output^{L2}})
+      \;\middle|\;
+      \forall i \neq j.\; k_i \neq k_j
+    \right\}
+\end{split}
+\end{equation*}
+
+An output reference is a tuple that uniquely identifies an output by a hash of the transaction that created it and its index among that transaction's outputs:
+\begin{equation*}
+  \T{OutputRef} \coloneq \left\{
+    \begin{array}{lll}
+      \T{id} &::& \T{TxId} \\
+        \T{index} &::& \T{Int}
+    \end{array} \right\}
+\end{equation*}
+
+An output is a tuple describing a bundle of tokens, data, and a script that have been placed at an address in the ledger:
+\begin{equation*}
+\begin{split}
+  \T{Output^{L2}} &\coloneq \left\{
+  \begin{array}{lll}
+    \T{addr} &::& \T{Address^{L2}} \\
+      \T{value} &::& \T{Value} \\
+      \T{datum} &::& \T{Datum^{L2}} \\
+      \T{script} &::& \T{Maybe} \; \T{Script^{L2}}
+  \end{array} \right\} \\\\
+  \T{Address^{L2}} &\coloneq \left\{
+    \begin{array}{l}
+      \T{Network^{L2}} \\
+      \T{PaymentCredential} \\
+      \T{StakeReference}
+    \end{array}\right\} \\\\
+  \T{Datum^{L2}} &\coloneq \T{NoDatum} \mid \T{Datum} \; \T{Data} \\ \\
+  \T{Script^{L2}} \coloneq\;& \T{TimelockScript} \; \T{Timelock} \\
+                        \mid\;& \T{PlutusScript} \; \T{PlutusVersion^{L2}} \; \T{PlutusBinary} \\\\
+  \T{PlutusVersion^{L2}} \coloneq\;& \T{PlutusV3}
+\end{split}
+\end{equation*}
+
+\subsection{Transaction}%
+\label{h:ledger-transaction}
+
+An L2 transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
 In the following type listing:
 \begin{itemize}
   \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
@@ -97,46 +115,43 @@ In the following type listing:
 \begingroup
 \allowdisplaybreaks
 \begin{align*}
-    \T{Tx} \coloneq\;& \left\{
+    \T{Tx^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
-      \T{body} &::& \T{TxBody} \\
-        \T{wits} &::& \T{TxWits} \\
+      \T{body} &::& \T{TxBody^{L2}} \\
+        \T{wits} &::& \T{TxWits^{L2}} \\
         \T{is\_valid} &::& \T{Bool} \\
         \T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
-    \end{array} \right\} \\
-    \T{TxBody} \coloneq\;& \left\{
+    \end{array} \right\} \\ \\
+    \T{TxBody^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
-      \T{spend\_inputs} &::& \T{Set(OutputRef)} \\
-        \T{collateral\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
-        \T{reference\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
-        \T{outputs} &::& \T{[Output]} \\
-        \T{collateral\_return} &::& \quad?\;\T{Output} \\
+      \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
+        \T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{outputs} &::& \T{[Output^{L2}]} \\
+        \T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
         \T{total\_collateral} &::& \quad?\;\T{Coin} \\
-        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set(Certificate) ]} \\
-        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map(RewardAccount, Coin)} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set \; Certificate ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map \; RewardAccount \; Coin} \\
         \T{fee} &::& \T{Coin} \\
         \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
         \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
         \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
-        \T{script\_integrity\_hash} &::& \quad?\;\T{Hash} \\
-        \T{auxiliary\_data\_hash} &::& \quad?\;\T{Hash} \\
-        \T{network\_id} &::& \quad?\;\T{Network} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{ScriptIntegrityHash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{AuxiliaryDataHash} \\
+        \T{network\_id} &::& \quad?\;\T{Network^{L2}} \\
         \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
-        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set(ProposalProcedure)} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set \; ProposalProcedure} \\
         \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
         \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
-    \end{array} \right\}\\
-    \T{TxWits} \coloneq\;& \left\{
+    \end{array} \right\}\\\\
+    \T{TxWits^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
-      \T{addr\_tx\_wits} &::& \quad?\;\T{Set(VKey, Signature, VKeyHash)} \\
-        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set(BootstrapWitness)} \\
-        \T{script\_tx\_wits} &::& \quad?\;\T{Map(ScriptHash, Script)} \\
+      \T{addr\_tx\_wits} &::& \quad?\;\T{Set \; (VKey, Signature,  VKeyHash)} \\
+        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set \; BootstrapWitness} \\
+        \T{script\_tx\_wits} &::& \quad?\;\T{Map \; ScriptHash \; Script^{L2}} \\
         \varnothing\;\T{data\_tx\_wits} &::& \quad?\;\T{TxDats} \\
         \T{redeemer\_tx\_wits} &::& \quad?\;\T{Redeemers}
-    \end{array} \right\}\\
-    \T{Script} \coloneq\;& \T{TimelockScript}(\T{Timelock}) \\
-                          \mid\;& \T{PlutusScript}(\T{PlutusVersion},\T{PlutusBinary}) \\
-    \T{PlutusVersion} \coloneq\;& \T{PlutusV3}
+    \end{array} \right\}
 \end{align*}
 \endgroup
 
@@ -157,46 +172,35 @@ Similar to L2 transactions, we can express the modified rules for withdrawals (r
 \begingroup
 \allowdisplaybreaks
 \begin{align*}
-    \T{Tx} \coloneq\;& \left\{
+  \T{Tx^{L2W}} \coloneq\;& \left\{
     \begin{array}{lll}
-      \T{body} &::& \T{TxBody} \\
-        \T{wits} &::& \T{TxWits} \\
+      \T{body} &::& \T{TxBody^{L2W}} \\
+        \T{wits} &::& \T{TxWits^{L2}} \\
         \T{is\_valid} &::& \T{Bool} \\
         \varnothing\;\T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
-    \end{array} \right\} \\
-    \T{TxBody} \coloneq\;& \left\{
+    \end{array} \right\} \\\\
+    \T{TxBody^{L2W}} \coloneq\;& \left\{
     \begin{array}{lll}
-      \T{spend\_inputs} &::& \T{Set(OutputRef)} \\
-        \varnothing\;\T{collateral\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
-        \T{reference\_inputs} &::& \quad?\;\T{Set(OutputRef)} \\
-        \varnothing\;\T{outputs} &::& \T{[Output]} \\
-        \varnothing\;\T{collateral\_return} &::& \quad?\;\T{Output} \\
+      \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
+        \varnothing\;\T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \varnothing\;\T{outputs} &::& \T{[Output^{L2}]} \\
+        \varnothing\;\T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
         \varnothing\;\T{total\_collateral} &::& \quad?\;\T{Coin} \\
-        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set(Certificate) ]} \\
-        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map(RewardAccount, Coin)} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set \; Certificate ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map \; RewardAccount Coin} \\
         \varnothing\;\T{fee} &::& \T{Coin} \\
         \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
         \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
         \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
-        \T{script\_integrity\_hash} &::& \quad?\;\T{Hash} \\
-        \T{auxiliary\_data\_hash} &::& \quad?\;\T{Hash} \\
-        \T{network\_id} &::& \quad?\;\T{Network} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{ScriptIntegrityHash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{AuxiliaryDataHash} \\
+        \T{network\_id} &::& \quad?\;\T{Network^{L2}} \\
         \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
-        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set(ProposalProcedure)} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set \; ProposalProcedure} \\
         \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
         \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
-    \end{array} \right\}\\
-    \T{TxWits} \coloneq\;& \left\{
-    \begin{array}{lll}
-      \T{addr\_tx\_wits} &::& \quad?\;\T{Set(VKey, Signature, VKeyHash)} \\
-        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set(BootstrapWitness)} \\
-        \T{script\_tx\_wits} &::& \quad?\;\T{Map(ScriptHash, Script)} \\
-        \varnothing\;\T{data\_tx\_wits} &::& \quad?\;\T{TxDats} \\
-        \T{redeemer\_tx\_wits} &::& \quad?\;\T{Redeemers}
-    \end{array} \right\}\\
-    \T{Script} \coloneq\;& \T{TimelockScript}(\T{Timelock}) \\
-                          \mid\;& \T{PlutusScript}(\T{PlutusVersion},\T{PlutusBinary}) \\
-    \T{PlutusVersion} \coloneq\;& \T{PlutusV3}
+    \end{array} \right\}
 \end{align*}
 \endgroup
 
@@ -227,7 +231,7 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
 The effect of this event is to empty the \code{withdrawnUtxo} set and add new utxos to the \code{activeUtxo} set.
 
-These new utxos correspond to the deposits absorbed by the settlement transaction (\cref{h:multisig-settle}) of the major L2 block, with the \code{Output} fields of each new utxo set as follows:
+These new utxos correspond to the deposits absorbed by the settlement transaction (\cref{h:multisig-settle}) of the major L2 block, with the \codeMathTt{Output^{L2}} fields of each new utxo set as follows:
 \begin{description}
   \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
   \item[value.] Set equal to the value of the corresponding L1 deposit.
@@ -237,7 +241,7 @@ These new utxos correspond to the deposits absorbed by the settlement transactio
 
 The \code{OutputReference} fields of each of these new utxos is as follows:
 \begin{description}
-  \item[id.] Set equal to the Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the transaction ID of the major L2 block's settlement transaction.
+  \item[id.] Set equal to the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the transaction ID of the major L2 block's settlement transaction.
   \item[index.] Set equal to the L1 deposit's index among the absorbed deposits of the major L2 block, in ascending order of L1 \code{OutputReference}, starting from zero.
 \end{description}
 

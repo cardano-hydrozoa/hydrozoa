@@ -36,7 +36,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
   \T{ResolvedDatum} &\coloneq\;\left\{
     \begin{array}{lll}
       \T{headMp} &::& \T{PolicyId} \\
-      \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+      \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{version} &::& (\T{Int}, \T{Int}) \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\} \\
@@ -67,7 +67,7 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[n peers.] The number of peers in the head.
   \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
   \item[major version.] The treasury's major version, pinned by the transition to the rule-based regime.
-  \item[params.] A 32-byte Blake2b-256 hash (\inlineColored{$\mathcal{H}_{32}$}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
+  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
 \end{description}
 
 \subsubsection{Dispute state}
@@ -80,7 +80,7 @@ Each of these utxos is at the head's Plutus-based dispute address and holds one 
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
     prefix for class label \inlineColored{3477}, which corresponds to Hydrozoa head dispute tokens.%
     \footnote{We chose \inlineColored{3477} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
-  \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:rule-based-transition}).
+  \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:rule-based-transition}).
 \end{itemize}
 
 Each vote utxo has this datum type:
@@ -96,7 +96,7 @@ Each vote utxo has this datum type:
   \T{VoteStatus} &\coloneq \T{NoVote} \mid \T{Abstain} \mid \T{Vote} \; \T{VoteDetails} \\
   \T{VoteDetails} &\coloneq \left\{
     \begin{array}{lll}
-      \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+      \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{minorVersion} &::& \T{Int}
     \end{array}\right\}
 \end{split}
@@ -108,7 +108,7 @@ These fields are interpreted as follows:
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:rule-based-transition}).
   \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor L2 block.
-  \item[active utxos.] A 32-byte Merkle root hash (\inlineColored{$\mathcal{RH}_{32}$}) of the L2 ledger's active utxo set, as of the block voted by the peer.
+  \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the block voted by the peer.
   \item[minor version.] The minor version of the minor L2 block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
 
@@ -129,7 +129,7 @@ The transaction body is as follows:
     Let \code{mt} be its datum.
   \item Let \code{headMp} be the head's native script minting policy.
   \item Let \code{votingDeadline} be the voting deadline for this dispute, as defined by the L2 consensus for this transition to the rule-based regime.
-  \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash (\inlineColored{$\mathcal{H}_{28}$}) of the \code{multisigTreasury} output reference.
+  \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the \code{multisigTreasury} output reference.
   \item Let \code{peers} be a list of the peers' public keys and \code{nPeers} be its length.%
     \footnote{The indices of the \code{peers} list (and all other lists in this specification) start from \inlineColored{1}.}
   \item Mint (\code{nPeers} + 1) dispute tokens of (\code{headMp}, \code{disputeId}).
@@ -162,7 +162,7 @@ The transaction body is as follows:
         \end{array}\right\}
       \end{array}\right\}
     \end{equation*}
-  \item For \inlineColored{$i$} iterated from 1 to \code{nPeers}, create a vote utxo with one dispute token and this datum:%
+  \item For \codeMath{i} iterated from 1 to \code{nPeers}, create a vote utxo with one dispute token and this datum:%
     \begin{equation*}
       \T{initVoteDatum} \; i \coloneq \left\{
         \begin{array}{lll}
@@ -215,7 +215,7 @@ Redeemers:
                 \end{array}\right\}\\
               \T{MinorBlock} &\coloneq \left\{
               \begin{array}{lll}
-                \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet} \\
+                \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
                 \T{majorVersion} &::& \T{Int} \\
                 \T{minorVersion} &::& \T{Int}
               \end{array}\right\}
@@ -350,9 +350,9 @@ Redeemers:
           &\T{validWithdrawals} \; \T{in} \; \T{ws} \; \T{out} \coloneq
             (\T{foldl} \; \T{delete} \; \T{in} \; \T{ws} = \T{out}) \\
           &\T{delete} ::
-            \mathcal{RH}_{32} \; \T{UtxoSet} ->
-            (\T{OutputRef}, \T{Output}, \T{Proof}) ->
-            \mathcal{RH}_{32} \; \T{UtxoSet}
+            \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} ->
+            (\T{OutputRef}, \T{Output^{L2}}, \T{Proof}) ->
+            \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
         \end{split}
         \end{equation*}
       \item \code{treasuryInput} must hold the sum of all tokens in \code{treasuryOutput} and the outputs of \code{withdrawals}.
