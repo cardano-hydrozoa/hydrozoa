@@ -95,25 +95,26 @@ Peers can deposit funds into a Hydrozoa head by sending utxos to its native scri
   \end{array}\right\}
 \end{equation*}
 
-The \code{deadline} field defines a POSIX time before which the deposit should be absorbed into the head's treasury via a settlement transaction (\cref{h:multisig-settle}).
-After the deadline, the deposit should be refunded to the peer (\cref{h:multisig-refund}).
+In this datum, the depositor instructs the peers to absorb the deposit into the treasury via a settlement transaction (\cref{h:multisig-settle}) before the \code{deadline}, or else to refund it to the depositor (\cref{h:multisig-refund}) if it will not be absorbed before the \code{deadline}.
 
 The \code{address} and \code{datum} fields define the address and datum at which the utxo in the L2 ledger should be created, if the deposit is absorbed into the head's treasury.
 The new utxo in the L2 ledger should contain the same funds as the deposit utxo.
 
 The \code{refundAddress} and \code{refundDatum} fields define the address and datum to which the deposit's funds should be sent, if the deposit is refunded.
+The funds in the deposit must be sufficient to pay for the refund's transaction cost and create the refund utxo.
 
 \subsection{Refund}%
 \label{h:multisig-refund}
 A refund is a transaction, multi-signed by all peers, that sends a deposit utxo's funds to the deposit's \code{refundAddress} and \code{refundDatum}.
-As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that are past their deadline.
+As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that will not be absorbed before their deadline.%
+\footnote{To minimize uncertainty from L1 rollbacks, the L2 consensus protocol will not attempt to absorb a deposit unless sufficient time remains before its deadline. This safety margin is controlled by an offchain consensus parameter (\cref{h:consensus-parameters}).}
 
-However, a peer should obtain the other peers' signatures for a post-dated refund transaction before submitting the deposit transaction to Cardano.
+However, a depositor should obtain the other peers' signatures for a post-dated refund transaction before submitting the deposit transaction to Cardano.
 This transaction's validity interval should start at the deposit's \code{deadline}.
-The post-dated refund ensures that the peer can still retrieve the deposited funds if they haven not been absorbed by the deadline, even if the other peers stop responding.
+Doing so ensures that the depositor can still retrieve the deposited funds if they haven not been absorbed by the deadline, even if the other peers stop responding.
 
-Peers can request and receive signatures for post-dated refund transactions via the \code{ReqDeposit} and \code{AckDeposit} messages of the L2 consensus protocol (\cref{h:l2-consensus-protocol}).
-In other words, if the peer requests permission to submit the deposit (\code{ReqDeposit}), then the peers confirm their readiness to absorb it into the head and assure the refund in case they fail to do so (\code{AckDeposit}).
+The L2 consensus protocol (\cref{h:consensus-on-refunds}) allows peers to obtain multi-signed post-dated refund transactions before posting their deposits on L1.
+It also allows them to immediately refund any deposits that its rules disqualify from being absorbed into the treasury.
 
 \subsection{Settlement and rollout}%
 \label{h:multisig-settle}
@@ -144,11 +145,7 @@ The finalization transaction is similar to the settlement transaction, except th
   \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using a rollout node output if necessary.
 \end{itemize}
 
-The L2 consensus protocol produces the multi-signed finalization transaction via the \code{ReqFinal} and \code{AckFinal} messages (\cref{h:l2-consensus-protocol}).
-To complement the finalization transaction, the protocol also produces multi-signed immediate refund transactions for all deposits that have not been confirmed in the blocks preceding the final L2 block.
-Post-dated refund transactions can handle any deposits that still remain after these immediate refunds, if the depositors bothered to obtain them before creating their deposits.
-
-Thus, the finalization and immediate/post-dated refund transactions remove any trace of the Hydrozoa head from Cardano's ledger.
-The peers can manually spend (via multi-signed transactions) any other utxos that still remain at the head's native script address.
+After the finalization transaction deals with the treasury and immediate/post-dated refund transactions deal with the unabsorbed deposits, no trace of the Hydrozoa head should be left in the L1 ledger.
+Any other utxos that remain at the head's native script address---assumed to be unrelated to the head---can be manually spent by the peers.
 
 \end{document}
