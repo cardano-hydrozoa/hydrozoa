@@ -1,3 +1,5 @@
+SPECNAME = hydrozoa
+SPECDIR = specification
 
 .PHONY: help
 help:
@@ -5,14 +7,14 @@ help:
 	@echo
 	@echo "Targets:"
 	@echo "  help               -- show this help"
-	@echo "  spec               -- build the specification specification/hydrozoa.pdf"
-	@echo "  spec-clean         -- clean the latexmk files in technical-spec"
+	@echo "  spec               -- build $(SPECDIR)/$(SPECNAME).pdf"
+	@echo "  spec-clean         -- clean the latexmk files in $(SPECDIR)"
 
 .PHONY: spec
 spec:
-	$(MAKE) -C specification nix-spec
+	$(MAKE) -C $(SPECDIR) nix-spec
 
 .PHONY: spec-clean
 spec-clean:
-	$(MAKE) -C specification nix-clean
+	$(MAKE) -C $(SPECDIR) nix-clean
 
