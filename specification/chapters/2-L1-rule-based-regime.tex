@@ -2,8 +2,11 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
+\input{\subfix{0-constants}}
+
 \chapter{L1 rule-based regime}%
 \label{h:l1-rule-based-regime}%
+
 If the peers stop responding to each other in the L2 consensus protocol, the L1~rule-based~regime ensures that the peers can still withdraw their funds from the Hydrozoa head's treasury.
 It is less cost-efficient and more complex than the multisig regime, but it serves as a fallback when L2 consensus breaks down.
 
@@ -20,7 +23,7 @@ The rule-based regime does not manage any unabsorbed deposits left over from the
 Depositors can retrieve them with post-dated refund transactions (\cref{h:l1-multisig-refund}) from the multisig regime.
 
 \section{Utxo state}%
-\label{h:l1-rule-based-utxo-state}
+\label{h:l1-rule-based-utxo-state}%
 
 \subsection{Treasury state}
 
@@ -78,8 +81,8 @@ Each of these utxos is at the head's Plutus-based dispute address and holds one 
   \item The policy ID corresponds to the head's native script (in minting policy form) (\cref{h:l1-multisig-regime}).
   \item The first four bytes of the asset name are equal to the CIP-67
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
-    prefix for class label \inlineColored{3477}, which corresponds to Hydrozoa head dispute tokens.%
-    \footnote{We chose \inlineColored{3477} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
+    prefix for class label \headDisputeToken{}, which corresponds to Hydrozoa head dispute tokens.%
+    \footnote{We chose \headDisputeToken{} because it spells ``DISP'' (short for dispute) on a phone dial pad.}
   \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the multisig treasury utxo spent in the head's transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
 \end{itemize}
 
@@ -115,7 +118,7 @@ These fields are interpreted as follows:
 Collectively, the vote utxos constitute a linked list data structure on L1.
 
 \section{Transition to rule-based regime}%
-\label{h:l1-rule-based-transition}
+\label{h:l1-rule-based-transition}%
 
 The L2 consensus protocol pairs every multisig treasury utxo that it creates with a post-dated transaction that transitions the treasury to the rule-based regime (\cref{h:l2-consensus-protocol}).
 
@@ -175,7 +178,7 @@ The transaction body is as follows:
 \end{enumerate}
 
 \section{Dispute resolution}%
-\label{h:l1-rule-based-dispute-resolution}
+\label{h:l1-rule-based-dispute-resolution}%
 
 During the voting period of a dispute, each peer gets one opportunity to cast their vote on the latest minor L2 block confirmed by the L2 consensus protocol before it stalled.
 After all votes are cast or the voting period ends, the dispute state can be resolved to a single vote utxo containing the latest block among the votes.
@@ -199,7 +202,7 @@ Redeemers:
       \item Verify the treasury reference input:
         \begin{enumerate}[resume]
           \item Let \code{treasury} be the only reference input matching \code{voteOutref} on tx hash.
-          \item A head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937} must be in \code{treasury}.
+          \item A head beacon token of \code{headMp} and CIP-67 prefix \headBeaconToken{} must be in \code{treasury}.
           \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
           \item The transaction's time-validity upper bound must not exceed the \code{votingDeadline} field of \code{treasury}.
         \end{enumerate}
@@ -243,7 +246,7 @@ Redeemers:
     \begin{enumerate}
       \item Let \code{voteInput} be the input being spent.
       \item Let (\code{headMp}, \code{disputeId}) be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
-      \item Let \code{treasury} be a spent input that holds a head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
+      \item Let \code{treasury} be a spent input that holds a head beacon token of \code{headMp} and CIP-67 prefix \headBeaconToken{}.
       \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
 \end{enumerate}
 \end{description}
@@ -271,7 +274,7 @@ Redeemers:
           \item \code{continuingInput} and \code{removedInput} must have non-ADA tokens of only one asset class, which must match between them and satisfy both of the following:
             \begin{enumerate}
               \item The minting policy (\code{headMp}) must be a native script.
-              \item The asset name (\code{disputeId}) must have the CIP-67 prefix \inlineColored{3477}.
+              \item The asset name (\code{disputeId}) must have the CIP-67 prefix \headDisputeToken{}.
             \end{enumerate}
           \item The \code{key} field of \code{removedInput} must be greater than the \code{key} field and equal to the \code{link} field of \code{continuingInput}.
           \item There must be no other spent inputs from the same address as \code{continuingInput} or holding any tokens of \code{headMp}.
@@ -280,7 +283,7 @@ Redeemers:
         \begin{enumerate}[resume]
           \item If the \code{voteStatus} of either \code{continuingInput} or \code{removedInput} is \code{NoVote}, all of the following must be satisfied:
             \begin{enumerate}
-              \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \inlineColored{4937}.
+              \item Let \code{treasury} be a reference input holding the head beacon token of \code{headMp} and CIP-67 prefix \headBeaconToken{}.
               \item \code{headMp} and \code{disputeId} must match the corresponding fields of the \code{Unresolved} datum in \code{treasury}.
               \item The \code{votingDeadline} field of \code{treasury} must not exceed the transaction's time-validity lower bound.
             \end{enumerate}
@@ -303,7 +306,7 @@ Redeemers:
 \end{description}
 
 \section{Treasury}%
-\label{h:l1-rule-based-treasury}
+\label{h:l1-rule-based-treasury}%
 
 The treasury spending validator awaits the dispute's resolution and adopts the active utxo set of the resolved L2 block.
 Peers can then withdraw funds from the treasury by creating utxos on L1 and showing Merkle proofs of equivalent utxos being removed from the treasury's active utxo set.
@@ -335,7 +338,7 @@ Redeemers:
     \begin{enumerate}
       \item Let \code{treasuryInput} be the input being spent.
       \item Let \code{headMp} be the corresponding field in \code{treasuryInput}.
-      \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \inlineColored{4937}.
+      \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \headBeaconToken{}.
       \item Let \code{treasuryOutput} be the output holding the (\code{headMp}, \code{headId}) beacon token.
       \item Let \code{withdrawals} be a list of triples. In each triple:
         \begin{itemize}
@@ -364,7 +367,7 @@ Redeemers:
     \begin{enumerate}
       \item Let \code{treasury} be the input being spent.
       \item Let \code{headMp} be the corresponding field in \code{treasury}.
-      \item All \code{headMp} tokens in \code{treasury} with CIP-67 prefixes of \inlineColored{3477} and \inlineColored{4937} must be burned.
+      \item All \code{headMp} tokens in \code{treasury} with CIP-67 prefixes of \headDisputeToken{} and \headBeaconToken{} must be burned.
     \end{enumerate}
 \end{description}
 

@@ -2,8 +2,11 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
+\input{\subfix{0-constants}}
+
 \chapter{L1 multisig regime}%
 \label{h:l1-multisig-regime}%
+
 Every Hydrozoa head uniquely corresponds to its peers' public key hashes.
 In the L1~multisig~regime, the head's native script simply requires signatures from all these public key hashes:%
 \footnote{We use similar notation to the Cardano ledger library \citep{IntersectMBOCardanoLedgerV117402025}, simplifying for readability.
@@ -22,14 +25,15 @@ However, we will describe this regime's expected states and transitions, which t
 
 \section{Utxo state}%
 \label{h:l1-multisig-utxo-state}%
+
 In the multisig regime, a head's entire L1 state resides in utxos at its native script address.
 Among these utxos, the head's treasury utxo is uniquely identified as the one holding the head's beacon token:
 \begin{enumerate}
   \item The policy ID corresponds to the head's native script (in minting policy form).
   \item The first four bytes of the asset name are equal to the CIP-67
     \citep{AlessandroKonradThomasVellekoopCIP67AssetName2022}
-    prefix for class label \inlineColored{4937}, which corresponds to Hydrozoa head beacon tokens.%
-    \footnote{We chose \inlineColored{4937} because it spells ``HYDR'' (short for Hydra/Hydrozoa) on a phone dial pad.}
+    prefix for class label \headBeaconToken{}, which corresponds to Hydrozoa head beacon tokens.%
+    \footnote{We chose \headBeaconToken{} because it spells ``HYDR'' (short for Hydra/Hydrozoa) on a phone dial pad.}
   \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the utxo nonce spent in the head's initialization transaction (\cref{h:l1-multisig-initialization}).
 \end{enumerate}
 No other utxo at the head's native script address should hold any tokens that meet the policy ID and CIP-67 prefix conditions above. In other words, there must only be one head at the address.%
@@ -62,7 +66,8 @@ Non-treasury utxos at the head's native script address are recognized as follows
 Unrecognized utxos are ignored by the Hydrozoa protocol.
 
 \section{Initialization}%
-\label{h:l1-multisig-initialization}
+\label{h:l1-multisig-initialization}%
+
 Before initializing a Hydrozoa head, the peers should agree on the L2 consensus parameters they want to use (\cref{h:l2-consensus-protocol}).
 Initialization is achieved with a single transaction, multi-signed by all the peers, that:
 \begin{itemize}
@@ -83,7 +88,8 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
 \end{itemize}
 
 \section{Deposit}%
-\label{h:l1-multisig-deposit}
+\label{h:l1-multisig-deposit}%
+
 Peers can deposit funds into a Hydrozoa head by sending utxos to its native script address, specifying their instructions in this datum type:
 \begin{equation*}
   \T{DepositDatum} \coloneq \left\{
@@ -105,7 +111,8 @@ The \code{refundAddress} and \code{refundDatum} fields define the address and da
 The funds in the deposit must be sufficient to pay for the refund's transaction cost and create the refund utxo.
 
 \section{Refund}%
-\label{h:l1-multisig-refund}
+\label{h:l1-multisig-refund}%
+
 A refund is a transaction, multi-signed by all peers, that sends a deposit utxo's funds to the deposit's \code{refundAddress} and \code{refundDatum}.
 As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that will not be absorbed before their deadline.%
 \footnote{To minimize uncertainty from L1 rollbacks, the L2 consensus protocol will not attempt to absorb a deposit unless sufficient time remains before its deadline. This safety margin is controlled by an offchain consensus parameter (\cref{h:l2-consensus-parameters}).}
@@ -118,7 +125,8 @@ The L2 consensus protocol (\cref{h:l2-consensus-on-refunds}) allows peers to obt
 It also allows them to immediately refund any deposits that its rules disqualify from being absorbed into the treasury.
 
 \section{Settlement and rollout}%
-\label{h:l1-multisig-settlement-rollout}
+\label{h:l1-multisig-settlement-rollout}%
+
 A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major L2 block (\cref{h:l2-blocks}).%
 \footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
 It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block, while keeping the \code{params} field unchanged.
@@ -139,7 +147,8 @@ The rollout node is spent in a rollout transaction, paying out some more withdra
 Further rollout transactions spend the shrinking rollout node, until all the withdrawals have been paid out.
 
 \section{Finalization}%
-\label{h:l1-multisig-finalization}
+\label{h:l1-multisig-finalization}%
+
 The finalization transaction is similar to the settlement transaction, except that:
 \begin{itemize}
   \item It burns the head's beacon token.

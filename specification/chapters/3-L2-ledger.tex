@@ -3,7 +3,7 @@
 \begin{document}
 
 \chapter{L2 ledger}%
-\label{h:l2-ledger}
+\label{h:l2-ledger}%
 
 The L2 ledger state has this type:
 \begin{equation*}
@@ -23,7 +23,7 @@ These fields are interpreted as follows:
 \end{description}
 
 \section{Ledger rules}%
-\label{h:l2-ledger-rules}
+\label{h:l2-ledger-rules}%
 
 The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions,%
 \footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
@@ -56,7 +56,7 @@ Instead, we express them as requirements for certain fields in transactions to a
 The hydra node software rejects (with an error message) L2 transactions that violate these requirements, while peers simply ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
 
 \section{Utxo set}%
-\label{h:l2-utxo-set}
+\label{h:l2-utxo-set}%
 
 Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
 In practice, we equivalently represent a utxo set as a map from output reference to output:
@@ -104,7 +104,7 @@ An output is a tuple describing a bundle of tokens, data, and a script that have
 \end{equation*}
 
 \section{Transaction}%
-\label{h:ledger-transaction}
+\label{h:ledger-transaction}%
 
 An L2 transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
 In the following type listing:
@@ -156,7 +156,7 @@ In the following type listing:
 \endgroup
 
 \section{Withdrawal}%
-\label{h:ledger-withdrawal}
+\label{h:ledger-withdrawal}%
 
 A withdrawal is an L2 ledger event that spends one or more utxos in \code{activeUtxos} and creates identical utxos (with the same output references) in \code{withdrawnUtxos}.
 The L2 ledger rules for withdrawals are similar to transactions, but with the following modifications:
@@ -226,7 +226,7 @@ Theoretically, we could effectively deactivate the minimum fee, minimum collater
 However, since the non-empty collateral inputs and transaction balancing rules are not affected by protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
 
 \section{Settlement}%
-\label{h:ledger-settlement}
+\label{h:ledger-settlement}%
 
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
 The effect of this event is to empty the \code{withdrawnUtxo} set and add new utxos to the \code{activeUtxo} set.
