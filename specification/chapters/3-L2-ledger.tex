@@ -25,7 +25,7 @@ These fields are interpreted as follows:
 \section{Ledger rules}%
 \label{h:l2-ledger-rules}%
 
-The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions,%
+Hydrozoa's L2 ledger rules are the same as Cardano's ledger rules,%
 \footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
 but with the following additions:
 \begin{description}
@@ -50,10 +50,6 @@ but with the following additions:
         Fortunately, the Midgard team is exploring a new approach to this problem, which we may adopt in future extensions to Hydrozoa.}
     \item[Different network ID.] Hydrozoa L2 transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
 \end{description}
-Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
-Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
-
-The hydra node software rejects (with an error message) L2 transactions that violate these requirements, while peers simply ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
 
 \section{Utxo set}%
 \label{h:l2-utxo-set}%
@@ -96,7 +92,7 @@ An output is a tuple describing a bundle of tokens, data, and a script that have
       \T{PaymentCredential} \\
       \T{StakeReference}
     \end{array}\right\} \\\\
-  \T{Datum^{L2}} &\coloneq \T{NoDatum} \mid \T{Datum} \; \T{Data} \\ \\
+  \T{Datum^{L2}} &\coloneq \T{NoDatum} \mid \T{Datum} \; \T{Data} \\\\
   \T{Script^{L2}} \coloneq\;& \T{TimelockScript} \; \T{Timelock} \\
                         \mid\;& \T{PlutusScript} \; \T{PlutusVersion^{L2}} \; \T{PlutusBinary} \\\\
   \T{PlutusVersion^{L2}} \coloneq\;& \T{PlutusV3}
@@ -107,6 +103,13 @@ An output is a tuple describing a bundle of tokens, data, and a script that have
 \label{h:ledger-transaction}%
 
 An L2 transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
+The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions, but with the additions listed in \cref{h:l2-ledger-rules}.
+
+Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
+Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
+
+The hydra node software should reject (with an error message) L2 transactions that violate these requirements, while peers should ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
+
 In the following type listing:
 \begin{itemize}
   \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
@@ -121,7 +124,7 @@ In the following type listing:
         \T{wits} &::& \T{TxWits^{L2}} \\
         \T{is\_valid} &::& \T{Bool} \\
         \T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
-    \end{array} \right\} \\ \\
+    \end{array} \right\} \\\\
     \T{TxBody^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
       \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
@@ -143,7 +146,7 @@ In the following type listing:
         \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set \; ProposalProcedure} \\
         \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
         \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
-    \end{array} \right\}\\\\
+    \end{array} \right\} \\\\
     \T{TxWits^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
       \T{addr\_tx\_wits} &::& \quad?\;\T{Set \; (VKey, Signature,  VKeyHash)} \\
