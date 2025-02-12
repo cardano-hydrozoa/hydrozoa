@@ -5,14 +5,54 @@
 \chapter{L2 blocks}%
 \label{h:l2-blocks}%
 
+It would be inefficient for a head's peers to confirm each L2 ledger event individually.
+Instead, they confirm an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
+
+Each block contains the sequence of all the valid but unconfirmed L2 ledger events that the peers witnessed since the previous block.
+Depending on the types of L2 ledger events in this sequence and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
+\begin{description}
+  \item[Minor block.] A block that contains a sequence of only L2 transactions (no withdrawals or settlement).
+    Minor blocks have no effect on the head's L1 utxo state and only affect the L2 ledger state's \code{activeUtxos} set.
+  \item[Major block.] A block that contains a sequence of L2 transactions and withdrawals, ending with an L2 settlement, and references a set of L1 deposits.
+    Each major block also contains an L1 settlement transaction that pays out L1 utxos corresponding to the block's L2 withdrawals and absorbs L1 deposits corresponding to the block's deposits into the head's treasury.
+    The major block's L2 settlement event must correspond to its L1 settlement transaction.
+  \item[Initial block.] The minor block with which the head is initialized.
+    It contains no L2 transactions and results in an empty L2 ledger state.
+  \item[Final block.] The major block with which the head is finalized.
+    Its L2 settlement event results in an empty L2 ledger state.
+\end{description}
+
+Every block is versioned by a unique pair of integers---the major and minor versions of the block:
+\begin{itemize}
+  \item The initial block has both major and minor versions set to zero.
+  \item A minor block keeps its predecessor's major version and increments the minor version.
+  \item A major block increments the major version and resets the minor version to zero.
+  \item The final block increments the major version and resets the minor version to zero.
+\end{itemize}
+
+Every block is also tagged by its sequence number, which counts the block's predecessors.
+
+This chapter describes how to create and verify L2 blocks.
+
 % TODO Parameters for blocks
+
+\section{Initial block}%
+\label{h:l2-initial-block}%
+
+% TODO Initial block
 
 \section{Minor block}%
 \label{h:l2-minor-block}%
 
 % TODO Minor block
 
+\subsection{Create a minor block}%
+\label{h:l2-minor-block-create}%
+
 % TODO - create
+
+\subsection{Verify a minor block}%
+\label{h:l2-minor-block-verify}%
 
 % TODO - verify
 
@@ -21,7 +61,13 @@
 
 % TODO Major block
 
+\subsection{Create a major block}%
+\label{h:l2-major-block-create}%
+
 % TODO - create
+
+\subsection{Verify a major block}%
+\label{h:l2-major-block-verify}%
 
 % TODO - verify
 
@@ -34,7 +80,13 @@
 
 % TODO Final block
 
+\subsection{Create a final block}%
+\label{h:l2-final-block-create}%
+
 % TODO - create
+
+\subsection{Verify a final block}%
+\label{h:l2-final-block-verify}%
 
 % TODO - verify
 

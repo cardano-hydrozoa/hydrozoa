@@ -232,9 +232,9 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 \label{h:ledger-settlement}%
 
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
-The effect of this event is to empty the \code{withdrawnUtxo} set and add new utxos to the \code{activeUtxo} set.
+The effect of this event is to empty the \code{withdrawnUtxos} set and add new utxos to the \code{activeUtxos} set, mirroring the effect of the major block's L1 settlement transaction on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}).
 
-These new utxos correspond to the deposits absorbed by the settlement transaction (\cref{h:l1-multisig-settlement-rollout}) of the major L2 block, with the \codeMathTt{Output^{L2}} fields of each new utxo set as follows:
+The new utxos in \code{activeUtxos} correspond to the deposits absorbed by the settlement transaction, with the \codeMathTt{Output^{L2}} fields of each new utxo set as follows:
 \begin{description}
   \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
   \item[value.] Set equal to the value of the corresponding L1 deposit.

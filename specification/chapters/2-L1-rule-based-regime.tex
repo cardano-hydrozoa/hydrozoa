@@ -33,17 +33,17 @@ It holds the head's beacon token and all treasury funds from the multisig regime
 The treasury utxo must have the following datum type, which defines its unresolved and resolved states in the rule-based regime:
 \begin{equation*}
 \begin{split}
-  \T{RuleBasedTreasuryDatum} &\coloneq\;
-    \T{Resolved} \; \T{ResolvedDatum} \mid
+  \T{RuleBasedTreasuryDatum} \coloneq&\;
+    \T{Resolved} \; \T{ResolvedDatum} \\\mid&\;
     \T{Unresolved} \; \T{UnresolvedDatum} \\
-  \T{ResolvedDatum} &\coloneq\;\left\{
+  \T{ResolvedDatum} \coloneq&\;\left\{
     \begin{array}{lll}
       \T{headMp} &::& \T{PolicyId} \\
       \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{version} &::& (\T{Int}, \T{Int}) \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\} \\
-  \T{UnresolvedDatum} &\coloneq\;\left\{
+  \T{UnresolvedDatum} \coloneq&\;\left\{
     \begin{array}{lll}
       \T{headMp} &::& \T{PolicyId} \\
       \T{disputeId} &::& \T{AssetName} \\
@@ -220,7 +220,8 @@ Redeemers:
               \begin{array}{lll}
                 \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
                 \T{majorVersion} &::& \T{Int} \\
-                \T{minorVersion} &::& \T{Int}
+                \T{minorVersion} &::& \T{Int} \\
+                \T{sequenceNum} &::& \T{Int}
               \end{array}\right\}
             \end{split}
             \end{equation*}
