@@ -8,7 +8,7 @@
 It would be inefficient for a head's peers to confirm each L2 ledger event individually.
 Instead, they confirm an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
 
-Each block contains the sequence of all the valid but unconfirmed L2 ledger events that the peers witnessed since the previous block.
+Each block contains a sequence of L2 ledger events that operates on the ledger state reached in the previous block.
 Depending on the types of L2 ledger events in this sequence and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that contains a sequence of only L2 transactions (no withdrawals or settlement).
@@ -30,11 +30,62 @@ Every block is versioned by a unique pair of integers---the major and minor vers
   \item The final block increments the major version and resets the minor version to zero.
 \end{itemize}
 
-Every block is also tagged by its sequence number, which counts the block's predecessors.
+Every block is also tagged by its block number, which counts the block's predecessors.
 
-This chapter describes how to create and verify L2 blocks.
+This chapter describes how to create and validate L2 blocks.
 
-% TODO Parameters for blocks
+\section{Block validation environment}%
+\label{h:l2-block-validation-environment}%
+
+Every peer requires access to an up-to-date source of the following information:
+\begin{equation*}
+\begin{split}
+  \T{BlockValidationEnv} \coloneq&\; \left\{
+    \begin{array}{lll}
+      \T{currentTime} &::& \T{PosixTime} \\
+      \T{blockValidationParams} &::& \T{BlockValParams} \\
+      \T{stateL1} &::& \T{HeadStateL1} \\
+      \T{stateL2} &::& \T{LedgerStateL2} \\
+      \T{pendingTxs} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2}} \\
+      \T{pendingWithdrawals} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2W}}
+    \end{array}\right\} \\
+  \T{BlockValParams} \coloneq&\; \left\{
+    \begin{array}{lll}
+      \T{depositMaturityMargin} &::& \T{DiffTime} \\
+      \T{depositExpiryMargin} &::& \T{DiffTime}
+    \end{array}\right\}
+\end{split}
+\end{equation*}
+
+These fields are interpreted as follows:
+\begin{description}
+  \item[current time.] The current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
+  \item[block validation params.] The head's block validation parameters:
+    \begin{description}
+      \item[deposit maturity margin.] After an L1 deposit is created on L1, the peers must wait for this time duration before attempting to absorb it into the head's treasury.
+      \item[deposit expiry margin.] If less than this time duration is left before an L1 deposit's deadline, then the peers must not attempt to absorb it into the head's treasury.
+    \end{description}
+  \item[L1 state.] The head's L1 utxo state (\cref{h:l1-multisig-utxo-state}).
+  \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}).
+  \item[pending L2 txs.] The L2 transactions witnessed by the peer but not yet included in any confirmed blocks.
+  \item[pending L2 withdrawals.] The L2 withdrawals witnessed by the peer but not yet included in any confirmed blocks.
+\end{description}
+
+With the above information, a peer can create blocks and determine the validation status of a block:
+\begin{equation}
+\begin{split}
+  \T{ValidationStatus} \coloneq&\;
+    \T{Valid} \\\mid&\;
+    \T{NotYetValid} \\\mid&\;
+    \T{Invalid}
+\end{split}
+\end{equation}
+These statuses are interpreted as follows:
+\begin{description}
+  \item[Valid.] The block is valid and should be confirmed by the peer.
+  \item[Not yet valid.] The peer has detected an error that could be resolved if the peer waits and tries again---e.g., the peer may soon witness a pending L2 event that was included in the block.
+  \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
+\end{description}
 
 \section{Initial block}%
 \label{h:l2-initial-block}%
@@ -51,10 +102,10 @@ This chapter describes how to create and verify L2 blocks.
 
 % TODO - create
 
-\subsection{Verify a minor block}%
-\label{h:l2-minor-block-verify}%
+\subsection{Validate a minor block}%
+\label{h:l2-minor-block-validate}%
 
-% TODO - verify
+% TODO - validate
 
 \section{Major block}%
 \label{h:l2-major-block}%
@@ -66,10 +117,10 @@ This chapter describes how to create and verify L2 blocks.
 
 % TODO - create
 
-\subsection{Verify a major block}%
-\label{h:l2-major-block-verify}%
+\subsection{Validate a major block}%
+\label{h:l2-major-block-validate}%
 
-% TODO - verify
+% TODO - validate
 
 % TODO major blocks created in two cases:
 % - Accumulation of unabsorbed L1 deposits or unsettled L2 withdrawals
@@ -85,9 +136,9 @@ This chapter describes how to create and verify L2 blocks.
 
 % TODO - create
 
-\subsection{Verify a final block}%
-\label{h:l2-final-block-verify}%
+\subsection{Validate a final block}%
+\label{h:l2-final-block-validate}%
 
-% TODO - verify
+% TODO - validate
 
 \end{document}

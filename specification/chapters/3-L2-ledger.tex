@@ -7,7 +7,7 @@
 
 The L2 ledger state has this type:
 \begin{equation*}
-  \T{LedgerState} \coloneq \left\{
+  \T{LedgerStateL2} \coloneq \left\{
   \begin{array}{lll}
     \T{activeUtxos} &::& \T{UtxoSet^{L2}} \\
     \T{withdrawnUtxos} &::& \T{UtxoSet^{L2}}
@@ -58,7 +58,7 @@ Conceptually, a utxo set is a set of transaction outputs tagged with unique refe
 In practice, we equivalently represent a utxo set as a map from output reference to output:
 \begin{equation*}
 \begin{split}
-  \T{UtxoSet^{L2}} &\coloneq \T{Map(OutputRef, Output^{L2})} \\
+  \T{UtxoSet^{L2}} &\coloneq \T{Map} \; \T{OutputRef} \; \T{Output^{L2}} \\
     &\coloneq \left\{
       (k_i :: \T{OutputRef}, v_i :: \T{Output^{L2}})
       \;\middle|\;

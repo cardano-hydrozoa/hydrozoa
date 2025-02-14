@@ -27,6 +27,14 @@ However, we will describe this regime's expected states and transitions, which t
 \label{h:l1-multisig-utxo-state}%
 
 In the multisig regime, a head's entire L1 state resides in utxos at its native script address.
+\begin{equation*}
+  \T{HeadStateL1} \coloneq \left\{
+  \begin{array}{lll}
+    \T{treasuryUtxo} &::& (\T{OutputRef}, \T{Output^{L1}}) \\
+    \T{depositUtxos} &::& \T{UtxoSet^{L1}} \\
+    \T{rolloutUtxos} &::& \T{UtxoSet^{L1}}
+  \end{array}\right\}
+\end{equation*}
 Among these utxos, the head's treasury utxo is uniquely identified as the one holding the head's beacon token:
 \begin{enumerate}
   \item The policy ID corresponds to the head's native script (in minting policy form).
@@ -62,9 +70,7 @@ Non-treasury utxos at the head's native script address are recognized as follows
   \item Rollout nodes are no-datum outputs of the head's settlement transactions (\cref{h:l1-multisig-settlement-rollout}).
     They are transient in nature, quickly spent in the rollout transactions that follow the settlement transactions that create them.
 \end{itemize}
-
-Unrecognized utxos are ignored by the Hydrozoa protocol.
-
+  
 \section{Initialization}%
 \label{h:l1-multisig-initialization}%
 
