@@ -43,17 +43,21 @@ Every peer requires access to an up-to-date source of the following information:
   \T{BlockValidationEnv} \coloneq&\; \left\{
     \begin{array}{lll}
       \T{currentTime} &::& \T{PosixTime} \\
-      \T{blockValidationParams} &::& \T{BlockValParams} \\
-      \T{stateL1} &::& \T{HeadStateL1} \\
+      \T{blockValidationParams} &::& \T{BlockValidationParams} \\
+      \T{stateL1} &::& \T{MultisigHeadStateL1} \\
       \T{stateL2} &::& \T{LedgerStateL2} \\
-      \T{pendingTxs} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2}} \\
-      \T{pendingWithdrawals} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2W}}
+      \T{pendingTxsL2} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2}} \\
+      \T{pendingWithdrawalsL2} &::& \T{Map} \; \T{TxId} \; \T{Tx^{L2W}} \\
+      \T{eventQueueL2} &::& \T{Queue} \; \T{PendingEventL2}
     \end{array}\right\} \\
-  \T{BlockValParams} \coloneq&\; \left\{
+  \T{BlockValidationParams} \coloneq&\; \left\{
     \begin{array}{lll}
       \T{depositMaturityMargin} &::& \T{DiffTime} \\
       \T{depositExpiryMargin} &::& \T{DiffTime}
-    \end{array}\right\}
+    \end{array}\right\} \\
+  \T{PendingEventL2} \coloneq&\;
+    \T{Transaction} \; \T{TxId} \\\mid&\;
+    \T{Withdrawal} \; \T{TxId}
 \end{split}
 \end{equation*}
 
@@ -65,21 +69,22 @@ These fields are interpreted as follows:
       \item[deposit maturity margin.] After an L1 deposit is created on L1, the peers must wait for this time duration before attempting to absorb it into the head's treasury.
       \item[deposit expiry margin.] If less than this time duration is left before an L1 deposit's deadline, then the peers must not attempt to absorb it into the head's treasury.
     \end{description}
-  \item[L1 state.] The head's L1 utxo state (\cref{h:l1-multisig-utxo-state}).
-  \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}).
-  \item[pending L2 txs.] The L2 transactions witnessed by the peer but not yet included in any confirmed blocks.
-  \item[pending L2 withdrawals.] The L2 withdrawals witnessed by the peer but not yet included in any confirmed blocks.
+  \item[L1 state.] The head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
+    \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
+  \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}) as of the latest confirmed block.
+  \item[pending L2 txs/withdrawals.] The L2 transactions and withdrawals witnessed by the peer but not yet included in any confirmed blocks.
+  \item[L2 event queue.] The queue of identifiers for the pending L2 transactions and withdrawals, sorted in the ascending time that the peer witnessed them.
 \end{description}
 
-With the above information, a peer can create blocks and determine the validation status of a block:
-\begin{equation}
+With the above information, a peer can create and determine the validation status of a block:
+\begin{equation*}
 \begin{split}
   \T{ValidationStatus} \coloneq&\;
     \T{Valid} \\\mid&\;
     \T{NotYetValid} \\\mid&\;
     \T{Invalid}
 \end{split}
-\end{equation}
+\end{equation*}
 These statuses are interpreted as follows:
 \begin{description}
   \item[Valid.] The block is valid and should be confirmed by the peer.
@@ -90,12 +95,16 @@ These statuses are interpreted as follows:
 \section{Initial block}%
 \label{h:l2-initial-block}%
 
-% TODO Initial block
+The initial block is a notional block that does not need to be created, validated, or confirmed by the peers.
+It is just assumed to be confirmed when the peers initialize the head.
+
+It is equivalent to a minor block with an empty sequence of L2 transactions that transitions to an empty L2 ledger state.
 
 \section{Minor block}%
 \label{h:l2-minor-block}%
 
-% TODO Minor block
+A minor block rearranges the L2 ledger state's active utxo set without depositing any new funds from L1 or withdrawing any funds to L1.
+As such, minor blocks do not affect the head's L1 state while it is in the multisig regime.
 
 \subsection{Create a minor block}%
 \label{h:l2-minor-block-create}%
