@@ -72,7 +72,7 @@ An output reference is a tuple that uniquely identifies an output by a hash of t
   \T{OutputRef} \coloneq \left\{
     \begin{array}{lll}
       \T{id} &::& \T{TxId} \\
-        \T{index} &::& \T{Int}
+      \T{index} &::& \T{UInt}
     \end{array} \right\}
 \end{equation*}
 
@@ -170,7 +170,7 @@ The L2 ledger rules for withdrawals are similar to transactions, but with the fo
   \item[No metadata.] Withdrawals cannot contain transaction metadata.
 \end{description}
 
-Similar to L2 transactions, we can express the modified rules for withdrawals (relative to Cardano ledger rules) as requirements for certain fields to be omitted or restricted:%
+We can express the rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}) as further restrictions on the fields of L2 transactions  (\codeMathTt{Tx^{L2}}):%
 \footnote{Here, ``omitting'' the \inlineColored{outputs} and \inlineColored{fee} fields means setting them to an empty list and zero, respectively.}
 \begingroup
 \allowdisplaybreaks
@@ -181,7 +181,7 @@ Similar to L2 transactions, we can express the modified rules for withdrawals (r
         \T{wits} &::& \T{TxWits^{L2}} \\
         \T{is\_valid} &::& \T{Bool} \\
         \varnothing\;\T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
-    \end{array} \right\} \\\\
+    \end{array} \right\} \subseteq \T{Tx^{L2}} \\\\
     \T{TxBody^{L2W}} \coloneq\;& \left\{
     \begin{array}{lll}
       \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
@@ -233,8 +233,10 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
 The effect of this event is to empty the \code{withdrawnUtxos} set and add new utxos to the \code{activeUtxos} set, mirroring the effect of the major block's L1 settlement transaction on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}).
+Correspondingly, the L2 settlement event's identifier is the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the transaction ID of the major block's L1 settlement transaction.
 
-The new utxos in \code{activeUtxos} correspond to the deposits absorbed by the settlement transaction, with the \codeMathTt{Output^{L2}} fields of each new utxo set as follows:
+To model the effect of an L2 settlement on the L2 \code{activeUtxos} set, we represent it as a L2 transaction with all fields omitted except the outputs (\codeMathTt{Tx^{L2S} \subseteq Tx^{L2}}).
+These outputs must correspond to the deposits absorbed by the L1 settlement transaction, as follows:
 \begin{description}
   \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
   \item[value.] Set equal to the value of the corresponding L1 deposit.
@@ -242,9 +244,9 @@ The new utxos in \code{activeUtxos} correspond to the deposits absorbed by the s
   \item[script.] Empty.
 \end{description}
 
-The \code{OutputReference} fields of each of these new utxos is as follows:
+The \code{OutputReference} fields of each of these outputs is as follows:
 \begin{description}
-  \item[id.] Set equal to the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the transaction ID of the major L2 block's settlement transaction.
+  \item[id.] Set equal to the L2 settlement event's identifier.
   \item[index.] Set equal to the L1 deposit's index among the absorbed deposits of the major L2 block, in ascending order of L1 \code{OutputReference}, starting from zero.
 \end{description}
 

@@ -40,7 +40,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
     \begin{array}{lll}
       \T{headMp} &::& \T{PolicyId} \\
       \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
-      \T{version} &::& (\T{Int}, \T{Int}) \\
+      \T{version} &::& (\T{UInt}, \T{UInt}) \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\} \\
   \T{UnresolvedDatum} \coloneq&\;\left\{
@@ -48,9 +48,9 @@ The treasury utxo must have the following datum type, which defines its unresolv
       \T{headMp} &::& \T{PolicyId} \\
       \T{disputeId} &::& \T{AssetName} \\
       \T{peers} &::& \T{[VerificationKey]} \\
-      \T{nPeers} &::& \T{Int} \\
+      \T{nPeers} &::& \T{UInt} \\
       \T{votingDeadline} &::& \T{PosixTime} \\
-      \T{majorVersion} &::& \T{Int} \\
+      \T{majorVersion} &::& \T{UInt} \\
       \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
     \end{array}\right\}
 \end{split}
@@ -91,8 +91,8 @@ Each vote utxo has this datum type:
 \begin{split}
   \T{VoteDatum} &\coloneq \left\{
     \begin{array}{lll}
-      \T{key}  &::& \T{Int} \\
-      \T{link} &::& \T{Int} \\
+      \T{key}  &::& \T{UInt} \\
+      \T{link} &::& \T{UInt} \\
       \T{peer} &::& \T{Maybe} \; \T{PubKeyHash} \\
       \T{voteStatus} &::& \T{VoteStatus}
     \end{array}\right\}\\
@@ -100,7 +100,7 @@ Each vote utxo has this datum type:
   \T{VoteDetails} &\coloneq \left\{
     \begin{array}{lll}
       \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
-      \T{minorVersion} &::& \T{Int}
+      \T{minorVersion} &::& \T{UInt}
     \end{array}\right\}
 \end{split}
 \end{equation*}
@@ -219,9 +219,9 @@ Redeemers:
               \T{MinorBlock} &\coloneq \left\{
               \begin{array}{lll}
                 \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
-                \T{majorVersion} &::& \T{Int} \\
-                \T{minorVersion} &::& \T{Int} \\
-                \T{blockNum} &::& \T{Int}
+                \T{majorVersion} &::& \T{UInt} \\
+                \T{minorVersion} &::& \T{UInt} \\
+                \T{blockNum} &::& \T{UInt}
               \end{array}\right\}
             \end{split}
             \end{equation*}
