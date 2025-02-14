@@ -5,10 +5,11 @@
 \chapter{L2 blocks}%
 \label{h:l2-blocks}%
 
-It would be inefficient for a head's peers to confirm each L2 ledger event individually.
-Instead, they confirm an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
+It would be inefficient for a head's peers to confirm the validity of each L2 ledger event individually.
+Instead, they confirm the validity/invalidity of an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
 
-Each block contains a sequence of L2 ledger events that operates on the ledger state reached in the previous block.
+Each block claims that a sequence of L2 ledger events correctly transition from the ledger state reached in the previous block, and that a set of L2 ledger events are invalid relative to the L2 ledger state reached by the sequence.%
+\footnote{The purpose of the latter set is to declare those transactions to be invalid, so that the peers can stop expecting them to be included as valid transactions in any future blocks.}
 Depending on the types of L2 ledger events in this sequence and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that contains a sequence of only L2 transactions (no withdrawals or settlement).
