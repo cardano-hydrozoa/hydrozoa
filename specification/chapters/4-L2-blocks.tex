@@ -141,23 +141,68 @@ These statuses are interpreted as follows:
 \section{Block creation}%
 \label{h:l2-block-creation}%
 
-% TODO
+The initial block is predefined and identical for all Hydrozoa heads.
+All other blocks are created by a common procedure that branches based on whether the peers want to finalize the head, the peers want to force a major block, or the procedure has detected any absorbable L1 deposits or unconfirmed L2 withdrawals in the block validation environment.
 
-\subsection{Minor or major block}%
-\label{h:l2-block-creation-minor-major}%
-
-Suppose that the events in \code{eventsSeenL2} of the block validation environment are L2 transactions, as indicated by their \code{eventType} field.
-Then a new minor block is created as follows:
+Given the block validation environment, create a block as follows:
+% TODO Can/should this procedure be rewritten in a non-imperative programming style?
 \begin{enumerate}
-  \item For each L2 event in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
+  \item Initialize variables and arguments (immutable by default):
+    \begin{enumerate}
+      \item Let \code{finalize} be an argument indicating whether a final block should be created.
+      \item Let \code{forceMajor} be an argument indicating whether a major block should be created.
+      \item Let \code{previousBlock} be the latest element in \code{blocksConfirmedL2}.
+      \item Let \code{block} be a mutable variable initialized to an empty \codeMathTt{Block^{L2}}.
+      \item Let \code{localStateL2} be a mutable variable initialized to \code{stateL2}.
+      \item Let \code{seenValidWithdrawals} be a mutable variable initialized to \code{False}.
+      \item Let \code{major} be a mutable variable initialized to \code{False}.
+    \end{enumerate}
+  \item For each L2 event \code{x} in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
       \begin{enumerate}
-        \item Apply it to the active utxo set reached by the composition of its valid predecessors from the \code{utxosActive} set of \code{stateL2}.
-        \item If the L2 event complies with Hydrozoa's ledger rules for L2 transactions, append it to the minor block's \code{eventsValid} sequence.
-        \item Otherwise, insert it to the minor block's \code{eventsInvalid} set.
+        \item If \code{x.eventType} is a \code{Transaction}, try to apply \code{x.event} to \code{localStateL2.utxosActive}.
+          If it is valid according to Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}):
+          \begin{enumerate}
+            \item Append (\code{x.eventId}, \code{x.eventType}) to \code{block.eventsValid}.
+            \item Update \code{localStateL2.utxosActive} to the result of this transition.
+          \end{enumerate}
+        \item If \code{x.eventType} is a \code{Withdrawal}, try to apply \code{x.event} to \code{localStateL2.utxosActive}.
+          If it is valid according to Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}):
+          \begin{enumerate}
+            \item Append (\code{x.eventId}, \code{x.eventType}) to \code{block.eventsValid}.
+            \item Update \code{localStateL2.utxosActive} to the result of this transition.
+            \item Insert the spent inputs of \code{x.event} into \code{localStateL2.utxosWithdrawn}.
+            \item Update \code{seenValidWithdrawals} to \code{True}.
+          \end{enumerate}
+        \item Otherwise, insert (\code{x.eventId}, \code{x.eventType}) into \code{block.eventsInvalid}.
       \end{enumerate}
-  \item Set the minor block's \code{utxosActive} to the Merkle root of the active utxo set reached after iterating through \code{eventsSeenL2}.
-  \item Increment the \code{blockNum} and \code{versionMinor} from the latest confirmed block.
-  \item Keep the \code{versionMajor} the same as the latest confirmed block.
+  \item For each deposit \code{d} in \code{stateL1.depositUtxos}, insert \code{d} into \code{block.depositsAbsorbed} if:
+    \begin{equation*}
+      \T{d.deadline} + \T{depositMarginMaturity} \leq
+      \T{timeCurrent} <
+      \T{d.deadline} - \T{depositMarginExpiry}
+    \end{equation*}
+  \item Update \code{major} to \code{True} if any of the following hold:
+    \begin{enumerate}
+      \item \code{seenValidWithdrawals} is \code{True}.
+      \item \code{block.depositsAbsorbed} is non-empty.
+      \item \code{forceMajor} is \code{True}.
+      \item \code{finalize} is \code{True}.
+    \end{enumerate}
+  \item Set block header:
+    \begin{enumerate}
+      \item Set \code{block.blockNum} to (\code{previousBlock.blockNum} + 1).
+      \item Set \code{block.utxosActive} to the Merkle root hash of \code{localStateL2.utxosActive}.
+      \item If \code{major} is \code{True}:
+        \begin{enumerate}
+          \item Set \code{block.versionMajor} to (\code{previousBlock.versionMajor} + 1).
+          \item Set \code{block.versionMinor} to zero.
+        \end{enumerate}
+      \item Otherwise:
+        \begin{enumerate}
+          \item Set \code{block.versionMajor} to \code{previousBlock.versionMajor}.
+          \item Set \code{block.versionMinor} to (\code{previousBlock.versionMinor} + 1).
+        \end{enumerate}
+    \end{enumerate}
 \end{enumerate}
 
 % TODO fix
@@ -165,11 +210,6 @@ Then a new minor block is created as follows:
 % TODO major blocks created in two cases:
 % - Accumulation of unabsorbed L1 deposits or unsettled L2 withdrawals
 % - Within safety margin of L1 treasury transition boundary (consensus protocol parameter)
-
-\subsection{Final block}%
-\label{h:l2-block-creation-final}%
-
-% TODO
 
 \section{Block validation}%
 \label{h:l2-block-validation}%
@@ -188,6 +228,26 @@ Then a new minor block is created as follows:
 
 \subsection{Final block}%
 \label{h:l2-block-validation-final}%
+
+% TODO
+
+\section{Block application}%
+\label{h:l2-block-application}%
+
+% TODO
+
+\subsection{Minor block}%
+\label{h:l2-block-application-minor}%
+
+% TODO
+
+\subsection{Major block}%
+\label{h:l2-block-application-major}%
+
+% TODO
+
+\subsection{Final block}%
+\label{h:l2-block-application-final}%
 
 % TODO
 
