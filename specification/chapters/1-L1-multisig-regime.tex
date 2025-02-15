@@ -52,9 +52,9 @@ The treasury utxo must have this datum:
 \begin{equation*}
   \T{MultisigTreasuryDatum} \coloneq \left\{
     \begin{array}{lll}
-      \T{activeUtxos}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
-      \T{majorVersion} &::& \T{UInt} \\
-      \T{params} &::& \mathcal{H}_{32} \; \T{HeadParams}
+      \T{utxosActive}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
+      \T{versionMajor} &::& \T{UInt} \\
+      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsHead}
     \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
@@ -82,11 +82,11 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
   \item Creates the treasury utxo at the head's native script address, placing the beacon token into it (with min-ADA) with this datum:
     \begin{equation*}
     \begin{split}
-      \T{initMultisigTreasuryDatum} &:: \mathcal{H}_{32} \; \T{HeadParams} -> \T{MultisigTreasuryDatum} \\
+      \T{initMultisigTreasuryDatum} &:: \mathcal{H}_{32} \; \T{ParamsHead} -> \T{MultisigTreasuryDatum} \\
       \T{initMultisigTreasuryDatum} &\; \T{initParams} \coloneq \left\{
         \begin{array}{lll}
-          \T{activeUtxos} &=& \mathcal{RH}_{32} \; \varnothing \\
-          \T{majorVersion} &=& 0 \\
+          \T{utxosActive} &=& \mathcal{RH}_{32} \; \varnothing \\
+          \T{versionMajor} &=& 0 \\
           \T{params} &=& \T{initParams}
         \end{array}\right\}
     \end{split}
@@ -135,7 +135,7 @@ It also allows them to immediately refund any deposits that its rules disqualify
 
 A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major L2 block (\cref{h:l2-blocks}).%
 \footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
-It also updates the \code{majorVersion} and \code{activeUtxos} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block, while keeping the \code{params} field unchanged.
+It also updates the \code{versionMajor} and \code{utxosActive} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block, while keeping the \code{params} field unchanged.
 
 The absorbed deposit utxos are spent inputs in the settlement transaction.
 This means that Cardano's transaction size limit constrains the number of deposits settled per major L2 block.

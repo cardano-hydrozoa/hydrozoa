@@ -9,15 +9,15 @@ The L2 ledger state has this type:
 \begin{equation*}
   \T{LedgerState^{L2}} \coloneq \left\{
   \begin{array}{lll}
-    \T{activeUtxos} &::& \T{UtxoSet^{L2}} \\
-    \T{withdrawnUtxos} &::& \T{UtxoSet^{L2}}
+    \T{utxosActive} &::& \T{UtxoSet^{L2}} \\
+    \T{utxosWithdrawn} &::& \T{UtxoSet^{L2}}
   \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
     These utxos are created by L2 transactions and settlements.
-  \item[withdrawnUtxos.] The set of utxos that have been withdrawn from \code{activeUtxos} and can be settled on L1 in the multisig regime.
+  \item[withdrawn utxos.] The set of utxos that have been withdrawn from \code{utxosActive} and can be settled on L1 in the multisig regime.
     L2 settlement events empty this set (\cref{h:ledger-settlement}).
     
 \end{description}
@@ -102,7 +102,7 @@ An output is a tuple describing a bundle of tokens, data, and a script that have
 \section{Transaction}%
 \label{h:ledger-transaction}%
 
-An L2 transaction spends one or more utxos in \code{activeUtxos}, replacing them with zero or more new utxos.
+An L2 transaction spends one or more utxos in \code{utxosActive}, replacing them with zero or more new utxos.
 The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions, but with the additions listed in \cref{h:l2-ledger-rules}.
 
 Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
@@ -161,10 +161,10 @@ In the following type listing:
 \section{Withdrawal}%
 \label{h:ledger-withdrawal}%
 
-A withdrawal is an L2 ledger event that spends one or more utxos in \code{activeUtxos} and creates identical utxos (with the same output references) in \code{withdrawnUtxos}.
+A withdrawal is an L2 ledger event that spends one or more utxos in \code{utxosActive} and creates identical utxos (with the same output references) in \code{utxosWithdrawn}.
 The L2 ledger rules for withdrawals are similar to transactions, but with the following modifications:
 \begin{description}
-  \item[No outputs.] Withdrawals cannot create utxos in \code{activeUtxos}.
+  \item[No outputs.] Withdrawals cannot create utxos in \code{utxosActive}.
   \item[No fees.] Withdrawals do not pay transaction fees.
   \item[No collateral.] Withdrawals do not provide collateral for phase-2 validation.
   \item[No metadata.] Withdrawals cannot contain transaction metadata.
@@ -232,10 +232,10 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 \label{h:ledger-settlement}%
 
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
-The effect of this event is to empty the \code{withdrawnUtxos} set and add new utxos to the \code{activeUtxos} set, mirroring the effect of the major block's L1 settlement and rollout transactions on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}):
+The effect of this event is to empty the \code{utxosWithdrawn} set and add new utxos to the \code{utxosActive} set, mirroring the effect of the major block's L1 settlement and rollout transactions on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}):
 \begin{itemize}
-  \item The new L2 utxos added to the \code{activeUtxos} set correspond to the L1 deposits absorbed by the L1 settlement transaction.
-  \item The L2 utxos emptied from the \code{withdrawnUtxos} set correspond to the L1 utxos paid out by the L1 settlement and rollout transactions.
+  \item The new L2 utxos added to the \code{utxosActive} set correspond to the L1 deposits absorbed by the L1 settlement transaction.
+  \item The L2 utxos emptied from the \code{utxosWithdrawn} set correspond to the L1 utxos paid out by the L1 settlement and rollout transactions.
 \end{itemize}
 
 Let \code{depositsAbsorbed} be the set of L1 deposits' output references, in the order that they are spent by the L1 settlement transaction.

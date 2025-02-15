@@ -20,9 +20,9 @@ All L2 blocks have the following type:
     \begin{array}{lll}
       \T{blockNum} &::& \T{UInt} \\
       \T{blockType} &::& \T{BlockType^{L2}} \\
-      \T{majorVersion} &::& \T{UInt} \\
-      \T{minorVersion} &::& \T{UInt} \\
-      \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
+      \T{versionMajor} &::& \T{UInt} \\
+      \T{versionMinor} &::& \T{UInt} \\
+      \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
     \end{array}\right\} \\
   \T{BlockType^{L2}} &\coloneq
     \T{Minor} \mid
@@ -35,13 +35,15 @@ All L2 blocks have the following type:
       \T{Sequence} \; (\T{EventType^{L2}}, \T{TxId}) \\
     \T{eventsInvalid} &::&
       \T{Map} \; \T{TxId} \; \T{EventType^{L2}} \\
-    \T{depositsAbsorbed} &::& \T{Sequence} \; \T{OutputReference}
+    \T{depositsAbsorbed} &::& \T{Sequence} \; \T{OutputRef}
   \end{array}\right\} \\
   \T{EventType^{L2}} &\coloneq \T{Transaction} \mid \T{Withdrawal}
 \end{split}
 \end{equation*}
 
 Each block affirms a sequence of L2 ledger events, rejects a separate set of L2 ledger events, and absorbs a set of L1 deposits.
+The block's header contains a Merkle root hash of the active utxo set that results from applying the affirmed L2 ledger events to the latest confirmed L2 ledger state.
+
 Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that neither affirms any L2 withdrawals nor absorbs any L1 deposits.
@@ -57,7 +59,7 @@ Depending on the types of L2 ledger events affirmed by the block and the peers' 
     It has an empty block body and results in an empty L2 ledger state.
 \end{description}
 
-Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{majorVersion} and \code{minorVersion} numbers:
+Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{versionMajor} and \code{versionMinor} numbers:
 \begin{itemize}
   \item The initial block has both major and minor versions set to zero.
   \item A minor block keeps its predecessor's major version and increments the minor version.
@@ -158,17 +160,17 @@ A minor block affirms a sequence of valid L2 events and rejects a set of invalid
 \label{h:l2-minor-block-create}%
 
 Suppose that all L2 events in the \code{eventsSeenL2} of the block validation environment are L2 transactions, as indicated by their \code{eventType} field.
-Then a new minor block can be created relative to the latest confirmed block, as follows:
+Then a new minor block is created as follows:
 \begin{enumerate}
   \item For each L2 event in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
       \begin{enumerate}
-        \item Apply it to the active utxo set reached by the composition of its valid predecessors from the \code{activeUtxos} set of \code{stateL2}.
+        \item Apply it to the active utxo set reached by the composition of its valid predecessors from the \code{utxosActive} set of \code{stateL2}.
         \item If the L2 event complies with Hydrozoa's ledger rules for L2 transactions, append it to the minor block's \code{eventsValid} sequence.
         \item Otherwise, insert it to the minor block's \code{eventsInvalid} set.
       \end{enumerate}
-  \item Set the minor block's \code{activeUtxos} to the Merkle root of the active utxo set reached after iterating through \code{eventsSeenL2}.
-  \item Increment the \code{blockNum} and \code{minorVersion} from the latest confirmed block.
-  \item Keep the \code{majorVersion} the same as the latest confirmed block.
+  \item Set the minor block's \code{utxosActive} to the Merkle root of the active utxo set reached after iterating through \code{eventsSeenL2}.
+  \item Increment the \code{blockNum} and \code{versionMinor} from the latest confirmed block.
+  \item Keep the \code{versionMajor} the same as the latest confirmed block.
 \end{enumerate}
 
 \subsection{Validate a minor block}%
