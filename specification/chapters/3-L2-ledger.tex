@@ -7,7 +7,7 @@
 
 The L2 ledger state has this type:
 \begin{equation*}
-  \T{LedgerStateL2} \coloneq \left\{
+  \T{LedgerState^{L2}} \coloneq \left\{
   \begin{array}{lll}
     \T{activeUtxos} &::& \T{UtxoSet^{L2}} \\
     \T{withdrawnUtxos} &::& \T{UtxoSet^{L2}}
@@ -232,22 +232,27 @@ However, since the non-empty collateral inputs and transaction balancing rules a
 \label{h:ledger-settlement}%
 
 L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
-The effect of this event is to empty the \code{withdrawnUtxos} set and add new utxos to the \code{activeUtxos} set, mirroring the effect of the major block's L1 settlement transaction on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}).
-Correspondingly, the L2 settlement event's identifier is the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the transaction ID of the major block's L1 settlement transaction.
+The effect of this event is to empty the \code{withdrawnUtxos} set and add new utxos to the \code{activeUtxos} set, mirroring the effect of the major block's L1 settlement and rollout transactions on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}):
+\begin{itemize}
+  \item The new L2 utxos added to the \code{activeUtxos} set correspond to the L1 deposits absorbed by the L1 settlement transaction.
+  \item The L2 utxos emptied from the \code{withdrawnUtxos} set correspond to the L1 utxos paid out by the L1 settlement and rollout transactions.
+\end{itemize}
 
-To model the effect of an L2 settlement on the L2 \code{activeUtxos} set, we represent it as a L2 transaction with all fields omitted except the outputs (\codeMathTt{Tx^{L2S} \subseteq Tx^{L2}}).
-These outputs must correspond to the deposits absorbed by the L1 settlement transaction, as follows:
+Let \code{depositsAbsorbed} be the set of L1 deposits' output references, in the order that they are spent by the L1 settlement transaction.
+Each of the new L2 utxos added by the L2 settlement event must uniquely correspond to an element of \code{depositsAbsorbed} as follows:
 \begin{description}
-  \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
-  \item[value.] Set equal to the value of the corresponding L1 deposit.
-  \item[datum.] Set equal to the \code{datum} field in the corresponding L1 deposit's datum.
-  \item[script.] Empty.
-\end{description}
-
-The \code{OutputReference} fields of each of these outputs is as follows:
-\begin{description}
-  \item[id.] Set equal to the L2 settlement event's identifier.
-  \item[index.] Set equal to the L1 deposit's index among the absorbed deposits of the major L2 block, in ascending order of L1 \code{OutputReference}, starting from zero.
-\end{description}
+  \item[output reference:]~
+    \begin{description}
+      \item[id.] Set equal to the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{depositsAbsorbed}.
+      \item[index.] Set equal to the L1 deposit's positional index in \code{depositsAbsorbed}.
+    \end{description}
+  \item[output:]~
+    \begin{description}
+      \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
+      \item[value.] Set equal to the value of the corresponding L1 deposit.
+      \item[datum.] Set equal to the \code{datum} field in the corresponding L1 deposit's datum.
+      \item[script.] Empty.
+    \end{description}
+  \end{description}
 
 \end{document}

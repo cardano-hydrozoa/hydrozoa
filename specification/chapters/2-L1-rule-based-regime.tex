@@ -213,19 +213,23 @@ Redeemers:
             \begin{split}
               \T{VoteRedeemer} &\coloneq \left\{
                 \begin{array}{lll}
-                  \T{minorBlock} &::& \T{MinorBlock} \\
+                  \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
                   \T{multisig} &::& [\T{Signature}]
                 \end{array}\right\}\\
-              \T{MinorBlock} &\coloneq \left\{
+              \T{BlockHeader^{L2}} &\coloneq \left\{
               \begin{array}{lll}
-                \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
+                \T{blockNum} &::& \T{UInt} \\
                 \T{majorVersion} &::& \T{UInt} \\
                 \T{minorVersion} &::& \T{UInt} \\
-                \T{blockNum} &::& \T{UInt}
+                \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
               \end{array}\right\}
             \end{split}
             \end{equation*}
-          \item If \code{voteRedeemer} is provided, then the \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{minorBlock} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
+          \item If \code{voteRedeemer} is provided, then both of these must hold:
+            \begin{enumerate}
+              \item The \code{multisig} field of \code{voteRedeemer} must have signatures of the \code{blockHeader} field of \code{voteRedeemer} for all the public keys in the \code{peers} field of \code{treasury}.
+              \item The \code{majorVersion} field must match between \code{treasury} and \code{voteRedeemer}.
+            \end{enumerate}
         \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]

@@ -5,35 +5,65 @@
 \chapter{L2 blocks}%
 \label{h:l2-blocks}%
 
-It would be inefficient for a head's peers to confirm the validity of each L2 ledger event individually.
-Instead, they confirm the validity/invalidity of an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
+It would be inefficient for a head's peers to reach consensus on each L2 ledger event individually.
+Instead, they reach consensus on an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
 
-Each block claims that a sequence of L2 ledger events correctly transition from the ledger state reached in the previous block, and that a set of L2 ledger events are invalid relative to the L2 ledger state reached by the sequence.%
-\footnote{The purpose of the latter set is to declare those transactions to be invalid, so that the peers can stop expecting them to be included as valid transactions in any future blocks.}
-Depending on the types of L2 ledger events in this sequence and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
+All L2 blocks have the following type:
+\begin{equation*}
+\begin{split}
+  \T{Block^{L2}} \coloneq&\; \left\{
+    \begin{array}{lll}
+      \T{header} &::& \T{BlockHeader^{L2}} \\
+      \T{body} &::& \T{BlockBody^{L2}}
+    \end{array}\right\} \\
+  \T{BlockHeader^{L2}} \coloneq&\; \left\{
+    \begin{array}{lll}
+      \T{blockNum} &::& \T{UInt} \\
+      \T{blockType} &::& \T{BlockType^{L2}} \\
+      \T{majorVersion} &::& \T{UInt} \\
+      \T{minorVersion} &::& \T{UInt} \\
+      \T{activeUtxos} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
+    \end{array}\right\} \\
+  \T{BlockType^{L2}} &\coloneq
+    \T{Minor} \mid
+    \T{Major} \mid
+    \T{Final} \mid
+    \T{Initial} \\
+  \T{BlockBody^{L2}} &\coloneq \left\{
+  \begin{array}{lll}
+    \T{eventsValid} &::&
+      \T{Sequence} \; (\T{EventType^{L2}}, \T{TxId}) \\
+    \T{eventsInvalid} &::&
+      \T{Map} \; \T{TxId} \; \T{EventType^{L2}} \\
+    \T{depositsAbsorbed} &::& \T{Sequence} \; \T{OutputReference}
+  \end{array}\right\} \\
+  \T{EventType^{L2}} &\coloneq \T{Transaction} \mid \T{Withdrawal}
+\end{split}
+\end{equation*}
+
+Each block affirms a sequence of L2 ledger events, rejects a separate set of L2 ledger events, and absorbs a set of L1 deposits.
+Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
-  \item[Minor block.] A block that contains a sequence of only L2 transactions (no withdrawals or settlement).
-    Minor blocks have no effect on the head's L1 utxo state and only affect the L2 ledger state's \code{activeUtxos} set.
-  \item[Major block.] A block that contains a sequence of L2 transactions and withdrawals, ending with an L2 settlement, and references a set of L1 deposits.
-    Each major block also contains an L1 settlement transaction that pays out L1 utxos corresponding to the block's L2 withdrawals and absorbs L1 deposits corresponding to the block's deposits into the head's treasury.
-    The major block's L2 settlement event must correspond to its L1 settlement transaction.
+  \item[Minor block.] A block that neither affirms any L2 withdrawals nor absorbs any L1 deposits.
+    Minor blocks have no effect on the head's L1 utxo state in the multisig regime and only affect the L2 ledger state's active utxo set.
+    They may affect the L1 utxo state in the rule-based regime.
+  \item[Major block.] A block that affirms some L2 withdrawals or absorbs some L1 deposits.
+    Every major block also implicitly affirms an L2 settlement event corresponding to its affirmed L2 withdrawals and absorbed L1 deposits.
+    The major block should immediately affect the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 settlement event (\cref{h:ledger-settlement}).
+  \item[Final block.] A block with which the peers wish to finalize the head.
+    It has an empty block body because its effects are implicit: it withdraws the entire L2 active utxo set and does not absorb any L1 deposits, resulting in an empty L2 ledger state.
+    Like major blocks, a final block takes immediate effect as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 effects.
   \item[Initial block.] The minor block with which the head is initialized.
-    It contains no L2 transactions and results in an empty L2 ledger state.
-  \item[Final block.] The major block with which the head is finalized.
-    Its L2 settlement event results in an empty L2 ledger state.
+    It has an empty block body and results in an empty L2 ledger state.
 \end{description}
 
-Every block is versioned by a unique pair of integers---the major and minor versions of the block:
+Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{majorVersion} and \code{minorVersion} numbers:
 \begin{itemize}
   \item The initial block has both major and minor versions set to zero.
   \item A minor block keeps its predecessor's major version and increments the minor version.
   \item A major block increments the major version and resets the minor version to zero.
   \item The final block increments the major version and resets the minor version to zero.
 \end{itemize}
-
-Every block is also tagged by its block number, which counts the block's predecessors.
-
-This chapter describes how to create and validate L2 blocks.
 
 \section{Block validation environment}%
 \label{h:l2-block-validation-environment}%
@@ -45,24 +75,24 @@ Every peer requires access to an up-to-date source of the following information:
     \begin{array}{lll}
       \T{timeCurrent} &::& \T{PosixTime} \\
       \T{paramsBlockValidation} &::& \T{ParamsBlockValidtion} \\
-      \T{stateL1} &::& \T{MultisigHeadStateL1} \\
-      \T{stateL2} &::& \T{LedgerStateL2} \\
-      \T{eventsL2} &::& \T{Table} \; \T{EventL2} \\
+      \T{stateL1} &::& \T{MultisigHeadState^{L1}} \\
+      \T{stateL2} &::& \T{LedgerState^{L2}} \\
+      \T{blocksConfirmedL2} &::& \T{Sequence} \; \T{Block^{L2}} \\
+      \T{eventsSeenL2} &::& \T{Table} \; \T{Event^{L2}}
     \end{array}\right\} \\
   \T{ParamsBlockValidation} &\coloneq \left\{
     \begin{array}{lll}
       \T{depositMarginMaturity} &::& \T{UDiffTime} \\
       \T{depositMarginExpiry} &::& \T{UDiffTime}
     \end{array}\right\} \\
-  \T{EventL2} &\coloneq \left\{
+  \T{Event^{L2}} &\coloneq \left\{
     \begin{array}{lll}
       \T{timeReceived} &::& \T{PosixTime} \\
       \T{eventId} &::& \T{TxId} \\
-      \T{eventType} &::& \T{EventTypeL2} \\
+      \T{eventType} &::& \T{EventType^{L2}} \\
       \T{event} &::& \T{Tx^{L2}} \\
       \T{blockNum} &::& \T{Maybe} \; \T{UInt}
     \end{array}\right\} \\
-  \T{EventTypeL2} &\coloneq \T{Transaction} \mid \T{Withdrawal} \mid \T{Settlement}
 \end{split}
 \end{equation*}
 
@@ -77,41 +107,40 @@ These fields are interpreted as follows:
   \item[L1 state.] The head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
     \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
   \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}) as of the latest confirmed block.
-  \item[L2 events.] The table of L2 events witnessed by the peer to date,%
+  \item[confirmed L2 blocks.] The sequence of L2 blocks confirmed in the L2 consensus protocol.
+  \item[seen L2 events.] The table of L2 events witnessed by the peer,%
     \footnote{It's up to the L2 consensus protocol whether this table stores all L2 events ever witnessed by the peer, or just the recent events up to a time-based or block-based cutoff.}
     which must be unique on \code{eventId} and sorted in the ascending order of \code{timeReceived}:
     \begin{description}
       \item[time received.] The POSIX time at which the peer received the event.
-      \item[event ID.] The transaction ID corresponding to the event's effect on the L2 \code{activeUtxos} set (\cref{h:l2-ledger}).
-      \item[event type]. The L2 event is a transaction, withdrawal, or settlement.
-      \item[event.] The transaction representing the event's effect on the L2 \code{activeUtxos} set.
-      \item[blockNum.] The block number of the block (if any) that includes the event, regardless of whether the block is confirmed.
+      \item[event ID.] The transaction ID corresponding to the event's effect on the L2 active utxo set.
+      \item[event type.] The L2 event is a transaction, withdrawal, or settlement.
+      \item[event.] The transaction representing the event's effect on the L2 active utxo set.
+      \item[block number.] The block number of the block (if any) that includes the event, regardless of whether the block is confirmed.
     \end{description}
 \end{description}
 
 With the above information, a peer can create and determine the validation status of a block:
 \begin{equation*}
-\begin{split}
-  \T{ValidationStatus} \coloneq&\;
-    \T{Valid} \\\mid&\;
-    \T{NotYetValid} \\\mid&\;
+  \T{ValidationStatus} \coloneq
+    \T{Valid} \mid
+    \T{NotYetValid} \mid
     \T{Invalid}
-\end{split}
 \end{equation*}
 These statuses are interpreted as follows:
 \begin{description}
   \item[Valid.] The block is valid and should be confirmed by the peer.
-  \item[Not yet valid.] The peer has detected an error that could be resolved if the peer waits and tries again---e.g., the peer may soon witness a pending L2 event that was included in the block.
+  \item[Not yet valid.] The peer has detected an error that could be resolved if the peer waits and tries again---e.g., the peer may soon receive an L2 event that was included in the block.
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
 \section{Initial block}%
 \label{h:l2-initial-block}%
 
-The initial block is a notional block that does not need to be created, validated, or confirmed by the peers.
-It is just assumed to be confirmed when the peers initialize the head.
+The initial block has an empty block body and results in an empty L2 ledger state.
 
-It is equivalent to a minor block with an empty sequence of L2 transactions that transitions to an empty L2 ledger state.
+It is a notional block that is presumed confirmed when the peers initialize the head.
+As such, it does not need to be created, validated, or explicitly confirmed by the peers.
 
 \section{Minor block}%
 \label{h:l2-minor-block}%
@@ -119,10 +148,28 @@ It is equivalent to a minor block with an empty sequence of L2 transactions that
 A minor block rearranges the L2 ledger state's active utxo set without depositing any new funds from L1 or withdrawing any funds to L1.
 As such, minor blocks do not affect the head's L1 state while it is in the multisig regime.
 
+A minor block affirms a sequence of valid L2 events and rejects a set of invalid L2 events:
+\begin{equation*}
+\begin{split}
+\end{split}
+\end{equation*}
+
 \subsection{Create a minor block}%
 \label{h:l2-minor-block-create}%
 
-% TODO - create
+Suppose that all L2 events in the \code{eventsSeenL2} of the block validation environment are L2 transactions, as indicated by their \code{eventType} field.
+Then a new minor block can be created relative to the latest confirmed block, as follows:
+\begin{enumerate}
+  \item For each L2 event in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
+      \begin{enumerate}
+        \item Apply it to the active utxo set reached by the composition of its valid predecessors from the \code{activeUtxos} set of \code{stateL2}.
+        \item If the L2 event complies with Hydrozoa's ledger rules for L2 transactions, append it to the minor block's \code{eventsValid} sequence.
+        \item Otherwise, insert it to the minor block's \code{eventsInvalid} set.
+      \end{enumerate}
+  \item Set the minor block's \code{activeUtxos} to the Merkle root of the active utxo set reached after iterating through \code{eventsSeenL2}.
+  \item Increment the \code{blockNum} and \code{minorVersion} from the latest confirmed block.
+  \item Keep the \code{majorVersion} the same as the latest confirmed block.
+\end{enumerate}
 
 \subsection{Validate a minor block}%
 \label{h:l2-minor-block-validate}%
@@ -139,7 +186,7 @@ As such, minor blocks do not affect the head's L1 state while it is in the multi
 
 % TODO - create
 
-\subsection{Validate a major block}%
+\subsection{Validate a major block}% 
 \label{h:l2-major-block-validate}%
 
 % TODO - validate
