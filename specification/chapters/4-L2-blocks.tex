@@ -47,16 +47,18 @@ The block's header contains a Merkle root hash of the active utxo set that resul
 Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that neither affirms any L2 withdrawals nor absorbs any L1 deposits.
-    Minor blocks have no effect on the head's L1 utxo state in the multisig regime and only affect the L2 ledger state's active utxo set.
+    It has no effect on the head's L1 utxo state in the multisig regime and only affects the L2 ledger state's active utxo set.
     They may affect the L1 utxo state in the rule-based regime.
   \item[Major block.] A block that affirms some L2 withdrawals or absorbs some L1 deposits.
-    Every major block also implicitly affirms an L2 settlement event corresponding to its affirmed L2 withdrawals and absorbed L1 deposits.
-    The major block should immediately affect the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 settlement event (\cref{h:ledger-settlement}).
-  \item[Final block.] A block with which the peers wish to finalize the head.
-    It has an empty block body because its effects are implicit: it withdraws the entire L2 active utxo set and does not absorb any L1 deposits, resulting in an empty L2 ledger state.
-    Like major blocks, a final block takes immediate effect as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 effects.
-  \item[Initial block.] The minor block with which the head is initialized.
+    It implicitly affirms an L2 settlement event corresponding to its affirmed L2 withdrawals and absorbed L1 deposits.
+    It immediately affects the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 settlement event (\cref{h:ledger-settlement}).
+  \item[Final block.] A major block with which the peers finalize the head, but which must not absorb any L1 deposits.
+    It implicitly affirms withdrawals for the entire active utxo set that remains after its sequence of affirmed L2 ledger events.
+    Its L2 settlement event results in an empty L2 ledger state.
+  \item[Initial block.] A block with which the peers initialize the head.
     It has an empty block body and results in an empty L2 ledger state.
+    It is a notional block that is presumed confirmed when the peers initialize the head.
+    As such, it does not need to be created, validated, or explicitly confirmed by the peers.
 \end{description}
 
 Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{versionMajor} and \code{versionMinor} numbers:
@@ -136,30 +138,15 @@ These statuses are interpreted as follows:
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
-\section{Initial block}%
-\label{h:l2-initial-block}%
+\section{Block creation}%
+\label{h:l2-block-creation}%
 
-The initial block has an empty block body and results in an empty L2 ledger state.
+% TODO
 
-It is a notional block that is presumed confirmed when the peers initialize the head.
-As such, it does not need to be created, validated, or explicitly confirmed by the peers.
+\subsection{Minor or major block}%
+\label{h:l2-block-creation-minor-major}%
 
-\section{Minor block}%
-\label{h:l2-minor-block}%
-
-A minor block rearranges the L2 ledger state's active utxo set without depositing any new funds from L1 or withdrawing any funds to L1.
-As such, minor blocks do not affect the head's L1 state while it is in the multisig regime.
-
-A minor block affirms a sequence of valid L2 events and rejects a set of invalid L2 events:
-\begin{equation*}
-\begin{split}
-\end{split}
-\end{equation*}
-
-\subsection{Create a minor block}%
-\label{h:l2-minor-block-create}%
-
-Suppose that all L2 events in the \code{eventsSeenL2} of the block validation environment are L2 transactions, as indicated by their \code{eventType} field.
+Suppose that the events in \code{eventsSeenL2} of the block validation environment are L2 transactions, as indicated by their \code{eventType} field.
 Then a new minor block is created as follows:
 \begin{enumerate}
   \item For each L2 event in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
@@ -173,43 +160,35 @@ Then a new minor block is created as follows:
   \item Keep the \code{versionMajor} the same as the latest confirmed block.
 \end{enumerate}
 
-\subsection{Validate a minor block}%
-\label{h:l2-minor-block-validate}%
-
-% TODO - validate
-
-\section{Major block}%
-\label{h:l2-major-block}%
-
-% TODO Major block
-
-\subsection{Create a major block}%
-\label{h:l2-major-block-create}%
-
-% TODO - create
-
-\subsection{Validate a major block}% 
-\label{h:l2-major-block-validate}%
-
-% TODO - validate
+% TODO fix
 
 % TODO major blocks created in two cases:
 % - Accumulation of unabsorbed L1 deposits or unsettled L2 withdrawals
 % - Within safety margin of L1 treasury transition boundary (consensus protocol parameter)
 
-\section{Final block}%
-\label{h:l2-final-block}%
+\subsection{Final block}%
+\label{h:l2-block-creation-final}%
 
-% TODO Final block
+% TODO
 
-\subsection{Create a final block}%
-\label{h:l2-final-block-create}%
+\section{Block validation}%
+\label{h:l2-block-validation}%
 
-% TODO - create
+% TODO
 
-\subsection{Validate a final block}%
-\label{h:l2-final-block-validate}%
+\subsection{Minor block}%
+\label{h:l2-block-validation-minor}%
 
-% TODO - validate
+% TODO
+
+\subsection{Major block}%
+\label{h:l2-block-validation-major}%
+
+% TODO
+
+\subsection{Final block}%
+\label{h:l2-block-validation-final}%
+
+% TODO
 
 \end{document}
