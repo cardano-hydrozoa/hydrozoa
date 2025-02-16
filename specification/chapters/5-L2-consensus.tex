@@ -5,10 +5,21 @@
 \chapter{L2 consensus protocol}%
 \label{h:l2-consensus-protocol}%
 
+L2 consensus between a Hydrozoa head's peers is achieved via a peer-to-peer protocol that:
+\begin{itemize}
+  \item Broadcasts L2 transaction and withdrawal requests among the peers.
+  \item Facilitates agreement between the peers on a growing common sequence of L2 ledger events that are grouped into blocks.
+  \item Promptly settles the L1 effects of a confirmed block, if it affirms any L2 withdrawals or absorbs any L1 deposits.
+  \item Ensures that no funds get stranded as unabsorbed L1 deposits. If a deposit will not be absorbed into the head, it can always be refunded to the depositor.
+  \item Ensures that no funds get stranded in the head. If the peers stop responding to each other, they can always retrieve their funds on L1 according to the latest block matching the L1 treasury's major version.
+\end{itemize}
+
+Peers take round-robin turns to create L2 blocks---every $i^\mathtt{th}$ block must be created by the  $i^\mathtt{th}$ peer.
+
 \section{Setup}%
 \label{h:l2-consensus-setup}%
 
-\subsection{Parameters}%
+\subsection{Parameters~~~(\codeHeading{ReqParams} / \codeHeading{AckParams})}%
 \label{h:l2-consensus-parameters}%
 
 % TODO parameters for L2 consensus
@@ -20,7 +31,7 @@
 % Bob: Acknowledged. Here's my pubkey.
 % Charlie: Acknowledged. Here's my pubkey.
 
-\subsection{Initialization}%
+\subsection{Initialization~~~(\codeHeading{ReqInit} / \codeHeading{AckInit})}%
 \label{h:l2-consensus-intitialization}%
 
 % TODO ReqInit
@@ -34,34 +45,75 @@
 \section{Ledger requests}%
 \label{h:l2-consensus-ledger}%
 
-\subsection{Transaction}%
+Any peer can broadcast a request to the other peers, asking them to witness a new L2 transaction or withdrawal.
+The peers do not explicitly acknowledge the request, but a future block should affirm the L2 transaction or withdrawal if it is valid relative to the block creator's validation environment.
+
+\subsection{Transaction~~~(\codeHeading{ReqTx})}%
 \label{h:l2-consensus-transaction}%
 
-% TODO ReqTx
+A request from one peer to the other peers to witness a new L2 transaction:
+\begin{equation*}
+  \T{ReqTx} \coloneq \bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
+\end{equation*}
 
-\subsection{Withdrawal}%
+Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
+\begin{equation*}
+  \T{Event^{L2}}\;\left\{
+  \begin{array}{lll}
+    \T{timeReceived} &\coloneq& \T{timeReceived} \\
+    \T{eventId} &\coloneq& \T{tx.txId} \\
+    \T{eventType} &\coloneq& \T{Tranasction} \\
+    \T{event} &\coloneq& \T{tx} \\
+    \T{blockNum} &\coloneq& \varnothing
+  \end{array}\right\}
+\end{equation*}
+The sender must do the same, immediately upon sending the request.
+
+No acknowledgment response is required.
+Peers other than the next block creator should not attempt to validate this L2 transaction, at this time.
+
+\subsection{Withdrawal~~~(\codeHeading{ReqWithdrawal})}%
 \label{h:l2-consensus-withdrawal}%
 
-% TODO ReqWithdrawal
+A request from one peer to the other peers to witness a new L2 withdrawal:
+\begin{equation*}
+  \T{ReqWithdrawal} \coloneq \bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
+\end{equation*}
+
+Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
+\begin{equation*}
+  \T{Event^{L2}}\;\left\{
+  \begin{array}{lll}
+    \T{timeReceived} &\coloneq& \T{timeReceived} \\
+    \T{eventId} &\coloneq& \T{w.txId} \\
+    \T{eventType} &\coloneq& \T{Withdrawal} \\
+    \T{event} &\coloneq& \T{w} \\
+    \T{blockNum} &\coloneq& \varnothing
+  \end{array}\right\}
+\end{equation*}
+The sender must do the same, immediately upon sending the request.
+
+No acknowledgment response is required.
+Peers other than the next block creator should not attempt to validate this L2 withdrawal, at this time.
 
 \section{Consensus on blocks}%
 \label{h:l2-consensus-on-blocks}%
 
-\subsection{Minor block}%
+\subsection{Minor block~~~(\codeHeading{ReqMinor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-minor-block}%
 
 % TODO ReqMinor
 
 % TODO AckMinor
 
-\subsection{Major block}%
+\subsection{Major block~~~(\codeHeading{ReqMajor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-major-block}%
 
 % TODO ReqMajor
 
 % TODO AckMajor
 
-\subsection{Final block}%
+\subsection{Final block~~~(\codeHeading {ReqFinal} / \codeHeading{AckFinal})}%
 \label{h:l2-consensus-final-block}%
 
 % TODO ReqFinal
@@ -72,14 +124,14 @@
 \label{h:l2-consensus-on-refunds}%
 
 
-\subsection{Post-dated refund}%
+\subsection{Post-dated refund~~~(\codeHeading {ReqRefundLater} / \codeHeading{AckRefundLater})}%
 \label{h:l2-consensus-post-dated-refund}%
 
 % TODO ReqRefundLater
 
 % TODO AckRefundLater
 
-\subsection{Immediate refund}%
+\subsection{Immediate refund~~~(\codeHeading{ReqRefundNow} / \codeHeading{AckRefundNow})}%
 \label{h:l2-consensus-immediate-refund}%
 
 % TODO ReqRefundNow
