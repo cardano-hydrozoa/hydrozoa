@@ -9,17 +9,13 @@ The L2 ledger state has this type:
 \begin{equation*}
   \T{LedgerState^{L2}} \coloneq \left\{
   \begin{array}{lll}
-    \T{utxosActive} &::& \T{UtxoSet^{L2}} \\
-    \T{utxosWithdrawn} &::& \T{UtxoSet^{L2}}
+    \T{utxosActive} &::& \T{UtxoSet^{L2}}
   \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
-    These utxos are created by L2 transactions and settlements.
-  \item[withdrawn utxos.] The set of utxos that have been withdrawn from \code{utxosActive} and can be settled on L1 in the multisig regime.
-    L2 settlement events empty this set (\cref{h:ledger-settlement}).
-    
+    These utxos are created by L2 transactions and genesis events.
 \end{description}
 
 \section{Ledger rules}%
@@ -161,7 +157,7 @@ In the following type listing:
 \section{Withdrawal}%
 \label{h:ledger-withdrawal}%
 
-A withdrawal is an L2 ledger event that spends one or more utxos in \code{utxosActive} and creates identical utxos (with the same output references) in \code{utxosWithdrawn}.
+A withdrawal is an L2 ledger event that spends one or more utxos in \code{utxosActive} but does not output any utxos.
 The L2 ledger rules for withdrawals are similar to transactions, but with the following modifications:
 \begin{description}
   \item[No outputs.] Withdrawals cannot create utxos in \code{utxosActive}.
@@ -228,28 +224,22 @@ Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Ca
 Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting certain protocol parameters to zero.
 However, since the other rules are affected protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
 
-\section{Settlement}%
-\label{h:ledger-settlement}%
+\section{Genesis}%
+\label{h:ledger-genesis}%
 
-L2 settlement is a ledger event that is automatically inserted into the ledger's history immediately following the events confirmed by a major L2 block.
-The effect of this event is to add new utxos to the \code{utxosActive} set and remove all utxos from the \code{utxosWithdrawn} set:
+L2 genesis is a ledger event that is automatically inserted into the ledger's history immediately following the affirmed events of a confirmed major L2 block.
+It adds new utxos to the \code{utxosActive} set without spending any utxos:
 \begin{equation*}
-  \T{Settlement^{L2}} \coloneq \left\{
+  \T{Genesis^{L2}} \coloneq \left\{
   \begin{array}{lll}
-    \T{utxosAdded} &::& \T{UtxoSet^{L2}} \\
-    \T{utxosPaidOut} &::& \T{UtxoSet^{L2}}
+    \T{utxosAdded} &::& \T{UtxoSet^{L2}}
   \end{array}\right\}
 \end{equation*}
-It mirrors the effect of the major block's L1 settlement and rollout transactions (\cref{h:l1-multisig-settlement-rollout}):
-\begin{itemize}
-  \item The \code{utxosAdded} set corresponds to the L1 deposits absorbed by the L1 settlement.
-  \item The \code{utxosPaidOut} set corresponds to the L1 utxos paid out by the L1 settlement and rollouts.
-\end{itemize}
-Let \code{depositsAbsorbed} be the set of L1 deposits absorbed. Each utxo in \code{utxosAdded} is set to:
+These L2 utxos uniquely correspond to the L1 \code{absorbedDeposits} of the major block:
 \begin{description}
   \item[output reference:]~
     \begin{description}
-      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{depositsAbsorbed}.
+      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}. Incidentally, this is also the genesis event's unique ID (\code{TxId}).
       \item[index.] The corresponding L1 deposit's positional index in \code{depositsAbsorbed}.
     \end{description}
   \item[output:]~

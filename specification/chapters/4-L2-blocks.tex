@@ -37,7 +37,7 @@ All L2 blocks have this type:
       \T{Map} \; \T{TxId} \; \T{EventType^{L2}} \\
     \T{depositsAbsorbed} &::& \T{Sequence} \; \T{OutputRef}
   \end{array}\right\} \\
-  \T{EventType^{L2}} &\coloneq \T{Transaction} \mid \T{Withdrawal}
+  \T{EventType^{L2}} &\coloneq \T{Transaction} \mid \T{Withdrawal} \mid \T{Genesis}
 \end{split}
 \end{equation*}
 
@@ -50,11 +50,11 @@ Depending on the types of L2 ledger events affirmed by the block and the peers' 
     It has no effect on the head's L1 utxo state in the multisig regime and only affects the L2 ledger state's active utxo set.
     They may affect the L1 utxo state in the rule-based regime.
   \item[Major block.] A block that affirms some L2 withdrawals or absorbs some L1 deposits.
-    It implicitly affirms an L2 settlement event corresponding to its affirmed L2 withdrawals and absorbed L1 deposits.
-    It immediately affects the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror its L2 settlement event (\cref{h:ledger-settlement}).
-  \item[Final block.] A major block with which the peers finalize the head, but which must not absorb any L1 deposits.
+    It implicitly affirms an L2 genesis event corresponding to its absorbed L1 deposits, appended to the end of its affirmed L2 event sequence.
+    It immediately affects the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror the utxos it adds and withdraws from the L2 ledger.
+  \item[Final block.] A block with which the peers finalize the head, resulting in an empty L2 ledger.
     It implicitly affirms withdrawals for the entire active utxo set that remains after its sequence of affirmed L2 ledger events.
-    Its L2 settlement event results in an empty L2 ledger state.
+    It does not absorb any L1 deposits.
 \end{description}
 
 Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{versionMajor} and \code{versionMinor} numbers:
@@ -125,7 +125,7 @@ These fields are interpreted as follows:
     \begin{description}
       \item[time received.] The POSIX time at which the peer received the event.
       \item[event ID.] The transaction ID corresponding to the event's effect on the L2 active utxo set.
-      \item[event type.] The L2 event is a transaction, withdrawal, or settlement.
+      \item[event type.] The L2 event is a transaction, withdrawal, or genesis event.
       \item[event.] The transaction representing the event's effect on the L2 active utxo set.
       \item[block number.] The block number of the block (if any) that includes the event, regardless of whether the block is confirmed.
     \end{description}
@@ -138,40 +138,42 @@ All other blocks are created by a common procedure that branches based on whethe
 
 Given the block validation environment, create a new block as follows:
 \begin{enumerate}
-  \item Initialize variables and arguments (immutable by default):
+  \item Initialize the variables and arguments (immutable by default):
     \begin{enumerate}
       \item Let \code{block} be a mutable variable initialized to an empty \codeMathTt{Block^{L2}}.
       \item Let \code{previousBlock} be the latest block in \code{blocksConfirmedL2}.
       \item Let \code{previousMajorBlock} be the latest major block in \code{blocksConfirmedL2}.
-      \item Let \code{localStateL2} be a mutable variable initialized to \code{stateL2}.
-      \item Let \code{settlementEvent} be a mutable variable initialized to an empty \codeMathTt{Settlement^{L2}}.
+      \item Let \code{utxosActive} be a mutable variable initialized to \code{stateL2.utxosActive}.
+      \item Let \code{utxosAdded} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
+      \item Let \code{utxosWithdrawn} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
     \end{enumerate}
-  \item For each L2 event \code{x} in \code{eventsSeenL2} in ascending order of \code{timeReceived}:
+  \item For each non-genesis L2 event \code{x} in \code{eventsSeenL2}, where \code{x.blockNum} is empty:%
+    \footnote{The non-genesis filter is just a sanity check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsSeenL2} with an empty \inlineColored{blockNum}.
+      A genesis event can only be appended by a valid block.
+      }
       \begin{enumerate}
-        \item If \code{x.eventType} is \code{Transaction}, apply \code{x.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}).
+        \item If \code{x.eventType} is \code{Transaction}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}).
           If it is valid:
           \begin{enumerate}
             \item Append (\code{x.eventId}, \code{x.eventType}) to \code{block.eventsValid}.
-            \item Update \code{localStateL2.utxosActive} to the result of this transition.
+            \item Update \code{utxosActive} to the result of this transition.
           \end{enumerate}
-        \item If \code{x.eventType} is \code{Withdrawal}, apply \code{x.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}).
+        \item If \code{x.eventType} is \code{Withdrawal}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}).
           If it is valid:
           \begin{enumerate}
             \item Append (\code{x.eventId}, \code{x.eventType}) to \code{block.eventsValid}.
-            \item Update \code{localStateL2.utxosActive} to the result of this transition.
-            \item Insert the spent inputs of \code{x.event} into \code{localStateL2.utxosWithdrawn}.
-            \item Insert the spent inputs of \code{x.event} into \code{settlementEvent.utxosPaidOut}.
+            \item Update \code{utxosActive} to the result of this transition.
+            \item Insert the spent inputs of \code{x.event} into \code{utxosWithdrawn}.
           \end{enumerate}
         \item Otherwise, insert (\code{x.eventId}, \code{x.eventType}) into \code{block.eventsInvalid}.
       \end{enumerate}
-  \item Move all utxos from \code{localStateL2.utxosWithdrawn} to \code{settlementEvent.utxosPaidOut}.
   \item If \code{finalizing} is \code{False}, for each deposit \code{d} in \code{stateL1.depositUtxos}:
     \begin{enumerate}
       \item Insert \code{d} into \code{block.depositsAbsorbed} if:
         \begin{equation*}
           \T{timeCurrent} \in [\T{d.deadline} + \T{depositMarginMaturity}, \T{d.deadline} - \T{depositMarginExpiry})
         \end{equation*}
-      \item Insert this utxo into \code{settlementEvent.utxosAdded}:
+      \item Insert this utxo into \code{utxosAdded}:
         \begin{equation*}
           \left\{
           \begin{array}{lll}
@@ -192,24 +194,22 @@ Given the block validation environment, create a new block as follows:
     \end{enumerate}
   \item If \code{finalizing} is \code{True}:
     \begin{itemize}
-      \item Move all utxos from \code{localStateL2.utxosActive} to \code{settlementEvent.utxosPaidOut}.
+      \item Move all utxos from \code{utxosActive} to \code{utxosWithdrawn}.
     \end{itemize}
   \item Set \code{block.blockType} according to the first among these conditions to hold:
     \begin{enumerate}
       \item \code{Final} if \code{finalizing} is \code{True}.
-      \item \code{Major} if \code{settlementEvent.utxosAdded} is non-empty.
-      \item \code{Major} if \code{settlementEvent.utxosPaidOut} is non-empty.
-      \item \code{Major} if:
+      \item \code{Major} if \code{utxosAdded} is non-empty, \code{utxosWithdrawn} is non-empty, or:
         \begin{equation*}
           \T{timeCurrent} \geq \T{previousMajorBlock.creationTime} + \T{multisigRegimeKeepAlive}
         \end{equation*}
       \item \code{Minor}, otherwise.
     \end{enumerate}
-  \item Set block header:
+  \item Set the block header:
     \begin{enumerate}
       \item Set \code{block.blockNum} to (\code{previousBlock.blockNum} + 1).
       \item Set \code{block.creationTime} to \code{currentTime}.
-      \item Set \code{block.utxosActive} to the Merkle root hash of \code{localStateL2.utxosActive}.
+      \item Set \code{block.utxosActive} to the Merkle root hash of \code{utxosActive}.
       \item If \code{block.blockType} is \code{Major} or \code{Final}:
         \begin{enumerate}
           \item Set \code{block.versionMajor} to (\code{previousBlock.versionMajor} + 1).
@@ -221,13 +221,8 @@ Given the block validation environment, create a new block as follows:
           \item Set \code{block.versionMinor} to (\code{previousBlock.versionMinor} + 1).
         \end{enumerate}
     \end{enumerate}
+  \item Return \code{block}, \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
-
-% TODO fix
-
-% TODO major blocks created in two cases:
-% - Accumulation of unabsorbed L1 deposits or unsettled L2 withdrawals
-% - Within safety margin of L1 treasury transition boundary (consensus protocol parameter)
 
 \section{Block validation}%
 \label{h:l2-block-validation}%
@@ -239,14 +234,17 @@ From a peer's perspective, a new block's validity has three states:
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
-Given the block validation environment, validate a new block as follows:
+Given the block validation environment, validate a new block as follows:%
+\footnote{In the block validation procedure, ``return'' statements immediately break execution.}
 \begin{enumerate}
-  \item Initialize variables and arguments (immutable by default):
+  \item Initialize the variables and arguments (immutable by default):
     \begin{enumerate}
       \item Let \code{block} be the new block being validated.
       \item Let \code{previousBlock} be the latest block in \code{blocksConfirmedL2}.
       \item Let \code{previousMajorBlock} be the latest major block in \code{blocksConfirmedL2}.
-      \item Let \code{localStateL2} be a mutable variable initialized to \code{stateL2}.
+      \item Let \code{utxosActive} be a mutable variable initialized to \code{stateL2.utxosActive}.
+      \item Let \code{utxosAdded} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
+      \item Let \code{utxosWithdrawn} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
     \end{enumerate}
   \item Return \framebox{\code{Invalid}} if:
     \begin{equation*}
@@ -256,39 +254,37 @@ Given the block validation environment, validate a new block as follows:
     \begin{enumerate}
       \item If \code{x.eventId} is not in \code{eventsSeenL2}, return \framebox{\code{NotYetKnown}}.
       \item If \code{block.blockType} is \code{Minor} and \code{x.eventType} is \code{Withdrawal}, return \framebox{\code{Invalid}}.
-      \item If \code{x.eventType} is \code{Transaction}, apply \code{x.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}):
+      \item If \code{x.eventType} is \code{Transaction}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}):
         \begin{enumerate}
           \item If it is invalid, return \framebox{\code{Invalid}}.
-          \item Otherwise, update \code{localState.utxosActive} to the result of this transition.
+          \item Update \code{utxosActive} to the result of this transition.
         \end{enumerate}
-      \item If \code{x.eventType} is \code{Withdrawal}, apply \code{x.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}):
+      \item If \code{x.eventType} is \code{Withdrawal}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}):
         \begin{enumerate}
           \item If it is invalid, return \framebox{\code{Invalid}}.
-          \item Otherwise, do all of these:
+          \item Do all of these:
             \begin{itemize}
-              \item Update \code{localState.utxosActive} to the result of this transition.
-              \item Insert the spent inputs of \code{x.event} into \code{localStateL2.utxosWithdrawn}.
-              \item Insert the spent inputs of \code{x.event} into \code{settlementEvent.utxosPaidOut}.
+              \item Update \code{utxosActive} to the result of this transition.
+              \item Insert the spent inputs of \code{x.event} into \code{utxosWithdrawn}.
             \end{itemize}
         \end{enumerate}
+      \item If \code{x.eventType} is \code{Genesis}, return \framebox{\code{Invalid}}.
     \end{enumerate}
   \item For each event \code{y} in \code{eventsInvalid}:
     \begin{enumerate}
       \item If \code{y.eventId} is not in \code{eventsSeenL2}, return \framebox{\code{NotYetKnown}}.
-      \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}). If it is valid, return \framebox{\code{Invalid}}.
-      \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{localStateL2.utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}). If it is valid, return \framebox{\code{Invalid}}.
+      \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}). If it is valid, return \framebox{\code{Invalid}}.
+      \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}). If it is valid, return \framebox{\code{Invalid}}.
     \end{enumerate}
-  % TODO ! Remove this sillyness:
-  \item Move all utxos from \code{localStateL2.utxosWithdrawn} to \code{settlementEvent.utxosPaidOut}.
   \item If \code{finalizing} is \code{False}, for each deposit \code{d} in \code{depositsAbsorbed}:
     \begin{enumerate}
       \item If \code{d} is not in \code{stateL1.depositUtxos}, return \framebox{\code{NotYetKnown}}.
-      \item Otherwise, let \code{d'} be the corresponding deposit in \code{stateL1.depositUtxos}.
+      \item Let \code{d'} be the corresponding deposit in \code{stateL1.depositUtxos}.
       \item Return \framebox{\code{Invalid}} if:
         \begin{equation*}
           \T{block.creationTime} \notin [\T{d'.deadline} + \T{depositMarginMaturity}, \T{d'.deadline} - \T{depositMarginExpiry})
         \end{equation*}
-      \item Insert this utxo into \code{settlementEvent.utxosAdded}:
+      \item Insert this utxo into \code{utxosAdded}:
         \begin{equation*}
           \left\{
           \begin{array}{lll}
@@ -310,12 +306,12 @@ Given the block validation environment, validate a new block as follows:
   \item If \code{finalizing} is \code{True}:
     \begin{enumerate}
       \item If \code{depositsAbsorbed} is non-empty, return \framebox{\code{Invalid}}.
-      \item Move all utxos from \code{localStateL2.utxosActive} to \code{settlementEvent.utxosPaidOut}.
+      \item Move all utxos from \code{utxosActive} to \code{utxosWithdrawn}.
     \end{enumerate}
   \item Return \framebox{\code{Invalid}} if any of these fails to hold:
     \begin{enumerate}
       \item \code{block.blockNum} matches (\code{previousBlock.blockNum} + 1).
-      \item \code{block.utxosActive} matches the Merkle root hash of \code{localStateL2.utxosActive}.
+      \item \code{block.utxosActive} matches the Merkle root hash of \code{utxosActive}.
       \item If \code{block.blockType} is \code{Major} or \code{Final}, both of these hold:
         \begin{enumerate}
           \item \code{block.versionMajor} matches (\code{previousBlock.versionMajor} + 1).
@@ -327,26 +323,7 @@ Given the block validation environment, validate a new block as follows:
           \item \code{block.versionMinor} matches (\code{previousBlock.versionMinor} + 1).
         \end{enumerate}
     \end{enumerate}
+  \item Return \framebox{\code{Valid}}, along with \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
-
-\section{Block application}%
-\label{h:l2-block-application}%
-
-% TODO
-
-\subsection{Minor block}%
-\label{h:l2-block-application-minor}%
-
-% TODO
-
-\subsection{Major block}%
-\label{h:l2-block-application-major}%
-
-% TODO
-
-\subsection{Final block}%
-\label{h:l2-block-application-final}%
-
-% TODO
 
 \end{document} 
