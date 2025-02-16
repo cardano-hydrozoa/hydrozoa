@@ -20,7 +20,7 @@ All L2 blocks have this type:
     \begin{array}{lll}
       \T{blockNum} &::& \T{UInt} \\
       \T{blockType} &::& \T{BlockType^{L2}} \\
-      \T{creationTime} &::& \T{PosixTime} \\
+      \T{timeCreation} &::& \T{PosixTime} \\
       \T{versionMajor} &::& \T{UInt} \\
       \T{versionMinor} &::& \T{UInt} \\
       \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
@@ -68,10 +68,10 @@ Blocks are numbered consecutively by \code{blockNum}, and they are versioned by 
   \item The final block increments the major version and resets the minor version to zero.
 \end{itemize}
 
-The \code{creationTime} field of a block indicates the time when it was created.
+The \code{timeCreation} field of a block indicates the time when it was created.
 
-\section{Block validation environment}%
-\label{h:l2-block-validation-environment}%
+\section{Environment}%
+\label{h:l2-block-environment}%
 
 Every peer requires access to an up-to-date source of this information:
 \begin{equation*}
@@ -111,8 +111,11 @@ These fields are interpreted as follows:
   \item[block validation params.] The head's block validation parameters:
     \begin{description}
       \item[block latency tolerance.] During validation, a new block's creation time must not deviate from the peer's current time by more than this non-negative time duration.
-      \item[deposit maturity margin.] After an L1 deposit is created on L1, the peers must wait for this non-negative time duration before attempting to absorb it into the head's treasury.
-      \item[deposit expiry margin.] If less than this non-negative time duration is left before an L1 deposit's deadline, the peers must not attempt to absorb it into the head's treasury.
+      \item[deposit maturity margin.] After an L1 deposit is created on L1,%
+        \footnote{An L1 deposit's creation time corresponds to the slot number of the block that includes the transaction that outputs it.
+          While this may be ill-defined at first due to chain forks, we expect it to stabilize by the time that an L1 deposit matures enough to be absorbed---that's the whole point of maturation!}
+        the peers must wait for this non-negative time duration before attempting to absorb it into the head's treasury.
+      \item[deposit expiry margin.] If no more than this non-negative time duration is left before an L1 deposit's deadline, the peers must not attempt to absorb it into the head's treasury.
       \item[multisig regime keep-alive.] If this non-negative time duration has passed since the latest confirmed major block's creation, the next block must be major.
     \end{description}
   \item[L1 state.] The head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
@@ -131,7 +134,7 @@ These fields are interpreted as follows:
     \end{description}
 \end{description}
 
-\section{Block creation}%
+\section{Creation}%
 \label{h:l2-block-creation}%
 
 All other blocks are created by a common procedure that branches based on whether the peers want to finalize the head, the peers want to force a major block, or the procedure has detected any absorbable L1 deposits or unconfirmed L2 withdrawals in the block validation environment.
@@ -147,6 +150,7 @@ Given the block validation environment, create a new block as follows:
       \item Let \code{utxosAdded} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
       \item Let \code{utxosWithdrawn} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
     \end{enumerate}
+  \item Set \code{block.timeCreation} to \code{timeCurrent}.
   \item For each non-genesis L2 event \code{x} in \code{eventsSeenL2}, where \code{x.blockNum} is empty:%
     \footnote{The non-genesis filter is just a sanity check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsSeenL2} with an empty \inlineColored{blockNum}.
       A genesis event can only be appended by a valid block.
@@ -169,28 +173,37 @@ Given the block validation environment, create a new block as follows:
       \end{enumerate}
   \item If \code{finalizing} is \code{False}, for each deposit \code{d} in \code{stateL1.depositUtxos}:
     \begin{enumerate}
-      \item Insert \code{d} into \code{block.depositsAbsorbed} if:
+      \item Skip to the next deposit if this fails to hold:
         \begin{equation*}
-          \T{timeCurrent} \in [\T{d.deadline} + \T{depositMarginMaturity}, \T{d.deadline} - \T{depositMarginExpiry})
+        \begin{split}
+          &(\T{block.timeCreation} \geq \T{d'.timeCreation} + \T{depositMarginMaturity}) \;\land\;\\
+          &(\T{block.timeCreation} < \T{d'.deadline} - \T{depositMarginExpiry})
+        \end{split}
         \end{equation*}
-      \item Insert this utxo into \code{utxosAdded}:
-        \begin{equation*}
-          \left\{
-          \begin{array}{lll}
-            \T{outputRef} &\coloneq& \left\{
-              \begin{array}{lll}
-                \T{id} &\coloneq& \mathcal{RH}_{32} \; \T{block.depositsAbsorbed} \\
-                \T{index} &\coloneq& \T{elemIndex} \; \T{d} \; \T{block.depositsAbsorbed}
-              \end{array}\right\} \\
-            \T{output} &\coloneq& \left\{
-              \begin{array}{lll}
-                \T{addr} &\coloneq& \T{d.address} \\
-                \T{value} &\coloneq& \T{d.value} \\
-                \T{datum} &\coloneq& \T{d.datum} \\
-                \T{script} &\coloneq& \varnothing
-              \end{array}\right\}
-          \end{array}\right\}
-        \end{equation*}
+      \item Otherwise:
+      \begin{enumerate}
+        \item Insert \code{d} into \code{block.depositsAbsorbed}.
+        \item Insert this utxo into \code{utxosAdded}:%
+          \footnote{Actually, the output reference of each L2 utxo in \inlineColored{utxosAdded} can only be constructed after the iteration through \inlineColored{stateL1.depositUtxos} is complete.
+            In practice, this may require a second pass through \inlineColored{utxosAdded} to fill-in the blanks.}
+          \begin{equation*}
+            \left\{
+            \begin{array}{lll}
+              \T{outputRef} &\coloneq& \left\{
+                \begin{array}{lll}
+                  \T{id} &\coloneq& \mathcal{RH}_{32} \; \T{block.depositsAbsorbed} \\
+                  \T{index} &\coloneq& \T{elemIndex} \; \T{d} \; \T{block.depositsAbsorbed}
+                \end{array}\right\} \\
+              \T{output} &\coloneq& \left\{
+                \begin{array}{lll}
+                  \T{addr} &\coloneq& \T{d.address} \\
+                  \T{value} &\coloneq& \T{d.value} \\
+                  \T{datum} &\coloneq& \T{d.datum} \\
+                  \T{script} &\coloneq& \varnothing
+                \end{array}\right\}
+            \end{array}\right\}
+          \end{equation*}
+      \end{enumerate}
     \end{enumerate}
   \item If \code{finalizing} is \code{True}:
     \begin{itemize}
@@ -201,21 +214,20 @@ Given the block validation environment, create a new block as follows:
       \item \code{Final} if \code{finalizing} is \code{True}.
       \item \code{Major} if \code{utxosAdded} is non-empty, \code{utxosWithdrawn} is non-empty, or:
         \begin{equation*}
-          \T{timeCurrent} \geq \T{previousMajorBlock.creationTime} + \T{multisigRegimeKeepAlive}
+          \T{block.timeCreation} \geq \T{previousMajorBlock.timeCreation} + \T{multisigRegimeKeepAlive}
         \end{equation*}
       \item \code{Minor}, otherwise.
     \end{enumerate}
-  \item Set the block header:
+  \item Set the rest of the block header:
     \begin{enumerate}
       \item Set \code{block.blockNum} to (\code{previousBlock.blockNum} + 1).
-      \item Set \code{block.creationTime} to \code{currentTime}.
       \item Set \code{block.utxosActive} to the Merkle root hash of \code{utxosActive}.
-      \item If \code{block.blockType} is \code{Major} or \code{Final}:
+      \item If \code{block.blockType} is \code{Major} or \code{Final}, both of these:
         \begin{enumerate}
           \item Set \code{block.versionMajor} to (\code{previousBlock.versionMajor} + 1).
           \item Set \code{block.versionMinor} to zero.
         \end{enumerate}
-      \item If \code{block.blockType} is \code{Minor}:
+      \item If \code{block.blockType} is \code{Minor}, both of these hold:
         \begin{enumerate}
           \item Set \code{block.versionMajor} to \code{previousBlock.versionMajor}.
           \item Set \code{block.versionMinor} to (\code{previousBlock.versionMinor} + 1).
@@ -224,7 +236,7 @@ Given the block validation environment, create a new block as follows:
   \item Return \code{block}, \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
 
-\section{Block validation}%
+\section{Validation}%
 \label{h:l2-block-validation}%
 
 From a peer's perspective, a new block's validity has three states:
@@ -246,9 +258,9 @@ Given the block validation environment, validate a new block as follows:%
       \item Let \code{utxosAdded} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
       \item Let \code{utxosWithdrawn} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
     \end{enumerate}
-  \item Return \framebox{\code{Invalid}} if:
+  \item Return \framebox{\code{Invalid}} if this fails to hold:
     \begin{equation*}
-      \T{block.creationTime} \notin [\T{timeCurrent} \pm \T{blockLatencyTolerance})
+      \T{block.timeCreation} \in [\T{timeCurrent} \pm \T{blockLatencyTolerance})
     \end{equation*}
   \item For each event \code{x} in \code{eventsValid}:
     \begin{enumerate}
@@ -262,11 +274,8 @@ Given the block validation environment, validate a new block as follows:%
       \item If \code{x.eventType} is \code{Withdrawal}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}):
         \begin{enumerate}
           \item If it is invalid, return \framebox{\code{Invalid}}.
-          \item Do all of these:
-            \begin{itemize}
-              \item Update \code{utxosActive} to the result of this transition.
-              \item Insert the spent inputs of \code{x.event} into \code{utxosWithdrawn}.
-            \end{itemize}
+          \item Update \code{utxosActive} to the result of this transition.
+          \item Insert the spent inputs of \code{x.event} into \code{utxosWithdrawn}.
         \end{enumerate}
       \item If \code{x.eventType} is \code{Genesis}, return \framebox{\code{Invalid}}.
     \end{enumerate}
@@ -276,13 +285,16 @@ Given the block validation environment, validate a new block as follows:%
       \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}). If it is valid, return \framebox{\code{Invalid}}.
       \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}). If it is valid, return \framebox{\code{Invalid}}.
     \end{enumerate}
-  \item If \code{finalizing} is \code{False}, for each deposit \code{d} in \code{depositsAbsorbed}:
+  \item If \code{finalizing} is \code{False}, for each deposit \code{d'} in \code{depositsAbsorbed}:
     \begin{enumerate}
-      \item If \code{d} is not in \code{stateL1.depositUtxos}, return \framebox{\code{NotYetKnown}}.
-      \item Let \code{d'} be the corresponding deposit in \code{stateL1.depositUtxos}.
-      \item Return \framebox{\code{Invalid}} if:
+      \item If \code{d'} is not in \code{stateL1.depositUtxos}, return \framebox{\code{NotYetKnown}}.
+      \item Let \code{d} be the corresponding deposit in \code{stateL1.depositUtxos}.
+      \item Return \framebox{\code{Invalid}} if this fails to hold:
         \begin{equation*}
-          \T{block.creationTime} \notin [\T{d'.deadline} + \T{depositMarginMaturity}, \T{d'.deadline} - \T{depositMarginExpiry})
+        \begin{split}
+          &(\T{block.timeCreation} \geq \T{d.timeCreation} + \T{depositMarginMaturity}) \;\land\;\\
+          &(\T{block.timeCreation} < \T{d.deadline} - \T{depositMarginExpiry})
+        \end{split}
         \end{equation*}
       \item Insert this utxo into \code{utxosAdded}:
         \begin{equation*}
@@ -307,6 +319,15 @@ Given the block validation environment, validate a new block as follows:%
     \begin{enumerate}
       \item If \code{depositsAbsorbed} is non-empty, return \framebox{\code{Invalid}}.
       \item Move all utxos from \code{utxosActive} to \code{utxosWithdrawn}.
+    \end{enumerate}
+  \item Return \framebox{\code{Invalid}} if \code{block.blockType} is not set according to the first among these to hold:
+    \begin{enumerate}
+      \item \code{Final} if \code{finalizing} is \code{True}.
+      \item \code{Major} if \code{utxosAdded} is non-empty, \code{utxosWithdrawn} is non-empty, or:
+        \begin{equation*}
+          \T{block.timeCreation} \geq \T{previousMajorBlock.timeCreation} + \T{multisigRegimeKeepAlive}
+        \end{equation*}
+      \item \code{Minor}, otherwise.
     \end{enumerate}
   \item Return \framebox{\code{Invalid}} if any of these fails to hold:
     \begin{enumerate}
