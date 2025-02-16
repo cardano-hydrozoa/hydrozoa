@@ -226,31 +226,37 @@ Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Ca
 \end{itemize}
 
 Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting certain protocol parameters to zero.
-However, since the non-empty collateral inputs and transaction balancing rules are not affected by protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
+However, since the other rules are affected protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
 
 \section{Settlement}%
 \label{h:ledger-settlement}%
 
-L2 settlement is a ledger event that is automatically inserted into the ledger's event history immediately following the events confirmed by a major L2 block.
-The effect of this event is to empty the \code{utxosWithdrawn} set and add new utxos to the \code{utxosActive} set, mirroring the effect of the major block's L1 settlement and rollout transactions on the head's utxo state (\cref{h:l1-multisig-settlement-rollout}):
+L2 settlement is a ledger event that is automatically inserted into the ledger's history immediately following the events confirmed by a major L2 block.
+The effect of this event is to add new utxos to the \code{utxosActive} set and remove all utxos from the \code{utxosWithdrawn} set:
+\begin{equation*}
+  \T{Settlement^{L2}} \coloneq \left\{
+  \begin{array}{lll}
+    \T{utxosAdded} &::& \T{UtxoSet^{L2}} \\
+    \T{utxosPaidOut} &::& \T{UtxoSet^{L2}}
+  \end{array}\right\}
+\end{equation*}
+It mirrors the effect of the major block's L1 settlement and rollout transactions (\cref{h:l1-multisig-settlement-rollout}):
 \begin{itemize}
-  \item The new L2 utxos added to the \code{utxosActive} set correspond to the L1 deposits absorbed by the L1 settlement transaction.
-  \item The L2 utxos emptied from the \code{utxosWithdrawn} set correspond to the L1 utxos paid out by the L1 settlement and rollout transactions.
+  \item The \code{utxosAdded} set corresponds to the L1 deposits absorbed by the L1 settlement.
+  \item The \code{utxosPaidOut} set corresponds to the L1 utxos paid out by the L1 settlement and rollouts.
 \end{itemize}
-
-Let \code{depositsAbsorbed} be the set of L1 deposits' output references, in the order that they are spent by the L1 settlement transaction.
-Each of the new L2 utxos added by the L2 settlement event must uniquely correspond to an element of \code{depositsAbsorbed} as follows:
+Let \code{depositsAbsorbed} be the set of L1 deposits absorbed. Each utxo in \code{utxosAdded} is set to:
 \begin{description}
   \item[output reference:]~
     \begin{description}
-      \item[id.] Set equal to the Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{depositsAbsorbed}.
-      \item[index.] Set equal to the L1 deposit's positional index in \code{depositsAbsorbed}.
+      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{depositsAbsorbed}.
+      \item[index.] The corresponding L1 deposit's positional index in \code{depositsAbsorbed}.
     \end{description}
   \item[output:]~
     \begin{description}
-      \item[addr.] Set equal to the \code{address} field in the corresponding L1 deposit's datum.
-      \item[value.] Set equal to the value of the corresponding L1 deposit.
-      \item[datum.] Set equal to the \code{datum} field in the corresponding L1 deposit's datum.
+      \item[addr.] The \code{address} field in the corresponding L1 deposit's datum.
+      \item[value.] The value of the corresponding L1 deposit.
+      \item[datum.] The \code{datum} field in the corresponding L1 deposit's datum.
       \item[script.] Empty.
     \end{description}
   \end{description}
