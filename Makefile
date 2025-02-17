@@ -16,5 +16,5 @@ spec:
 
 .PHONY: spec-clean
 spec-clean:
-	$(MAKE) -C $(SPECDIR) nix-clean
+	$(MAKE) -C $(SPECDIR) nix-spec-clean
 
