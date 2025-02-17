@@ -5,23 +5,23 @@ help:
 	@echo "Usage: make <target>"
 	@echo
 	@echo "Targets:"
-	@echo "  help      -- show this help"
-	@echo "  shell     -- open nix dev shell"
-	@echo "  spec      -- build $(SPECNAME).pdf"
-	@echo "  clean     -- clean up latexmk files"
-	@echo "  nix-spec  -- open nix shell & spec"
-	@echo "  nix-clean -- open nix shell & clean"
+	@echo "  help           -- show this help"
+	@echo "  spec           -- build $(SPECNAME).pdf"
+	@echo "  spec-clean     -- clean up latexmk files"
+	@echo "  nix-shell      -- open nix shell"
+	@echo "  nix-spec       -- open nix shell & make spec"
+	@echo "  nix-spec-clean -- open nix shell & make spec-clean"
 
-.PHONY: shell
-shell:
+.PHONY: nix-shell
+nix-shell:
 	nix develop
 
 .PHONY: spec
 spec:
 	latexmk -pdf -bibtex $(SPECNAME).tex
 
-.PHONY: clean
-clean:
+.PHONY: spec-clean
+spec-clean:
 	latexmk -CA
 	find . -type f -name "*.aux" -exec rm {} \;
 	rm gitHeadLocal.gin
@@ -30,6 +30,6 @@ clean:
 nix-spec:
 	nix develop --command $(MAKE) spec
 
-.PHONY: nix-clean
-nix-clean:
-	nix develop --command $(MAKE) clean
+.PHONY: nix-spec-clean
+nix-spec-clean:
+	nix develop --command $(MAKE) spec-clean
