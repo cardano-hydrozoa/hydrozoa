@@ -94,9 +94,12 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Inline code
 % styled with monospaced font in dark red color
-\newcommand{\code}[1]{\textcolor{inline-code-dark-red}{\mytexttt{#1}}}
-\newcommand{\codeNC}[1]{\texttt{#1}}
 \newcommand{\inlineColored}[1]{\textcolor{inline-code-dark-red}{#1}}
+\newcommand{\code}[1]{\inlineColored{\mytexttt{#1}}}
+\newcommand{\codeMath}[1]{\inlineColored{\begin{math}#1\end{math}}}
+\newcommand{\codeMathTt}[1]{\inlineColored{\begin{math}\mathtt{#1}\end{math}}}
+\newcommand{\codeNC}[1]{\texttt{#1}}
+\newcommand{\codeHeading}[1]{\inlineColored{\texttt{#1}}}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Code blocks

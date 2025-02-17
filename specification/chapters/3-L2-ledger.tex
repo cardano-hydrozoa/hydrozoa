@@ -1,0 +1,254 @@
+\documentclass[../hydrozoa.tex]{subfiles}
+\graphicspath{{\subfix{../images/}}}
+\begin{document}
+
+\chapter{L2 ledger}%
+\label{h:l2-ledger}%
+
+The L2 ledger state has this type:
+\begin{equation*}
+  \T{LedgerState^{L2}} \coloneq \left\{
+  \begin{array}{lll}
+    \T{utxosActive} &::& \T{UtxoSet^{L2}}
+  \end{array}\right\}
+\end{equation*}
+These fields are interpreted as follows:
+\begin{description}
+  \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
+    These utxos are created by L2 transactions and genesis events.
+\end{description}
+
+\section{Ledger rules}%
+\label{h:l2-ledger-rules}%
+
+Hydrozoa's L2 ledger rules are the same as Cardano's ledger rules,%
+\footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
+but with the following additions:
+\begin{description}
+    \item[No staking or governance actions.]
+      Hydrozoa's consensus protocol is not based on Ouroboros proof-of-stake, and its governance protocol is not based on Cardano's hard-fork-combinator update mechanism.
+      Furthermore, Hydrozoa's L1 scripts cannot authorize arbitrary staking or governance actions on behalf of users.
+      For this reason, staking and governance actions cannot be used in L2 transactions.%
+      \footnote{We are aware that many dApps on Cardano rely on withdraw-zero staking validators (for performance gains), which are not available without staking actions.
+        However, instead of conjuring a complex workaround, Hydrozoa will wait for the implementation of CIP-112 \citep{DiSarroCIP112ObserveScript2024} in an upcoming hardfork.
+        The observer scripts of CIP-112 allow dApp developers to implement the same functionality without withdraw-zero staking validators in a more principled and performant way.}
+        % TODO add minting subsection to future work section
+    \item[No pre-Conway features.] Hydrozoa does not need to maintain backwards compatibility with pre-Conway eras.
+      L2 utxos cannot use bootstrap addresses or Shelley addresses with Plutus versions older than Plutus V3.
+
+      Public key hash credentials, native scripts, and Plutus scripts at or above V3 are allowed.
+    \item[No datum hashes in outputs.] Hydrozoa requires all utxo datums to be inline, which avoids the need to index the datum-hash to datum map from transactions' datum witnesses.
+    \item[No minting or burning of tokens.]
+      Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when L2 state is settled on L1.
+      Thus, L2 transactions cannot mint or burn tokens.%
+      \footnote{We are also aware that many dApps on Cardano rely on token minting and burning to authenticate their internal state.
+        However, supporting this feature opens up a range of difficult issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
+        Fortunately, the Midgard team is exploring a new approach to this problem, which we may adopt in future extensions to Hydrozoa.}
+    \item[Different network ID.] Hydrozoa L2 transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
+\end{description}
+
+\section{Utxo set}%
+\label{h:l2-utxo-set}%
+
+Conceptually, a utxo set is a set of transaction outputs tagged with unique references to their origins.
+In practice, we equivalently represent a utxo set as a map from output reference to output:
+\begin{equation*}
+\begin{split}
+  \T{UtxoSet^{L2}} &\coloneq \T{Map} \; \T{OutputRef} \; \T{Output^{L2}} \\
+    &\coloneq \left\{
+      (k_i :: \T{OutputRef}, v_i :: \T{Output^{L2}})
+      \;\middle|\;
+      \forall i \neq j.\; k_i \neq k_j
+    \right\}
+\end{split}
+\end{equation*}
+
+An output reference is a tuple that uniquely identifies an output by a hash of the transaction that created it and its index among that transaction's outputs:
+\begin{equation*}
+  \T{OutputRef} \coloneq \left\{
+    \begin{array}{lll}
+      \T{id} &::& \T{TxId} \\
+      \T{index} &::& \T{UInt}
+    \end{array} \right\}
+\end{equation*}
+
+An output is a tuple describing a bundle of tokens, data, and a script that have been placed at an address in the ledger:
+\begin{equation*}
+\begin{split}
+  \T{Output^{L2}} &\coloneq \left\{
+  \begin{array}{lll}
+    \T{addr} &::& \T{Address^{L2}} \\
+      \T{value} &::& \T{Value} \\
+      \T{datum} &::& \T{Datum^{L2}} \\
+      \T{script} &::& \T{Maybe} \; \T{Script^{L2}}
+  \end{array} \right\} \\\\
+  \T{Address^{L2}} &\coloneq \left\{
+    \begin{array}{l}
+      \T{Network^{L2}} \\
+      \T{PaymentCredential} \\
+      \T{StakeReference}
+    \end{array}\right\} \\\\
+  \T{Datum^{L2}} &\coloneq \T{NoDatum} \mid \T{Datum} \; \T{Data} \\\\
+  \T{Script^{L2}} \coloneq\;& \T{TimelockScript} \; \T{Timelock} \\
+                        \mid\;& \T{PlutusScript} \; \T{PlutusVersion^{L2}} \; \T{PlutusBinary} \\\\
+  \T{PlutusVersion^{L2}} \coloneq\;& \T{PlutusV3}
+\end{split}
+\end{equation*}
+
+\section{Transaction}%
+\label{h:ledger-transaction}%
+
+An L2 transaction spends one or more utxos in \code{utxosActive}, replacing them with zero or more new utxos.
+The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions, but with the additions listed in \cref{h:l2-ledger-rules}.
+
+Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
+Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
+
+The hydra node software should reject (with an error message) L2 transactions that violate these requirements, while peers should ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
+
+In the following type listing:
+\begin{itemize}
+  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
+  \item We indicate fields that must be omitted in Hydrozoa L2 transactions by prefixing their field names with an empty-set symbol (\code{$\varnothing$}).
+\end{itemize}
+\begingroup
+\allowdisplaybreaks
+\begin{align*}
+    \T{Tx^{L2}} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{body} &::& \T{TxBody^{L2}} \\
+        \T{wits} &::& \T{TxWits^{L2}} \\
+        \T{is\_valid} &::& \T{Bool} \\
+        \T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
+    \end{array} \right\} \\\\
+    \T{TxBody^{L2}} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
+        \T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{outputs} &::& \T{[Output^{L2}]} \\
+        \T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
+        \T{total\_collateral} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set \; Certificate ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map \; RewardAccount \; Coin} \\
+        \T{fee} &::& \T{Coin} \\
+        \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
+        \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
+        \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{ScriptIntegrityHash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{AuxiliaryDataHash} \\
+        \T{network\_id} &::& \quad?\;\T{Network^{L2}} \\
+        \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set \; ProposalProcedure} \\
+        \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
+    \end{array} \right\} \\\\
+    \T{TxWits^{L2}} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{addr\_tx\_wits} &::& \quad?\;\T{Set \; (VKey, Signature,  VKeyHash)} \\
+        \varnothing\;\T{boot\_addr\_tx\_wits} &::& \quad?\;\T{Set \; BootstrapWitness} \\
+        \T{script\_tx\_wits} &::& \quad?\;\T{Map \; ScriptHash \; Script^{L2}} \\
+        \varnothing\;\T{data\_tx\_wits} &::& \quad?\;\T{TxDats} \\
+        \T{redeemer\_tx\_wits} &::& \quad?\;\T{Redeemers}
+    \end{array} \right\}
+\end{align*}
+\endgroup
+
+\section{Withdrawal}%
+\label{h:ledger-withdrawal}%
+
+A withdrawal is an L2 ledger event that spends one or more utxos in \code{utxosActive} but does not output any utxos.
+The L2 ledger rules for withdrawals are similar to transactions, but with the following modifications:
+\begin{description}
+  \item[No outputs.] Withdrawals cannot create utxos in \code{utxosActive}.
+  \item[No fees.] Withdrawals do not pay transaction fees.
+  \item[No collateral.] Withdrawals do not provide collateral for phase-2 validation.
+  \item[No metadata.] Withdrawals cannot contain transaction metadata.
+\end{description}
+
+We can express the rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}) as further restrictions on the fields of L2 transactions  (\codeMathTt{Tx^{L2}}):%
+\footnote{Here, ``omitting'' the \inlineColored{outputs} and \inlineColored{fee} fields means setting them to an empty list and zero, respectively.}
+\begingroup
+\allowdisplaybreaks
+\begin{align*}
+  \T{Tx^{L2W}} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{body} &::& \T{TxBody^{L2W}} \\
+        \T{wits} &::& \T{TxWits^{L2}} \\
+        \T{is\_valid} &::& \T{Bool} \\
+        \varnothing\;\T{auxiliary\_data} &::& \quad?\;\T{TxMetadata}
+    \end{array} \right\} \subseteq \T{Tx^{L2}} \\\\
+    \T{TxBody^{L2W}} \coloneq\;& \left\{
+    \begin{array}{lll}
+      \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
+        \varnothing\;\T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \T{reference\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \varnothing\;\T{outputs} &::& \T{[Output^{L2}]} \\
+        \varnothing\;\T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
+        \varnothing\;\T{total\_collateral} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set \; Certificate ]} \\
+        \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map \; RewardAccount Coin} \\
+        \varnothing\;\T{fee} &::& \T{Coin} \\
+        \T{validity\_interval} &::& \quad?\;\T{ValidityInterval} \\
+        \T{required\_signer\_hashes} &::& \quad?\;\T{[VKeyCredential]} \\
+        \varnothing\;\T{mint} &::& \quad?\;\T{Value} \\
+        \T{script\_integrity\_hash} &::& \quad?\;\T{ScriptIntegrityHash} \\
+        \T{auxiliary\_data\_hash} &::& \quad?\;\T{AuxiliaryDataHash} \\
+        \T{network\_id} &::& \quad?\;\T{Network^{L2}} \\
+        \varnothing\;\T{voting\_procedures} &::& \quad?\;\T{VotingProcedures} \\
+        \varnothing\;\T{proposal\_procedures} &::& \quad?\;\T{Set \; ProposalProcedure} \\
+        \varnothing\;\T{current\_treasury\_value} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{treasury\_donation} &::& \quad?\;\T{Coin}
+    \end{array} \right\}
+\end{align*}
+\endgroup
+
+Unfortunately, Cardano's ledger rules do not allow the \code{fee} to be zero, and they do not allow the \code{collateral\_inputs}, \code{collateral\_return}, and \code{total\_collateral} fields to be omitted in transactions containing Plutus scripts.
+Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Cardano ledger rules:
+\begin{itemize}
+  \item Minimum fee amount
+  \item Minimum collateral amount
+  \item Non-empty collateral inputs (if Plutus scripts used)
+  \item Collateral balancing:
+    \begin{equation*}
+      \sum \T{lovelace} (\T{collateral\_inputs}) =
+      \T{lovelace} (\T{collateral\_return}) + \T{total\_collateral}
+    \end{equation*}
+  \item Transaction balancing:
+    \begin{equation*}
+      \sum \T{value} (\T{inputs}) + \T{mint} =
+      \sum \T{value} (\T{outputs}) + \T{fee}
+    \end{equation*}
+\end{itemize}
+
+Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting certain protocol parameters to zero.
+However, since the other rules are affected protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
+
+\section{Genesis}%
+\label{h:ledger-genesis}%
+
+L2 genesis is a ledger event that is automatically inserted into the ledger's history immediately following the affirmed events of a confirmed major L2 block.
+It adds new utxos to the \code{utxosActive} set without spending any utxos:
+\begin{equation*}
+  \T{Genesis^{L2}} \coloneq \left\{
+  \begin{array}{lll}
+    \T{utxosAdded} &::& \T{UtxoSet^{L2}}
+  \end{array}\right\}
+\end{equation*}
+These L2 utxos uniquely correspond to the L1 \code{absorbedDeposits} of the major block (\cref{h:l2-blocks}):
+\begin{description}
+  \item[output reference:]~
+    \begin{description}
+      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}. Incidentally, this is also the genesis event's unique ID (\code{TxId}).
+      \item[index.] The corresponding L1 deposit's positional index in \code{depositsAbsorbed}.
+    \end{description}
+  \item[output:]~
+    \begin{description}
+      \item[addr.] The \code{address} field in the corresponding L1 deposit's datum.
+      \item[value.] The value of the corresponding L1 deposit.
+      \item[datum.] The \code{datum} field in the corresponding L1 deposit's datum.
+      \item[script.] Empty.
+    \end{description}
+  \end{description}
+
+\end{document}

@@ -1,0 +1,44 @@
+\documentclass[../hydrozoa.tex]{subfiles}
+\graphicspath{{\subfix{../images/}}}
+\begin{document}
+
+\chapter*{Overview}%
+\label{h:overview-introduction}%
+\addcontentsline{toc}{chapter}{Overview}%
+
+% TODO Intro
+
+\section*{L1 protocol}%
+\label{h:overview-l1-protocol}%
+\addcontentsline{toc}{section}{L1 protocol}%
+
+The Hydrozoa L1 protocol has two distinct operating regimes.
+Every head is initialized by its peers in the \textbf{multisig} regime (\cref{h:l1-multisig-regime}), in which all funds and state are stored at a native script address controlled by the unanimous multi-signature of its peers.
+Deposits into the head are created by sending utxos to this address, which are either absorbed into the head's treasury or refunded to depositors by multi-signed transactions.
+Similarly, withdrawals are settled on L1 by multi-signed transactions that send utxos out of the head's treasury.
+Thus, the multisig regime's L1 script defers entirely to the L2 consensus protocol between the peers, which it perceives as a black box mechanism that produces multi-signed transactions to modify the L1 state.
+
+Ideally, a head spends its entire life cycle in the multisig regime, right up to the final transaction that withdraws all remaining funds out of the head and de-initializes it.
+However, the multisig regime may stall if the peers stop multi-signing transactions before reaching finalization.
+
+In this case, the head moves to the \textbf{rule-based} regime (\cref{h:l1-rule-based-regime}), in which unabsorbed deposits are refunded and control over the head's treasury transfers to a suite of Plutus scripts. 
+This regime focuses on the peers' dispute about which L2 block is the latest among those confirmed by the L2 consensus protocol and compatible with the L1 treasury state.
+The Plutus scripts arbitrate the peers' dispute and then manage withdrawals from the head's treasury based on the resolved L2 block.
+
+% TODO Why use native scripts in multisig regime?
+% - cheaper
+% - Problem of single-user collateral requirement in Plutus scripts
+
+\section*{L2 state}%
+\label{h:overview-l2-state}%
+\addcontentsline{toc}{section}{L2 state}%
+
+% TODO L2 state overview
+
+\section*{L2 consensus protocol}%
+\label{h:overview-l2-consensus-protocol}%
+\addcontentsline{toc}{section}{L2 consensus protocol}%
+
+% TODO L2 consensus protocol overview
+
+\end{document}

@@ -1,3 +1,4 @@
+SPECNAME = hydrozoa
 
 .PHONY: help
 help:
@@ -6,7 +7,7 @@ help:
 	@echo "Targets:"
 	@echo "  help      -- show this help"
 	@echo "  shell     -- open nix dev shell"
-	@echo "  spec      -- build the specification hydrozoa.pdf"
+	@echo "  spec      -- build $(SPECNAME).pdf"
 	@echo "  clean     -- clean up latexmk files"
 	@echo "  nix-spec  -- open nix shell & spec"
 	@echo "  nix-clean -- open nix shell & clean"
@@ -17,11 +18,11 @@ shell:
 
 .PHONY: spec
 spec:
-	latexmk -pdf -verbose -file-line-error -synctex=1 -interaction=nonstopmode
+	latexmk -pdf -bibtex $(SPECNAME).tex
 
 .PHONY: clean
 clean:
-	latexmk -C
+	latexmk -CA
 	find . -type f -name "*.aux" -exec rm {} \;
 	rm gitHeadLocal.gin
 
