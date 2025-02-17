@@ -67,7 +67,7 @@ These fields are interpreted as follows:
 Non-treasury utxos at the head's native script address are recognized as follows:
 \begin{itemize}
   \item Deposits have datums with the \code{DepositDatum} type (\cref{h:l1-multisig-deposit}).
-  \item Rollout nodes are no-datum outputs of the head's settlement transactions (\cref{h:l1-multisig-settlement-rollout}).
+  \item Rollout utxos are no-datum outputs of the head's settlement (\cref{h:l1-multisig-settlement-rollout}) and finalization (\cref{h:l1-multisig-finalization}) transactions.
     They are transient in nature, quickly spent in the rollout transactions that follow the settlement transactions that create them.
 \end{itemize}
   
@@ -147,10 +147,10 @@ Overall, they are paid out in the ascending order of their output references in 
 % TODO deterministic utxo rollout algorithm
 
 The settlement transaction greedily pays out as many withdrawals as it can, using the transaction size remaining after fitting the deposit inputs and the fixed transaction overhead.
-It outputs the remaining withdrawals' aggregate funds as a single ``rollout node'' output, sent to the head's native script address without a datum.
+It outputs the remaining withdrawals' aggregate funds as a single rollout utxo, sent to the head's native script address without a datum.
 
-The rollout node is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout node with the aggregate funds of the rest of the withdrawals, if any remain.
-Further rollout transactions spend the shrinking rollout node, until all the withdrawals have been paid out.
+The rollout utxo is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout utxo with the aggregate funds of the rest of the withdrawals, if any remain.
+Further rollout transactions spend the shrinking rollout utxo, until all the withdrawals have been paid out.
 
 \section{Finalization}%
 \label{h:l1-multisig-finalization}%
@@ -160,7 +160,7 @@ The finalization transaction is similar to the settlement transaction, except th
   \item It burns the head's beacon token.
   \item It spends the head's treasury utxo without outputting a new treasury utxo.
   \item It does not absorb any deposits.
-  \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using a rollout node output if necessary.
+  \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using rollout transactions if necessary.
 \end{itemize}
 
 After the finalization transaction deals with the treasury and immediate/post-dated refund transactions deal with the unabsorbed deposits, no trace of the Hydrozoa head should be left in the L1 ledger.

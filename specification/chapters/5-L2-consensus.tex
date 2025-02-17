@@ -58,7 +58,7 @@ A request from one peer to the other peers to witness a new L2 transaction:
 
 Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
 \begin{equation*}
-  \T{Event^{L2}}\;\left\{
+  \left\{
   \begin{array}{lll}
     \T{timeReceived} &\coloneq& \T{timeReceived} \\
     \T{eventId} &\coloneq& \T{tx.txId} \\
@@ -82,7 +82,7 @@ A request from one peer to the other peers to witness a new L2 withdrawal:
 
 Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
 \begin{equation*}
-  \T{Event^{L2}}\;\left\{
+  \left\{
   \begin{array}{lll}
     \T{timeReceived} &\coloneq& \T{timeReceived} \\
     \T{eventId} &\coloneq& \T{w.txId} \\
@@ -99,7 +99,7 @@ Peers other than the next block creator should not attempt to validate this L2 w
 \section{Consensus on blocks}%
 \label{h:l2-consensus-on-blocks}%
 
-If no new block is awaiting confirmation from the peers, the next block must be created and sent to the peers for confirmation.
+If there are unconfirmed L2 events, and no new block is awaiting confirmation from the peers, then the next block must be created and sent to the peers for confirmation.
 The $i^\mathtt{th}$ peer has the exclusive right to create every $i^\mathtt{th}$ block: 
 \begin{equation*}
   \T{rightfulBlockCreator} \; \T{peersN} \; \T{blockNum} \coloneq
@@ -122,7 +122,7 @@ When the new block is major or final, acknowledgment proceeds in two rounds.%
   }
 When a peer has received the first acknowledgment response (\code{AckMajor1} or \code{AckFinal1}) from all peers, the peer must broadcast a corresponding second acknowledgment response (\code{AckMajor2} or \code{AckFinal2}).
 
-A peer must consider a block to be confirmed when all its acknowledgments have been received.
+A peer must consider a block and all its affirmed events to be confirmed when all of the block's acknowledgments have been received.
 
 \subsection{Minor block~~~(\codeHeading{ReqMinor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-minor-block}%

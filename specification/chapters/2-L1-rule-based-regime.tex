@@ -209,10 +209,10 @@ Redeemers:
       \item Verify the redeemer:
         \begin{enumerate}[resume]
           \item Let \code{voteRedeemer} be an \emph{optional} redeemer argument with this type:%
-            \footnote{The \inlineColored{$\T{BlockHeader^{L2}}$} type is defined in \cref{h:l2-blocks} and repeated here.}
+            \footnote{These types are defined in \cref{h:l2-blocks} and repeated here.}
             \begin{equation*}
             \begin{split}
-              \T{VoteRedeemer} &\coloneq \left\{
+              \T{MinorBlockL1Effect} &\coloneq \left\{
                 \begin{array}{lll}
                   \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
                   \T{multisig} &::& [\T{Signature}]
