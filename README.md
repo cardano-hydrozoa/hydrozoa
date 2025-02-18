@@ -1,5 +1,26 @@
 # Hydrozoa
 
+## Getting Started
+
+### Prerequisites
+
+You'll need Java JDK 11+, [scala-cli](https://scala-cli.virtuslab.org/) or [sbt](https://www.scala-sbt.org/).
+
+If you use Nix, you can run `nix develop` to get a shell with all the dependencies.
+
+### Setup IntelliJ IDEA
+
+File -> New -> Project from Existing Sources -> select the project directory -> Import project from external model ->
+BSP -> Sbt
+
+### Building with sbt
+
+Run `sbt` to enter the sbt shell.
+
+Run `compile` to compile the project.
+
+Run `test` to run the tests.
+
 ## Build the specification
 
 Build this project's PDF specification from the LaTeX files in the `specification` subdirectory.
