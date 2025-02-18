@@ -400,8 +400,8 @@ A confirmed major block's L1 effect is a package of L1 transactions, multi-signe
 \end{equation*}
 These L1 transactions are as follows:
 \begin{description}
-  \item[settlement.] The L1 settlement transaction (\cref{h:l1-multisig-settlement-rollout}) that absorbs the block's \code{absorbedDeposits} and pays out as many utxos corresponding to the block's \code{utxosWithdrawn} as fit within Cardano's L1 transaction constraints.
-  \item[rollouts.] The L1 rollout transactions (\cref{h:l1-multisig-settlement-rollout}) that pay out utxos corresponding to the rest of the block's \code{utxosWithdrawn}.
+  \item[settlement.] The L1 settlement transaction (\cref{h:l1-multisig-settlement}) that absorbs the block's \code{absorbedDeposits} and pays out as many utxos corresponding to the block's \code{utxosWithdrawn} as fit within Cardano's L1 transaction constraints.
+  \item[rollouts.] The L1 rollout transactions (\cref{h:l1-multisig-rollout}) that pay out utxos corresponding to the rest of the block's \code{utxosWithdrawn}.
   \item[post-dated transition.] An L1 transaction that transitions the multisig treasury to the rule-based regime with the block's major version (\cref{h:l1-rule-based-transition}).
     The transaction's time-validity interval starts at the major block's creation time, shifted forward by the \code{multisigRegimeTimeout} parameter.
 \end{description}
@@ -426,7 +426,7 @@ These L1 transactions are as follows:
 \begin{description}
   \item[finalization.] The L1 finalization transaction (\cref{h:l1-multisig-finalization}) that pays out as many utxos corresponding to the block's \code{utxosWithdrawn} as fit within Cardano's L1 transaction constraints.
     It does not absorb any L1 deposits.
-  \item[rollouts.] The L1 rollout transactions (\cref{h:l1-multisig-settlement-rollout}) that pay out utxos corresponding to the rest of the block's \code{utxosWithdrawn}.
+  \item[rollouts.] The L1 rollout transactions (\cref{h:l1-multisig-rollout}) that pay out utxos corresponding to the rest of the block's \code{utxosWithdrawn}.
 \end{description}
 
 All peers must immediately submit the finalization and rollouts to Cardano L1.
