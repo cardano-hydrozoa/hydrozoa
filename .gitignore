@@ -29,3 +29,10 @@ cabal.project.local~
 # Aiken
 build/
 artifacts
+
+# Scala
+.bsp/
+.idea/
+project/
+target/
+
