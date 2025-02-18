@@ -46,7 +46,7 @@ Peers take round-robin turns to create L2 blocks---every $i^\mathtt{th}$ block m
 \label{h:l2-consensus-ledger}%
 
 Any peer can broadcast a request to the other peers, asking them to witness a new L2 transaction or withdrawal.
-The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's validation environment.
+The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's peer state.
 
 \subsection{Transaction~~~(\codeHeading{ReqTx})}%
 \label{h:l2-consensus-transaction}%
@@ -56,7 +56,7 @@ A request from one peer to the other peers to witness a new L2 transaction:
   \T{ReqTx} \coloneq \bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
 \end{equation*}
 
-Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
+Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsL2} table in the peer's state (\cref{h:l2-peer-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -80,7 +80,7 @@ A request from one peer to the other peers to witness a new L2 withdrawal:
   \T{ReqWithdrawal} \coloneq \bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
 \end{equation*}
 
-Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsSeenL2} table in the peer's block validation environment (\cref{h:l2-block-environment}):
+Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsL2} table in the peer's state (\cref{h:l2-peer-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -106,10 +106,10 @@ The $i^\mathtt{th}$ peer has the exclusive right to create every $i^\mathtt{th}$
     \T{mod} \; \T{blockNum} \; \T{peersN}
 \end{equation*}
 
-To create the a block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's block validation environment.
+To create the a block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's peer state.
 Depending on the type of the new block, the block creator must broadcast either a \code{ReqMinor}, \code{ReqMajor}, or \code{ReqFinal} request to the other peers.
 
-Each recipient must validate the new block relative to the recipient's block validation environment. If the new block is valid, the recipient must broadcast a corresponding acknowledgment response (\code{AckMinor}, \code{AckMajor1}, or \code{AckFinal1}) to the other peers.
+Each recipient must validate the new block relative to the recipient's peer state. If the new block is valid, the recipient must broadcast a corresponding acknowledgment response (\code{AckMinor}, \code{AckMajor1}, or \code{AckFinal1}) to the other peers.
 
 The block creator must broadcast a corresponding acknowledgment response for the new block to the other peers, immediately upon broadcasting the new block.
 

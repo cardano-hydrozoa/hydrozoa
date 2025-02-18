@@ -70,23 +70,23 @@ Blocks are numbered consecutively by \code{blockNum}, and they are versioned by 
 
 The \code{timeCreation} field of a block indicates the time when it was created.
 
-\section{Environment}%
-\label{h:l2-block-environment}%
+\section{Peer state}%
+\label{h:l2-peer-state}%
 
 Every peer requires access to an up-to-date source of this information:
 \begin{equation*}
 \begin{split}
-  \T{BlockValidationEnv} &\coloneq \left\{
+  \T{PeerState} &\coloneq \left\{
     \begin{array}{lll}
       \T{timeCurrent} &::& \T{PosixTime} \\
       \T{finalizing} &::& \T{Bool} \\
-      \T{paramsBlockValidation} &::& \T{ParamsBlockValidtion} \\
+      \T{params} &::& \T{ParamsConsensusL2} \\
       \T{stateL1} &::& \T{MultisigHeadState^{L1}} \\
       \T{stateL2} &::& \T{LedgerState^{L2}} \\
       \T{blocksConfirmedL2} &::& \T{Sequence} \; \T{Block^{L2}} \\
-      \T{eventsSeenL2} &::& \T{Table} \; \T{Event^{L2}}
+      \T{eventsL2} &::& \T{Table} \; \T{Event^{L2}}
     \end{array}\right\} \\
-  \T{ParamsBlockValidation} &\coloneq \left\{
+  \T{ParamsConsensusL2} &\coloneq \left\{
     \begin{array}{lll}
       \T{blockLatencyTolerance} &::& \T{UDiffTime} \\
       \T{depositMarginMaturity} &::& \T{UDiffTime} \\
@@ -107,9 +107,9 @@ Every peer requires access to an up-to-date source of this information:
 
 These fields are interpreted as follows:
 \begin{description}
-  \item[current time.] The current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
+  \item[current time.] The peer's current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
   \item[finalizing.] A boolean indicator of whether the peers want to immediately finalize the head.
-  \item[block validation params.] The head's block validation parameters:
+  \item[head params.] The head's parameters:
     \begin{description}
       \item[block latency tolerance.] During validation, a new block's creation time must not deviate from the peer's current time by more than this non-negative time duration.
       \item[deposit maturity margin.] After an L1 deposit is created on L1,%
@@ -120,13 +120,14 @@ These fields are interpreted as follows:
       \item[multisig regime keep-alive.] If this non-negative time duration has passed since the latest confirmed major block's creation, the next block must be major.
       \item[multisig regime timeout.] If this non-negative time duration has passed since the latest confirmed major block's creation, then the head can transition to the rule-based regime with this block's major version.
     \end{description}
-  \item[L1 state.] The head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
+  \item[L1 state.] The peer's view of the head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
     \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
   \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}) as of the latest confirmed block.
-  \item[confirmed L2 blocks.] The sequence of L2 blocks confirmed in the L2 consensus protocol.
-  \item[seen L2 events.] The table of L2 events witnessed by the peer,%
-    \footnote{It's up to the L2 consensus protocol whether this table stores all L2 events ever witnessed by the peer, or just the recent events up to a time-based or block-based cutoff.}
-    which must be unique on \code{eventId} and sorted in the ascending order of \code{timeReceived}:
+  \item[confirmed L2 blocks.] The sequence of all L2 blocks confirmed by the L2 consensus protocol.%
+    \footnote{In practice, it may be acceptable to remove blocks when they're settled on L1 with sufficient finality.}
+  \item[L2 events.] The table of all L2 events that were witnessed by the peer but not rejected by any confirmed block.%
+    \footnote{It may be acceptable to keep only a small buffer of these events, corresponding to several recently confirmed blocks.}
+    The events must be unique on \code{eventId} and sorted in the ascending order of \code{timeReceived}:
     \begin{description}
       \item[time received.] The POSIX time at which the peer received the event.
       \item[event ID.] The transaction ID corresponding to the event's effect on the L2 active utxo set.
@@ -139,9 +140,7 @@ These fields are interpreted as follows:
 \section{Creation}%
 \label{h:l2-block-creation}%
 
-All other blocks are created by a common procedure that branches based on whether the peers want to finalize the head, the peers want to force a major block, or the procedure has detected any absorbable L1 deposits or unconfirmed L2 withdrawals in the block validation environment.
-
-Given the block validation environment, create a new block as follows:
+Given a peer's state, create a new block as follows:
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
     \begin{enumerate}
@@ -153,8 +152,8 @@ Given the block validation environment, create a new block as follows:
       \item Let \code{utxosWithdrawn} be a mutable variable initialized to an empty \codeMathTt{UtxoSet^{L2}}.
     \end{enumerate}
   \item Set \code{block.timeCreation} to \code{timeCurrent}.
-  \item For each non-genesis L2 event \code{x} in \code{eventsSeenL2}, where \code{x.blockNum} is empty:%
-    \footnote{The non-genesis filter is just a sanity check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsSeenL2} with an empty \inlineColored{blockNum}.
+  \item For each non-genesis L2 event \code{x} in \code{eventsL2}, where \code{x.blockNum} is empty:%
+    \footnote{The non-genesis filter is just a sanity check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsL2} with an empty \inlineColored{blockNum}.
       A genesis event can only be appended by a valid block.
       }
       \begin{enumerate}
@@ -248,7 +247,7 @@ From a peer's perspective, a new block's validity has three states:
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
-Given the block validation environment, validate a new block as follows:%
+Given a peer's state, validate a new block as follows:%
 \footnote{In the block validation procedure, ``return'' statements immediately break execution.}
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
@@ -266,7 +265,7 @@ Given the block validation environment, validate a new block as follows:%
     \end{equation*}
   \item For each event \code{x} in \code{eventsValid}:
     \begin{enumerate}
-      \item If \code{x.eventId} is not in \code{eventsSeenL2}, return \framebox{\code{NotYetKnown}}.
+      \item If \code{x.eventId} is not in \code{eventsL2}, return \framebox{\code{NotYetKnown}}.
       \item If \code{block.blockType} is \code{Minor} and \code{x.eventType} is \code{Withdrawal}, return \framebox{\code{Invalid}}.
       \item If \code{x.eventType} is \code{Transaction}, apply \code{x.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}):
         \begin{enumerate}
@@ -283,7 +282,7 @@ Given the block validation environment, validate a new block as follows:%
     \end{enumerate}
   \item For each event \code{y} in \code{eventsInvalid}:
     \begin{enumerate}
-      \item If \code{y.eventId} is not in \code{eventsSeenL2}, return \framebox{\code{NotYetKnown}}.
+      \item If \code{y.eventId} is not in \code{eventsL2}, return \framebox{\code{NotYetKnown}}.
       \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}). If it is valid, return \framebox{\code{Invalid}}.
       \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}). If it is valid, return \framebox{\code{Invalid}}.
     \end{enumerate}
@@ -354,18 +353,19 @@ Given the block validation environment, validate a new block as follows:%
 
 A confirmed block's L2 effect is immediate and handled by a common procedure for all block types.
 
-On the other hand, a confirmed block's L1 effect varies by its block type and it cannot be directly applied by the peers to the block validation environment.
+On the other hand, a confirmed block's L1 effect varies by its block type and it cannot be directly applied by a peer to its peer state.
 Instead, it must be executed by submitting L1 transactions and waiting for the L1 Ouroboros consensus protocol to confirm the transactions.
 
 \subsection{Any block L2 effect}%
 \label{h:l2-block-effect-l2}%
 
-Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and block validation environment (\code{env}).
-Upon confirmation of \code{block} by the peers, it immediately affects \code{env} as follows:
+Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and peer state.
+Upon confirmation of \code{block} by the peers, it immediately affects the peer state as follows:
 \begin{enumerate}
-  \item Update \code{env.stateL2.utxosActive} to \code{utxosActive}.
-  \item For each L2 event in \code{block.eventsValid}, set the \code{blockNum} of the corresponding event in \code{env.eventsSeenL2} to \code{block.blockNum}.
-  \item If \code{utxosAdded} is non-empty, then append this genesis event to \code{env.eventsSeenL2}:
+  \item Update \code{stateL2.utxosActive} to \code{utxosActive}.
+  \item For each L2 event in \code{block.eventsValid}, set the \code{blockNum} of the corresponding event in \code{eventsL2} to \code{block.blockNum}.
+  \item For each L2 event in \code{block.eventsInvalid}, remove the corresponding event in \code{eventsL2}.
+  \item If \code{utxosAdded} is non-empty, then append this genesis event to \code{eventsL2}:
     \begin{equation*}
       \T{Genesis^{L2}} \;\{\; \T{utxosAdded} \coloneq \T{utxosAdded} \;\}
     \end{equation*}

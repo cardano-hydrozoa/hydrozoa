@@ -54,14 +54,14 @@ The treasury utxo must have this datum:
     \begin{array}{lll}
       \T{utxosActive}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{versionMajor} &::& \T{UInt} \\
-      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsHead}
+      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsConsensusL2}
     \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the latest major L2 block settled on L1 (\cref{h:l1-multisig-settlement-rollout}).
   \item[major version.] The version number of the latest major L2 block settled on L1.
-  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
+  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-peer-state}).
 \end{description}
 
 Non-treasury utxos at the head's native script address are recognized as follows:
