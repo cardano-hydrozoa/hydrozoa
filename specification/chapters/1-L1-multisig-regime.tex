@@ -2,8 +2,6 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\input{\subfix{0-constants}}
-
 \chapter{L1 multisig regime}%
 \label{h:l1-multisig-regime}%
 
@@ -44,7 +42,8 @@ Among these utxos, the head's treasury utxo is uniquely identified as the one ho
     \footnote{We chose \headBeaconToken{} because it spells ``HYDR'' (short for Hydra/Hydrozoa) on a phone dial pad.}
   \item The last 28 bytes of the asset name are equal to the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the utxo nonce spent in the head's initialization transaction (\cref{h:l1-multisig-initialization}).
 \end{enumerate}
-No other utxo at the head's native script address should hold any tokens that meet the policy ID and CIP-67 prefix conditions above. In other words, there must only be one head at the address.%
+No other utxo at the head's native script address should hold any tokens that meet the policy ID and CIP-67 prefix conditions above.
+In other words, there must only be one head at the address.%
 \footnote{It may seem redundant to use a 28-byte unique nonce in the beacon token's asset name, given that only one head is allowed per native script address at any given time.
   However, the unique nonce is helpful to distinguish between different heads that may exist at the same address across time.}
 
@@ -123,7 +122,8 @@ The funds in the deposit must be sufficient to pay for the refund's transaction 
 
 A refund is a transaction, multi-signed by all peers, that sends a deposit utxo's funds to the deposit's \code{refundAddress} and \code{refundDatum}.
 As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that will not be absorbed before their deadline.%
-\footnote{To minimize uncertainty from L1 rollbacks, the L2 consensus protocol will not attempt to absorb a deposit unless sufficient time remains before its deadline. This safety margin is controlled by an offchain consensus parameter (\cref{h:l2-consensus-parameters}).}
+\footnote{To minimize uncertainty from L1 rollbacks, the L2 consensus protocol will not attempt to absorb a deposit unless sufficient time remains before its deadline.
+This safety margin is controlled by an offchain consensus parameter (\cref{h:l2-consensus-parameters}).}
 
 However, a depositor should obtain the other peers' signatures for a post-dated refund transaction before submitting the deposit transaction to Cardano.
 This transaction's validity interval should start at the deposit's \code{deadline}.

@@ -14,7 +14,7 @@ The L2 ledger state has this type:
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
+  \item[utxos active.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
     These utxos are created by L2 transactions and genesis events.
 \end{description}
 
@@ -108,7 +108,8 @@ The hydra node software should reject (with an error message) L2 transactions th
 
 In the following type listing:
 \begin{itemize}
-  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
+  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted.
+  We indicate these by prefixing their field types with a question mark (\code{?}).
   \item We indicate fields that must be omitted in Hydrozoa L2 transactions by prefixing their field names with an empty-set symbol (\code{$\varnothing$}).
 \end{itemize}
 \begingroup
@@ -239,7 +240,8 @@ These L2 utxos uniquely correspond to the L1 \code{absorbedDeposits} of the majo
 \begin{description}
   \item[output reference:]~
     \begin{description}
-      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}. Incidentally, this is also the genesis event's unique ID (\code{TxId}).
+      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}.
+      Incidentally, this is also the genesis event's unique ID (\code{TxId}).
       \item[index.] The corresponding L1 deposit's positional index in \code{depositsAbsorbed}.
     \end{description}
   \item[output:]~

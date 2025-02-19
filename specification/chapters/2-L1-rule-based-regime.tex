@@ -2,8 +2,6 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\input{\subfix{0-constants}}
-
 \chapter{L1 rule-based regime}%
 \label{h:l1-rule-based-regime}%
 
@@ -59,7 +57,8 @@ The treasury utxo must have the following datum type, which defines its unresolv
 The resolved treasury's datum is the same as the multisig treasury's datum, with these exceptions:
 \begin{description}
   \item[head MP.] The policy ID of the head's native script minting policy.
-  \item[version.] The full version of the resolved L2 block, which includes both the major and minor version numbers. This replaces the \code{versionMajor} field of the multisig treasury.
+  \item[version.] The full version of the resolved L2 block, which includes both the major and minor version numbers.
+  This replaces the \code{versionMajor} field of the multisig treasury.
 \end{description}
 
 The unresolved treasury's datum fields are interpreted as follows:
@@ -68,7 +67,7 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[dispute ID.] The unique identifier used as the asset name of the dispute tokens (see below).
   \item[peers.] The peers' public keys.
   \item[n peers.] The number of peers in the head.
-  \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
+  \item[deadline voting.] A POSIX time before which votes can be cast in the dispute.
   \item[major version.] The treasury's major version, pinned by the transition to the rule-based regime.
   \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-peer-state}).
 \end{description}
@@ -109,10 +108,12 @@ These fields are interpreted as follows:
 \begin{description}
   \item[key.] An integer that uniquely identifies the vote utxo.
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
-  \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo. It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
+  \item[peer.] The public-key hash of the peer (if any) who can cast the vote in this utxo.
+  It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
   \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor L2 block.
-  \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the block voted by the peer.
-  \item[minor version.] The minor version of the minor L2 block voted by the peer. This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
+  \item[utxos active.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the block voted by the peer.
+  \item[minor version.] The minor version of the minor L2 block voted by the peer.
+  This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
 \end{description}
 
 Collectively, the vote utxos constitute a linked list data structure on L1.
@@ -188,7 +189,8 @@ After all votes are cast or the voting period ends, the dispute state can be res
 Voting is handled by the Plutus-based spending validator of the dispute address.
 Redeemers:
 \begin{description}
-  \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a block. Conditions:
+  \item[Vote.] Replace the input's no-vote status with an abstention or a valid vote for a block.
+  Conditions:
     \begin{itemize}
       \item Verify the vote inputs:
         \begin{enumerate}
@@ -217,15 +219,7 @@ Redeemers:
                   \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
                   \T{multisig} &::& [\T{Signature}]
                 \end{array}\right\}\\
-              \T{BlockHeader^{L2}} &\coloneq \left\{
-              \begin{array}{lll}
-                \T{blockNum} &::& \T{UInt} \\
-                \T{blockType} &::& \T{BlockType^{L2}} \\
-                \T{creationTime} &::& \T{PosixTime} \\
-                \T{versionMajor} &::& \T{UInt} \\
-                \T{versionMinor} &::& \T{UInt} \\
-                \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
-              \end{array}\right\}
+              \blockHeaderTypeName{} &\coloneq \blockHeaderTypeBody{}
             \end{split}
             \end{equation*}
           \item If \code{voteRedeemer} is provided, then both of these must hold:
@@ -236,7 +230,8 @@ Redeemers:
         \end{enumerate}
       \item Verify the vote output:
         \begin{enumerate}[resume]
-          \item Let \code{voteOutput} be an output with the same number of (\code{headMp}, \code{disputeId}) tokens and same address as \code{voteInput}. It must not hold any other non-ADA tokens.
+          \item Let \code{voteOutput} be an output with the same number of (\code{headMp}, \code{disputeId}) tokens and same address as \code{voteInput}.
+          It must not hold any other non-ADA tokens.
           \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{voteOutput} must be a \code{Vote} matching \code{voteRedeemer} on the \code{utxosActive} and \code{versionMinor} fields.
             Otherwise, it must be \code{Abstain}.
           \item All other fields of \code{voteInput} and \code{voteOutput} must match.
@@ -348,14 +343,16 @@ Redeemers:
       \item Let \code{headMp} be the corresponding field in \code{treasuryInput}.
       \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \headBeaconToken{}.
       \item Let \code{treasuryOutput} be the output holding the (\code{headMp}, \code{headId}) beacon token.
-      \item Let \code{withdrawals} be a list of triples. In each triple:
+      \item Let \code{withdrawals} be a list of triples.
+      In each triple:
         \begin{itemize}
           \item The \code{key} is an output reference of a utxo in the active utxo set corresponding to the \code{utxosActive} field of \code{treasuryInput}.
           \item The \code{value} is an output of this transaction.
           \item The \code{proof} is a Merkle inclusion proof.
         \end{itemize}
       \item Starting with the \code{utxosActive} field in \code{treasuryInput}, folding over \code{withdrawals} with the Merkle library's \code{delete} function must produce a result matching the \code{utxosActive} field of \code{treasuryOutput}:%
-        \footnote{The details of this function depend on the Merkle library that will be used by the Hydrozoa implementation. For example, see the \inlineColored{delete} function in the Merkle Patricia Forestry library \citep{MatthiasBenkortMerklePatriciaForestry2024}.}
+        \footnote{The details of this function depend on the Merkle library that will be used by the Hydrozoa implementation.
+        For example, see the \inlineColored{delete} function in the Merkle Patricia Forestry library \citep{MatthiasBenkortMerklePatriciaForestry2024}.}
         \begin{equation*}
         \begin{split}
           &\T{validWithdrawals} \; \T{in} \; \T{ws} \; \T{out} \coloneq
