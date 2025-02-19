@@ -330,7 +330,7 @@ Given a peer's state, validate a new block as follows:%
 \end{enumerate}
 
 \section{Effects}%
-\label{h:l2-block-effect}%
+\label{h:l2-block-effects}%
 
 A confirmed block's L2 effect is immediate and handled by a common procedure for all block types.
 
@@ -360,7 +360,7 @@ A confirmed minor block's L1 effect is the block's header, multi-signed by all p
   \T{MinorBlockL1Effect} \coloneq \left\{
     \begin{array}{lll}
       \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
-      \T{multisig} &::& [\T{Signature}]
+      \T{multisig} &::& [(\T{VerificationKey}, \T{Signature})]
     \end{array}\right\}
 \end{equation*}
 
