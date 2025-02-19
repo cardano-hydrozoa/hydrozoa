@@ -19,7 +19,31 @@ Run `sbt` to enter the sbt shell.
 
 Run `compile` to compile the project.
 
+Run `run` to run the node.
+
 Run `test` to run the tests.
+
+### Private network
+
+Currently, Hydrozoa works against a private network provided by 
+[Yaci DevKit](https://github.com/bloxbean/yaci-devkit).
+Here is the [link](https://devkit.yaci.xyz/docker) to installation page.
+
+Create and run the network:
+
+```shell
+devkit
+> create-node
+> start
+```
+
+#### Resetting the local Cardano node
+
+If you need to reset the local testnet (in the devkit shell):
+
+```shell
+reset
+```
 
 ## Build the specification
 

@@ -1,7 +1,7 @@
 package hydrozoa.head
 
 // Serialized Cardano tx
-case class Tx(bytes: Array[Byte])
+case class Tx_(bytes: Array[Byte])
 
 // Transaction ID
 case class TxId(bytes: Array[Byte])

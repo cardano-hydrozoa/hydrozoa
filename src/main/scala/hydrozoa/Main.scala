@@ -1,19 +1,19 @@
 package hydrozoa
 
+import hydrozoa.head.AppCtx.yaciDevKit
+import hydrozoa.head.{Node, NodeApi}
 import hydrozoa.head.multisig.mkHeadNativeScript
 import hydrozoa.head.network.{HydrozoaNetwork, MockHydrozoaNetwork}
 import hydrozoa.logging.{ConsoleLoggingService, LoggingService}
 
-object Main:
+object Cli:
 
   @main def main(args: String*): Unit = {
-    val loggingService: LoggingService = new ConsoleLoggingService()
-    val network: HydrozoaNetwork = new MockHydrozoaNetwork()
-
-    //
-    loggingService.logInfo("Starting Hydrozoa Node")
-    // getting participants' keys
-    val headNativeScript = mkHeadNativeScript(network.participantsKeys())
-    val policyId = headNativeScript.getPolicyId
-    println(policyId)
+    // subsystems
+    val logging: LoggingService = ConsoleLoggingService()
+    val network: HydrozoaNetwork = MockHydrozoaNetwork()
+    // 
+    val node = Node(yaciDevKit(), network, logging)
+    logging.logInfo("Starting Hydrozoa Node API Server...")
+    NodeApi(node).start()
   }
