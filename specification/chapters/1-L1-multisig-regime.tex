@@ -54,21 +54,23 @@ The treasury utxo must have this datum:
     \begin{array}{lll}
       \T{utxosActive}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{versionMajor} &::& \T{UInt} \\
-      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsHead}
+      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsConsensusL2}
     \end{array}\right\}
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the latest major L2 block settled on L1 (\cref{h:l1-multisig-settlement-rollout}).
+  \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the latest major L2 block settled on L1 (\cref{h:l1-multisig-settlement}).
   \item[major version.] The version number of the latest major L2 block settled on L1.
-  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
+  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-peer-state}).
 \end{description}
 
 Non-treasury utxos at the head's native script address are recognized as follows:
 \begin{itemize}
-  \item Deposits have datums with the \code{DepositDatum} type (\cref{h:l1-multisig-deposit}).
-  \item Rollout nodes are no-datum outputs of the head's settlement transactions (\cref{h:l1-multisig-settlement-rollout}).
-    They are transient in nature, quickly spent in the rollout transactions that follow the settlement transactions that create them.
+  \item A rollout utxo holds a rollout beacon token of the head's minting policy, with CIP-67 prefix \headRolloutToken{}.%
+    \footnote{We chose \headRolloutToken{} because it spells ``ROLL'' (short for rollout) on a phone dial pad.}
+    It is a no-datum output a settlement, finalization, or rollout transaction.
+    It is transient in nature, quickly spent in a subsequent rollout transaction.
+  \item A deposit utxo has a datum with the \code{DepositDatum} type (\cref{h:l1-multisig-deposit}).
 \end{itemize}
   
 \section{Initialization}%
@@ -108,7 +110,7 @@ Peers can deposit funds into a Hydrozoa head by sending utxos to its native scri
   \end{array}\right\}
 \end{equation*}
 
-In this datum, the depositor instructs the peers to absorb the deposit into the treasury via a settlement transaction (\cref{h:l1-multisig-settlement-rollout}) before the \code{deadline}, or else to refund it to the depositor (\cref{h:l1-multisig-refund}) if it will not be absorbed before the \code{deadline}.
+In this datum, the depositor instructs the peers to absorb the deposit into the treasury via a settlement transaction (\cref{h:l1-multisig-settlement}) before the \code{deadline}, or else to refund it to the depositor (\cref{h:l1-multisig-refund}) if it will not be absorbed before the \code{deadline}.
 
 The \code{address} and \code{datum} fields define the address and datum at which the utxo in the L2 ledger should be created, if the deposit is absorbed into the head's treasury.
 The new utxo in the L2 ledger should contain the same funds as the deposit utxo.
@@ -130,8 +132,8 @@ Doing so ensures that the depositor can still retrieve the deposited funds if th
 The L2 consensus protocol (\cref{h:l2-consensus-on-refunds}) allows peers to obtain multi-signed post-dated refund transactions before posting their deposits on L1.
 It also allows them to immediately refund any deposits that its rules disqualify from being absorbed into the treasury.
 
-\section{Settlement and rollout}%
-\label{h:l1-multisig-settlement-rollout}%
+\section{Settlement}%
+\label{h:l1-multisig-settlement}%
 
 A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major L2 block (\cref{h:l2-blocks}).%
 \footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
@@ -141,16 +143,11 @@ The absorbed deposit utxos are spent inputs in the settlement transaction.
 This means that Cardano's transaction size limit constrains the number of deposits settled per major L2 block.
 
 On the other hand, the number of withdrawals per major L2 block is unconstrained.
-Given a set of withdrawn utxos in a major L2 block, the deterministic utxo rollout algorithm assigns them to be outputs of the settlement and rollup transactions.
-Overall, they are paid out in the ascending order of their output references in the L2 ledger.
-
-% TODO deterministic utxo rollout algorithm
+The withdrawn utxos of the major L2 block are paid out via outputs of the settlement and rollup transactions, in the ascending order of their output references in the L2 ledger.
 
 The settlement transaction greedily pays out as many withdrawals as it can, using the transaction size remaining after fitting the deposit inputs and the fixed transaction overhead.
-It outputs the remaining withdrawals' aggregate funds as a single ``rollout node'' output, sent to the head's native script address without a datum.
-
-The rollout node is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout node with the aggregate funds of the rest of the withdrawals, if any remain.
-Further rollout transactions spend the shrinking rollout node, until all the withdrawals have been paid out.
+It outputs the remaining withdrawals' aggregate funds as a single rollout utxo, sent to the head's native script address without a datum.
+Rollout transactions iteratively pay out more utxos from the rollout utxo, until all withdrawals are settled (\cref{h:l1-multisig-rollout}).
 
 \section{Finalization}%
 \label{h:l1-multisig-finalization}%
@@ -160,10 +157,18 @@ The finalization transaction is similar to the settlement transaction, except th
   \item It burns the head's beacon token.
   \item It spends the head's treasury utxo without outputting a new treasury utxo.
   \item It does not absorb any deposits.
-  \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using a rollout node output if necessary.
+  \item It withdraws all utxos in the final L2 block's ledger, including those in the active utxo set, using rollout transactions if necessary.
 \end{itemize}
 
 After the finalization transaction deals with the treasury and immediate/post-dated refund transactions deal with the unabsorbed deposits, no trace of the Hydrozoa head should be left in the L1 ledger.
 Any other utxos that remain at the head's native script address---assumed to be unrelated to the head---can be manually spent by the peers.
+
+\section{Rollout}%
+\label{h:l1-multisig-rollout}%
+
+The rollout utxo is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout utxo with the aggregate funds of the rest of the withdrawals, if any remain.
+Further rollout transactions spend the shrinking rollout utxo, until all the withdrawals have been paid out.
+
+% TODO deterministic utxo rollout algorithm
 
 \end{document}

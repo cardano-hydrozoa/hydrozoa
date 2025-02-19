@@ -41,7 +41,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
       \T{headMp} &::& \T{PolicyId} \\
       \T{utxosActive}  &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
       \T{version} &::& (\T{UInt}, \T{UInt}) \\
-      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsHead}
+      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsConsensusL2}
     \end{array}\right\} \\
   \T{UnresolvedDatum} \coloneq&\;\left\{
     \begin{array}{lll}
@@ -51,7 +51,7 @@ The treasury utxo must have the following datum type, which defines its unresolv
       \T{peersN} &::& \T{UInt} \\
       \T{deadlineVoting} &::& \T{PosixTime} \\
       \T{versionMajor} &::& \T{UInt} \\
-      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsHead}
+      \T{params} &::& \mathcal{H}_{32} \; \T{ParamsConsensusL2}
     \end{array}\right\}
 \end{split}
 \end{equation*}
@@ -70,7 +70,7 @@ The unresolved treasury's datum fields are interpreted as follows:
   \item[n peers.] The number of peers in the head.
   \item[voting deadline.] A POSIX time before which votes can be cast in the dispute.
   \item[major version.] The treasury's major version, pinned by the transition to the rule-based regime.
-  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-consensus-protocol}).
+  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-peer-state}).
 \end{description}
 
 \subsection{Dispute state}
@@ -209,10 +209,10 @@ Redeemers:
       \item Verify the redeemer:
         \begin{enumerate}[resume]
           \item Let \code{voteRedeemer} be an \emph{optional} redeemer argument with this type:%
-            \footnote{The \inlineColored{$\T{BlockHeader^{L2}}$} type is defined in \cref{h:l2-blocks} and repeated here.}
+            \footnote{These types are defined in \cref{h:l2-blocks} and repeated here.}
             \begin{equation*}
             \begin{split}
-              \T{VoteRedeemer} &\coloneq \left\{
+              \T{MinorBlockL1Effect} &\coloneq \left\{
                 \begin{array}{lll}
                   \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
                   \T{multisig} &::& [\T{Signature}]
