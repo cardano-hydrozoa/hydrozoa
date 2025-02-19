@@ -1,6 +1,5 @@
 package hydrozoa.head.l1
 
-import scala.jdk.CollectionConverters.*
 import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
 import com.bloxbean.cardano.client.api.model.Amount.{ada, asset}
 import com.bloxbean.cardano.client.api.model.{ProtocolParams, Result}
@@ -18,6 +17,7 @@ import hydrozoa.head.{AppCtx, HeadParams, Tx_, UtxoRef}
 import scalus.bloxbean.{EvaluatorMode, NoScriptSupplier, ScalusTransactionEvaluator, SlotConfig}
 
 import java.math.BigInteger
+import scala.jdk.CollectionConverters.*
 
 /**
  * @param params head params
@@ -35,18 +35,13 @@ extension [A](result: Result[A])
     else Left(result.getResponse)
 
 class TxBuilder(ctx: AppCtx) {
-  private val backendService = ctx.backendService
-  private val account = ctx.account
-  private lazy val quickTxBuilder = QuickTxBuilder(backendService)
-
   lazy val protocolParams: ProtocolParams = {
     val result = backendService.getEpochService.getProtocolParameters
     if !result.isSuccessful then sys.error(result.getResponse)
     result.getValue
   }
-
+  private lazy val quickTxBuilder = QuickTxBuilder(backendService)
   private lazy val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
-
   private lazy val evaluator = ScalusTransactionEvaluator(
     slotConfig = SlotConfig.Preprod,
     protocolParams = protocolParams,
@@ -54,14 +49,31 @@ class TxBuilder(ctx: AppCtx) {
     scriptSupplier = NoScriptSupplier(),
     mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
   )
+  private val backendService = ctx.backendService
+  private val account = ctx.account
+
+  def submitInitTx(
+                    amount: Long,
+                    nativeScript: NativeScript,
+                    vKeys: Set[VerificationKey],
+                    sKeys: Set[SecretKey],
+                  ): Either[String, String] = {
+    val signedTxE = mkInitTx(amount, nativeScript, vKeys, sKeys)
+    println("Initializaton tx: " + signedTxE.map(t => t.serializeToHex()).merge)
+    for
+      signedTx <- signedTxE
+      result = backendService.getTransactionService.submitTransaction(signedTx.serialize())
+      r <- Either.cond(result.isSuccessful, result.getValue, result.getResponse)
+    yield r
+  }
 
   def mkInitTx(
-      amount: Long,
-      nativeScript: NativeScript,
-      vKeys: Set[VerificationKey],
-      sKeys: Set[SecretKey]
-  ): Either[String, Transaction] = {
-    val wallet =  account.getBaseAddress.getAddress
+                amount: Long,
+                nativeScript: NativeScript,
+                vKeys: Set[VerificationKey],
+                sKeys: Set[SecretKey]
+              ): Either[String, Transaction] = {
+    val wallet = account.getBaseAddress.getAddress
 
     for
       utxo <- backendService.getUtxoService.getUtxos(wallet, 100, 1).toEither
@@ -79,12 +91,12 @@ class TxBuilder(ctx: AppCtx) {
         .collectFrom(utxo)
         .withChangeAddress(wallet)
         .payToContract(
-            headAddress,
-            List(
-                ada(amount),
-//                asset(nativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
-            ).asJava,
-            PlutusData.unit
+          headAddress,
+          List(
+            ada(amount),
+            //                asset(nativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
+          ).asJava,
+          PlutusData.unit
         )
 
 
@@ -104,21 +116,5 @@ class TxBuilder(ctx: AppCtx) {
         .feePayer(account.baseAddress())
         .buildAndSign()
     yield signedTx
-  }
-
-
-  def submitInitTx(
-      amount: Long,
-      nativeScript: NativeScript,
-      vKeys: Set[VerificationKey],
-      sKeys: Set[SecretKey],
-  ): Either[String, String] = {
-    val signedTxE = mkInitTx(amount, nativeScript, vKeys, sKeys)
-    println("Initializaton tx: " + signedTxE.map(t => t.serializeToHex()).merge)
-    for
-      signedTx <- signedTxE
-      result = backendService.getTransactionService.submitTransaction(signedTx.serialize())
-      r <- Either.cond(result.isSuccessful, result.getValue, result.getResponse)
-    yield r
   }
 }

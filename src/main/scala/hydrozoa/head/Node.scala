@@ -15,10 +15,10 @@ import scalus.ledger.api.v1.PubKeyHash
 // TODO: move to a "clean module" that doesn't depend on the libs
 
 class Node(
-    ctx: AppCtx,
-    network: HydrozoaNetwork,
-    logging: LoggingService
-):
+            ctx: AppCtx,
+            network: HydrozoaNetwork,
+            logging: LoggingService
+          ):
 
   private val ownKeys: Keys = KeyGenUtil.generateKey
   private val txBuilder = TxBuilder(ctx)
@@ -42,10 +42,10 @@ class Node(
 // TODO: AppCtx in fact just holds backendService for now
 
 case class AppCtx(
-    network: Network,
-    account: Account,
-    backendService: BackendService,
-) {
+                   network: Network,
+                   account: Account,
+                   backendService: BackendService,
+                 ) {
   lazy val pubKeyHash: PubKeyHash = PubKeyHash(
     ByteString.fromArray(account.hdKeyPair().getPublicKey.getKeyHash)
   )

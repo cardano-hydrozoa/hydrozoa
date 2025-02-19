@@ -1,9 +1,9 @@
 package hydrozoa
 
 import hydrozoa.head.AppCtx.yaciDevKit
-import hydrozoa.head.{Node, NodeApi}
 import hydrozoa.head.multisig.mkHeadNativeScript
 import hydrozoa.head.network.{HydrozoaNetwork, MockHydrozoaNetwork}
+import hydrozoa.head.{Node, NodeApi}
 import hydrozoa.logging.{ConsoleLoggingService, LoggingService}
 
 object Cli:

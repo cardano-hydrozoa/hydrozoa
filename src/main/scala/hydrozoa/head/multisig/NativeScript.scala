@@ -21,6 +21,3 @@ def mkHeadNativeScript(vKeys: Set[VerificationKey]): NativeScript = {
     .map(ScriptPubkey.create)
     .foldLeft(ScriptAll())((s: ScriptAll, k: ScriptPubkey) => s.addScript(k))
 }
-
-
-
