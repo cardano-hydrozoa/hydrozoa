@@ -24,11 +24,7 @@ However, the multisig regime may stall if the peers stop multi-signing transacti
 In this case, the head moves to the \textbf{rule-based} regime (\cref{h:l1-rule-based-regime}), in which unabsorbed deposits are refunded and control over the head's treasury transfers to a suite of Plutus scripts.
 
 This regime focuses on the peers' dispute about which L2 block is the latest among those confirmed by the L2 consensus protocol and compatible with the L1 treasury state.
-The Plutus scripts arbitrate the peers' dispute and then manage withdrawals from the head's treasury based on the resolved L2 block.
-
-% TODO Why use native scripts in multisig regime?
-% - cheaper
-% - Problem of single-user collateral requirement in Plutus scripts
+The Plutus scripts arbitrate the peers' dispute and manage withdrawals from the treasury based on the resolved L2 block.
 
 \section*{L2 state}%
 \label{h:overview-l2-state}%

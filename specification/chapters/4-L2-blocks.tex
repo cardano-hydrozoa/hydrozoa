@@ -62,13 +62,13 @@ Blocks are numbered consecutively by \code{blockNum}, and they are versioned by 
 
 The \code{timeCreation} field of a block indicates the time when it was created.
 
-\section{Peer state}%
-\label{h:l2-peer-state}%
+\section{Head state}%
+\label{h:l2-head-state}%
 
 Every peer requires access to an up-to-date source of this information:
 \begin{equation*}
 \begin{split}
-  \peerStateTypeName{} &\coloneq \peerStateTypeBody{} \\
+  \headStateTypeName{} &\coloneq \headStateTypeBody{} \\
   \paramsConsensusTypeName{} &\coloneq \paramsConsensusTypeBody{} \\
   \T{Event^{L2}} &\coloneq \left\{
     \begin{array}{lll}
@@ -116,10 +116,10 @@ These fields are interpreted as follows:
   \item[time current.] The peer's current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
 \end{description}
 
-\section{Creation}%
+\section{Block creation}%
 \label{h:l2-block-creation}%
 
-Given a peer's state, create a new block as follows:
+Given a peer's head state, create a new block as follows:
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
     \begin{enumerate}
@@ -216,7 +216,7 @@ Given a peer's state, create a new block as follows:
   \item Return \code{block}, \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
 
-\section{Validation}%
+\section{Block validation}%
 \label{h:l2-block-validation}%
 
 From a peer's perspective, a new block's validity has three states:
@@ -226,7 +226,7 @@ From a peer's perspective, a new block's validity has three states:
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
-Given a peer's state, validate a new block as follows:%
+Given a peer's head state, validate a new block as follows:%
 \footnote{In the block validation procedure, ``return'' statements immediately break execution.}
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
@@ -329,19 +329,19 @@ Given a peer's state, validate a new block as follows:%
   \item Return \framebox{\code{Valid}}, along with \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
 
-\section{Effects}%
+\section{Block effects}%
 \label{h:l2-block-effects}%
 
 A confirmed block's L2 effect is immediate and handled by a common procedure for all block types.
 
-On the other hand, a confirmed block's L1 effect varies by its block type and it cannot be directly applied by a peer to its peer state.
+On the other hand, a confirmed block's L1 effect varies by its block type and it cannot be directly applied by a peer to its head state.
 Instead, it must be executed by submitting L1 transactions and waiting for the L1 Ouroboros consensus protocol to confirm the transactions.
 
-\subsection{Any block L2 effect}%
+\subsection{Any block -- L2 effect}%
 \label{h:l2-block-effect-l2}%
 
-Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and peer state.
-Upon confirmation of \code{block} by the peers, it immediately affects the peer state as follows:
+Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and head state.
+Upon confirmation of \code{block} by the peers, it immediately affects the head state as follows:
 \begin{enumerate}
   \item Update \code{stateL2.utxosActive} to \code{utxosActive}.
   \item For each L2 event in \code{block.eventsValid}, set the \code{blockNum} of the corresponding event in \code{eventsL2} to \code{block.blockNum}.
@@ -352,7 +352,7 @@ Upon confirmation of \code{block} by the peers, it immediately affects the peer 
     \end{equation*}
 \end{enumerate}
 
-\subsection{Minor block L1 effect}%
+\subsection{Minor block -- L1 effect}%
 \label{h:l2-block-effect-minor-block}%
 
 A confirmed minor block's L1 effect is the block's header, multi-signed by all peers:
@@ -367,7 +367,7 @@ A confirmed minor block's L1 effect is the block's header, multi-signed by all p
 This effect is manually triggered if a peer uses it as a redeemer to vote during the rule-based regime's dispute (\cref{h:l1-rule-based-dispute-resolution}).
 If the dispute resolution process resolves to this minor block, then the rule-based treasury will allow funds to be withdrawn according to this minor block's active utxo set.
 
-\subsection{Major block L1 effect}%
+\subsection{Major block -- L1 effect}%
 \label{h:l2-block-effect-major-block}%
 
 A confirmed major block's L1 effect is a package of L1 transactions, multi-signed by all peers:
@@ -391,7 +391,7 @@ All peers must immediately submit the settlement and rollouts to Cardano L1.
 
 If the post-dated transition becomes valid, all peers must immediately submit it.
 
-\subsection{Final block L1 effect}%
+\subsection{Final block -- L1 effect}%
 \label{h:l2-block-effect-final-block}%
 
 A confirmed final block's L1 effect is a package of L1 transactions, multi-signed by all peers:

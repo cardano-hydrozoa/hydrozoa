@@ -18,10 +18,10 @@ L2 consensus between a Hydrozoa head's peers is achieved via a peer-to-peer prot
 
 Peers take round-robin turns to create L2 blocks---every $i^\mathtt{th}$ block must be created by the  $i^\mathtt{th}$ peer.
 
-While participating in the L2 consensus protocol, each peer maintains this local state:%
-\footnote{This type is defined in \cref{h:l2-peer-state} and repeated here.}
+While participating in the L2 consensus protocol, each peer locally maintains this head state:%
+\footnote{This type is defined in \cref{h:l2-head-state} and repeated here.}
 \begin{equation*}
-  \peerStateTypeName{} \coloneq \peerStateTypeBody{}
+  \headStateTypeName{} \coloneq \headStateTypeBody{}
 \end{equation*}
 
 \section{Assumptions}%
@@ -49,7 +49,7 @@ When all the peers agree on this information, they submit the multi-signed initi
 \label{h:l2-consensus-parameters}%
 
 To start the setup process, the initiator must broadcast a request for the other peers to adopt the initiator's proposed L2 consensus parameters:%
-\footnote{The L2 consensus parameters are defined in \cref{h:l2-peer-state} and repeated here.}
+\footnote{The L2 consensus parameters are defined in \cref{h:l2-head-state} and repeated here.}
 \begin{equation*}
 \begin{split}
   \T{ReqParams} &\coloneq \{\; \T{params} :: \paramsConsensusTypeName{} \;\bigr\} \\
@@ -57,13 +57,13 @@ To start the setup process, the initiator must broadcast a request for the other
 \end{split}
 \end{equation*}
 
-On receiving a \code{ReqParams}, if the receiving peer accepts the proposed parameters, the peer must update the \code{params} in its state to the proposed parameters and broadcast an acknowledgment that contains the peer's verification key:
+On receiving a \code{ReqParams}, if the receiving peer accepts the proposed parameters, the peer must update the \code{params} in its head state to the proposed parameters and broadcast an acknowledgment that contains the peer's verification key:
 \begin{equation*}
   \T{AckParams} \coloneq \;\bigr\{\; \T{vkey} :: \T{VerificationKey} \;\bigr\}
 \end{equation*}
 The initiator do the same, immediately after sending the \code{ReqParams} request.
 
-On receiving a \code{AckParams}, the receiving peer must update the \code{peers} list in its peer state to include the received verification key and its Blake2b-256 (\codeMath{\mathcal{H}_{32}}) hash.
+On receiving a \code{AckParams}, the receiving peer must update the \code{peers} list in its head state to include the received verification key and its Blake2b-256 (\codeMath{\mathcal{H}_{32}}) hash.
 This list must have unique verification keys and must be sorted in ascending order of public key hash.
 Furthermore, it must always include the peer's own verification key and public key hash.
 
@@ -75,7 +75,7 @@ On receiving all parameter acknowledgments from the peers, the initiator must dr
   \T{ReqInit} \coloneq \;\bigr\{\; \T{initTx} :: \T{Tx^{L1}} \;\bigr\}
 \end{equation*}
 
-On receiving a \code{ReqInit}, the receiving peer must verify that the initialization transaction meets the conditions in \cref{h:l1-multisig-initialization} and uses a native script (\cref{h:l1-multisig-regime}) parametrized by all the peers' public key hashes, corresponding to the \code{peers} list its peer state.
+On receiving a \code{ReqInit}, the receiving peer must verify that the initialization transaction meets the conditions in \cref{h:l1-multisig-initialization} and uses a native script (\cref{h:l1-multisig-regime}) parametrized by all the peers' public key hashes, corresponding to the \code{peers} list its head state.
 If it is valid, the peer must broadcast a signature of the initialization transaction:
 \begin{equation*}
   \T{AckInit} \coloneq \left\{
@@ -95,7 +95,7 @@ Each peer must submit the initialization transaction when all required signature
 \label{h:l2-consensus-ledger}%
 
 Any peer can broadcast a request to the other peers, asking them to witness a new L2 transaction or withdrawal.
-The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's peer state.
+The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's head state.
 
 \subsection{Transaction~~~(\codeHeading{ReqTx})}%
 \label{h:l2-consensus-transaction}%
@@ -105,7 +105,7 @@ To submit a new L2 transaction to the head, the submitting peer must broadcast t
   \T{ReqTx} \coloneq \;\bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
 \end{equation*}
 
-On receiving a \code{ReqTx} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in  in its peer state (\cref{h:l2-peer-state}):
+On receiving a \code{ReqTx} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in  in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -129,7 +129,7 @@ To submit a new L2 withdrawal to the head, the submitting peer must broadcast th
   \T{ReqWithdrawal} \coloneq \;\bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
 \end{equation*}
 
-On receiving a \code{ReqWithdrawal} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in its peer state (\cref{h:l2-peer-state}):
+On receiving a \code{ReqWithdrawal} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -155,10 +155,10 @@ The $i^\mathtt{th}$ peer has the exclusive right to create every $i^\mathtt{th}$
     \T{mod} \; \T{blockNum} \; \T{peersN}
 \end{equation*}
 
-To create a new block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's peer state.
+To create a new block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's head state.
 Depending on the new block's type, the block creator must broadcast it in either a \code{ReqMinor}, \code{ReqMajor}, or \code{ReqFinal} request to the other peers.
 
-Each recipient must validate the new block relative to the recipient's peer state.
+Each recipient must validate the new block relative to the recipient's head state.
 If the new block is valid, the recipient must broadcast a corresponding acknowledgment (\code{AckMinor}, \code{AckMajor1}, or \code{AckFinal1}) to the other peers.
 
 The block creator must broadcast a corresponding acknowledgment for the new block to the other peers, immediately on broadcasting the new block.
@@ -173,7 +173,7 @@ When the new block is major or final, acknowledgment proceeds in two rounds.%
 When a peer has received the first acknowledgment (\code{AckMajor1} or \code{AckFinal1}) from all peers, the peer must broadcast a corresponding second acknowledgment (\code{AckMajor2} or \code{AckFinal2}).
 
 When a peer receives all acknowledgments for a block, the peer must consider the block and all its affirmed events to be confirmed.
-The peer must update its peer state as described in \cref{h:l2-block-effects}.
+The peer must update its head state as described in \cref{h:l2-block-effects}.
 
 \subsection{Minor block~~~(\codeHeading{ReqMinor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-minor-block}%
@@ -200,7 +200,7 @@ A block creator's broadcast of a new major block contains the block;
   \T{ReqMajor} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
 \end{equation*}
 
-A peer's first acknowledgment of a major block identifies the block by block number and contains the recipient's signatures for the block's rollout and post-dated transition transactions:
+A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout and post-dated transition transactions:
 \begin{equation*}
   \T{AckMajor1} \coloneq \left\{
   \begin{array}{lll}
@@ -210,7 +210,7 @@ A peer's first acknowledgment of a major block identifies the block by block num
   \end{array}\right\}
 \end{equation*}
 
-A peer's second acknowledgment of a major block identifies the block by block number and contains the recipient's signature for the block's settlement transaction:
+A peer's second acknowledgment of a major block identifies the block by its header and contains the recipient's signature for the block's settlement transaction:
 \begin{equation*}
   \T{AckMajor2} \coloneq \left\{
   \begin{array}{lll}
@@ -227,18 +227,20 @@ A block creator's broadcast of a new major block contains the block;
   \T{ReqFinal} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
 \end{equation*}
 
-A peer's first acknowledgment of a major block identifies the block by block number and contains the recipient's signatures for the block's rollout transactions:
+A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout transactions:
 \begin{equation*}
   \T{AckFinal1} \coloneq \left\{
   \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
     \T{rollouts} &::& [\T{Signature}]
   \end{array}\right\}
 \end{equation*}
 
-A peer's second acknowledgment of a major block identifies the block by block number and contains the recipient's signature for the block's finalization transaction:
+A peer's second acknowledgment of a major block identifies the block by its header and contains the recipient's signature for the block's finalization transaction:
 \begin{equation*}
   \T{AckFinal2} \coloneq \left\{
   \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
     \T{finalization} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
