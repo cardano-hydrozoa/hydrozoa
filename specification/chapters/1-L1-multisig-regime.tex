@@ -145,6 +145,7 @@ This means that Cardano's transaction size limit constrains the number of deposi
 On the other hand, the number of withdrawals per major L2 block is unconstrained.
 The withdrawn utxos of the major L2 block are paid out via outputs of the settlement and rollup transactions, in the ascending order of their output references in the L2 ledger.
 
+The assignment of L2 withdrawn utxos to L1 outputs of the settlement and rollout transactions is handled by Hydrozoa's deterministic rollout algorithm (\cref{h:deterministic-rollout-algorithm}).
 The settlement transaction greedily pays out as many withdrawals as it can, using the transaction size remaining after fitting the deposit inputs and the fixed transaction overhead.
 It outputs the remaining withdrawals' aggregate funds as a single rollout utxo, sent to the head's native script address without a datum.
 Rollout transactions iteratively pay out more utxos from the rollout utxo, until all withdrawals are settled (\cref{h:l1-multisig-rollout}).
