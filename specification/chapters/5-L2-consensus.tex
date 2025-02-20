@@ -12,7 +12,7 @@ L2 consensus between a Hydrozoa head's peers is achieved via a peer-to-peer prot
   \item Promptly settles the L1 effects of a confirmed block, if it affirms any L2 withdrawals or absorbs any L1 deposits.
   \item Ensures that no funds get stranded as unabsorbed L1 deposits.
   If a deposit will not be absorbed into the head, it can always be refunded to the depositor.
-  \item Ensures that no funds get stranded in the head.
+  \item Ensures that no funds get stranded in the head's treasury.
   If the peers stop responding to each other, they can always retrieve their funds on L1 according to the latest block matching the L1 treasury's major version.
 \end{itemize}
 
