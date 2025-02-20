@@ -8,55 +8,104 @@
 L2 consensus between a Hydrozoa head's peers is achieved via a peer-to-peer protocol that:
 \begin{itemize}
   \item Broadcasts L2 transaction and withdrawal requests among the peers.
-  \item Facilitates agreement between the peers on a growing common sequence of L2 ledger events that are grouped into blocks.
-  \item Promptly settles the L1 effects of a confirmed block, if it affirms any L2 withdrawals or absorbs any L1 deposits.
-  \item Ensures that no funds get stranded as unabsorbed L1 deposits. If a deposit will not be absorbed into the head, it can always be refunded to the depositor.
-  \item Ensures that no funds get stranded in the head. If the peers stop responding to each other, they can always retrieve their funds on L1 according to the latest block matching the L1 treasury's major version.
+  \item Facilitates peer agreement on a growing common sequence of L2 ledger events grouped into blocks.
+  \item Promptly settles the L1 effects of a confirmed block if it affirms any L2 withdrawals or absorbs any L1 deposits.
+  \item Ensures that no funds get stranded as unabsorbed L1 deposits.
+  If a deposit is determined not to be absorbed into the head, it can always be refunded to the depositor.
+  \item Ensures that no funds get stranded in the head's treasury.
+  If the peers stop responding to each other, they can always retrieve their funds on L1 according to the latest block matching the L1 treasury's major version.
 \end{itemize}
 
 Peers take round-robin turns to create L2 blocks---every $i^\mathtt{th}$ block must be created by the  $i^\mathtt{th}$ peer.
 
+While participating in the L2 consensus protocol, each peer locally maintains this head state:%
+\footnote{This type is defined in \cref{h:l2-head-state} and repeated here.}
+\begin{equation*}
+  \headStateTypeName{} \coloneq \headStateTypeBody{}
+\end{equation*}
+
+\section{Assumptions}%
+\label{h:l2-consensus-assumptions}%
+
+The L2 consensus protocol relies on these assumptions:
+\begin{enumerate}
+  \item The peers have pre-established pairwise communication channels with each other.
+  \item Every network message received from a peer is checked for authentication.
+    Implementing this specification requires finding a suitable method to authenticate the communication channels or individual messages.
+  \item Every peer is promptly and correctly notified about all relevant L1 transactions, and L1 consensus finality and liveness properties always hold.
+  \item The lifecycle of a Hydrozoa head never crosses any L1 protocol update boundaries.%
+    \footnote{These boundaries are often announced in advance, before the hard-fork combinator event, so Hydrozoa peers should be capable of avoiding them by finalizing existing heads and delaying the initialization of new heads.}
+\end{enumerate}
+
 \section{Setup}%
 \label{h:l2-consensus-setup}%
+
+During setup, the initiator proposes the L2 consensus parameters for the head, collects the peers' verification keys, and drafts the L1 initialization transaction for the head.
+The other peers respond to the initiator's requests, broadcasting their responses to all peers.
+
+When all the peers agree on this information, they submit the multi-signed initialization transaction.
 
 \subsection{Parameters~~~(\codeHeading{ReqParams} / \codeHeading{AckParams})}%
 \label{h:l2-consensus-parameters}%
 
-% TODO parameters for L2 consensus
+To start the setup process, the initiator must broadcast a request for the other peers to adopt the initiator's proposed L2 consensus parameters:%
+\footnote{The L2 consensus parameters are defined in \cref{h:l2-head-state} and repeated here.}
+\begin{equation*}
+\begin{split}
+  \T{ReqParams} &\coloneq \{\; \T{params} :: \paramsConsensusTypeName{} \;\bigr\} \\
+  \paramsConsensusTypeName{} &\coloneq \paramsConsensusTypeBody{}
+\end{split}
+\end{equation*}
 
-% TODO ReqParams
-% Alice: Let's open a head! Here are my proposed parameters.
+On receiving a \code{ReqParams}, if the receiving peer accepts the proposed parameters, the peer must update the \code{params} in its head state to the proposed parameters and broadcast an acknowledgment that contains the peer's verification key:
+\begin{equation*}
+  \T{AckParams} \coloneq \;\bigr\{\; \T{vkey} :: \T{VerificationKey} \;\bigr\}
+\end{equation*}
+The initiator must do the same immediately after sending the \code{ReqParams} request.
 
-% TODO AckParams
-% Bob: Acknowledged. Here's my pubkey.
-% Charlie: Acknowledged. Here's my pubkey.
+On receiving a \code{AckParams}, the receiving peer must update the \code{peers} list in its head state to include the received verification key and its Blake2b-256 (\codeMath{\mathcal{H}_{32}}) hash.
+This list must have unique verification keys and be sorted in ascending order of public key hash.
+Furthermore, it must always include the peer's own verification key and public key hash.
 
 \subsection{Initialization~~~(\codeHeading{ReqInit} / \codeHeading{AckInit})}%
 \label{h:l2-consensus-intitialization}%
 
-% TODO ReqInit
-% Alice: Please sign this head initialization transaction, which uses a native script parametrized by Alice, Bob, and Charlie's provided pubkeys.
+On receiving all parameter acknowledgments from the peers, the initiator must draft an L1 initialization transaction (\cref{h:l1-multisig-initialization}) for the head, using the peers' public key hashes, and broadcast it to the peers:
+\begin{equation*}
+  \T{ReqInit} \coloneq \;\bigr\{\; \T{initTx} :: \T{Tx^{L1}} \;\bigr\}
+\end{equation*}
 
-% TODO AckInit
-% Bob: here's my signature.
-% Charlie: here's my signature.
-% (Everyone): (Submits the multisigned init transaction to Cardano)
+On receiving a \code{ReqInit}, the receiving peer must verify that the initialization transaction meets the conditions in \cref{h:l1-multisig-initialization} and uses a native script (\cref{h:l1-multisig-regime}) parametrized by all the peers' public key hashes, corresponding to the \code{peers} list its head state.
+If it is valid, the peer must broadcast a signature of the initialization transaction:
+\begin{equation*}
+  \T{AckInit} \coloneq \left\{
+  \begin{array}{lll}
+    \T{initTxId} &::& \T{TxId} \\
+    \T{signature} &::& \T{Signature}
+  \end{array}\right\}
+\end{equation*}
+The initiator must do the same immediately after sending the \code{ReqInit} request.
+
+On receiving an \code{AckInit}, the receiving peer must verify that \code{signature} is a valid signature of the initialization transaction by the sender's verification key.
+If so, the peer must attach the signature to the initialization transaction.
+
+Each peer must submit the initialization transaction when all required signatures are attached.
 
 \section{Ledger requests}%
 \label{h:l2-consensus-ledger}%
 
 Any peer can broadcast a request to the other peers, asking them to witness a new L2 transaction or withdrawal.
-The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's peer state.
+The peers do not explicitly acknowledge the request, but a future block must affirm the L2 transaction or withdrawal if it is valid relative to the block creator's head state.
 
 \subsection{Transaction~~~(\codeHeading{ReqTx})}%
 \label{h:l2-consensus-transaction}%
 
-A request from one peer to the other peers to witness a new L2 transaction:
+To submit a new L2 transaction to the head, the submitting peer must broadcast this request:
 \begin{equation*}
-  \T{ReqTx} \coloneq \bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
+  \T{ReqTx} \coloneq \;\bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
 \end{equation*}
 
-Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsL2} table in the peer's state (\cref{h:l2-peer-state}):
+On receiving a \code{ReqTx} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in  in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -67,20 +116,20 @@ Upon receiving a (\codeMathTt{\T{ReqTx} \; \T{tx}}) at time \code{timeReceived},
     \T{blockNum} &\coloneq& \varnothing
   \end{array}\right\}
 \end{equation*}
-The sender must do the same, immediately upon sending the request.
+The submitter must do the same immediately after sending the request.
 
-No acknowledgment response is required.
-Peers other than the next block creator should not attempt to validate this L2 transaction, at this time.
+No acknowledgment is required.
+Peers other than the next block creator should not attempt to validate this L2 transaction at this time.
 
 \subsection{Withdrawal~~~(\codeHeading{ReqWithdrawal})}%
 \label{h:l2-consensus-withdrawal}%
 
-A request from one peer to the other peers to witness a new L2 withdrawal:
+To submit a new L2 withdrawal to the head, the submitting peer must broadcast this request:
 \begin{equation*}
-  \T{ReqWithdrawal} \coloneq \bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
+  \T{ReqWithdrawal} \coloneq \;\bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
 \end{equation*}
 
-Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeReceived}, a peer must append the following L2 event to the \code{eventsL2} table in the peer's state (\cref{h:l2-peer-state}):
+On receiving a \code{ReqWithdrawal} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -91,66 +140,172 @@ Upon receiving a (\codeMathTt{\T{ReqWithdrawal} \; \T{w}}) at time \code{timeRec
     \T{blockNum} &\coloneq& \varnothing
   \end{array}\right\}
 \end{equation*}
-The sender must do the same, immediately upon sending the request.
+The submitter must do the same immediately after sending the request.
 
-No acknowledgment response is required.
-Peers other than the next block creator should not attempt to validate this L2 withdrawal, at this time.
+No acknowledgment is required.
+Peers other than the next block creator should not attempt to validate this L2 withdrawal at this time.
 
 \section{Consensus on blocks}%
 \label{h:l2-consensus-on-blocks}%
 
-If there are unconfirmed L2 events, and no new block is awaiting confirmation from the peers, then the next block must be created and sent to the peers for confirmation.
+If there are unconfirmed L2 events and no new block awaits the peers' confirmation, the next block must be created and sent to the peers for confirmation.
 The $i^\mathtt{th}$ peer has the exclusive right to create every $i^\mathtt{th}$ block: 
 \begin{equation*}
   \T{rightfulBlockCreator} \; \T{peersN} \; \T{blockNum} \coloneq
     \T{mod} \; \T{blockNum} \; \T{peersN}
 \end{equation*}
 
-To create the a block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's peer state.
-Depending on the type of the new block, the block creator must broadcast either a \code{ReqMinor}, \code{ReqMajor}, or \code{ReqFinal} request to the other peers.
+To create a new block, apply the block creation procedure (\cref{h:l2-block-creation}) to the block creator's head state.
+Depending on the new block's type, the block creator must broadcast it in either a \code{ReqMinor}, \code{ReqMajor}, or \code{ReqFinal} request to the other peers.
 
-Each recipient must validate the new block relative to the recipient's peer state. If the new block is valid, the recipient must broadcast a corresponding acknowledgment response (\code{AckMinor}, \code{AckMajor1}, or \code{AckFinal1}) to the other peers.
+Each recipient must validate the new block relative to the recipient's head state.
+If the new block is valid, the recipient must broadcast a corresponding acknowledgment (\code{AckMinor}, \code{AckMajor1}, or \code{AckFinal1}) to the other peers.
 
-The block creator must broadcast a corresponding acknowledgment response for the new block to the other peers, immediately upon broadcasting the new block.
+The block creator must broadcast a corresponding acknowledgment of the new block to the other peers immediately after broadcasting the new block.
 
 When the new block is major or final, acknowledgment proceeds in two rounds.%
-\footnote{The two rounds are needed for atomic block confirmation.
-  Major and final blocks have multiple effects that require signatures from peers.
-  To prevent any peer from obtaining all signatures for one effect of a block without broadcasting the peer's signature for other effects, the first round collects signatures for all effects except for the L1 settlement transaction.
-  None of the other effects can happen without the L1 settlement transaction.
-  Once all signatures for the other effects are collected in the first round, signatures for the L1 settlement can be collected in the second round.
+\footnote{Major and final blocks require two acknowledgment rounds to ensure block confirmation because they have multiple effects requiring the peers' signatures.
+  The first round collects signatures for all effects except for the L1 settlement/finalization transaction.
+  The second round collects signatures for the L1 settlement/finalization transaction.
+  Doing so prevents any peer from withholding their signature for an undesirable block effect after obtaining all signatures for a desirable block effect.
+  Since none of the other effects can happen without the L1 settlement transaction, requiring it last ensures all peers sign all effects.
   }
-When a peer has received the first acknowledgment response (\code{AckMajor1} or \code{AckFinal1}) from all peers, the peer must broadcast a corresponding second acknowledgment response (\code{AckMajor2} or \code{AckFinal2}).
+When a peer has received the first acknowledgment (\code{AckMajor1} or \code{AckFinal1}) from all peers, the peer must broadcast a corresponding second acknowledgment (\code{AckMajor2} or \code{AckFinal2}).
 
-A peer must consider a block and all its affirmed events to be confirmed when all of the block's acknowledgments have been received.
+When a peer receives all acknowledgments for a block, the peer must consider the block and all its affirmed events to be confirmed.
+The peer must update its head state as described in \cref{h:l2-block-effects}.
+
+Both the \code{AckMinor} and \code{AckMajor2} responses have a \code{nextBlockFinal} boolean flag, with which each peer can indicate whether the peer wishes the next block (after the currently pending block) to be the head's final block.
+If this flag is \code{True} in any of the acknowledgments of a confirmed block, all peers must set the \code{finalizing} variable to \code{True} in the head state, and the next block creator must create a final block.
 
 \subsection{Minor block~~~(\codeHeading{ReqMinor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-minor-block}%
 
-% TODO
+A block creator's broadcast of a new minor block contains the block:
+\begin{equation*}
+  \T{ReqMinor} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
+\end{equation*}
+
+A peer's acknowledgment of a minor block contains the block header signed by the peer:
+\begin{equation*}
+  \T{AckMinor} \coloneq \left\{
+  \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
+    \T{signature} &::& \T{Signature} \\
+    \T{nextBlockFinal} &::& \T{Bool}
+  \end{array}\right\}
+\end{equation*}
 
 \subsection{Major block~~~(\codeHeading{ReqMajor} / \codeHeading{AckMajor1} / \codeHeading{AckMajor2})}%
 \label{h:l2-consensus-major-block}%
 
-% TODO
+A block creator's broadcast of a new major block contains the block;
+\begin{equation*}
+  \T{ReqMajor} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
+\end{equation*}
+
+A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout and post-dated transition transactions:
+\begin{equation*}
+  \T{AckMajor1} \coloneq \left\{
+  \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
+    \T{rollouts} &::& [\T{Signature}] \\
+    \T{postDatedTransition} &::& \T{Signature}
+  \end{array}\right\}
+\end{equation*}
+
+A peer's second acknowledgment of a major block identifies the block by its header and contains the recipient's signature for the block's settlement transaction:
+\begin{equation*}
+  \T{AckMajor2} \coloneq \left\{
+  \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
+    \T{settlement} &::& \T{Signature} \\
+    \T{nextBlockFinal} &::& \T{Bool}
+  \end{array}\right\}
+\end{equation*}
 
 \subsection{Final block~~~(\codeHeading {ReqFinal} / \codeHeading{AckFinal1} / \codeHeading{AckFinal2})}%
 \label{h:l2-consensus-final-block}%
 
-% TODO
+A block creator's broadcast of a new major block contains the block;
+\begin{equation*}
+  \T{ReqFinal} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
+\end{equation*}
+
+A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout transactions:
+\begin{equation*}
+  \T{AckFinal1} \coloneq \left\{
+  \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
+    \T{rollouts} &::& [\T{Signature}]
+  \end{array}\right\}
+\end{equation*}
+
+A peer's second acknowledgment of a major block identifies the block by its header and contains the recipient's signature for the block's finalization transaction:
+\begin{equation*}
+  \T{AckFinal2} \coloneq \left\{
+  \begin{array}{lll}
+    \T{blockHeader} &::& \T{BlockHeader} \\
+    \T{finalization} &::& \T{Signature}
+  \end{array}\right\}
+\end{equation*}
 
 \section{Consensus on refunds}%
 \label{h:l2-consensus-on-refunds}%
 
+To ensure that deposited funds never get stranded, every depositor must obtain a multi-signed post-dated refund transaction from the head's peers before sending the L1 deposit utxo to the head's native script address.
+
+Similarly, the peers may sometimes determine that an L1 deposit will not be absorbed into the head---e.g., insufficient time before the deposit deadline, disruption in L2 block consensus.
+In those cases, the peers should attempt to multi-sign and submit an immediate refund transaction for the deposit as a courtesy to the depositor.
 
 \subsection{Post-dated refund~~~(\codeHeading {ReqRefundLater} / \codeHeading{AckRefundLater})}%
 \label{h:l2-consensus-post-dated-refund}%
 
-% TODO
+A request for a post-dated refund of an L1 deposit must contain the unsigned transaction that will create the L1 deposit:
+\begin{equation*}
+  \T{ReqRefundLater} \coloneq \left\{
+  \begin{array}{lll}
+    \T{depositTx} &::& \T{Tx^{L1}} \\
+    \T{index} &::& \T{UInt}
+  \end{array}\right\}
+\end{equation*}
+
+On receiving a \code{ReqRefundLater}, the receiving peer must:
+\begin{enumerate}
+  \item Verify that the deposit transaction creates a valid L1 deposit (\cref{h:l1-multisig-deposit}) at the specified index.
+  \item Construct an L1 refund transaction that spends the L1 deposit and sends its funds to the \code{refundAddress} and \code{refundDatum}, with time validity interval starting at the \code{deadline}.
+  \item Broadcast the peer's signature for the post-dated refund transaction:
+    \begin{equation*}
+      \T{AckRefundLater} \coloneq \left\{
+      \begin{array}{lll}
+        \T{deposit} &::& \T{OutputReference} \\
+        \T{signature} &::& \T{Signature}
+      \end{array}\right\}
+    \end{equation*}
+\end{enumerate}
+On receiving all peer signatures for the post-dated refund, the deposit caches it and submits the deposit transaction.
 
 \subsection{Immediate refund~~~(\codeHeading{ReqRefundNow} / \codeHeading{AckRefundNow})}%
 \label{h:l2-consensus-immediate-refund}%
 
-% TODO
+A request for an immediate refund must contain the list of L1 deposit utxos to be refunded:
+\begin{equation*}
+  \T{ReqRefundNow} \coloneq \;\{\; \T{deposits} :: [\T{OutputReference}] \;\}
+\end{equation*}
+On receiving a \code{ReqRefundNow}, the receiving peer must:
+\begin{enumerate}
+  \item Verify that each of the L1 deposit utxos exists on L1 and that no more than \code{depositMarginExpiry} time duration is left until the deposit's \code{deadline}.
+  \item For each L1 deposit, construct an L1 refund transaction that spends it and send a corresponding output to its \code{refundAddress} and \code{refundDatum}.
+    This transaction's time-validity interval is unbounded.
+  \item Broadcast the peer's signatures for the immediate refund transactions:
+    \begin{equation*}
+      \T{AckRefundNow} \coloneq \left[\left\{
+      \begin{array}{lll}
+        \T{deposit} &::& \T{OutputReference} \\
+        \T{signature} &::& \T{Signature}
+      \end{array}\right\}\right]
+    \end{equation*}
+\end{enumerate}
+On receiving all the peers' signatures for the immediate refund, every peer must submit it.
 
 \end{document}

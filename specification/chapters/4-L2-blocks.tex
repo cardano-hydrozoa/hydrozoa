@@ -5,8 +5,8 @@
 \chapter{L2 blocks}%
 \label{h:l2-blocks}%
 
-It would be inefficient for a head's peers to reach consensus on each L2 ledger event individually.
-Instead, they reach consensus on an entire block of L2 ledger events at every round of the Hydrozoa L2 consensus protocol.
+It would be inefficient for a head's peers to reach a consensus on each L2 ledger event individually.
+Instead, they reach a consensus on an entire block of L2 ledger events at every Hydrozoa L2 consensus protocol round.
 
 All L2 blocks have this type:
 \begin{equation*}
@@ -16,15 +16,7 @@ All L2 blocks have this type:
       \T{header} &::& \T{BlockHeader^{L2}} \\
       \T{body} &::& \T{BlockBody^{L2}}
     \end{array}\right\} \\
-  \T{BlockHeader^{L2}} \coloneq&\; \left\{
-    \begin{array}{lll}
-      \T{blockNum} &::& \T{UInt} \\
-      \T{blockType} &::& \T{BlockType^{L2}} \\
-      \T{timeCreation} &::& \T{PosixTime} \\
-      \T{versionMajor} &::& \T{UInt} \\
-      \T{versionMinor} &::& \T{UInt} \\
-      \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
-    \end{array}\right\} \\
+  \blockHeaderTypeName{} \coloneq&\; \blockHeaderTypeBody{} \\
   \T{BlockType^{L2}} &\coloneq
     \T{Minor} \mid
     \T{Major} \mid
@@ -47,53 +39,37 @@ The block's header contains a Merkle root hash of the active utxo set that resul
 Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that neither affirms any L2 withdrawals nor absorbs any L1 deposits.
-    It has no effect on the head's L1 utxo state in the multisig regime and only affects the L2 ledger state's active utxo set.
+    It does not affect the head's L1 utxo state in the multisig regime and only affects the L2 ledger state's active utxo set.
     They may affect the L1 utxo state in the rule-based regime.
   \item[Major block.] A block that affirms some L2 withdrawals or absorbs some L1 deposits.
     It implicitly affirms an L2 genesis event corresponding to its absorbed L1 deposits, appended to the end of its affirmed L2 event sequence.
-    It immediately affects the head's L1 utxo state as soon as it is confirmed by the peers, via the L1 settlement and rollout transactions that mirror the utxos it adds and withdraws from the L2 ledger.
+    As soon as the peers confirm it, it immediately affects the head's L1 utxo state via the L1 settlement and rollout transactions that mirror the utxos it adds and withdraws from the L2 ledger.
   \item[Final block.] A block with which the peers finalize the head, resulting in an empty L2 ledger.
-    It implicitly affirms withdrawals for the entire active utxo set that remains after its sequence of affirmed L2 ledger events.
+    It implicitly affirms withdrawals for the active utxo set remaining after its affirmed L2 ledger events sequence.
     It does not absorb any L1 deposits.
 \end{description}
 
 Blocks are numbered consecutively by \code{blockNum}, and they are versioned by \code{versionMajor} and \code{versionMinor} numbers:
 \begin{itemize}
-  \item The notional initial block has both major and minor versions set to zero.%
+  \item The notional initial block has major and minor versions set to zero.%
     \footnote{The initial block is never actually created or explicitly confirmed by the peers.
-      It is the same for all hydra heads and its only effect is to initialize the empty L2 ledger state.
-      We only care about it because its major and minor versions are both zero.}
+      It is the same for all hydra heads; its only effect is initializing the empty L2 ledger state.
+      We only care about it because its major and minor versions are zero.}
   \item A minor block keeps its predecessor's major version and increments the minor version.
   \item A major block increments the major version and resets the minor version to zero.
   \item The final block increments the major version and resets the minor version to zero.
 \end{itemize}
 
-The \code{timeCreation} field of a block indicates the time when it was created.
+A block's the \code{timeCreation} field indicates the time it was created.
 
-\section{Peer state}%
-\label{h:l2-peer-state}%
+\section{Head state}%
+\label{h:l2-head-state}%
 
 Every peer requires access to an up-to-date source of this information:
 \begin{equation*}
 \begin{split}
-  \T{PeerState} &\coloneq \left\{
-    \begin{array}{lll}
-      \T{timeCurrent} &::& \T{PosixTime} \\
-      \T{finalizing} &::& \T{Bool} \\
-      \T{params} &::& \T{ParamsConsensusL2} \\
-      \T{stateL1} &::& \T{MultisigHeadState^{L1}} \\
-      \T{stateL2} &::& \T{LedgerState^{L2}} \\
-      \T{blocksConfirmedL2} &::& \T{Sequence} \; \T{Block^{L2}} \\
-      \T{eventsL2} &::& \T{Table} \; \T{Event^{L2}}
-    \end{array}\right\} \\
-  \T{ParamsConsensusL2} &\coloneq \left\{
-    \begin{array}{lll}
-      \T{blockLatencyTolerance} &::& \T{UDiffTime} \\
-      \T{depositMarginMaturity} &::& \T{UDiffTime} \\
-      \T{depositMarginExpiry} &::& \T{UDiffTime} \\
-      \T{multisigRegimeKeepAlive} &::& \T{UDiffTime} \\
-      \T{multisigRegimeTimeout} &::& \T{UDiffTime}
-    \end{array}\right\} \\
+  \headStateTypeName{} &\coloneq \headStateTypeBody{} \\
+  \paramsConsensusTypeName{} &\coloneq \paramsConsensusTypeBody{} \\
   \T{Event^{L2}} &\coloneq \left\{
     \begin{array}{lll}
       \T{timeReceived} &::& \T{PosixTime} \\
@@ -107,26 +83,10 @@ Every peer requires access to an up-to-date source of this information:
 
 These fields are interpreted as follows:
 \begin{description}
-  \item[current time.] The peer's current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
-  \item[finalizing.] A boolean indicator of whether the peers want to immediately finalize the head.
-  \item[head params.] The head's parameters:
-    \begin{description}
-      \item[block latency tolerance.] During validation, a new block's creation time must not deviate from the peer's current time by more than this non-negative time duration.
-      \item[deposit maturity margin.] After an L1 deposit is created on L1,%
-        \footnote{An L1 deposit's creation time corresponds to the slot number of the block that includes the transaction that outputs it.
-          While this may be ill-defined at first due to chain forks, we expect it to stabilize by the time that an L1 deposit matures enough to be absorbed---that's the whole point of maturation!}
-        the peers must wait for this non-negative time duration before attempting to absorb it into the head's treasury.
-      \item[deposit expiry margin.] If no more than this non-negative time duration is left before an L1 deposit's deadline, the peers must not attempt to absorb it into the head's treasury.
-      \item[multisig regime keep-alive.] If this non-negative time duration has passed since the latest confirmed major block's creation, the next block must be major.
-      \item[multisig regime timeout.] If this non-negative time duration has passed since the latest confirmed major block's creation, then the head can transition to the rule-based regime with this block's major version.
-    \end{description}
-  \item[L1 state.] The peer's view of the head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
-    \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
-  \item[L2 state.] The head's L2 ledger state (\cref{h:l2-ledger}) as of the latest confirmed block.
-  \item[confirmed L2 blocks.] The sequence of all L2 blocks confirmed by the L2 consensus protocol.%
-    \footnote{In practice, it may be acceptable to remove blocks when they're settled on L1 with sufficient finality.}
-  \item[L2 events.] The table of all L2 events that were witnessed by the peer but not rejected by any confirmed block.%
-    \footnote{It may be acceptable to keep only a small buffer of these events, corresponding to several recently confirmed blocks.}
+  \item[blocks confirmed L2.] The sequence of all L2 blocks confirmed by the L2 consensus protocol.%
+    \footnote{In practice, it may be acceptable to remove blocks when they are settled on L1 with sufficient finality.}
+  \item[events L2.] The table of all L2 events witnessed by the peer but not rejected by any confirmed block.%
+    \footnote{It may be acceptable to keep only a small buffer of these events corresponding to several recently confirmed blocks.}
     The events must be unique on \code{eventId} and sorted in the ascending order of \code{timeReceived}:
     \begin{description}
       \item[time received.] The POSIX time at which the peer received the event.
@@ -135,12 +95,31 @@ These fields are interpreted as follows:
       \item[event.] The transaction representing the event's effect on the L2 active utxo set.
       \item[block number.] The block number of the block (if any) that includes the event, regardless of whether the block is confirmed.
     \end{description}
+  \item[finalizing.] A boolean indicator of whether the peers want to finalize the head immediately.
+    Its initial value is \code{False}, and it becomes \code{True} when a peer expresses a wish to close the head.
+  \item[peers.] The peers' public key hashes and verification keys, which must be unique and sorted in ascending order of public key hash.
+    Each peer's integer ID in the head is assigned according to the position of the key's public key hash in this list.
+  \item[params.] The head's parameters:
+    \begin{description}
+      \item[block latency tolerance.] During validation, a new block's creation time must not deviate from the peer's current time by more than this non-negative time duration.
+      \item[deposit margin maturity.] After an L1 deposit is created on L1,%
+        \footnote{An L1 deposit's creation time corresponds to the slot number of the block that includes the transaction that outputs it.
+          While this may be ill-defined at first due to chain forks, we expect it to stabilize by the time L1 deposit matures enough to be absorbed---that is the whole point of maturation!}
+        the peers must wait for this non-negative time duration before attempting to absorb it into the head's treasury.
+      \item[deposit margin expiry.] If no more than this non-negative time duration is left before an L1 deposit's deadline, the peers must not attempt to absorb it into the head's treasury.
+      \item[multisig regime keep-alive.] If this non-negative time duration has passed since the latest confirmed major block's creation, the next block must be major.
+      \item[multisig regime timeout.] If this non-negative time duration has passed since the latest confirmed major block's creation, the head can transition to the rule-based regime with this block's major version.
+    \end{description}
+  \item[state L1.] The peer's view of the head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
+    \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
+  \item[state L2.] The head's L2 ledger state (\cref{h:l2-ledger}) as of the latest confirmed block.
+  \item[time current.] The peer's current POSIX time, synchronized via the NTP protocol \citep{MillsEtAlNetworkTimeProtocol2010}.
 \end{description}
 
-\section{Creation}%
+\section{Block creation}%
 \label{h:l2-block-creation}%
 
-Given a peer's state, create a new block as follows:
+Given a peer's head state, create a new block as follows:
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
     \begin{enumerate}
@@ -153,7 +132,7 @@ Given a peer's state, create a new block as follows:
     \end{enumerate}
   \item Set \code{block.timeCreation} to \code{timeCurrent}.
   \item For each non-genesis L2 event \code{x} in \code{eventsL2}, where \code{x.blockNum} is empty:%
-    \footnote{The non-genesis filter is just a sanity check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsL2} with an empty \inlineColored{blockNum}.
+    \footnote{The non-genesis filter is just a self-consistency check---the L2 consensus protocol does not provide any way for a genesis event to be appended to \inlineColored{eventsL2} with an empty \inlineColored{blockNum}.
       A genesis event can only be appended by a valid block.
       }
       \begin{enumerate}
@@ -186,7 +165,7 @@ Given a peer's state, create a new block as follows:
         \item Insert \code{d} into \code{block.depositsAbsorbed}.
         \item Insert this utxo into \code{utxosAdded}:%
           \footnote{Actually, the output reference of each L2 utxo in \inlineColored{utxosAdded} can only be constructed after the iteration through \inlineColored{stateL1.depositUtxos} is complete.
-            In practice, this may require a second pass through \inlineColored{utxosAdded} to fill-in the blanks.}
+            In practice, this may require a second pass through \inlineColored{utxosAdded} to fill in the blanks.}
           \begin{equation*}
             \left\{
             \begin{array}{lll}
@@ -237,7 +216,7 @@ Given a peer's state, create a new block as follows:
   \item Return \code{block}, \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
 
-\section{Validation}%
+\section{Block validation}%
 \label{h:l2-block-validation}%
 
 From a peer's perspective, a new block's validity has three states:
@@ -247,7 +226,7 @@ From a peer's perspective, a new block's validity has three states:
   \item[Invalid.] The peer has detected an error that cannot be resolved by waiting.
 \end{description}
 
-Given a peer's state, validate a new block as follows:%
+Given a peer's head state, validate a new block as follows:%
 \footnote{In the block validation procedure, ``return'' statements immediately break execution.}
 \begin{enumerate}
   \item Initialize the variables and arguments (immutable by default):
@@ -283,8 +262,10 @@ Given a peer's state, validate a new block as follows:%
   \item For each event \code{y} in \code{eventsInvalid}:
     \begin{enumerate}
       \item If \code{y.eventId} is not in \code{eventsL2}, return \framebox{\code{NotYetKnown}}.
-      \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}). If it is valid, return \framebox{\code{Invalid}}.
-      \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}). If it is valid, return \framebox{\code{Invalid}}.
+      \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}).
+      If it is valid, return \framebox{\code{Invalid}}.
+      \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}).
+      If it is valid, return \framebox{\code{Invalid}}.
     \end{enumerate}
   \item If \code{finalizing} is \code{False}, for each deposit \code{d'} in \code{depositsAbsorbed}:
     \begin{enumerate}
@@ -348,19 +329,19 @@ Given a peer's state, validate a new block as follows:%
   \item Return \framebox{\code{Valid}}, along with \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn}.
 \end{enumerate}
 
-\section{Effects}%
-\label{h:l2-block-effect}%
+\section{Block effects}%
+\label{h:l2-block-effects}%
 
-A confirmed block's L2 effect is immediate and handled by a common procedure for all block types.
+A confirmed block's L2 effect is immediate, and it is handled by a common procedure for all block types.
 
-On the other hand, a confirmed block's L1 effect varies by its block type and it cannot be directly applied by a peer to its peer state.
+On the other hand, a confirmed block's L1 effect varies by its block type, and a peer cannot directly apply it to its head state.
 Instead, it must be executed by submitting L1 transactions and waiting for the L1 Ouroboros consensus protocol to confirm the transactions.
 
-\subsection{Any block L2 effect}%
+\subsection{Any block -- L2 effect}%
 \label{h:l2-block-effect-l2}%
 
-Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and peer state.
-Upon confirmation of \code{block} by the peers, it immediately affects the peer state as follows:
+Let \code{utxosActive}, \code{utxosAdded}, and \code{utxosWithdrawn} be the sets produced by the block creation or validation procedure for a given block (\code{block}) and head state.
+Upon confirmation of \code{block} by the peers, it immediately affects the head state as follows:
 \begin{enumerate}
   \item Update \code{stateL2.utxosActive} to \code{utxosActive}.
   \item For each L2 event in \code{block.eventsValid}, set the \code{blockNum} of the corresponding event in \code{eventsL2} to \code{block.blockNum}.
@@ -371,7 +352,7 @@ Upon confirmation of \code{block} by the peers, it immediately affects the peer 
     \end{equation*}
 \end{enumerate}
 
-\subsection{Minor block L1 effect}%
+\subsection{Minor block -- L1 effect}%
 \label{h:l2-block-effect-minor-block}%
 
 A confirmed minor block's L1 effect is the block's header, multi-signed by all peers:
@@ -379,14 +360,14 @@ A confirmed minor block's L1 effect is the block's header, multi-signed by all p
   \T{MinorBlockL1Effect} \coloneq \left\{
     \begin{array}{lll}
       \T{blockHeader} &::& \T{BlockHeader^{L2}} \\
-      \T{multisig} &::& [\T{Signature}]
+      \T{multisig} &::& [(\T{VerificationKey}, \T{Signature})]
     \end{array}\right\}
 \end{equation*}
 
 This effect is manually triggered if a peer uses it as a redeemer to vote during the rule-based regime's dispute (\cref{h:l1-rule-based-dispute-resolution}).
-If the dispute resolution process resolves to this minor block, then the rule-based treasury will allow funds to be withdrawn according to this minor block's active utxo set.
+If the dispute resolution process resolves with this minor block, then the rule-based treasury will allow funds to be withdrawn according to this minor block's active utxo set.
 
-\subsection{Major block L1 effect}%
+\subsection{Major block -- L1 effect}%
 \label{h:l2-block-effect-major-block}%
 
 A confirmed major block's L1 effect is a package of L1 transactions, multi-signed by all peers:
@@ -410,7 +391,7 @@ All peers must immediately submit the settlement and rollouts to Cardano L1.
 
 If the post-dated transition becomes valid, all peers must immediately submit it.
 
-\subsection{Final block L1 effect}%
+\subsection{Final block -- L1 effect}%
 \label{h:l2-block-effect-final-block}%
 
 A confirmed final block's L1 effect is a package of L1 transactions, multi-signed by all peers:
