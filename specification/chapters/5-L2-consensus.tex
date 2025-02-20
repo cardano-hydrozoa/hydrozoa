@@ -175,6 +175,8 @@ When a peer has received the first acknowledgment (\code{AckMajor1} or \code{Ack
 When a peer receives all acknowledgments for a block, the peer must consider the block and all its affirmed events to be confirmed.
 The peer must update its head state as described in \cref{h:l2-block-effects}.
 
+Both the \code{AckMinor} and \code{AckMajor2} responses have a \code{nextBlockFinal} boolean flag, with which each peer can indicate whether the peer wishes the next block (after the currently pending block) to be the head's final block.
+If this flag is \code{True} in any of the acknowledgments of a confirmed block, all peers must set the \code{finalizing} variable to \code{True} in the head state, and the next block creator must create a final block.
 \subsection{Minor block~~~(\codeHeading{ReqMinor} / \codeHeading{AckMinor})}%
 \label{h:l2-consensus-minor-block}%
 
@@ -188,7 +190,8 @@ A peer's acknowledgment of a minor block contains the block header signed by the
   \T{AckMinor} \coloneq \left\{
   \begin{array}{lll}
     \T{blockHeader} &::& \T{BlockHeader} \\
-    \T{signature} &::& \T{Signature}
+    \T{signature} &::& \T{Signature} \\
+    \T{nextBlockFinal} &::& \T{Bool}
   \end{array}\right\}
 \end{equation*}
 
@@ -215,7 +218,8 @@ A peer's second acknowledgment of a major block identifies the block by its head
   \T{AckMajor2} \coloneq \left\{
   \begin{array}{lll}
     \T{blockHeader} &::& \T{BlockHeader} \\
-    \T{settlement} &::& \T{Signature}
+    \T{settlement} &::& \T{Signature} \\
+    \T{nextBlockFinal} &::& \T{Bool}
   \end{array}\right\}
 \end{equation*}
 
