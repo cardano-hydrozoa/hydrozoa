@@ -14,7 +14,7 @@ Hydrozoa is a dynamic, near-isomorphic multi-party state channel protocol:
     \footnote{Unfortunately, full equivalence is impossible because the result of the L2 transactions ultimately needs to be settled on L1 by the peers, and Cardano's ledger rules do authorize the peers to perform certain actions (\cref{h:l2-ledger-rules}).}
   \item[Dynamic.] Hydrozoa allows the peers to add new peers or remove existing peers from the group%
     \footnote{Adding and removing peers is not currently specified in this document, but will be specified and implemented in the final milestone of the Catalyst Fund 13 Hydrozoa project \citep{FlerovskyCatalystMilestonesHydrozoa2024} (\cref{h:future-work-add-remove-members}).}
-    and deposit or withdraw funds from, if the existing peers unanimously consent.
+    and deposit funds from L1 or withdraw funds from L2, if the existing peers unanimously consent.
 \end{description}
 Hydrozoa evolved out of Cardano's Hydra Head protocol \citep{NagelEtAlHydraHeadV1Specification2024}, dramatically simplifying the L1 smart contract architecture and increasing flexibility.
 
