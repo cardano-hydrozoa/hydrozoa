@@ -259,7 +259,7 @@ In those cases, the peers should attempt to multi-sign and submit an immediate r
 
 A request for a post-dated refund of an L1 deposit must contain the unsigned transaction that will create the L1 deposit:
 \begin{equation*}
-  \T{ReqRefundLater} \coloneq \;\{\; \T{depositTx} :: \T{Tx^{L1}} \;}
+  \T{ReqRefundLater} \coloneq \;\{\; \T{depositTx} :: \T{Tx^{L1}} \;\}
 \end{equation*}
 
 On receiving a \code{ReqRefundLater}, the receiving peer must:
@@ -284,7 +284,7 @@ When the depositor obtains all the peers' signatures for the post-dated refund t
 
 A request for an immediate refund must contain the list of L1 deposit utxos to be refunded:
 \begin{equation*}
-  \T{ReqRefundNow} \coloneq \;\{\; \T{deposits} :: [\T{OutputReference}] \;}
+  \T{ReqRefundNow} \coloneq \;\{\; \T{deposits} :: [\T{OutputReference}] \;\}
 \end{equation*}
 
 On receiving a \code{ReqRefundNow}, the receiving peer must:
