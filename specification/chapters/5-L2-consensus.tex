@@ -76,17 +76,17 @@ On receiving all parameter acknowledgments from the peers, the initiator must dr
 \end{equation*}
 
 On receiving a \code{ReqInit}, the receiving peer must verify that the initialization transaction meets the conditions in \cref{h:l1-multisig-initialization} and uses a native script (\cref{h:l1-multisig-regime}) parametrized by all the peers' public key hashes, corresponding to the \code{peers} list its peer state.
-If it is valid, the peer must sign it with the peer's verification key and broadcast it an acknowledgment:
+If it is valid, the peer must broadcast a signature of the initialization transaction:
 \begin{equation*}
   \T{AckInit} \coloneq \left\{
   \begin{array}{lll}
-    \T{vkeyHash} &::& \T{PublicKeyHash} \\
+    \T{initTxId} &::& \T{TxId} \\
     \T{signature} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
 The initiator must do the same, immediately on sending the \code{ReqInit} request.
 
-On receiving an \code{AckInit}, the receiving peer must verify that \code{vkeyHash} is a required signatory and \code{signature} is a valid signature of the intialization transaction by the verification key corresponding to \code{vkeyHash}.
+On receiving an \code{AckInit}, the receiving peer must verify that \code{signature} is a valid signature of the intialization transaction by the sender's verification key.
 If so, the peer must attach the signature to the initialization transaction.
 
 Each peer must submit the initialization transaction when all required signatures are attached.
@@ -183,12 +183,11 @@ A block creator's broadcast of a new minor block contains the block:
   \T{ReqMinor} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
 \end{equation*}
 
-A peer's acknowledgment of a minor block identifies the block by block number and contains the recipient's signature of the new block's header:
+A peer's acknowledgment of a minor block contains the block header signed by the peer:
 \begin{equation*}
   \T{AckMinor} \coloneq \left\{
   \begin{array}{lll}
-    \T{blockNum} &::& \T{UInt} \\
-    \T{vkey} &::& \T{UInt} \\
+    \T{blockHeader} &::& \T{BlockHeader} \\
     \T{signature} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
@@ -205,7 +204,7 @@ A peer's first acknowledgment of a major block identifies the block by block num
 \begin{equation*}
   \T{AckMajor1} \coloneq \left\{
   \begin{array}{lll}
-    \T{vkey} &::& \T{VerificationKey} \\
+    \T{blockHeader} &::& \T{BlockHeader} \\
     \T{rollouts} &::& [\T{Signature}] \\
     \T{postDatedTransition} &::& \T{Signature}
   \end{array}\right\}
@@ -215,7 +214,7 @@ A peer's second acknowledgment of a major block identifies the block by block nu
 \begin{equation*}
   \T{AckMajor2} \coloneq \left\{
   \begin{array}{lll}
-    \T{vkey} &::& \T{VerificationKey} \\
+    \T{blockHeader} &::& \T{BlockHeader} \\
     \T{settlement} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
@@ -232,7 +231,6 @@ A peer's first acknowledgment of a major block identifies the block by block num
 \begin{equation*}
   \T{AckFinal1} \coloneq \left\{
   \begin{array}{lll}
-    \T{vkey} &::& \T{VerificationKey} \\
     \T{rollouts} &::& [\T{Signature}]
   \end{array}\right\}
 \end{equation*}
@@ -241,7 +239,6 @@ A peer's second acknowledgment of a major block identifies the block by block nu
 \begin{equation*}
   \T{AckFinal2} \coloneq \left\{
   \begin{array}{lll}
-    \T{vkey} &::& \T{VerificationKey} \\
     \T{finalization} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
@@ -259,25 +256,27 @@ In those cases, the peers should attempt to multi-sign and submit an immediate r
 
 A request for a post-dated refund of an L1 deposit must contain the unsigned transaction that will create the L1 deposit:
 \begin{equation*}
-  \T{ReqRefundLater} \coloneq \;\{\; \T{depositTx} :: \T{Tx^{L1}} \;\}
+  \T{ReqRefundLater} \coloneq \left\{
+  \begin{array}{lll}
+    \T{depositTx} &::& \T{Tx^{L1}} \\
+    \T{index} &::& \T{UInt}
+  \end{array}\right\}
 \end{equation*}
 
 On receiving a \code{ReqRefundLater}, the receiving peer must:
 \begin{enumerate}
-  \item Verify that the deposit transaction creates a valid L1 deposit (\cref{h:l1-multisig-deposit}).
+  \item Verify that the deposit transaction creates a valid L1 deposit (\cref{h:l1-multisig-deposit}) at the specified index.
   \item Construct an L1 refund transaction that spends the L1 deposit and sends its funds to the \code{refundAddress} and \code{refundDatum}, with time validity interval starting at the \code{deadline}.
-  \item Broadcast the peer's verification key and signature for the post-dated refund transaction:
+  \item Broadcast the peer's signature for the post-dated refund transaction:
     \begin{equation*}
       \T{AckRefundLater} \coloneq \left\{
       \begin{array}{lll}
-        \T{refundTxId} &::& \T{TxId} \\
-        \T{vkey} &::& \T{VerificationKey} \\
+        \T{deposit} &::& \T{OutputReference} \\
         \T{signature} &::& \T{Signature}
       \end{array}\right\}
     \end{equation*}
 \end{enumerate}
-
-When the depositor obtains all the peers' signatures for the post-dated refund transaction, the depositor can cache it and submit the deposit transaction.
+On receiving all peer signatures for the post-dated refund, the deposit caches it and submits the deposit transaction.
 
 \subsection{Immediate refund~~~(\codeHeading{ReqRefundNow} / \codeHeading{AckRefundNow})}%
 \label{h:l2-consensus-immediate-refund}%
@@ -286,23 +285,20 @@ A request for an immediate refund must contain the list of L1 deposit utxos to b
 \begin{equation*}
   \T{ReqRefundNow} \coloneq \;\{\; \T{deposits} :: [\T{OutputReference}] \;\}
 \end{equation*}
-
 On receiving a \code{ReqRefundNow}, the receiving peer must:
 \begin{enumerate}
   \item Verify that each of the L1 deposit utxos exists on L1 and that no more than \code{depositMarginExpiry} time duration is left until the deposit's \code{deadline}.
-  \item Construct an L1 refund transaction that spends the L1 deposits and sends corresponding outputs, according to the deposits' \code{refundAddress} and \code{refundDatum} fields.
+  \item For each L1 deposit, construct an L1 refund transaction that spends it and send a corresponding output to its \code{refundAddress} and \code{refundDatum}.
     This transaction's time-validity interval is unbounded.
-  \item Broadcast the peer's verification key and signature for the immediate refund transaction:
+  \item Broadcast the peer's signatures for the immediate refund transactions:
     \begin{equation*}
-      \T{AckRefundNow} \coloneq \left\{
+      \T{AckRefundNow} \coloneq \left[\left\{
       \begin{array}{lll}
-        \T{refundTxId} &::& \T{TxId} \\
-        \T{vkey} &::& \T{VerificationKey} \\
+        \T{deposit} &::& \T{OutputReference} \\
         \T{signature} &::& \T{Signature}
-      \end{array}\right\}
+      \end{array}\right\}\right]
     \end{equation*}
 \end{enumerate}
-
-When a peer obtains all the peers' signatures for the immediate refund transaction, the peer must submit it.
+On receiving all the peers' signatures for the immediate refund, every peer must submit it.
 
 \end{document}
