@@ -1,0 +1,57 @@
+\documentclass[../hydrozoa.tex]{subfiles}
+\graphicspath{{\subfix{../images/}}}
+\begin{document}
+
+\chapter{Architecture}%
+\label{h:architecture}%
+
+% TODO
+
+\section{Codebase}%
+\label{h:architecture-codebase}%
+
+Hydrozoa uses a single mono-repository called \code{cardano-hydrozoa/hydrozoa} \citep{FlerovskyRodionovHydrozoaRepositoryGithub2025}.
+Tentatively, the codebase will be organized into the following packages:
+\begin{description}
+  \item[Spec.] The source code for this specification.
+  \item[Multisig.] Onchain scripts, transaction building code, and blockchain queries for the L1 multisig regime (\cref{h:l1-multisig-regime}).
+  \item[Plutus.] Onchain scripts, transaction building code, and blockchain queries for the L1 rule-based regime (\cref{h:l1-rule-based-regime}).
+  \item[Ledger.] L2 ledger state and transitions (\cref{h:l2-ledger}).
+  \item[Blocks.] L2 block creation, validation, and effects (\cref{h:l2-blocks}).
+  \item[Head state.] L2 head state, storage, and queries. (\cref{h:l2-head-state}).
+  \item[Consensus.] L2 consensus protocol messages, handlers, API (\cref{h:l2-consensus-protocol}).
+  \item[Node.] Hydrozoa node software and interface (\cref{h:architecture-processes-and-components}).
+  \item[Infra.] Development environment, CI/CD, deployment scripts, configurations, etc.
+\end{description}
+
+\section{Onchain script interdependencies}%
+\label{h:ref}%
+
+Hydrozoa's L1 protocol has the following onchain script interdependencies:
+\begin{description}
+  \item[Native script] A native script parametrized on the list of peers (\cref{h:l1-multisig-regime}).
+  \item[Native minting policy.] A minting policy controlled by the native script (\cref{h:l1-multisig-utxo-state}).
+  \item[Treasury script.] A Plutus-based spending validator parametrized on the native script (\cref{h:l1-rule-based-treasury}).
+  \item[Tallying script.] A Plutus-based staking validator parametrized on the native script (\cref{h:l1-rule-based-dispute-resolution}).
+  \item[Voting script.] A Plutus-based spending validator parametrized on the native script and the tallying script (\cref{h:l1-rule-based-dispute-resolution}).
+\end{description}
+
+Overall, all the Plutus-based scripts are parametrized only on the head's native script, except that the voting script also depends on the tallying script.
+
+\section{Processes and components}%
+\label{h:architecture-processes-and-components}%
+
+In order to operate a Hydrozoa head, each peer will need to run the following processes/software:
+\begin{description}
+  \item[Hydrozoa UI.] A web-based or terminal-based user interface for a user to initialize, fund, and interact with a Hydrozoa head.
+  \item[Hydrozoa node.] An executable that manages the peer's L2 state for the head and facilitates the peer's participation in the L2 consensus protocol.
+    It also provides a backend API for the Hydrozoa UI's interactions with the head.
+  \item[User wallet.] A wallet that holds the user cryptographic keys for manual transaction signing.
+    User wallet signatures are needed in the head's initialization and deposit transactions, which bring funds into the head.
+  \item[Cardano node (L1).] A Cardano node synchronized to the chain tip of the target L1 network (e.g., Cardano mainnet).
+    This is the underlying source of events about the head's L1 state, and it is also where the Hydrozoa node submits L1 transactions.
+  \item[Blockchain indexer (L1).] A blockchain indexer (e.g., Blockfrost, Ogmios/Kupo) that indexes the events from the Cardano node.
+    This is the server responsible for responding to the Hydrozoa node's queries about the head's L1 state.
+\end{description}
+
+\end{document}
