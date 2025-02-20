@@ -45,7 +45,7 @@ Among these utxos, the head's treasury utxo is uniquely identified as the one ho
 No other utxo at the head's native script address should hold any tokens that meet the policy ID and CIP-67 prefix conditions above.
 In other words, there must only be one head at the address.%
 \footnote{It may seem redundant to use a 28-byte unique nonce in the beacon token's asset name, given that only one head is allowed per native script address at any given time.
-  However, the unique nonce is helpful to distinguish between different heads that may exist at the same address across time.}
+  However, the unique nonce helps distinguish between different heads that may exist at the same address across time.}
 
 The treasury utxo must have this datum:
 \begin{equation*}
@@ -60,15 +60,15 @@ These fields are interpreted as follows:
 \begin{description}
   \item[active utxos.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the latest major L2 block settled on L1 (\cref{h:l1-multisig-settlement}).
   \item[major version.] The version number of the latest major L2 block settled on L1.
-  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-peer-state}).
+  \item[params.] A 32-byte Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of the head's L2 consensus parameters (\cref{h:l2-head-state}).
 \end{description}
 
 Non-treasury utxos at the head's native script address are recognized as follows:
 \begin{itemize}
   \item A rollout utxo holds a rollout beacon token of the head's minting policy, with CIP-67 prefix \headRolloutToken{}.%
     \footnote{We chose \headRolloutToken{} because it spells ``ROLL'' (short for rollout) on a phone dial pad.}
-    It is a no-datum output a settlement, finalization, or rollout transaction.
-    It is transient in nature, quickly spent in a subsequent rollout transaction.
+    It is a no-datum output of a settlement, finalization, or rollout transaction.
+    It is transient---quickly spent in a subsequent rollout transaction.
   \item A deposit utxo has a datum with the \code{DepositDatum} type (\cref{h:l1-multisig-deposit}).
 \end{itemize}
   
@@ -111,23 +111,23 @@ Peers can deposit funds into a Hydrozoa head by sending utxos to its native scri
 
 In this datum, the depositor instructs the peers to absorb the deposit into the treasury via a settlement transaction (\cref{h:l1-multisig-settlement}) before the \code{deadline}, or else to refund it to the depositor (\cref{h:l1-multisig-refund}) if it will not be absorbed before the \code{deadline}.
 
-The \code{address} and \code{datum} fields define the address and datum at which the utxo in the L2 ledger should be created, if the deposit is absorbed into the head's treasury.
+The \code{address} and \code{datum} fields define the address and datum at which the utxo in the L2 ledger should be created if the deposit is absorbed into the head's treasury.
 The new utxo in the L2 ledger should contain the same funds as the deposit utxo.
 
-The \code{refundAddress} and \code{refundDatum} fields define the address and datum to which the deposit's funds should be sent on L1, if the deposit is refunded.
-The funds in the deposit must be sufficient to pay for the refund's transaction cost and create the refund utxo.
+The \code{refundAddress} and \code{refundDatum} fields define the address and datum to which the deposit's funds should be sent on L1 if the deposit is refunded.
+The funds in the deposit must be sufficient to pay for the refund transaction cost and create the refund utxo.
 
 \section{Refund}%
 \label{h:l1-multisig-refund}%
 
 A refund is a transaction, multi-signed by all peers, that sends a deposit utxo's funds to the deposit's \code{refundAddress} and \code{refundDatum}.
-As long as the peers are following the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits that will not be absorbed before their deadline.%
+While the peers follow the L2 consensus protocol, they will automatically multi-sign and submit refund transactions for all deposits not absorbed before their deadline.%
 \footnote{To minimize uncertainty from L1 rollbacks, the L2 consensus protocol will not attempt to absorb a deposit unless sufficient time remains before its deadline.
 This safety margin is controlled by an offchain consensus parameter (\cref{h:l2-consensus-parameters}).}
 
 However, a depositor should obtain the other peers' signatures for a post-dated refund transaction before submitting the deposit transaction to Cardano.
 This transaction's validity interval should start at the deposit's \code{deadline}.
-Doing so ensures that the depositor can still retrieve the deposited funds if they haven not been absorbed by the deadline, even if the other peers stop responding.
+Doing so ensures that the depositor can still retrieve the deposited funds if they have not been absorbed by the deadline, even if the other peers stop responding.
 
 The L2 consensus protocol (\cref{h:l2-consensus-on-refunds}) allows peers to obtain multi-signed post-dated refund transactions before posting their deposits on L1.
 It also allows them to immediately refund any deposits that its rules disqualify from being absorbed into the treasury.
@@ -135,9 +135,9 @@ It also allows them to immediately refund any deposits that its rules disqualify
 \section{Settlement}%
 \label{h:l1-multisig-settlement}%
 
-A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury, based on a major L2 block (\cref{h:l2-blocks}).%
+A settlement is a transaction, multi-signed by all peers, that absorbs deposits into a Hydrozoa head's treasury and pays out withdrawals out of the treasury based on a major L2 block (\cref{h:l2-blocks}).%
 \footnote{A block is ``major'' if it confirms new deposits or withdrawals that were not confirmed in the preceding blocks.}
-It also updates the \code{versionMajor} and \code{utxosActive} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block, while keeping the \code{params} field unchanged.
+It also updates the \code{versionMajor} and \code{utxosActive} fields of the \code{MultisigTreasuryDatum} to the corresponding fields in the major L2 block while keeping the \code{params} field unchanged.
 
 The absorbed deposit utxos are spent inputs in the settlement transaction.
 This means that Cardano's transaction size limit constrains the number of deposits settled per major L2 block.
@@ -168,8 +168,6 @@ Any other utxos that remain at the head's native script address---assumed to be 
 \label{h:l1-multisig-rollout}%
 
 The rollout utxo is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout utxo with the aggregate funds of the rest of the withdrawals, if any remain.
-Further rollout transactions spend the shrinking rollout utxo, until all the withdrawals have been paid out.
-
-% TODO deterministic utxo rollout algorithm
+Further rollout transactions spend the shrinking rollout utxo, until all the withdrawals have been paid out (\cref{h:deterministic-rollout-rollouts}).
 
 \end{document}
