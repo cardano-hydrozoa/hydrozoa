@@ -22,17 +22,14 @@ These fields are interpreted as follows:
 \label{h:l2-ledger-rules}%
 
 Hydrozoa's L2 ledger rules are the same as Cardano's ledger rules,%
-\footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
+\footnote{This specification is pinned to this version of the Cardano ledger rules: \citep{IntersectMBOCardanoLedgerV117402025}.}
 but with the following additions:
 \begin{description}
     \item[No staking or governance actions.]
       Hydrozoa's consensus protocol is not based on Ouroboros proof-of-stake, and its governance protocol is not based on Cardano's hard-fork-combinator update mechanism.
       Furthermore, Hydrozoa's L1 scripts cannot authorize arbitrary staking or governance actions on behalf of users.
       For this reason, staking and governance actions cannot be used in L2 transactions.%
-      \footnote{We are aware that many dApps on Cardano rely on withdraw-zero staking validators (for performance gains), which are not available without staking actions.
-        However, instead of conjuring a complex workaround, Hydrozoa will wait for the implementation of CIP-112 \citep{DiSarroCIP112ObserveScript2024} in an upcoming hardfork.
-        The observer scripts of CIP-112 allow dApp developers to implement the same functionality without withdraw-zero staking validators in a more principled and performant way.}
-        % TODO add minting subsection to future work section
+      \footnote{In future work (\cref{h:observer-script-withdraw-zero-trick}), Hydrozoa may implement support on L2 for observer scripts (CIP-112 \citep{DiSarroCIP112ObserveScript2024}) as a better alternative for dApps that currently rely on withdraw-zero staking validators for performance optimization.}
     \item[No pre-Conway features.] Hydrozoa does not need to maintain backwards compatibility with pre-Conway eras.
       L2 utxos cannot use bootstrap addresses or Shelley addresses with Plutus versions older than Plutus V3.
 
@@ -41,9 +38,7 @@ but with the following additions:
     \item[No minting or burning of tokens.]
       Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when L2 state is settled on L1.
       Thus, L2 transactions cannot mint or burn tokens.%
-      \footnote{We are also aware that many dApps on Cardano rely on token minting and burning to authenticate their internal state.
-        However, supporting this feature opens up a range of difficult issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
-        Fortunately, the Midgard team is exploring a new approach to this problem, which we may adopt in future extensions to Hydrozoa.}
+      \footnote{In future work (\cref{h:future-work-minting}), Hydrozoa may implement support for minting and burning on L2.}
     \item[Different network ID.] Hydrozoa L2 transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
 \end{description}
 
