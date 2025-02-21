@@ -13,7 +13,7 @@
       (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        jdk = pkgs.openjdk21;
+            jdk = pkgs.openjdk21;
         sbt = pkgs.sbt.override { jre = jdk; };
       in
       rec {
@@ -25,6 +25,7 @@
             openjdk21
             scala-cli
             sbt
+            jetbrains.idea-community-bin
           ];
         };
       })
