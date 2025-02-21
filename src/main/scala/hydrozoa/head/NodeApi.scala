@@ -12,6 +12,8 @@ class NodeApi(node: Node):
   private val initEndpoint = endpoint.put
     .in("init")
     .in(query[Long]("amount")) // how much ADA should be deposited for fees into the treasury
+    .in(query[String]("txId"))
+    .in(query[Long]("txIx"))
     .out(stringBody)
     .errorOut(stringBody)
     .handle(runInitializeHead)
@@ -25,5 +27,5 @@ class NodeApi(node: Node):
       .addEndpoints(apiEndpoints ++ swaggerEndpoints)
       .startAndWait()
 
-  private def runInitializeHead(amount: Long): Either[String, String] =
-    node.initializeHead(amount)
+  private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
+    node.initializeHead(amount, txId, txIx)

@@ -23,7 +23,7 @@ class Node(
   private val ownKeys: Keys = KeyGenUtil.generateKey
   private val txBuilder = TxBuilder(ctx)
 
-  def initializeHead(amount: Long): Either[String, String] = {
+  def initializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] = {
     // FIXME: check head/node status
     logging.logInfo("Trying to initialize the head with initial treasury of " + amount + "ADA.")
 
@@ -36,7 +36,7 @@ class Node(
     val sKeys = network.participantsSigningKeys() + ownKeys.getSkey
     
     for {
-      ret <- txBuilder.submitInitTx(amount, headNativeScript, vKeys, sKeys)
+      ret <- txBuilder.submitInitTx(amount, txId, txIx, headNativeScript, vKeys, sKeys)
     } yield ret
   }
 

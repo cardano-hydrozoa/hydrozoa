@@ -12,7 +12,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.head.multisig.{assetNamePrefix, given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
-import hydrozoa.head.{AppCtx, HeadParams, Tx_, UtxoRef}
+import hydrozoa.head.{AppCtx, HeadParams, Tx_, UtxoRef, hydrozoaH28}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
@@ -55,11 +55,13 @@ class TxBuilder(ctx: AppCtx) {
 
   def submitInitTx(
                     amount: Long,
+                    txId: String,
+                    txIx: Long,
                     nativeScript: NativeScript,
                     vKeys: Set[VerificationKey],
                     sKeys: Set[SecretKey],
                   ): Either[String, String] = {
-    val signedTxE = mkInitTx(amount, nativeScript, vKeys, sKeys)
+    val signedTxE = mkInitTx(amount, txId, txIx, nativeScript, vKeys, sKeys)
     println("Initialization tx: " + signedTxE.map(_.serializeToHex()).merge)
     for
       signedTx <- signedTxE
@@ -70,6 +72,8 @@ class TxBuilder(ctx: AppCtx) {
 
   def mkInitTx(
                 amount: Long,
+                txId: String,
+                txIx: Long,
                 nativeScript: NativeScript,
                 vKeys: Set[VerificationKey],
                 sKeys: Set[SecretKey]
@@ -77,19 +81,22 @@ class TxBuilder(ctx: AppCtx) {
     val wallet = account.getBaseAddress.getAddress
 
     for
-      utxo <- backendService.getUtxoService.getUtxos(wallet, 100, 1).toEither
+      seedUtxo <- backendService.getUtxoService.getTxOutput(txId, txIx.intValue).toEither
+
+      beaconName = hydrozoaH28((txId.getBytes.toList ++ BigInt(txIx).toByteArray.toList).toArray)
+//      utxo <- backendService.getUtxoService.getUtxos(wallet, 100, 1).toEither
 
       headAddress = getEntAddress(nativeScript, ctx.network).toBech32
 
       beaconToken = Asset.builder
-        .name(encodeHexString(assetNamePrefix ++ "HeadTokenName".getBytes, true))
+        .name(encodeHexString(assetNamePrefix ++ beaconName.bytes, true))
         .value(BigInteger.valueOf(1))
         .build
 
       scriptTx = Tx()
         .from(wallet) // otherwise it throws "No sender address or sender account defined"
         .mintAssets(nativeScript, beaconToken)
-        .collectFrom(utxo)
+        .collectFrom(List(seedUtxo).asJava)
         .withChangeAddress(wallet)
         .payToContract(
           headAddress,
