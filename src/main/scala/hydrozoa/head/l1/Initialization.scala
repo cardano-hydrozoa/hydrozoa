@@ -7,14 +7,15 @@ import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
 import com.bloxbean.cardano.client.crypto.{SecretKey, VerificationKey}
 import com.bloxbean.cardano.client.function.TxSigner
 import com.bloxbean.cardano.client.function.helper.SignerProviders
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import hydrozoa.head.multisig.assetNamePrefix
+import hydrozoa.head.multisig.{assetNamePrefix, given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
 import hydrozoa.head.{AppCtx, HeadParams, Tx_, UtxoRef}
-import scalus.bloxbean.{EvaluatorMode, NoScriptSupplier, ScalusTransactionEvaluator, SlotConfig}
+import scalus.bloxbean.*
+import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -59,7 +60,7 @@ class TxBuilder(ctx: AppCtx) {
                     sKeys: Set[SecretKey],
                   ): Either[String, String] = {
     val signedTxE = mkInitTx(amount, nativeScript, vKeys, sKeys)
-    println("Initializaton tx: " + signedTxE.map(t => t.serializeToHex()).merge)
+    println("Initialization tx: " + signedTxE.map(_.serializeToHex()).merge)
     for
       signedTx <- signedTxE
       result = backendService.getTransactionService.submitTransaction(signedTx.serialize())
@@ -85,18 +86,18 @@ class TxBuilder(ctx: AppCtx) {
         .value(BigInteger.valueOf(1))
         .build
 
-      scriptTx = new Tx()
+      scriptTx = Tx()
         .from(wallet) // otherwise it throws "No sender address or sender account defined"
-        .mintAssets(nativeScript, beaconToken, headAddress)
+        .mintAssets(nativeScript, beaconToken)
         .collectFrom(utxo)
         .withChangeAddress(wallet)
         .payToContract(
           headAddress,
           List(
             ada(amount),
-            //                asset(nativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
+            asset(nativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
           ).asJava,
-          PlutusData.unit
+          Interop.toPlutusData(mkInitMultisigTreasuryDatum(ByteString.empty).toData)
         )
 
 

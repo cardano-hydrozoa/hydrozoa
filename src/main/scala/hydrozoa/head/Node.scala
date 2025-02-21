@@ -28,12 +28,13 @@ class Node(
     logging.logInfo("Trying to initialize the head with initial treasury of " + amount + "ADA.")
 
     val vKeys = network.participantsKeys() + ownKeys.getVkey
-    val sKeys = network.participantsSigningKeys() + ownKeys.getSkey
     val headNativeScript = mkHeadNativeScript(vKeys)
     val policyId = headNativeScript.getPolicyId
 
     logging.logInfo("Native script policy id: " + policyId)
 
+    val sKeys = network.participantsSigningKeys() + ownKeys.getSkey
+    
     for {
       ret <- txBuilder.submitInitTx(amount, headNativeScript, vKeys, sKeys)
     } yield ret
@@ -59,7 +60,7 @@ object AppCtx {
     val network = new Network(0, 42)
     val mnemonic =
       "test test test test test test test test test test test test test test test test test test test test test test test sauce"
-    new AppCtx(
+    AppCtx(
       network,
       new Account(network, mnemonic),
       new BFBackendService(url, ""),
