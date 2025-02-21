@@ -15,6 +15,11 @@ lazy val core = (project in file("."))
       // Argument parsing
       "com.monovore" %% "decline" % "2.5.0",
       "org.slf4j" % "slf4j-simple" % "2.0.16",
+      // Concurrency
+      "com.softwaremill.ox" %% "core" % "0.5.11",
+      // Logging
+      "com.typesafe.scala-logging" %% "scala-logging" % "3.9.4",
+      "ch.qos.logback" % "logback-classic" % "1.2.10"
     ),
     libraryDependencies ++= Seq(
       "org.scalameta" %% "munit" % "1.1.0" % Test,
