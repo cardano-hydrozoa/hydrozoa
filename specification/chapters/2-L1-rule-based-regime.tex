@@ -341,17 +341,25 @@ Redeemers:
   \item[Withdraw.] Withdraw treasury funds and update its active utxo set accordingly.
     Conditions:
     \begin{enumerate}
+      \item Let \code{withdrawals} be a list of triples in the content of \code{WithdrawRedeemer}:
+          \begin{equation*}
+            \T{WithdrawRedeemer} \coloneq \left[\left\{
+            \begin{array}{lll}
+              \T{key} &::& \T{OutputRef} \\
+              \T{utxo} &::& \T{Output^{L2}} \\
+              \T{proof} &::& \T{Proof}
+            \end{array}\right\}\right]
+          \end{equation*}
+          In each triple:
+            \begin{itemize}
+              \item The \code{key} is an output reference of a utxo in the active utxo set corresponding to the \code{utxosActive} field of \code{treasuryInput}.
+              \item The \code{utxo} is an output with addresses translated to L1 network.
+              \item The \code{proof} is a Merkle inclusion proof.
+            \end{itemize}
       \item Let \code{treasuryInput} be the input being spent.
       \item Let \code{headMp} be the corresponding field in \code{treasuryInput}.
       \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \headBeaconToken{}.
       \item Let \code{treasuryOutput} be the output holding the (\code{headMp}, \code{headId}) beacon token.
-      \item Let \code{withdrawals} be a list of triples.
-      In each triple:
-        \begin{itemize}
-          \item The \code{key} is an output reference of a utxo in the active utxo set corresponding to the \code{utxosActive} field of \code{treasuryInput}.
-          \item The \code{value} is an output of this transaction.
-          \item The \code{proof} is a Merkle inclusion proof.
-        \end{itemize}
       \item Starting with the \code{utxosActive} field in \code{treasuryInput}, folding over \code{withdrawals} with the Merkle library's \code{delete} function must produce a result matching the \code{utxosActive} field of \code{treasuryOutput}:%
         \footnote{The details of this function depend on the Merkle library that Hydrozoa implementation will use.
         For example, see the \inlineColored{delete} function in the Merkle Patricia Forestry library \citep{MatthiasBenkortMerklePatriciaForestry2024}.}
@@ -365,6 +373,13 @@ Redeemers:
             \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
         \end{split}
         \end{equation*}
+      \item All \code{withdrawnUtxos} are outputs of the transaction:
+         \begin{equation*}
+         \begin{split}
+            &\T{withdrawnUtxos} :: [Output^{L2}] \\
+            &\T{withdrawnUtxos} \coloneq \; \T{map} \; \T{utxo} \; \T{withdrawals}
+         \end{split}
+         \end{equation*}
       \item \code{treasuryInput} must hold the sum of all tokens in \code{treasuryOutput} and the outputs of \code{withdrawals}.
     \end{enumerate}
   \item[Deinit.] De-initialize the head, removing all traces of it.
