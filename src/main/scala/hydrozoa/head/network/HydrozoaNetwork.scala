@@ -1,13 +1,14 @@
 package hydrozoa.head.network
 
-import com.bloxbean.cardano.client.crypto.{SecretKey, VerificationKey}
+import hydrozoa.head.{TxId, TxIx, TxKeyWitness, ParticipantVerificationKey}
 
 trait HydrozoaNetwork {
   /**
    * @return verification keys for known participants
    */
-  def participantsKeys(): Set[VerificationKey]
+  def participantsKeys(): Set[ParticipantVerificationKey]
 
-  // FIXME: temporary
-  def participantsSigningKeys(): Set[SecretKey]
+  def reqInit(req: ReqInit): Set[TxKeyWitness]
 }
+
+case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)

@@ -1,69 +1,55 @@
 package hydrozoa.head
 
-import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
-import com.bloxbean.cardano.client.common.model.Network
-import com.bloxbean.cardano.client.crypto.{KeyGenUtil, Keys}
-import hydrozoa.head.l1.TxBuilder
-import hydrozoa.head.multisig.mkHeadNativeScript
-import hydrozoa.head.network.HydrozoaNetwork
+import hydrozoa.head.l1.Cardano
+import hydrozoa.head.l1.txbuilder.{InitTxRecipe, TxBuilder}
+import hydrozoa.head.multisig.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.head.network.{HydrozoaNetwork, ReqInit}
+import hydrozoa.head.wallet.Wallet
 import hydrozoa.logging.LoggingService
-import scalus.builtin.ByteString
-import scalus.ledger.api.v1.PubKeyHash
 
-// TODO: move to a "clean module" that doesn't depend on the libs
 
 class Node(
-            ctx: AppCtx,
             network: HydrozoaNetwork,
+            cardano: Cardano,
+            wallet: Wallet,
+            txBuilder: TxBuilder,
             logging: LoggingService
           ):
 
-  private val ownKeys: Keys = KeyGenUtil.generateKey
-  private val txBuilder = TxBuilder(ctx)
+  private val ownKeys = genNodeKey()
 
-  def initializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] = {
+  def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[String, String] = {
+    logging.logInfo("Trying to initialize the head with seed utxo " + txId + "#" + txIx + ", amount: " + amount + "ADA.")
+
     // FIXME: check head/node status
-    logging.logInfo("Trying to initialize the head with initial treasury of " + amount + "ADA.")
 
-    val vKeys = network.participantsKeys() + ownKeys.getVkey
-    val headNativeScript = mkHeadNativeScript(vKeys)
-    val policyId = headNativeScript.getPolicyId
+    // Head's verification keys
+    val vKeys = network.participantsKeys() + ownKeys._2
 
-    logging.logInfo("Native script policy id: " + policyId)
+    // Native script, head address, and token
+    val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network())
+    val beaconTokenName = mkBeaconTokenName(txId, txIx)
 
-    val sKeys = network.participantsSigningKeys() + ownKeys.getSkey
-    
-    for {
-      ret <- txBuilder.submitInitTx(amount, txId, txIx, headNativeScript, vKeys, sKeys)
-    } yield ret
-  }
-
-// TODO: AppCtx in fact just holds backendService for now
-
-case class AppCtx(
-                   network: Network,
-                   account: Account,
-                   backendService: BackendService,
-                 ) {
-  lazy val pubKeyHash: PubKeyHash = PubKeyHash(
-    ByteString.fromArray(account.hdKeyPair().getPublicKey.getKeyHash)
-  )
-}
-
-
-object AppCtx {
-
-  def yaciDevKit(): AppCtx = {
-    val url = "http://localhost:8080/api/v1/"
-    val network = new Network(0, 42)
-    val mnemonic =
-      "test test test test test test test test test test test test test test test test test test test test test test test sauce"
-    AppCtx(
-      network,
-      new Account(network, mnemonic),
-      new BFBackendService(url, ""),
+    // Recipe to build init tx
+    val initTxRecipe = InitTxRecipe(
+      headAddress,
+      txId, txIx, amount,
+      headNativeScript, beaconTokenName
     )
+
+    for
+      txDraft <- txBuilder.mkInitDraft(initTxRecipe)
+
+      ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
+
+      peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
+      // FIXME: broadcast ownWit
+
+      userWit = wallet.sign(txDraft)
+
+      initTx: L1Tx = (peersWits + ownWit + userWit).foldLeft(txDraft)(addWitness)
+
+      ret <- cardano.submit(initTx)
+
+    yield ret.hash
   }
-}

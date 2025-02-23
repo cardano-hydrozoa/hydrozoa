@@ -28,4 +28,4 @@ class NodeApi(node: Node):
       .startAndWait()
 
   private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
-    node.initializeHead(amount, txId, txIx)
+    node.initializeHead(amount, TxId(txId), TxIx(txIx))

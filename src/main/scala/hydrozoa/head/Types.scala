@@ -1,16 +1,29 @@
 package hydrozoa.head
 
-// Serialized Cardano tx
-case class Tx_(bytes: Array[Byte])
+// Serialized L1 Cardano tx
+case class L1Tx(bytes: Array[Byte])
+
+// Serialized Address
+case class L1Address(bytes: Array[Byte])
+
+// Transaction key witness
+case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
 // Transaction ID
-case class TxId(bytes: Array[Byte])
+case class TxId(hash: String)
+
+// Transacion output index
+case class TxIx(ix: Long)
 
 // Policy ID
 case class PolicyId(policyId: String)
 
-// Verification keys of participant, used on both L1 and L2
+// A verification key of a participant, used on both L1 and L2
 case class ParticipantVerificationKey(bytes: Array[Byte])
 
-// Output reference
-case class UtxoRef()
+// A signing key of a participant, used on both L1 and L2
+case class ParticipantSecretKey(bytes: Array[Byte])
+
+case class Network(networkId: Int, protocolMagic: Long)
+
+case class NativeScript(bytes: Array[Byte])
