@@ -1,5 +1,50 @@
 # Hydrozoa
 
+## Getting Started
+
+### Prerequisites
+
+You'll need Java JDK 11+, [scala-cli](https://scala-cli.virtuslab.org/) or [sbt](https://www.scala-sbt.org/).
+
+If you use Nix, you can run `nix develop` to get a shell with all the dependencies.
+
+### Setup IntelliJ IDEA
+
+File -> New -> Project from Existing Sources -> select the project directory -> Import project from external model ->
+BSP -> Sbt
+
+### Building with sbt
+
+Run `sbt` to enter the sbt shell.
+
+Run `compile` to compile the project.
+
+Run `run` to run the node.
+
+Run `test` to run the tests.
+
+### Private network
+
+Currently, Hydrozoa works against a private network provided by 
+[Yaci DevKit](https://github.com/bloxbean/yaci-devkit).
+Here is the [link](https://devkit.yaci.xyz/docker) to installation page.
+
+Create and run the network:
+
+```shell
+devkit
+> create-node
+> start
+```
+
+#### Resetting the local Cardano node
+
+If you need to reset the local testnet (in the devkit shell):
+
+```shell
+reset
+```
+
 ## Build the specification
 
 Build this project's PDF specification from the LaTeX files in the `specification` subdirectory.
