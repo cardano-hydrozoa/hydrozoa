@@ -18,62 +18,64 @@ import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
 extension [A](result: Result[A])
-  def toEither: Either[String, A] =
-    if result.isSuccessful then Right(result.getValue)
-    else Left(result.getResponse)
-
+    def toEither: Either[String, A] =
+        if result.isSuccessful then Right(result.getValue)
+        else Left(result.getResponse)
 
 class BloxBeanTxBuilder(ctx: AppCtx) extends TxBuilder {
 
-  private val backendService = ctx.backendService
+    private val backendService = ctx.backendService
 
-  lazy val protocolParams: ProtocolParams = {
-    val result = backendService.getEpochService.getProtocolParameters
-    if !result.isSuccessful then sys.error(result.getResponse)
-    result.getValue
-  }
-  private lazy val quickTxBuilder = QuickTxBuilder(backendService)
+    lazy val protocolParams: ProtocolParams = {
+        val result = backendService.getEpochService.getProtocolParameters
+        if !result.isSuccessful then sys.error(result.getResponse)
+        result.getValue
+    }
+    private lazy val quickTxBuilder = QuickTxBuilder(backendService)
 
-  private lazy val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
+    private lazy val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
 
-  private lazy val evaluator = ScalusTransactionEvaluator(
-    slotConfig = SlotConfig.Preprod,
-    protocolParams = protocolParams,
-    utxoSupplier = utxoSupplier,
-    scriptSupplier = NoScriptSupplier(),
-    mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
-  )
+    private lazy val evaluator = ScalusTransactionEvaluator(
+      slotConfig = SlotConfig.Preprod,
+      protocolParams = protocolParams,
+      utxoSupplier = utxoSupplier,
+      scriptSupplier = NoScriptSupplier(),
+      mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
+    )
 
-  override def mkInitDraft(r: InitTxRecipe): Either[String, L1Tx] =
-    for
+    override def mkInitDraft(r: InitTxRecipe): Either[String, L1Tx] =
+        for
 
-      seedUtxo <- backendService.getUtxoService.getTxOutput(r.txId.hash, r.txIx.ix.intValue).toEither
+            seedUtxo <- backendService.getUtxoService
+                .getTxOutput(r.txId.hash, r.txIx.ix.intValue)
+                .toEither
 
-      beaconToken = Asset.builder
-        .name(r.beaconTokenName)
-        .value(BigInteger.valueOf(1))
-        .build
+            beaconToken = Asset.builder
+                .name(r.beaconTokenName)
+                .value(BigInteger.valueOf(1))
+                .build
 
-      script = NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
+            script = NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
 
-      treasuryValue = List(
-        ada(r.amount),
-        asset(script.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
-      )
+            treasuryValue = List(
+              ada(r.amount),
+              asset(script.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
+            )
 
-      treasuryDatum = Interop.toPlutusData(mkInitMultisigTreasuryDatum(ByteString.empty).toData)
+            treasuryDatum = Interop.toPlutusData(
+              mkInitMultisigTreasuryDatum(ByteString.empty).toData
+            )
 
-      tx = Tx()
-        .mintAssets(script, beaconToken)
-        .collectFrom(List(seedUtxo).asJava)
-        .payToContract(r.headAddressBech32, treasuryValue.asJava, treasuryDatum)
-        .from(seedUtxo.getAddress)
+            tx = Tx()
+                .mintAssets(script, beaconToken)
+                .collectFrom(List(seedUtxo).asJava)
+                .payToContract(r.headAddressBech32, treasuryValue.asJava, treasuryDatum)
+                .from(seedUtxo.getAddress)
 
-      ret: Transaction = quickTxBuilder
-        .compose(tx)
-        .withTxEvaluator(evaluator)
-        .withRequiredSigners(Address(seedUtxo.getAddress))
-        .build()
-
-    yield L1Tx(ret.serialize())
+            ret: Transaction = quickTxBuilder
+                .compose(tx)
+                .withTxEvaluator(evaluator)
+                .withRequiredSigners(Address(seedUtxo.getAddress))
+                .build()
+        yield L1Tx(ret.serialize())
 }

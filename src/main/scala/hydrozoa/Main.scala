@@ -10,14 +10,14 @@ import hydrozoa.logging.{ConsoleLoggingService, LoggingService}
 
 object Cli:
 
-  @main def main(args: String*): Unit = {
-    val network: HydrozoaNetwork = MockHydrozoaNetwork()
-    val wallet: Wallet = MockWallet()
-    val cardano: Cardano = YaciDevKitCardano(yaciDevKit())
-    val txBuilder: TxBuilder = BloxBeanTxBuilder(yaciDevKit())
-    val logging: LoggingService = ConsoleLoggingService()
+    @main def main(args: String*): Unit = {
+        val network: HydrozoaNetwork = MockHydrozoaNetwork()
+        val wallet: Wallet = MockWallet()
+        val cardano: Cardano = YaciDevKitCardano(yaciDevKit())
+        val txBuilder: TxBuilder = BloxBeanTxBuilder(yaciDevKit())
+        val logging: LoggingService = ConsoleLoggingService()
 
-    val node = Node(network, cardano, wallet, txBuilder, logging)
-    logging.logInfo("Starting Hydrozoa Node API Server...")
-    NodeApi(node).start()
-  }
+        val node = Node(network, cardano, wallet, txBuilder, logging)
+        logging.logInfo("Starting Hydrozoa Node API Server...")
+        NodeApi(node).start()
+    }

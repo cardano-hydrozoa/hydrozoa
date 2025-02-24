@@ -10,9 +10,8 @@ import com.bloxbean.cardano.client.crypto.Blake2bUtil.{blake2bHash224, blake2bHa
 case class H28(bytes: Array[Byte])
 
 def mkH28(bytes: Array[Byte]): H28 =
-
-  bytes.length match
-  case 28 => H28(bytes)
+    bytes.length match
+        case 28 => H28(bytes)
 // FIXME:  _ => what's the proper way?
 
 // H32
@@ -21,7 +20,7 @@ def mkH28(bytes: Array[Byte]): H28 =
 case class H32(bytes: Array[Byte])
 
 def mkH32(bytes: Array[Byte]): H32 = bytes.length match
-  case 32 => H32(bytes)
+    case 32 => H32(bytes)
 // FIXME:  _ => what's the proper way?
 
 // H28 hash function = Blake2b-224
