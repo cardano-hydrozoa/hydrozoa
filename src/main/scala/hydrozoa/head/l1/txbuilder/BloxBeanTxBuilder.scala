@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.{ada, asset}
 import com.bloxbean.cardano.client.api.model.{ProtocolParams, Result}
 import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
+import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
@@ -76,6 +77,18 @@ class BloxBeanTxBuilder(ctx: AppCtx) extends TxBuilder {
                 .compose(tx)
                 .withTxEvaluator(evaluator)
                 .withRequiredSigners(Address(seedUtxo.getAddress))
+                // FIXME: This hack ensures the number of key witness is correct
+                // Adding the same witness four times makes the witness set
+                // of the same size we expect to have and allows the balancer
+                // to evaluate fees correctly.
+                // Since this key is indeed a signer for this tx, it somehow
+                // works well without further interventions (I guess thanks
+                // serialization logic.
+                .withSigner(SignerProviders.signerFrom(ctx.account))
+                .withSigner(SignerProviders.signerFrom(ctx.account))
+                .withSigner(SignerProviders.signerFrom(ctx.account))
+                .withSigner(SignerProviders.signerFrom(ctx.account))
+                // end of signature fees hack.
                 .build()
         yield L1Tx(ret.serialize())
 }

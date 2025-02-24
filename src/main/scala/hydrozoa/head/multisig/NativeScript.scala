@@ -32,7 +32,7 @@ def mkHeadNativeScriptAndAddress(
         .foldLeft(ScriptAll())((s: ScriptAll, k: ScriptPubkey) => s.addScript(k))
     val nw = Network(network.networkId, network.protocolMagic)
     val address = getEntAddress(script, nw).toBech32
-    (HNativeScript(script.serialize()), address)
+    (HNativeScript(script.scriptRefBytes), address)
 }
 
 /** @return

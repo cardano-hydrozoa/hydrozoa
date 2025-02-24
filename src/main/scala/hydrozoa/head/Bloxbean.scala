@@ -3,15 +3,29 @@ package hydrozoa.head
 import co.nstant.in.cbor.model.{Array, ByteString, Map, UnsignedInteger}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.*
-import com.bloxbean.cardano.client.crypto.bip32.HdKeyGenerator
+import com.bloxbean.cardano.client.crypto.api.SigningProvider
+import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 
 // FIXME: make an API
 
-// Pure function to sign a transaction
+// Pure fucntion to sign a transaction with a test wallet using HD key.
 // FIXME: handle exceptions
-// FIXME: use Hydrozoa own type for the secret key
+def signTxWallet(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
+    val txBytes = TransactionBytes(tx.bytes)
+    val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
+    val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
+    val signature = signingProvider.signExtended(
+      txnBodyHash,
+      pair.getPrivateKey.getKeyData,
+      pair.getPublicKey.getKeyData
+    )
+    TxKeyWitness(signature, pair.getPublicKey.getKeyData)
+}
+
+// Pure function to sign a transaction with an ordinary key.
+// FIXME: handle exceptions
 def signTx(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
 
     // See TransactionSigner
@@ -36,7 +50,7 @@ def signTx(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
     TxKeyWitness(signature, vKey.getBytes)
 }
 
-// Pure function to add a key witness to a transaction
+// Pure function to add a key witness to a transaction.
 def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
     val txBytes = TransactionBytes(tx.bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
@@ -48,7 +62,7 @@ def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
         if (vkWitnessArrayDI != null) vkWitnessArrayDI.asInstanceOf[Array]
         else new Array
 
-    if (vkWitnessArrayDI != null)
+    if (vkWitnessArrayDI == null)
         witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray)
 
     val vkeyWitness = new Array

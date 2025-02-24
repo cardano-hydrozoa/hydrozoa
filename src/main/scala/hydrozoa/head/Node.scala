@@ -1,5 +1,6 @@
 package hydrozoa.head
 
+import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.head.l1.Cardano
 import hydrozoa.head.l1.txbuilder.{InitTxRecipe, TxBuilder}
 import hydrozoa.head.multisig.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
@@ -8,14 +9,13 @@ import hydrozoa.head.wallet.Wallet
 import hydrozoa.logging.LoggingService
 
 class Node(
+    ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
     network: HydrozoaNetwork,
     cardano: Cardano,
     wallet: Wallet,
     txBuilder: TxBuilder,
     logging: LoggingService
 ):
-
-    private val ownKeys = genNodeKey()
 
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[String, String] = {
         logging.logInfo(
@@ -41,18 +41,24 @@ class Node(
           beaconTokenName
         )
 
-        for
-            txDraft <- txBuilder.mkInitDraft(initTxRecipe)
+        val txDraft = txBuilder.mkInitDraft(initTxRecipe) match
+            case Right(v)  => v
+            case Left(err) => return Left(err)
 
-            ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
+        val ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
 
-            peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
-            // FIXME: broadcast ownWit
+        val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
+        // FIXME: broadcast ownWit
 
-            userWit = wallet.sign(txDraft)
+        val userWit = wallet.sign(txDraft)
 
-            initTx: L1Tx = (peersWits + ownWit + userWit).foldLeft(txDraft)(addWitness)
+        val wits = peersWits + ownWit + userWit
 
-            ret <- cardano.submit(initTx)
-        yield ret.hash
+        println(wits)
+
+        val initTx: L1Tx = wits.foldLeft(txDraft)(addWitness)
+
+        println(Transaction.deserialize(initTx.bytes).serializeToHex())
+
+        cardano.submit(initTx).map(_.hash)
     }
