@@ -1,12 +1,12 @@
 package hydrozoa
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.head.l1.AppCtx.yaciDevKit
 import hydrozoa.head.l1.txbuilder.{BloxBeanTxBuilder, TxBuilder}
 import hydrozoa.head.l1.{AppCtx, Cardano, YaciDevKitCardano}
 import hydrozoa.head.network.{HydrozoaNetwork, MockHydrozoaNetwork}
 import hydrozoa.head.wallet.{MockWallet, Wallet}
 import hydrozoa.head.{Node, NodeApi, genNodeKey}
-import hydrozoa.logging.{ConsoleLoggingService, LoggingService}
 
 object Cli:
 
@@ -16,13 +16,13 @@ object Cli:
         val ctx: AppCtx = yaciDevKit()
 
         // Components
-        val logging: LoggingService = ConsoleLoggingService()
+        val log: Logger = Logger("Hydrozoa")
         val wallet: Wallet = MockWallet(ctx)
         val cardano: Cardano = YaciDevKitCardano(ctx)
         val txBuilder: TxBuilder = BloxBeanTxBuilder(ctx)
         val network: HydrozoaNetwork = MockHydrozoaNetwork(txBuilder, cardano, ownKeys._2)
-        val node = Node(ownKeys, network, cardano, wallet, txBuilder, logging)
+        val node = Node(ownKeys, network, cardano, wallet, txBuilder, log)
 
-        logging.logInfo("Starting Hydrozoa Node API Server...")
+        log.warn("Starting Hydrozoa Node API Server...")
         NodeApi(node).start()
     }

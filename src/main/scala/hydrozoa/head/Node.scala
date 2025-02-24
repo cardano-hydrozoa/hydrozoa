@@ -1,12 +1,12 @@
 package hydrozoa.head
 
 import com.bloxbean.cardano.client.transaction.spec.Transaction
+import com.typesafe.scalalogging.Logger
 import hydrozoa.head.l1.Cardano
 import hydrozoa.head.l1.txbuilder.{InitTxRecipe, TxBuilder}
 import hydrozoa.head.multisig.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.head.network.{HydrozoaNetwork, ReqInit}
 import hydrozoa.head.wallet.Wallet
-import hydrozoa.logging.LoggingService
 
 class Node(
     ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
@@ -14,13 +14,11 @@ class Node(
     cardano: Cardano,
     wallet: Wallet,
     txBuilder: TxBuilder,
-    logging: LoggingService
+    log: Logger
 ):
 
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[String, String] = {
-        logging.logInfo(
-          "Trying to initialize the head with seed utxo " + txId + "#" + txIx + ", amount: " + amount + "ADA."
-        )
+        log.warn(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
 
         // FIXME: check head/node status
 
@@ -54,11 +52,11 @@ class Node(
 
         val wits = peersWits + ownWit + userWit
 
-        println(wits)
-
         val initTx: L1Tx = wits.foldLeft(txDraft)(addWitness)
 
-        println(Transaction.deserialize(initTx.bytes).serializeToHex())
+        log.whenInfoEnabled {
+            log.info("Init tx: " + Transaction.deserialize(initTx.bytes).serializeToHex())
+        }
 
         cardano.submit(initTx).map(_.hash)
     }

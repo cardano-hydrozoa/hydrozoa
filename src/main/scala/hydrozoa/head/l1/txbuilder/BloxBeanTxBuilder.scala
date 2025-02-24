@@ -83,7 +83,7 @@ class BloxBeanTxBuilder(ctx: AppCtx) extends TxBuilder {
                 // to evaluate fees correctly.
                 // Since this key is indeed a signer for this tx, it somehow
                 // works well without further interventions (I guess thanks
-                // serialization logic.
+                // to serialization logic).
                 .withSigner(SignerProviders.signerFrom(ctx.account))
                 .withSigner(SignerProviders.signerFrom(ctx.account))
                 .withSigner(SignerProviders.signerFrom(ctx.account))
