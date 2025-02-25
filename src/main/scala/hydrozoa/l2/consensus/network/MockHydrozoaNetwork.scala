@@ -44,4 +44,6 @@ class MockHydrozoaNetwork(
         val wit2: TxKeyWitness = signTx(tx, keys2._1)
         Set(wit1, wit2)
     }
+
+    def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] = ???
 }

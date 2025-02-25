@@ -6,6 +6,10 @@ case class L1Tx(bytes: Array[Byte])
 // Serialized Address
 case class L1Address(bytes: Array[Byte])
 
+// Bech32 addresses
+case class AddressBechL1(bech32: String)
+case class AddressBechL2(bech32: String)
+
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
@@ -27,3 +31,5 @@ case class ParticipantSecretKey(bytes: Array[Byte])
 case class Network(networkId: Int, protocolMagic: Long)
 
 case class NativeScript(bytes: Array[Byte])
+
+case class Datum(bytes: Array[Byte])
