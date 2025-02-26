@@ -4,32 +4,45 @@ import com.bloxbean.cardano.client.crypto.Blake2bUtil.{blake2bHash224, blake2bHa
 import com.bloxbean.cardano.client.crypto.KeyGenUtil
 import hydrozoa.{ParticipantSecretKey, ParticipantVerificationKey}
 
-// Types and functions for cryptographic hashes used in Hydrozoa
+// Opaque types and functions for cryptographic hashes used in Hydrozoa.
 
-// H28 - Blake2b224
+object CryptoHash:
 
-case class H28 private (bytes: Array[Byte])
+    // H28 - Blake2b224
+    opaque type H28 = IArray[Byte]
 
-object H28 {
-    def apply(bytes: Array[Byte]): H28 =
-        require(bytes.length == 28, "Blake2b224 hash should be exactly 28 bytes long")
-        new H28(bytes)
-}
+    object H28 {
+        def apply(bytes: IArray[Byte]): H28 =
+            require(bytes.length == 28, "Blake2b224 hash must be exactly 28 bytes long")
+            bytes
 
-val hydrozoaH28: Array[Byte] => H28 = H28.apply.compose(blake2bHash224)
+        def hash(input: IArray[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash224(IArray.genericWrapArray(input).toArray)))
 
-// H32 - Blake2b256
+        // Remove once we have
+        def hash_(input: Array[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash224(input)))
 
-case class H32 private (bytes: Array[Byte])
+        extension (x: H28) {
+            def bytes: IArray[Byte] = x
+        }
+    }
 
-object H32 {
-    def apply(bytes: Array[Byte]): H32 =
-        require(bytes.length == 32, "Blake2b256 hash should be exactly 32 bytes long")
-        new H32(bytes)
-}
+    // H32 - Blake2b256
+    opaque type H32 = IArray[Byte]
 
-// H32 hash function - Blake2b-256
-val hydrozoaH32: Array[Byte] => H32 = H32.apply.compose(blake2bHash256)
+    object H32 {
+        def apply(bytes: IArray[Byte]): H32 =
+            require(bytes.length == 32, "Blake2b256 hash must be exactly 32 bytes long")
+            bytes
+
+        def hash(input: IArray[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash256(IArray.genericWrapArray(input).toArray)))
+
+        extension (x: H32) {
+            def bytes: IArray[Byte] = x
+        }
+    }
 
 // Generating nodes keys
 
