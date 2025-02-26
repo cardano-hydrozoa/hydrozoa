@@ -54,13 +54,14 @@ class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
                 .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
                 .toEither
 
-            headAddressBech32: String = ???
-            amountList: List[Amount] = ??? // valueToAmountList(fundUtxo.toValue)
+            Some(headAddressBech32) = headStateReader.headBechAddress()
+            // FIXME: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
+            amountList: List[Amount] = List(ada(100))
             datum: PlutusData = Interop.toPlutusData(r.datum.toData)
 
             tx = Tx()
                 .collectFrom(List(fundUtxo).asJava)
-                .payToContract(headAddressBech32, amountList.asJava, datum)
+                .payToContract(headAddressBech32.bech32, amountList.asJava, datum)
                 .from(fundUtxo.getAddress)
 
             ret: Transaction = quickTxBuilder

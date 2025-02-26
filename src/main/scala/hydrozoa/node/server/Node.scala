@@ -3,7 +3,7 @@ package hydrozoa.node.server
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{addWitness, signTx}
+import hydrozoa.infra.*
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
@@ -12,7 +12,7 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.consensus.network.{HydrozoaNetwork, ReqInit, ReqRefundLater}
 import hydrozoa.node.server.DepositError
-import hydrozoa.node.server.HeadState.{Free, MultisigRegime}
+import scalus.prelude.Maybe
 
 class Node(
     headStateManager: HeadStateManager,
@@ -85,15 +85,33 @@ class Node(
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {
 
+        val DepositRequest(
+          txId: TxId,
+          txIx: TxIx,
+          deadline: BigInt,
+          address: AddressBechL2,
+          datum: Option[Datum],
+          refundAddress: AddressBechL1,
+          refundDatum: Option[Datum]
+        ) = r
+
         // FIXME
         val Some(headNativeScript) = headStateManager.headNativeScript()
 
-        val depositDatum = ??? // DepositDatum(...)
+        val depositDatum = DepositDatum(
+          decodeBech32AddressL2(address),
+          Maybe.fromOption(datum.map(datumByteString)),
+          deadline,
+          decodeBech32AddressL1(refundAddress),
+          Maybe.fromOption(datum.map(datumByteString))
+        )
 
         val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction as a courtesy of Hydrozoa (no signature)
         val Right(depositTx: L1Tx, index: TxIx) = depositTxBuilder.mkDepositTx(depositTxRecipe)
+
+        log.info(s"Deposit tx: ${serializeTx(depositTx)}, deposit output index: $index")
 
         // Build a post-dated refund tx
         def mkRefundTx(a: Any, b: Any) = ???
@@ -110,6 +128,8 @@ class Node(
         val wits = peersWits + ownWit
 
         val refundTx: L1Tx = wits.foldLeft(refundTxDraft)(addWitness)
+
+        // FIXME  here we have to submit the deposit tx
 
         Right(DepositResponse(refundTx, (???, ???)))
     }

@@ -14,10 +14,11 @@ type DepositId = (TxId, TxIx)
 case class DepositRequest(
     txId: TxId,
     txIx: TxIx,
+    deadline: BigInt,
     address: AddressBechL2,
-    datum: Datum,
+    datum: Option[Datum],
     refundAddress: AddressBechL1,
-    refundDatum: Datum
+    refundDatum: Option[Datum]
 )
 
 case class DepositResponse(postDatedRefundTx: L1Tx, depositId: DepositId) {

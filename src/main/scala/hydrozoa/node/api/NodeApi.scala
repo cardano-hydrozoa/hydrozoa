@@ -24,6 +24,7 @@ class NodeApi(node: Node):
         .in("deposit")
         .in(query[String]("txId"))
         .in(query[Long]("txIx"))
+        .in(query[BigInt]("deadline"))
         .in(query[String]("address"))
         .in(query[String]("datum"))
         .in(query[String]("refundAddress"))
@@ -49,6 +50,7 @@ class NodeApi(node: Node):
     private def runDeposit(
         txId: String,
         txIx: Long,
+        deadline: BigInt,
         address: String,
         datum: String,
         refundAddress: String,
@@ -58,9 +60,10 @@ class NodeApi(node: Node):
           DepositRequest(
             TxId(txId),
             TxIx(txIx),
+            deadline,
             AddressBechL2(address),
-            Datum(???),
+            None, // FIXME
             AddressBechL1(refundAddress),
-            Datum(???)
+            None // FIXME
           )
         ).map(_.toString)
