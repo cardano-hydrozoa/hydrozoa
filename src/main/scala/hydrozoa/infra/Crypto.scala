@@ -4,32 +4,34 @@ import com.bloxbean.cardano.client.crypto.Blake2bUtil.{blake2bHash224, blake2bHa
 import com.bloxbean.cardano.client.crypto.KeyGenUtil
 import hydrozoa.{ParticipantSecretKey, ParticipantVerificationKey}
 
-// Cryptographic hash functions used in Hydrozoa
+// Types and functions for cryptographic hashes used in Hydrozoa
 
-// H28
+// H28 - Blake2b224
 
-// FIXME: how to protect the constructor?
-case class H28(bytes: Array[Byte])
+case class H28 private (bytes: Array[Byte])
 
-def mkH28(bytes: Array[Byte]): H28 =
-    bytes.length match
-        case 28 => H28(bytes)
-// FIXME:  _ => what's the proper way?
+object H28 {
+    def apply(bytes: Array[Byte]): H28 =
+        require(bytes.length == 28, "Blake2b224 hash should be exactly 28 bytes long")
+        new H28(bytes)
+}
 
-// H32
+val hydrozoaH28: Array[Byte] => H28 = H28.apply.compose(blake2bHash224)
 
-// FIXME: how to protect the constructor?
-case class H32(bytes: Array[Byte])
+// H32 - Blake2b256
 
-def mkH32(bytes: Array[Byte]): H32 = bytes.length match
-    case 32 => H32(bytes)
-// FIXME:  _ => what's the proper way?
+case class H32 private (bytes: Array[Byte])
 
-// H28 hash function = Blake2b-224
-val hydrozoaH28: Array[Byte] => H28 = mkH28.compose(blake2bHash224)
+object H32 {
+    def apply(bytes: Array[Byte]): H32 =
+        require(bytes.length == 32, "Blake2b256 hash should be exactly 32 bytes long")
+        new H32(bytes)
+}
 
 // H32 hash function - Blake2b-256
-val hydrozoaH32: Array[Byte] => H32 = mkH32.compose(blake2bHash256)
+val hydrozoaH32: Array[Byte] => H32 = H32.apply.compose(blake2bHash256)
+
+// Generating nodes keys
 
 // Generating keys for a node
 def genNodeKey(): (ParticipantSecretKey, ParticipantVerificationKey) = {
