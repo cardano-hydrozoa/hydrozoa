@@ -16,4 +16,4 @@ trait HydrozoaNetwork {
 
 case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
 
-case class ReqRefundLater(depositTx: L1Tx, index: Long)
+case class ReqRefundLater(depositTx: L1Tx, index: TxIx)

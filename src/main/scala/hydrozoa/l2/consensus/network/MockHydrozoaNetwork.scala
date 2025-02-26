@@ -1,13 +1,15 @@
 package hydrozoa.l2.consensus.network
 
 import hydrozoa.infra.{genNodeKey, signTx}
-import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
+import hydrozoa.node.server.{HeadStateManager, HeadStateReader}
+import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(
-    txBuilder: InitTxBuilder,
+    headStateManager: HeadStateReader,
+    initTxBuilder: InitTxBuilder,
     cardano: Cardano,
     theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HydrozoaNetwork {
@@ -36,7 +38,7 @@ class MockHydrozoaNetwork(
           beaconTokenName
         )
 
-        val tx: L1Tx = txBuilder.mkInitDraft(initTxRecipe) match
+        val tx: L1Tx = initTxBuilder.mkInitDraft(initTxRecipe) match
             case Right(tx) => tx
             case Left(err) => println(err); ???
 

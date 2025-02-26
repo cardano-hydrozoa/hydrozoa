@@ -1,20 +1,35 @@
 package hydrozoa.node.server
-import hydrozoa.{L1Tx, TxId}
+import hydrozoa.{AddressBechL1, NativeScript}
+import hydrozoa.node.server.HeadState.{Free, MultisigRegime}
+
+// Milestone 2: shared global state
+class HeadStateManager {
+    private var headState: HeadState = Free(Array.empty)
+
+    // transitions
+    def init(headNativeScript: NativeScript, headBechAddress: AddressBechL1): Unit =
+        headState = MultisigRegime(headNativeScript, headBechAddress)
+
+    // utils
+    def headNativeScript(): Option[NativeScript] = headState match
+        case MultisigRegime(s, _) => Some(s)
+
+    def headBechAddress(): Option[AddressBechL1] = headState match
+        case MultisigRegime(_, a) => Some(a)
+}
+
+// A read-only wrapper around HeadStateManager
+// TODO: probbaly should be a singleton object
+class HeadStateReader(manager: HeadStateManager) {
+    def headNativeScript(): Option[NativeScript] = manager.headNativeScript()
+    def headBechAddress(): Option[AddressBechL1] = manager.headBechAddress()
+}
 
 // TODO: revise
 enum HeadState:
     // Hydrozoa node is running and can be asked to prepare the init tx.
     case Free(knownPeers: Array[Peer])
-    // The init tx is generated and ready to be signed by a user.
-    case ReadyToInit(initTx: L1Tx)
-    // The init transaction has been submitted but not yet confirmed.
-    case Initialization(initTxId: TxId)
     // The init transaction is settled.
-    case MultisigRegime
-    // FIXME:
-    case Finalization
-    case RuleBasedRegime
-    case DisputeResolution
+    case MultisigRegime(headNativeScript: NativeScript, headBechAddress: AddressBechL1)
 
-// Represents a peer node
 case class Peer()
