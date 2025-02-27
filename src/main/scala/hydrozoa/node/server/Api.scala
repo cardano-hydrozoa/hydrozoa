@@ -1,7 +1,7 @@
 package hydrozoa.node.server
 
 import hydrozoa.*
-import hydrozoa.infra.serializeTx
+import hydrozoa.infra.serializeTxHex
 
 // Types for NODE API
 
@@ -22,9 +22,9 @@ case class DepositRequest(
 )
 
 case class DepositResponse(postDatedRefundTx: L1Tx, depositId: DepositId) {
-    // FIXME: use JSON
+    // TODO: use JSON
     override def toString: String =
-        s"refundTx: ${serializeTx(postDatedRefundTx)}, deposit utxo: ${depositId}"
+        s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: ${depositId}"
 }
 
 type DepositError = String

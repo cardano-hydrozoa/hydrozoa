@@ -3,26 +3,27 @@ package hydrozoa.l1.multisig.tx.refund
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
-import com.bloxbean.cardano.client.crypto.SecretKey
-import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
 import com.bloxbean.cardano.client.transaction.spec.Transaction
+import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.txOutputToUtxo
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.MultisigTxs.PostDatedRefundTx
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx, ParticipantSecretKey}
+import hydrozoa.{AppCtx, L1Tx}
 import scalus.bloxbean.*
 import scalus.builtin.Data.fromData
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
-class BloxBeanRefundTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
-    extends RefundTxBuilder {
+class BloxBeanRefundTxBuilder(
+    ctx: AppCtx,
+    headStateReader: HeadStateReader
+) extends RefundTxBuilder {
 
     private val backendService = ctx.backendService
 
@@ -44,18 +45,15 @@ class BloxBeanRefundTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
     )
 
     override def mkPostDatedRefund(
-        r: PostDatedRefundRecipe,
-        ownKey: ParticipantSecretKey
+        r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] =
 
         val txBytes = r.depositTx.toTx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
         val txIxInt = r.txIx.ix.intValue()
-        val depositOutput = tb.getBody.getOutputs.get(txIxInt) // FIXME: may throw
+        val depositOutput = tb.getBody.getOutputs.get(txIxInt) // TODO: may throw
         val depositUtxo = txOutputToUtxo(txHash, txIxInt, depositOutput)
-
-        // println(s"$depositUtxo")
 
         val datum: DepositDatum = fromData[DepositDatum](
           Interop.toScalusData(
@@ -74,30 +72,25 @@ class BloxBeanRefundTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
             .collectFrom(List(depositUtxo).asJava)
             .payToAddress(
               refundAddress,
-              // FIXME: -5 ada for fees
+              // TODO: split up 5 ada for fees
               lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000")))
             )
-            // This won't work, but it's ok for now.
+            // TODO: This won't work, but it's ok for now.
             // .withChangeAddress(refundAddress)
             .from(headAddressBech32.bech32)
 
-        val secretKey = SecretKey.create(ownKey.bytes)
-
-        val ret: Transaction = quickTxBuilder
+        val ret = quickTxBuilder
             .compose(tx)
             .withTxEvaluator(evaluator)
-            // FIXME: This hack ensures the number of key witness is correct
-            // Adding the same witness four times makes the witness set
-            // of the same size we expect to have and allows the balancer
-            // to evaluate fees correctly.
-            // Since this key is indeed a signer for this tx, it somehow
-            // works well without further interventions (I guess thanks
-            // to serialization logic).
-            .withSigner(SignerProviders.signerFrom(secretKey))
-            .withSigner(SignerProviders.signerFrom(secretKey))
-            .withSigner(SignerProviders.signerFrom(secretKey))
-            // end of signature fees hack.
+            // TODO: 3 witnesses + 3 (roughly for the native script)
+            .additionalSignersCount(3 + 3)
             .build
+
+        // TODO: Add native script before balancing
+        // I didn't find the way to add native script
+        val Some(headNativeScript) = headStateReader.headNativeScript()
+        val script = NativeScript.deserializeScriptRef(headNativeScript.bytes)
+        ret.getWitnessSet.setNativeScripts(List(script).asJava)
 
         Right(PostDatedRefundTx.apply(L1Tx(ret.serialize())))
 }

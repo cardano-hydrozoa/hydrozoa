@@ -5,8 +5,7 @@ import hydrozoa.{ParticipantSecretKey, TxIx}
 
 trait RefundTxBuilder {
     def mkPostDatedRefund(
-        recipe: PostDatedRefundRecipe,
-        ownKey: ParticipantSecretKey // this is temporal - used to fill slots for witnesses
+        recipe: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx]
 }
 

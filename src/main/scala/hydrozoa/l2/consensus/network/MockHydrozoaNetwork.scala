@@ -50,7 +50,7 @@ class MockHydrozoaNetwork(
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
         val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
-        val Right(tx) = refundTxBuilder.mkPostDatedRefund(recipe, keys1._1)
+        val Right(tx) = refundTxBuilder.mkPostDatedRefund(recipe)
 
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)

@@ -31,7 +31,7 @@ class Node(
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[InitializeError, TxId] = {
         log.warn(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
 
-        // FIXME: check head/node status
+        // TODO: check head/node status
 
         // Make a recipe to build init tx
 
@@ -59,9 +59,9 @@ class Node(
         val ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
 
         val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
-        // FIXME: broadcast ownWit
+        // TODO: broadcast ownWit
 
-        // FIXME: this is temporal, in real world we need to give the tx to the initiator to be signed
+        // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
         val userWit = wallet.sign(txDraft)
 
         // All wits are here, we can sign and submit
@@ -98,7 +98,6 @@ class Node(
           refundDatum: Option[Datum]
         ) = r
 
-        // FIXME
         val Some(headNativeScript) = headStateManager.headNativeScript()
 
         val depositDatum = DepositDatum(
@@ -115,14 +114,13 @@ class Node(
         val Right(depositTx, index) = depositTxBuilder.mkDepositTx(depositTxRecipe)
         val depositTxHash = txHash(depositTx)
 
-        log.info(s"Deposit tx: ${serializeTx(depositTx)}")
+        log.info(s"Deposit tx: ${serializeTxHex(depositTx)}")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
         // TODO: Add a comment to explain how it's guarantees a deposit cannot be stolen by malicious peers
         val Right(refundTxDraft) =
             refundTxBuilder.mkPostDatedRefund(
-              PostDatedRefundRecipe(DepositTx(depositTx), index),
-              ownKeys._1
+              PostDatedRefundRecipe(DepositTx(depositTx), index)
             )
 
         // Own signature
@@ -130,17 +128,20 @@ class Node(
 
         // ReqRefundLater
         val peersWits: Set[TxKeyWitness] = network.reqRefundLater(ReqRefundLater(depositTx, index))
-        // FIXME: broadcast ownWit
+        // TODO: broadcast ownWit
 
         val wits = peersWits + ownWit
 
         val refundTx: L1Tx = wits.foldLeft(refundTxDraft.toTx)(addWitness)
-        log.info(s"Refund tx: ${serializeTx(refundTx)}")
+        log.info(s"Refund tx: ${serializeTxHex(refundTx)}")
 
-        // FIXME here we have to submit the deposit tx
+        // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
-            cardano.submit(addWitness(depositTx, wallet.sign(depositTx))) // FIXME combine
+            cardano.submit(addWitness(depositTx, wallet.sign(depositTx))) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
         Right(DepositResponse(refundTx, (depositTxHash, index)))
     }
+
+    def submit(hex: String): Either[String, TxId] =
+        cardano.submit(deserializeTxHex(hex))

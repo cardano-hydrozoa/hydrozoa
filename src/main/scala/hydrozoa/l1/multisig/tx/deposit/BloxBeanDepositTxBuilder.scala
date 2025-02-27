@@ -17,8 +17,10 @@ import scalus.builtin.Data.toData
 import scala.jdk.CollectionConverters.*
 
 // TODO factor out common parts into a separate component
-class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
-    extends DepositTxBuilder {
+class BloxBeanDepositTxBuilder(
+    ctx: AppCtx,
+    headStateReader: HeadStateReader
+) extends DepositTxBuilder {
 
     private val backendService = ctx.backendService
 
@@ -46,7 +48,7 @@ class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
                 .toEither
 
             Some(headAddressBech32) = headStateReader.headBechAddress()
-            // FIXME: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
+            // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
             amountList: List[Amount] = List(ada(100))
             datum: PlutusData = Interop.toPlutusData(r.datum.toData)
 
@@ -61,9 +63,9 @@ class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
                 .withRequiredSigners(Address(fundUtxo.getAddress))
                 .build()
 
-            // FIXME: returns -1
-//            index = ret.getBody.getOutputs.asScala
-//                .indexWhere(_.getAddress.equals(headAddressBech32))
+            // FIXME: returns -1 for some reason
+            // index = ret.getBody.getOutputs.asScala
+            //   .indexWhere(_.getAddress.equals(headAddressBech32))
             index = 0
         yield (L1Tx(ret.serialize()), TxIx(index))
 }
