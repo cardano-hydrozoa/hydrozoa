@@ -8,6 +8,7 @@ import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
+import hydrozoa.infra.toEither
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
 import hydrozoa.{AppCtx, L1Tx}
 import scalus.bloxbean.*
@@ -16,11 +17,6 @@ import scalus.builtin.Data.toData
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
-
-extension [A](result: Result[A])
-    def toEither: Either[String, A] =
-        if result.isSuccessful then Right(result.getValue)
-        else Left(result.getResponse)
 
 class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
 

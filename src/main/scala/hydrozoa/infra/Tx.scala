@@ -6,10 +6,13 @@ import com.bloxbean.cardano.client.crypto.*
 import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
+import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 
 // FIXME: make an API
+
+def txHash(tx: L1Tx): TxId = TxId(getTxHash(tx.bytes))
 
 def serializeTx(tx: L1Tx): String = HexUtil.encodeHexString(tx.bytes)
 

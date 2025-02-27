@@ -7,8 +7,10 @@ import hydrozoa.infra.*
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
+import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.consensus.network.{HydrozoaNetwork, ReqInit, ReqRefundLater}
 import hydrozoa.node.server.DepositError
@@ -22,6 +24,7 @@ class Node(
     wallet: Wallet,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
+    refundTxBuilder: RefundTxBuilder,
     log: Logger
 ):
 
@@ -109,17 +112,21 @@ class Node(
         val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction as a courtesy of Hydrozoa (no signature)
-        val Right(depositTx: L1Tx, index: TxIx) = depositTxBuilder.mkDepositTx(depositTxRecipe)
+        val Right(depositTx, index) = depositTxBuilder.mkDepositTx(depositTxRecipe)
+        val depositTxHash = txHash(depositTx)
 
-        log.info(s"Deposit tx: ${serializeTx(depositTx)}, deposit output index: $index")
+        log.info(s"Deposit tx: ${serializeTx(depositTx)}")
+        log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        // Build a post-dated refund tx
-        def mkRefundTx(a: Any, b: Any) = ???
-        // TODO: Add a comment to explain how it guarantees a deposit cannot be stolen by peers
-        val refundTxDraft: L1Tx = mkRefundTx(depositTx, index)
+        // TODO: Add a comment to explain how it's guarantees a deposit cannot be stolen by malicious peers
+        val Right(refundTxDraft) =
+            refundTxBuilder.mkPostDatedRefund(
+              PostDatedRefundRecipe(DepositTx(depositTx), index),
+              ownKeys._1
+            )
 
         // Own signature
-        val ownWit: TxKeyWitness = signTx(refundTxDraft, ownKeys._1)
+        val ownWit: TxKeyWitness = signTx(refundTxDraft.toTx, ownKeys._1)
 
         // ReqRefundLater
         val peersWits: Set[TxKeyWitness] = network.reqRefundLater(ReqRefundLater(depositTx, index))
@@ -127,9 +134,13 @@ class Node(
 
         val wits = peersWits + ownWit
 
-        val refundTx: L1Tx = wits.foldLeft(refundTxDraft)(addWitness)
+        val refundTx: L1Tx = wits.foldLeft(refundTxDraft.toTx)(addWitness)
+        log.info(s"Refund tx: ${serializeTx(refundTx)}")
 
-        // FIXME  here we have to submit the deposit tx
+        // FIXME here we have to submit the deposit tx
+        val Right(depositTxId) =
+            cardano.submit(addWitness(depositTx, wallet.sign(depositTx))) // FIXME combine
+        log.info(s"Deposit tx submitted: $depositTxId")
 
-        Right(DepositResponse(refundTx, (???, ???)))
+        Right(DepositResponse(refundTx, (depositTxHash, index)))
     }

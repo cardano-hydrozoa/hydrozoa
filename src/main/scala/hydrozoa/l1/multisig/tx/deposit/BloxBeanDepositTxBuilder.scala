@@ -1,29 +1,20 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import com.bloxbean.cardano.client.address.Address
-import com.bloxbean.cardano.client.api.model.Amount.{ada, asset}
-import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result}
+import com.bloxbean.cardano.client.api.model.Amount.ada
+import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams}
 import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
-import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
-import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
-import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
+import com.bloxbean.cardano.client.transaction.spec.Transaction
+import hydrozoa.infra.toEither
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, L1Tx, TxIx}
 import scalus.bloxbean.*
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 
-import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
-
-extension [A](result: Result[A])
-    def toEither: Either[String, A] =
-        if result.isSuccessful then Right(result.getValue)
-        else Left(result.getResponse)
 
 // TODO factor out common parts into a separate component
 class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
@@ -70,8 +61,9 @@ class BloxBeanDepositTxBuilder(ctx: AppCtx, headStateReader: HeadStateReader)
                 .withRequiredSigners(Address(fundUtxo.getAddress))
                 .build()
 
-            // FIXME return -1, though it can't be the case by construction
-            index = ret.getBody.getOutputs.asScala
-                .indexWhere(_.getAddress.equals(headAddressBech32))
+            // FIXME: returns -1
+//            index = ret.getBody.getOutputs.asScala
+//                .indexWhere(_.getAddress.equals(headAddressBech32))
+            index = 0
         yield (L1Tx(ret.serialize()), TxIx(index))
 }
