@@ -6,12 +6,22 @@ import com.bloxbean.cardano.client.crypto.*
 import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
+import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 
-// FIXME: make an API
+// TODO: make an API
+
+def txHash(tx: L1Tx): TxId = TxId(getTxHash(tx.bytes))
+
+// TODO: generalize fot both L1 and L2
+def serializeTxHex(tx: L1Tx): String = HexUtil.encodeHexString(tx.bytes)
+
+// TODO: generalize fot both L1 and L2
+def deserializeTxHex(hex: String): L1Tx = L1Tx(HexUtil.decodeHexString(hex))
 
 // Pure function to sign a transaction with a test wallet using HD key.
-// FIXME: handle exceptions
+// TODO: handle exceptions
 def signTxWallet(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
 
     // See TransactionSigner
@@ -28,7 +38,7 @@ def signTxWallet(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
 }
 
 // Pure function to sign a transaction with an ordinary key.
-// FIXME: handle exceptions
+// TODO: handle exceptions
 def signTx(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
 
     // See TransactionSigner
