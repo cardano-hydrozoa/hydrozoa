@@ -1,6 +1,7 @@
 package hydrozoa.l1
 
 import hydrozoa.{AppCtx, L1Tx, Network, TxId}
+import scalus.ledger.api.v1.PosixTime
 
 class YaciDevKitCardano(ctx: AppCtx) extends Cardano {
 
@@ -14,4 +15,7 @@ class YaciDevKitCardano(ctx: AppCtx) extends Cardano {
     override def network(): Network =
         val nw = ctx.network
         Network(nw.getNetworkId, nw.getProtocolMagic)
+
+    override def lastBlockTime: PosixTime =
+        ctx.backendService.getBlockService.getLatestBlock.getValue.getTime
 }
