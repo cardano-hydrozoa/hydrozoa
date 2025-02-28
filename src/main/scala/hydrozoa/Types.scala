@@ -33,3 +33,10 @@ case class Network(networkId: Int, protocolMagic: Long)
 case class NativeScript(bytes: Array[Byte])
 
 case class Datum(bytes: Array[Byte])
+
+// UDiffTime
+opaque type UDiffTime = BigInt
+
+object UDiffTime:
+    inline def apply(i: Int): UDiffTime = BigInt.apply(i)
+extension (x: UDiffTime) def +(i: UDiffTime): UDiffTime = i + x

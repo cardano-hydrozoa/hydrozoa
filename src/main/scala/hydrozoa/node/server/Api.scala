@@ -14,7 +14,7 @@ type DepositId = (TxId, TxIx)
 case class DepositRequest(
     txId: TxId,
     txIx: TxIx,
-    deadline: BigInt,
+    deadline: Option[BigInt],
     address: AddressBechL2,
     datum: Option[Datum],
     refundAddress: AddressBechL1,
@@ -24,7 +24,7 @@ case class DepositRequest(
 case class DepositResponse(postDatedRefundTx: L1Tx, depositId: DepositId) {
     // TODO: use JSON
     override def toString: String =
-        s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: ${depositId}"
+        s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: $depositId"
 }
 
 type DepositError = String

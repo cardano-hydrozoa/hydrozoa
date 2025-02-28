@@ -29,7 +29,7 @@ def mkHeadNativeScriptAndAddress(
     network: HNetwork
 ): (HNativeScript, String) = {
     val script = vKeys
-        // FIXME: compose vs multiple map?
+        // TODO: compose vs multiple map?
         .map(_.bytes)
         .map(VerificationKey.create)
         .map(ScriptPubkey.create)

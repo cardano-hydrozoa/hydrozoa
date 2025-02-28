@@ -63,9 +63,7 @@ class BloxBeanDepositTxBuilder(
                 .withRequiredSigners(Address(fundUtxo.getAddress))
                 .build()
 
-            // FIXME: returns -1 for some reason
-            // index = ret.getBody.getOutputs.asScala
-            //   .indexWhere(_.getAddress.equals(headAddressBech32))
-            index = 0
+            index = ret.getBody.getOutputs.asScala
+                .indexWhere(output => output.getAddress == headAddressBech32.bech32)
         yield (L1Tx(ret.serialize()), TxIx(index))
 }

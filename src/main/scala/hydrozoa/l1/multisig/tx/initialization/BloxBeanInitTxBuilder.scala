@@ -71,7 +71,7 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
                 .compose(tx)
                 .withTxEvaluator(evaluator)
                 .withRequiredSigners(Address(seedUtxo.getAddress))
-                .additionalSignersCount(4)
+                .additionalSignersCount(4) // TODO: magic number
                 .build()
         yield L1Tx(ret.serialize())
 }

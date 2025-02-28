@@ -1,6 +1,7 @@
 package hydrozoa.node.api
 
 import hydrozoa.*
+import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.node.server.{DepositRequest, Node}
 import sttp.tapir.*
 import sttp.tapir.server.netty.sync.NettySyncServer
@@ -24,11 +25,11 @@ class NodeApi(node: Node):
         .in("deposit")
         .in(query[String]("txId"))
         .in(query[Long]("txIx"))
-        .in(query[BigInt]("deadline"))
+        .in(query[Option[BigInt]]("deadline"))
         .in(query[String]("address"))
-        .in(query[String]("datum"))
+        .in(query[Option[String]]("datum"))
         .in(query[String]("refundAddress"))
-        .in(query[String]("refundDatum"))
+        .in(query[Option[String]]("refundDatum"))
         .out(stringBody)
         .errorOut(stringBody)
         .handle(runDeposit)
@@ -58,11 +59,11 @@ class NodeApi(node: Node):
     private def runDeposit(
         txId: String,
         txIx: Long,
-        deadline: BigInt,
+        deadline: Option[BigInt],
         address: String,
-        datum: String,
+        datum: Option[String],
         refundAddress: String,
-        refundDatum: String
+        refundDatum: Option[String]
     ): Either[String, String] =
         node.deposit(
           DepositRequest(
@@ -70,9 +71,13 @@ class NodeApi(node: Node):
             TxIx(txIx),
             deadline,
             AddressBechL2(address),
-            None, // FIXME
+            datum match
+                case None => None
+                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s)),
             AddressBechL1(refundAddress),
-            None // FIXME
+              refundDatum match
+                  case None => None
+                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
           )
         ).map(_.toString)
 

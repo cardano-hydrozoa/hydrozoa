@@ -12,6 +12,7 @@ import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.wallet.Wallet
+import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.{HydrozoaNetwork, ReqInit, ReqRefundLater}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
@@ -29,7 +30,7 @@ class Node(
 ):
 
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[InitializeError, TxId] = {
-        log.warn(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
+        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
 
         // TODO: check head/node status
 
@@ -81,31 +82,64 @@ class Node(
                 log.info(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
                 )
-                headStateManager.init(headNativeScript, AddressBechL1(headAddress))
+                headStateManager.init(
+                  HeadParams.default,
+                  headNativeScript,
+                  AddressBechL1(headAddress)
+                )
 
         ret
     }
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {
 
-        val DepositRequest(
-          txId: TxId,
-          txIx: TxIx,
-          deadline: BigInt,
-          address: AddressBechL2,
-          datum: Option[Datum],
-          refundAddress: AddressBechL1,
-          refundDatum: Option[Datum]
-        ) = r
+        log.info(s"Deposit request: $r")
+
+        /*
+
+        How deadline relates to other consensus parameters:
+
+         * `depositMarginMaturity` (s) - mature time
+         * `minimalDepositWindow` (s) - minimal window
+         * `depositMarginExpiry` (s) - potential race prevention
+
+                `depositMarginMaturity`         `minimalDepositWindow`        `depositMarginExpiry`
+        ----*|============================|*******************************|==========================|-------
+
+             ^ we are here                ^ now settlement tx can pick up                            ^ closest
+               `latestBlockTime`            the deposit                                                deadline
+
+              - no enough confirmations     - mature enough                 - to close to deadline
+                can be rolled back with     - far enough from deadline        may lead to races with
+                higher probability                                            post-dated refund tx
+
+         So basic check for requested deadline is:
+
+          deadline > latestBlockTime + depositMarginMaturity + minimalDepositWindow + depositMarginExpiry
+
+         */
+
+        // Check deadline
+        val Some(maturity, window, expiry) = headStateManager.depositTimingParams()
+        val latestBlockTime = cardano.lastBlockTime
+        val minimalDeadline = latestBlockTime + maturity + window + expiry
+
+        val deadline = r.deadline.getOrElse(minimalDeadline)
+        if (deadline < minimalDeadline)
+            return Left(
+              s"Deadline ($deadline) should be later than $minimalDeadline = latestBlockTime ($latestBlockTime) +" +
+                  s" depositMarginMaturity ($maturity) +" +
+                  s" minimalDepositWindow ($window) + depositMarginExpiry ($expiry)"
+            )
 
         val Some(headNativeScript) = headStateManager.headNativeScript()
 
         val depositDatum = DepositDatum(
-          decodeBech32AddressL2(address),
-          Maybe.fromOption(datum.map(datumByteString)),
+          decodeBech32AddressL2(r.address),
+          Maybe.fromOption(r.datum.map(datumByteString)),
           deadline,
-          decodeBech32AddressL1(refundAddress),
-          Maybe.fromOption(datum.map(datumByteString))
+          decodeBech32AddressL1(r.refundAddress),
+          Maybe.fromOption(r.datum.map(datumByteString))
         )
 
         val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
@@ -137,7 +171,9 @@ class Node(
 
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
-            cardano.submit(addWitness(depositTx, wallet.sign(depositTx))) // TODO: add the combined function
+            cardano.submit(
+              addWitness(depositTx, wallet.sign(depositTx))
+            ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
         Right(DepositResponse(refundTx, (depositTxHash, index)))
