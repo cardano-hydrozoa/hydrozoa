@@ -132,8 +132,8 @@ class Node(
                   s" minimalDepositWindow ($window) + depositMarginExpiry ($expiry)"
             )
 
-        val Some(headNativeScript) = headStateManager.headNativeScript()
-
+        // Make the datum and the recipe
+        // TODO: should we check that datums are sound?
         val depositDatum = DepositDatum(
           decodeBech32AddressL2(r.address),
           Maybe.fromOption(r.datum.map(datumByteString)),
@@ -144,14 +144,13 @@ class Node(
 
         val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
 
-        // Build a deposit transaction as a courtesy of Hydrozoa (no signature)
+        // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTx, index) = depositTxBuilder.mkDepositTx(depositTxRecipe)
         val depositTxHash = txHash(depositTx)
 
         log.info(s"Deposit tx: ${serializeTxHex(depositTx)}")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
-
-        // TODO: Add a comment to explain how it's guarantees a deposit cannot be stolen by malicious peers
+        
         val Right(refundTxDraft) =
             refundTxBuilder.mkPostDatedRefund(
               PostDatedRefundRecipe(DepositTx(depositTx), index)
@@ -161,6 +160,8 @@ class Node(
         val ownWit: TxKeyWitness = signTx(refundTxDraft.toTx, ownKeys._1)
 
         // ReqRefundLater
+        // TODO: Add a comment to explain how it's guaranteed that
+        //  a deposit cannot be stolen by malicious peers
         val peersWits: Set[TxKeyWitness] = network.reqRefundLater(ReqRefundLater(depositTx, index))
         // TODO: broadcast ownWit
 

@@ -9,16 +9,18 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.txOutputToUtxo
+import hydrozoa.infra.{addressToBloxbean, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.MultisigTxs.PostDatedRefundTx
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, L1Tx}
 import scalus.bloxbean.*
-import scalus.builtin.Data.fromData
+import scalus.builtin.Data.{fromCbor, fromData}
+import scalus.prelude.Maybe.{Just, Nothing}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
+import scala.language.postfixOps
 
 class BloxBeanRefundTxBuilder(
     ctx: AppCtx,
@@ -62,27 +64,47 @@ class BloxBeanRefundTxBuilder(
         )
 
         val Some(headAddressBech32) = headStateReader.headBechAddress()
-        val refundAddress = ctx.account.enterpriseAddress
-        // TODO: Checks/missing things
-        // 1. Deposit is locked at the head's script may be not necessary
-        // 2. Use refund datum
-        // 3. Use refund address, not ctx.account.enterpriseAddress()
 
-        val tx = Tx()
-            .collectFrom(List(depositUtxo).asJava)
-            .payToAddress(
-              refundAddress,
-              // TODO: split up 5 ada for fees
-              lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000")))
-            )
-            // TODO: This won't work, but it's ok for now.
-            // .withChangeAddress(refundAddress)
-            .from(headAddressBech32.bech32)
+        val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
+
+        // TODO: Not the best place - Node is better place, though will require some helpers to peek into tx
+        // Deposit is locked at the head's script (maybe not necessary in fact)
+        if (headAddressBech32.bech32 != depositUtxo.getAddress)
+            return Left("Deposit utxo should be locked at the head's address.")
+
+        // FIXME: Use refund datum
+
+        val tx = datum.refundDatum match
+            case Nothing =>
+                Tx()
+                    .collectFrom(List(depositUtxo).asJava)
+                    .payToAddress(
+                      refundAddress.toBech32,
+                      // TODO: split up 5 ada for fees
+                      lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000")))
+                    )
+                    // TODO: This won't work, but it's ok for now.
+                    // .withChangeAddress(refundAddress)
+                    .from(headAddressBech32.bech32)
+            case Just(refundDatum) =>
+                Tx()
+                    .collectFrom(List(depositUtxo).asJava)
+                    .payToContract(
+                        refundAddress.toBech32,
+                        // TODO: split up 5 ada for fees
+                        lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000"))),
+                        Interop.toPlutusData(fromCbor(refundDatum))
+                      
+                    )
+                    // TODO: This won't work, but it's ok for now.
+                    // .withChangeAddress(refundAddress)
+                    .from(headAddressBech32.bech32)
 
         val ret = quickTxBuilder
             .compose(tx)
             .withTxEvaluator(evaluator)
             // TODO: 3 witnesses + 3 (roughly for the native script)
+            // TODO: magic numbers
             .additionalSignersCount(3 + 3)
             .build
 
