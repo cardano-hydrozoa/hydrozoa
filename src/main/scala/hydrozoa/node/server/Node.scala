@@ -150,7 +150,7 @@ class Node(
 
         log.info(s"Deposit tx: ${serializeTxHex(depositTx)}")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
-        
+
         val Right(refundTxDraft) =
             refundTxBuilder.mkPostDatedRefund(
               PostDatedRefundRecipe(DepositTx(depositTx), index)

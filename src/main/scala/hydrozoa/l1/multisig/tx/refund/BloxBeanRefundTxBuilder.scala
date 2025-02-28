@@ -9,7 +9,7 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{addressToBloxbean, txOutputToUtxo}
+import hydrozoa.infra.{addressToBloxbean, toEither, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.MultisigTxs.PostDatedRefundTx
 import hydrozoa.node.server.HeadStateReader
@@ -72,8 +72,18 @@ class BloxBeanRefundTxBuilder(
         if (headAddressBech32.bech32 != depositUtxo.getAddress)
             return Left("Deposit utxo should be locked at the head's address.")
 
-        // FIXME: Use refund datum
+        // TODO: move to Node as well, not a concern of this function
+        // FIXME: this fails with Yaci - it doesn't expose GET /api/v1/genesis
+        // val Right(genesis) = ctx.backendService.getNetworkInfoService.getNetworkInfo.toEither
+        // val slotLength = genesis.getSlotLength
+        // val slotZero = genesis.getSystemStart
+        // val beginSlot = ...
 
+        // FIXME: temporary workaround - add 60 slots to the tip
+        val lastBlockSlot = ctx.backendService.getBlockService.getLatestBlock.getValue.getSlot
+        val beginSlot = lastBlockSlot + 60
+
+        // TODO: factor our shared parts
         val tx = datum.refundDatum match
             case Nothing =>
                 Tx()
@@ -90,11 +100,10 @@ class BloxBeanRefundTxBuilder(
                 Tx()
                     .collectFrom(List(depositUtxo).asJava)
                     .payToContract(
-                        refundAddress.toBech32,
-                        // TODO: split up 5 ada for fees
-                        lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000"))),
-                        Interop.toPlutusData(fromCbor(refundDatum))
-                      
+                      refundAddress.toBech32,
+                      // TODO: split up 5 ada for fees
+                      lovelace(depositOutput.getValue.getCoin.subtract(BigInteger("5000000"))),
+                      Interop.toPlutusData(fromCbor(refundDatum))
                     )
                     // TODO: This won't work, but it's ok for now.
                     // .withChangeAddress(refundAddress)
@@ -102,6 +111,7 @@ class BloxBeanRefundTxBuilder(
 
         val ret = quickTxBuilder
             .compose(tx)
+            .validFrom(beginSlot)
             .withTxEvaluator(evaluator)
             // TODO: 3 witnesses + 3 (roughly for the native script)
             // TODO: magic numbers

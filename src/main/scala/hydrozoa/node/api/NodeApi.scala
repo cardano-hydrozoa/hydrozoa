@@ -71,13 +71,15 @@ class NodeApi(node: Node):
             TxIx(txIx),
             deadline,
             AddressBechL2(address),
-            datum match
-                case None => None
-                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s)),
+            (datum match
+                case None    => None
+                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+            ),
             AddressBechL1(refundAddress),
-              refundDatum match
-                  case None => None
-                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+            (refundDatum match
+                case None    => None
+                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+            )
           )
         ).map(_.toString)
 
