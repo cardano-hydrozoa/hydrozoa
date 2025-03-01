@@ -1,19 +1,50 @@
 package hydrozoa.node.server
+import com.typesafe.scalalogging.Logger
+import hydrozoa.*
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
 import hydrozoa.node.server.HeadState.{Free, MultisigRegime}
-import hydrozoa.{AddressBechL1, NativeScript, UDiffTime}
+
+import scala.collection.mutable
 
 // Milestone 2: shared global state
-class HeadStateManager {
+class HeadStateManager(log: Logger) {
+
     private var headState: HeadState = Free(Array.empty)
+
+    // TODO: separate objects for every state
+    private val awaitingDeposits = mutable.Set[AwaitingDeposit]()
+    private var treasuryRef: Option[(TxId, TxIx)] = None
+    private var majorVersion = 0
 
     // transitions
     def init(
         headParams: HeadParams,
         headNativeScript: NativeScript,
-        headBechAddress: AddressBechL1
+        headBechAddress: AddressBechL1,
+        newTreasuryRef: (TxId, TxIx)
     ): Unit =
         headState = MultisigRegime(headParams, headNativeScript, headBechAddress)
+        treasuryRef = Some(newTreasuryRef)
+        majorVersion = 0
+
+    // operations over a particular state  - namely MultiSig
+    def enqueueDeposit(deposit: AwaitingDeposit) =
+        headState match
+            case MultisigRegime(_, _, _) =>
+                awaitingDeposits.add(deposit)
+            case _ => log.error(s"Deposits can be queued only in multisig regime.")
+
+    def peekDeposits: Set[AwaitingDeposit] = awaitingDeposits.toList.toSet
+
+    def currentMajorVersion = majorVersion
+
+    def currentTreasuryRef = treasuryRef
+
+    def stepMajor(absorbedDeposits: Set[AwaitingDeposit]): Unit =
+        // TODO: verify all absorbed deposits are on the list
+        // TODO: atomicity
+        absorbedDeposits.map(awaitingDeposits.remove(_))
+        majorVersion = majorVersion + 1
 
     // utils
     def headNativeScript(): Option[NativeScript] = headState match
@@ -32,15 +63,19 @@ class HeadStateManager {
               a
             ) =>
             Some(depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
+
 }
 
 // A read-only wrapper around HeadStateManager
 // TODO: probbaly should be a singleton object
 class HeadStateReader(manager: HeadStateManager) {
-    def headNativeScript(): Option[NativeScript] = manager.headNativeScript()
-    def headBechAddress(): Option[AddressBechL1] = manager.headBechAddress()
-    def depositTimingParams(): Option[(UDiffTime, UDiffTime, UDiffTime)] =
+    def headNativeScript: Option[NativeScript] = manager.headNativeScript()
+    def headBechAddress: Option[AddressBechL1] = manager.headBechAddress()
+    def depositTimingParams: Option[(UDiffTime, UDiffTime, UDiffTime)] =
         manager.depositTimingParams()
+    def currentMajorVersion = manager.currentMajorVersion
+    def currentTreasuryRef = manager.currentTreasuryRef match
+        case Some(x) => x // FIXME
 }
 
 // TODO: revise
@@ -55,3 +90,8 @@ enum HeadState:
     )
 
 case class Peer()
+
+case class AwaitingDeposit(
+    txId: TxId,
+    txIx: TxIx
+)
