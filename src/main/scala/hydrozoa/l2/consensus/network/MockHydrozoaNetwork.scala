@@ -6,6 +6,7 @@ import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAdd
 import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l2.block.Block
 import hydrozoa.node.server.{HeadStateManager, HeadStateReader}
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
@@ -55,4 +56,6 @@ class MockHydrozoaNetwork(
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
         Set(wit1, wit2)
+
+    override def reqMajor(block: Block): Set[AckMajorCombined] = ???
 }
