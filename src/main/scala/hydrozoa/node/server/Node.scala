@@ -5,6 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.Cardano
+import hydrozoa.l1.event.MultisigEventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, SettlementTx}
@@ -13,8 +14,8 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.consensus.{ConsensusState, HeadParams}
 import hydrozoa.l2.consensus.network.{AckMajorCombined, HydrozoaNetwork, ReqInit, ReqRefundLater}
+import hydrozoa.l2.consensus.{ConsensusState, HeadParams}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -29,6 +30,8 @@ class Node(
     refundTxBuilder: RefundTxBuilder,
     log: Logger
 ):
+
+    var multisigEventManager: Option[MultisigEventManager] = None
 
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[InitializeError, TxId] = {
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
@@ -77,17 +80,26 @@ class Node(
 
         val ret = cardano.submit(initTx)
 
-        // Put the head into multisig regime state
         ret match
             case Right(_) =>
+                // Put the head into multisig regime state
                 log.info(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
                 )
-                headStateManager.init(
-                  HeadParams.default,
-                  headNativeScript,
-                  AddressBechL1(headAddress)
+                // initialize new multisig event manager
+                multisigEventManager = Some(
+                  MultisigEventManager(
+                    HeadParams.default,
+                    headNativeScript,
+                    AddressBechL1(headAddress),
+                    headStateManager,
+                    log
+                  )
                 )
+
+                // FIXME: wait for the tx?
+                // Emulate l1 init event
+                multisigEventManager.map(_.handleInitTx(initTx))
 
         ret
     }
@@ -178,6 +190,12 @@ class Node(
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
+        // FIXME: wait for the tx?
+        // Emulate L1 deposit event
+        multisigEventManager.map(_.handleDepositTx(depositTx, depositTxHash))
+
+        // TODO: store the post-dated refund in the store along with the deposit id
+
         Right(DepositResponse(refundTx, (depositTxHash, index)))
     }
 
@@ -185,7 +203,10 @@ class Node(
         cardano.submit(deserializeTxHex(hex))
 
     def produceMajorBlock() =
-        val awaitingDeposits: Set[AwaitingDeposit] = ???
+        val awaitingDeposits: Set[AwaitingDeposit] = headStateManager.peekDeposits
+
+        log.info(s"Awaiting deposits: $awaitingDeposits")
+
         val consensusState: ConsensusState = ???
         val nextMajorVersion: Int = consensusState.majorVersion + 1
 
@@ -202,11 +223,5 @@ class Node(
         val wits: Set[TxKeyWitness] = ???
 
         val settlementTx: L1Tx = wits.foldLeft(settlementTxDraft.toTx)(addWitness)
-        
+
         log.info(s"Settlement tx: ${serializeTxHex(settlementTx)}")
-
-
-case class AwaitingDeposit(
-    txId: TxId,
-    txIx: TxIx
-)

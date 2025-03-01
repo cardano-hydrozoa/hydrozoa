@@ -19,14 +19,14 @@ object Cli:
         val ownKeys = genNodeKey()
         val ctx: AppCtx = yaciDevKit()
 
-        // Global head manager (for mocked head during Milestone 2)
-        val headStateManager: HeadStateManager = HeadStateManager()
-        val headStateReader: HeadStateReader = HeadStateReader(headStateManager)
-
         // Components
         val log: Logger = Logger("Hydrozoa")
         val wallet: Wallet = MockWallet(ctx)
         val cardano: Cardano = YaciDevKitCardano(ctx)
+
+        // Global head manager (for mocked head during Milestone 2)
+        val headStateManager: HeadStateManager = HeadStateManager(log)
+        val headStateReader: HeadStateReader = HeadStateReader(headStateManager)
 
         val initTxBuilder: InitTxBuilder = BloxBeanInitTxBuilder(ctx)
         val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, headStateReader)
