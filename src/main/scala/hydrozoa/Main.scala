@@ -6,6 +6,7 @@ import hydrozoa.infra.genNodeKey
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.wallet.{MockWallet, Wallet}
 import hydrozoa.l1.{Cardano, YaciDevKitCardano}
 import hydrozoa.l2.consensus.network.{HydrozoaNetwork, MockHydrozoaNetwork}
@@ -28,15 +29,19 @@ object Cli:
         val headStateManager: HeadStateManager = HeadStateManager(log)
         val headStateReader: HeadStateReader = HeadStateReader(headStateManager)
 
+        // Tx Builders
         val initTxBuilder: InitTxBuilder = BloxBeanInitTxBuilder(ctx)
         val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, headStateReader)
         val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, headStateReader)
+        val settlementTxBuilder: SettlementTxBuilder =
+            BloxBeanSettlementTxBuilder(ctx, headStateReader)
 
         val network: HydrozoaNetwork =
             MockHydrozoaNetwork(
               headStateReader,
               initTxBuilder,
               refundTxBuilder,
+              settlementTxBuilder,
               cardano,
               ownKeys._2
             )
@@ -50,6 +55,7 @@ object Cli:
           initTxBuilder,
           depositTxBuilder,
           refundTxBuilder,
+          settlementTxBuilder,
           log
         )
 

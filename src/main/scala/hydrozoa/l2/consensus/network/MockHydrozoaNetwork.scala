@@ -6,14 +6,16 @@ import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAdd
 import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.node.server.{HeadStateManager, HeadStateReader}
+import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(
     headStateManager: HeadStateReader,
     initTxBuilder: InitTxBuilder,
     refundTxBuilder: RefundTxBuilder,
+    settlementTxBuilder: SettlementTxBuilder,
     cardano: Cardano,
     theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HydrozoaNetwork {
@@ -57,5 +59,19 @@ class MockHydrozoaNetwork(
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
         Set(wit1, wit2)
 
-    override def reqMajor(block: Block): Set[AckMajorCombined] = ???
+    override def reqMajor(block: Block): Set[AckMajorCombined] =
+        val recipe =
+            SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
+        val Right(tx) = settlementTxBuilder.mkSettlement(recipe)
+
+        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        Set(wit1, wit2).map(w =>
+            AckMajorCombined(
+              block.blockHeader,
+              Set.empty,
+              w,
+              false
+            )
+        )
 }

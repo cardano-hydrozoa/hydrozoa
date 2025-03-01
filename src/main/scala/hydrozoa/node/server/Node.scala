@@ -12,10 +12,11 @@ import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, SettlementTx}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.wallet.Wallet
-import hydrozoa.l2.block.Block
+import hydrozoa.l2.block.{Block, majorDummyBlock}
 import hydrozoa.l2.consensus.network.{AckMajorCombined, HydrozoaNetwork, ReqInit, ReqRefundLater}
-import hydrozoa.l2.consensus.{ConsensusState, HeadParams}
+import hydrozoa.l2.consensus.{HeadParams}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -28,6 +29,7 @@ class Node(
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
     refundTxBuilder: RefundTxBuilder,
+    settlementTxBuilder: SettlementTxBuilder,
     log: Logger
 ):
 
@@ -202,26 +204,33 @@ class Node(
     def submit(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex(hex))
 
-    def produceMajorBlock() =
+    def produceMajorBlock(): Either[String, String] =
         val awaitingDeposits: Set[AwaitingDeposit] = headStateManager.peekDeposits
 
         log.info(s"Awaiting deposits: $awaitingDeposits")
 
-        val consensusState: ConsensusState = ???
-        val nextMajorVersion: Int = consensusState.majorVersion + 1
+        val nextMajorVersion: Int = headStateManager.currentMajorVersion + 1
 
-        val block: Block = ???
+        val block: Block = majorDummyBlock(nextMajorVersion, awaitingDeposits)
 
-        val settlementTxDraft: SettlementTx = ???
+        val txRecipe = SettlementRecipe(awaitingDeposits, nextMajorVersion)
 
-        // Own signature
+        val Right(settlementTxDraft: SettlementTx) = settlementTxBuilder.mkSettlement(txRecipe)
+
         val ownWit: TxKeyWitness = signTx(settlementTxDraft.toTx, ownKeys._1)
 
-        // ReqRefundLater
-        val peersWits: Set[AckMajorCombined] = network.reqMajor(block)
+        val ackMajorCombined: Set[AckMajorCombined] = network.reqMajor(block)
 
-        val wits: Set[TxKeyWitness] = ???
+        val wits: Set[TxKeyWitness] = ackMajorCombined.map(_.settlement) + ownWit
 
         val settlementTx: L1Tx = wits.foldLeft(settlementTxDraft.toTx)(addWitness)
 
         log.info(s"Settlement tx: ${serializeTxHex(settlementTx)}")
+
+        val Right(settlementTxId) = cardano.submit(settlementTx)
+
+        log.info(s"Settlement tx submitted: $settlementTxId")
+
+        multisigEventManager.map(_.handleSettlementTx())
+
+        Right(serializeTxHex(settlementTx))

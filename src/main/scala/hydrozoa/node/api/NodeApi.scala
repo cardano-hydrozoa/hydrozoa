@@ -42,7 +42,10 @@ class NodeApi(node: Node):
         .errorOut(stringBody)
         .handle(submitL1)
 
-    private val apiEndpoints = List(initEndpoint, depositEndpoint, submitL1Endpoint)
+    private val majorEndpoint =
+        endpoint.post.in("l2").in("major").out(stringBody).errorOut(stringBody).handle(major)
+
+    private val apiEndpoints = List(initEndpoint, depositEndpoint, submitL1Endpoint, majorEndpoint)
 
     private val swaggerEndpoints = SwaggerInterpreter()
         .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Hydrozoa Head API", "0.1")
@@ -85,3 +88,5 @@ class NodeApi(node: Node):
 
     private def submitL1(tx: String): Either[String, String] =
         node.submit(tx).map(_.toString)
+
+    private def major(u: Unit): Either[String, String] = node.produceMajorBlock()

@@ -10,30 +10,48 @@ import scala.collection.mutable
 class HeadStateManager(log: Logger) {
 
     private var headState: HeadState = Free(Array.empty)
+
+    // TODO: separate objects for every state
     private val awaitingDeposits = mutable.Set[AwaitingDeposit]()
+    private var treasuryRef: Option[(TxId, TxIx)] = None
+    private var majorVersion = 0
 
     // transitions
     def init(
         headParams: HeadParams,
         headNativeScript: NativeScript,
         headBechAddress: AddressBechL1,
-        treasuryRef: (TxId, TxIx)
+        newTreasuryRef: (TxId, TxIx)
     ): Unit =
-        headState = MultisigRegime(headParams, headNativeScript, headBechAddress, treasuryRef, 0)
+        headState = MultisigRegime(headParams, headNativeScript, headBechAddress)
+        treasuryRef = Some(newTreasuryRef)
+        majorVersion = 0
 
-    // operations over a particular state
-    def addDeposit(deposit: AwaitingDeposit) =
+    // operations over a particular state  - namely MultiSig
+    def enqueueDeposit(deposit: AwaitingDeposit) =
         headState match
-            case MultisigRegime(_, _, _, _, _) =>
+            case MultisigRegime(_, _, _) =>
                 awaitingDeposits.add(deposit)
             case _ => log.error(s"Deposits can be queued only in multisig regime.")
 
+    def peekDeposits: Set[AwaitingDeposit] = awaitingDeposits.toList.toSet
+
+    def currentMajorVersion = majorVersion
+
+    def currentTreasuryRef = treasuryRef
+
+    def stepMajor(absorbedDeposits: Set[AwaitingDeposit]): Unit =
+        // TODO: verify all absorbed deposits are on the list
+        // TODO: atomicity
+        absorbedDeposits.map(awaitingDeposits.remove(_))
+        majorVersion = majorVersion + 1
+
     // utils
     def headNativeScript(): Option[NativeScript] = headState match
-        case MultisigRegime(_, s, _, _, _) => Some(s)
+        case MultisigRegime(_, s, _) => Some(s)
 
     def headBechAddress(): Option[AddressBechL1] = headState match
-        case MultisigRegime(_, _, a, _, _) => Some(a)
+        case MultisigRegime(_, _, a) => Some(a)
 
     def depositTimingParams(): Option[(UDiffTime, UDiffTime, UDiffTime)] = headState match
         case MultisigRegime(
@@ -42,22 +60,22 @@ class HeadStateManager(log: Logger) {
                 minimalDepositWindow
               ),
               _,
-              a,
-              _,
-              _
+              a
             ) =>
             Some(depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
-    def peekDeposits: Set[AwaitingDeposit] = awaitingDeposits.toList.toSet
 }
 
 // A read-only wrapper around HeadStateManager
 // TODO: probbaly should be a singleton object
 class HeadStateReader(manager: HeadStateManager) {
-    def headNativeScript(): Option[NativeScript] = manager.headNativeScript()
-    def headBechAddress(): Option[AddressBechL1] = manager.headBechAddress()
-    def depositTimingParams(): Option[(UDiffTime, UDiffTime, UDiffTime)] =
+    def headNativeScript: Option[NativeScript] = manager.headNativeScript()
+    def headBechAddress: Option[AddressBechL1] = manager.headBechAddress()
+    def depositTimingParams: Option[(UDiffTime, UDiffTime, UDiffTime)] =
         manager.depositTimingParams()
+    def currentMajorVersion = manager.currentMajorVersion
+    def currentTreasuryRef = manager.currentTreasuryRef match
+        case Some(x) => x // FIXME
 }
 
 // TODO: revise
@@ -68,9 +86,7 @@ enum HeadState:
     case MultisigRegime(
         headParams: HeadParams,
         headNativeScript: NativeScript,
-        headBechAddress: AddressBechL1,
-        treasuryRef: (TxId, TxIx),
-        majorVersion: Int
+        headBechAddress: AddressBechL1
     )
 
 case class Peer()

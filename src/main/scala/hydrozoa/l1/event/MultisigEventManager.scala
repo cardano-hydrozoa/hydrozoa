@@ -34,10 +34,12 @@ case class MultisigEventManager(
         onlyAddressOutput(depositTx, headAddress) match
             case Some(ix) =>
                 log.info(s"Deposit output index is: $ix");
-                headStateManager.addDeposit(AwaitingDeposit(txHash, ix))
+                headStateManager.enqueueDeposit(AwaitingDeposit(txHash, ix))
             case None =>
                 log.error(
                   "Can't find the deposit output in the deposit tx (should not be the case)!"
                 )
 
-    def handleSettlementTx() = ???
+    def handleSettlementTx() =
+        log.info(s"Handling settlement tx...")
+        ???

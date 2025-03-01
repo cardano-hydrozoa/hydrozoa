@@ -1,10 +1,11 @@
 package hydrozoa.l2.block
 
 import hydrozoa.infra.CryptoHash.H32
+import hydrozoa.node.server.AwaitingDeposit
 
 case class Block(
     blockHeader: BlockHeader,
-    blockBody: Unit
+    blockBody: BlockBody
 )
 
 case class BlockHeader(
@@ -21,4 +22,12 @@ enum BlockTypeL2:
     case Major
     case Final
 
+case class BlockBody(depositsAbsorbed: Set[AwaitingDeposit])
+
 opaque type RH32UtxoSetL2 = H32
+
+def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
+    Block(
+      BlockHeader(0, BlockTypeL2.Major, 0, major, 0, H32.hash(IArray())),
+      BlockBody(depositsAbsorbed)
+    )

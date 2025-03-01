@@ -13,6 +13,11 @@ extension [A](result: Result[A])
         if result.isSuccessful then Right(result.getValue)
         else Left(result.getResponse)
 
+    // FIXME
+    def force: A =
+        if result.isSuccessful then result.getValue
+        else throw RuntimeException("Unexpected left")
+
 // Make an Utxo from an output reference + TransactionOutput
 // For now has some limitations:
 // * no datum hashes

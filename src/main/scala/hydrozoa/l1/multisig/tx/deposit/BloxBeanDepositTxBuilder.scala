@@ -46,7 +46,7 @@ class BloxBeanDepositTxBuilder(
                 .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
                 .toEither
 
-            Some(headAddressBech32) = headStateReader.headBechAddress()
+            Some(headAddressBech32) = headStateReader.headBechAddress
             // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
             amountList: List[Amount] = List(ada(100))
             datum: PlutusData = Interop.toPlutusData(r.datum.toData)
