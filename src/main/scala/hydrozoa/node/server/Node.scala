@@ -231,6 +231,6 @@ class Node(
 
         log.info(s"Settlement tx submitted: $settlementTxId")
 
-        multisigEventManager.map(_.handleSettlementTx())
+        multisigEventManager.map(_.handleSettlementTx(settlementTx, settlementTxId))
 
         Right(serializeTxHex(settlementTx))

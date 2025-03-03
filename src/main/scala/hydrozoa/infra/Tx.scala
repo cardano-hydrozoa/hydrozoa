@@ -10,6 +10,8 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
+import scalus.bloxbean.Interop
+import scalus.builtin.Data
 
 import scala.jdk.CollectionConverters.*
 
@@ -97,3 +99,13 @@ def onlyAddressOutput(tx: L1Tx, address: AddressBechL1): Option[TxIx] =
         .indexWhere(output => output.getAddress == address.bech32) match
         case -1 => None
         case i  => Some(TxIx(i))
+
+def outputDatum(tx: L1Tx, index: TxIx): Data =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    val output = tx_.getBody.getOutputs.get(index.ix.intValue)
+    val datum = output.getInlineDatum
+    Interop.toScalusData(datum)
+
+def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet

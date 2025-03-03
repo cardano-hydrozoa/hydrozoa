@@ -1,10 +1,12 @@
 package hydrozoa.l1.event
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{onlyAddressOutput, txHash}
+import hydrozoa.infra.{onlyAddressOutput, outputDatum, txHash, txInputsRef}
+import hydrozoa.l1.multisig.state.{MultisigTreasuryDatum, given_FromData_MultisigTreasuryDatum}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.node.server.{AwaitingDeposit, HeadStateManager}
-import hydrozoa.{AddressBechL1, L1Tx, NativeScript, TxId}
+import hydrozoa.node.server.{AwaitingDeposit, HeadStateManager, SettledDeposit}
+import hydrozoa.*
+import scalus.builtin.Data.fromData
 
 /** This class is in charge of handling L1 events.
   *
@@ -40,6 +42,19 @@ case class MultisigEventManager(
                   "Can't find the deposit output in the deposit tx (should not be the case)!"
                 )
 
-    def handleSettlementTx() =
-        log.info(s"Handling settlement tx...")
-        ???
+    def handleSettlementTx(tx: L1Tx, txHash: TxId) =
+        log.info(s"Handling settlement tx $txHash")
+
+        val Some(treasury) = headStateManager.currentTreasuryRef
+
+        // Inputs of a settlement tx should be either deposits or the treasury
+        val inputs: Set[(TxId, TxIx)] = txInputsRef(tx)
+        val deposits = (inputs - treasury).map((id, ix) => SettledDeposit(id, ix))
+
+        // TODO: Outputs of settlement might be
+        //  - withdrawals
+        //  - the rollout
+        //  - the treasury
+        val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
+
+        headStateManager.stepMajor(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits)

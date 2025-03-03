@@ -40,11 +40,26 @@ class HeadStateManager(log: Logger) {
 
     def currentTreasuryRef = treasuryRef
 
-    def stepMajor(absorbedDeposits: Set[AwaitingDeposit]): Unit =
-        // TODO: verify all absorbed deposits are on the list
-        // TODO: atomicity
-        absorbedDeposits.map(awaitingDeposits.remove(_))
-        majorVersion = majorVersion + 1
+    def stepMajor(
+        txId: TxId,
+        txIx: TxIx,
+        newMajor: Int,
+        absorbedDeposits: Set[SettledDeposit]
+    ): Unit =
+        if newMajor == majorVersion + 1 then
+            // TODO: verify all absorbed deposits are on the list
+            // TODO: atomicity
+            // TODO: create L2 utxos
+            absorbedDeposits.map(awaited).map(awaitingDeposits.remove)
+            log.info(s"Settled deposits: $absorbedDeposits")
+            majorVersion = newMajor
+            log.info(s"Step into next major version $newMajor")
+            treasuryRef = Some(txId, txIx)
+            log.info(s"New treasury utxo is $treasuryRef")
+        else
+            log.error(
+              s"Can't step into wrong major version, expected: ${majorVersion + 1}, got: $newMajor"
+            )
 
     // utils
     def headNativeScript(): Option[NativeScript] = headState match
@@ -95,3 +110,10 @@ case class AwaitingDeposit(
     txId: TxId,
     txIx: TxIx
 )
+
+case class SettledDeposit(
+    txId: TxId,
+    txIx: TxIx
+)
+
+def awaited(d: SettledDeposit): AwaitingDeposit = AwaitingDeposit(d.txId, d.txIx)
