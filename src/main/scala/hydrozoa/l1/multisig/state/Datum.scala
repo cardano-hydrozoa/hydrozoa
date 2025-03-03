@@ -21,10 +21,10 @@ case class MultisigTreasuryDatum(
 type L2ConsensusParamsH32 = ByteString
 
 // FIXME: implement hashing for L2ConsensusParamsH32
-def mkInitMultisigTreasuryDatum(_params: L2ConsensusParamsH32): MultisigTreasuryDatum =
+def mkInitMultisigTreasuryDatum(major: Int, _params: L2ConsensusParamsH32): MultisigTreasuryDatum =
     MultisigTreasuryDatum(
       ByteString.empty,
-      BigInt(0),
+      BigInt(major),
       ByteString.empty
     )
 
