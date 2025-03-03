@@ -46,7 +46,7 @@ class NodeApi(node: Node):
         endpoint.post
             .in("l2")
             .in("major")
-            .in(query[Boolean]("nextBlockFinal"))
+            .in(query[Option[String]]("nextBlockFinal"))
             .out(stringBody)
             .errorOut(stringBody)
             .handle(major)
@@ -95,5 +95,8 @@ class NodeApi(node: Node):
     private def submitL1(tx: String): Either[String, String] =
         node.submit(tx).map(_.toString)
 
-    private def major(nextBlockFinal: Boolean): Either[String, String] =
-        node.handleNextMajorBlock(nextBlockFinal)
+    private def major(nextBlockFinal: Option[String]): Either[String, String] =
+        val b = nextBlockFinal match
+            case Some(_) => true
+            case None    => false
+        node.handleNextMajorBlock(b)

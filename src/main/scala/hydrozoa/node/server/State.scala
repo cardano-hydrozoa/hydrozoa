@@ -93,6 +93,9 @@ class HeadStateManager(log: Logger) {
     def headBechAddress: Option[AddressBechL1] = headState match
         case MultisigRegime(_, _, a, _) => Some(a)
 
+    // FIXME: rename
+    def getSeedAddress = seedAddress
+
     def depositTimingParams: Option[(UDiffTime, UDiffTime, UDiffTime)] = headState match
         case MultisigRegime(
               HeadParams(
@@ -118,6 +121,8 @@ class HeadStateReader(manager: HeadStateManager) {
     def currentMajorVersion = manager.currentMajorVersion
     def currentTreasuryRef = manager.currentTreasuryRef match
         case Some(x) => x // FIXME
+    def seedAddress = manager.getSeedAddress
+    def peekDeposits = manager.peekDeposits
 }
 
 // TODO: revise

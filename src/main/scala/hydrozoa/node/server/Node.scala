@@ -209,9 +209,9 @@ class Node(
         cardano.submit(deserializeTxHex(hex))
 
     def handleNextMajorBlock(nextBlockFinal: Boolean): Either[String, String] =
-        if nextBlockFinal then produceMajorBlock() else produceFinalBlock()
+        if nextBlockFinal then produceFinalBlock else produceMajorBlock
 
-    def produceMajorBlock(): Either[String, String] =
+    def produceMajorBlock: Either[String, String] =
 
         val awaitingDeposits: Set[AwaitingDeposit] = headStateManager.peekDeposits
 
@@ -243,7 +243,7 @@ class Node(
 
         Right(serializeTxHex(settlementTx))
 
-    def produceFinalBlock(): Either[String, String] =
+    def produceFinalBlock: Either[String, String] =
 
         // Block
         val nextMajorVersion: Int = headStateManager.currentMajorVersion + 1
@@ -253,27 +253,23 @@ class Node(
         val Some(headBechAddress) = headStateManager.headBechAddress
         val Some(headNativeScript) = headStateManager.headNativeScript
         val Some(beaconTokenName) = headStateManager.beaconTokenName
-        val recipe = FinalizationRecipe(
-          nextMajorVersion,
-          headBechAddress,
-          headNativeScript,
-          beaconTokenName
-        )
+        val depositsToProtect: Set[AwaitingDeposit] = headStateManager.peekDeposits
+        val recipe = FinalizationRecipe(nextMajorVersion, depositsToProtect)
 
-        val Right(settlementTxDraft: FinalizationTx) =
+        val Right(finalizationTxDraft: FinalizationTx) =
             finalizationTxBuilder.mkFinalization(recipe)
 
         // Consensus
-        val ownWit: TxKeyWitness = signTx(settlementTxDraft.toTx, ownKeys._1)
+        val ownWit: TxKeyWitness = signTx(finalizationTxDraft.toTx, ownKeys._1)
         val ackFinalCombined: Set[AckFinalCombined] = network.reqFinal(block)
         // TODO: broadcast ownWit
 
         // Sign and submit
         val wits: Set[TxKeyWitness] = ackFinalCombined.map(_.finalization) + ownWit
-        val finalizationTx: L1Tx = wits.foldLeft(settlementTxDraft.toTx)(addWitness)
+        val finalizationTx: L1Tx = wits.foldLeft(finalizationTxDraft.toTx)(addWitness)
         log.info(s"Finalization tx: ${serializeTxHex(finalizationTx)}")
         val Right(finalizationTxId) = cardano.submit(finalizationTx)
-        log.info(s"Settlement tx submitted: $finalizationTxId")
+        log.info(s"Finalization tx submitted: $finalizationTxId")
 
         // TODO: temporary: handle the event
         multisigEventManager.map(_.handleFinalizationTx(finalizationTx, finalizationTxId))

@@ -9,11 +9,11 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.node.server.{AwaitingDeposit, HeadStateReader}
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(
-    headStateManager: HeadStateReader,
+    headStateReader: HeadStateReader,
     initTxBuilder: InitTxBuilder,
     refundTxBuilder: RefundTxBuilder,
     settlementTxBuilder: SettlementTxBuilder,
@@ -81,15 +81,12 @@ class MockHydrozoaNetwork(
     override def reqFinal(block: Block): Set[AckFinalCombined] =
         // TODO: check block type
 
-        val Some(headBechAddress) = headStateManager.headBechAddress
-        val Some(headNativeScript) = headStateManager.headNativeScript
-        val Some(beaconTokenName) = headStateManager.beaconTokenName
-        val recipe = FinalizationRecipe(
-          block.blockHeader.versionMajor,
-          headBechAddress,
-          headNativeScript,
-          beaconTokenName
-        )
+        val Some(headBechAddress) = headStateReader.headBechAddress
+        val Some(headNativeScript) = headStateReader.headNativeScript
+        val Some(beaconTokenName) = headStateReader.beaconTokenName
+        val depositsToProtect: Set[AwaitingDeposit] = headStateReader.peekDeposits
+
+        val recipe = FinalizationRecipe(block.blockHeader.versionMajor, depositsToProtect)
 
         val Right(tx) = finalizationTxBuilder.mkFinalization(recipe)
 

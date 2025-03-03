@@ -12,7 +12,5 @@ trait FinalizationTxBuilder {
 
 case class FinalizationRecipe(
     majorVersion: Int,
-    headBechAddress: AddressBechL1,
-    headNativeScript: NativeScript,
-    beaconTokenName: String
+    depositsToProtect: Set[AwaitingDeposit]
 )
