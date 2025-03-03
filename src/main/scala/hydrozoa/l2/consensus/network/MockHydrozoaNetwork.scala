@@ -4,6 +4,7 @@ import hydrozoa.infra.{genNodeKey, signTx}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
+import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
@@ -16,6 +17,7 @@ class MockHydrozoaNetwork(
     initTxBuilder: InitTxBuilder,
     refundTxBuilder: RefundTxBuilder,
     settlementTxBuilder: SettlementTxBuilder,
+    finalizationTxBuilder: FinalizationTxBuilder,
     cardano: Cardano,
     theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HydrozoaNetwork {
@@ -44,7 +46,7 @@ class MockHydrozoaNetwork(
           beaconTokenName
         )
 
-        val Right(tx) = initTxBuilder.mkInitDraft(initTxRecipe)
+        val Right(tx, _) = initTxBuilder.mkInitDraft(initTxRecipe)
 
         val wit1: TxKeyWitness = signTx(tx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx, keys2._1)
@@ -60,6 +62,7 @@ class MockHydrozoaNetwork(
         Set(wit1, wit2)
 
     override def reqMajor(block: Block): Set[AckMajorCombined] =
+        // TODO: check block type
         val recipe =
             SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
         val Right(tx) = settlementTxBuilder.mkSettlement(recipe)
@@ -72,6 +75,31 @@ class MockHydrozoaNetwork(
               Set.empty,
               w,
               false
+            )
+        )
+
+    override def reqFinal(block: Block): Set[AckFinalCombined] =
+        // TODO: check block type
+
+        val Some(headBechAddress) = headStateManager.headBechAddress
+        val Some(headNativeScript) = headStateManager.headNativeScript
+        val Some(beaconTokenName) = headStateManager.beaconTokenName
+        val recipe = FinalizationRecipe(
+          block.blockHeader.versionMajor,
+          headBechAddress,
+          headNativeScript,
+          beaconTokenName
+        )
+
+        val Right(tx) = finalizationTxBuilder.mkFinalization(recipe)
+
+        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        Set(wit1, wit2).map(w =>
+            AckFinalCombined(
+              block.blockHeader,
+              Set.empty,
+              w
             )
         )
 }

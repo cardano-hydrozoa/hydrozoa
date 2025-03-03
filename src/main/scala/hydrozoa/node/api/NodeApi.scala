@@ -43,7 +43,13 @@ class NodeApi(node: Node):
         .handle(submitL1)
 
     private val majorEndpoint =
-        endpoint.post.in("l2").in("major").out(stringBody).errorOut(stringBody).handle(major)
+        endpoint.post
+            .in("l2")
+            .in("major")
+            .in(query[Boolean]("nextBlockFinal"))
+            .out(stringBody)
+            .errorOut(stringBody)
+            .handle(major)
 
     private val apiEndpoints = List(initEndpoint, depositEndpoint, submitL1Endpoint, majorEndpoint)
 
@@ -89,4 +95,5 @@ class NodeApi(node: Node):
     private def submitL1(tx: String): Either[String, String] =
         node.submit(tx).map(_.toString)
 
-    private def major(u: Unit): Either[String, String] = node.produceMajorBlock()
+    private def major(nextBlockFinal: Boolean): Either[String, String] =
+        node.handleNextMajorBlock(nextBlockFinal)
