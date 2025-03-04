@@ -81,14 +81,9 @@ class MockHydrozoaNetwork(
     override def reqFinal(block: Block): Set[AckFinalCombined] =
         // TODO: check block type
 
-        val Some(headBechAddress) = headStateReader.headBechAddress
-        val Some(headNativeScript) = headStateReader.headNativeScript
-        val Some(beaconTokenName) = headStateReader.beaconTokenName
-        val depositsToProtect: Set[AwaitingDeposit] = headStateReader.peekDeposits
+        val recipe = FinalizationRecipe(block.blockHeader.versionMajor)
 
-        val recipe = FinalizationRecipe(block.blockHeader.versionMajor, depositsToProtect)
-
-        val Right(tx) = finalizationTxBuilder.mkFinalization(recipe)
+        val Right(tx) = finalizationTxBuilder.buildFinalizationDraft(recipe)
 
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)

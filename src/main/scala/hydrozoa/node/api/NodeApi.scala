@@ -7,6 +7,8 @@ import sttp.tapir.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
+import scala.concurrent.duration.{FiniteDuration, SECONDS}
+
 /** Hydrozoa Node API, currently backed by Tapir HTTP server.
   */
 class NodeApi(node: Node):
@@ -59,6 +61,7 @@ class NodeApi(node: Node):
     def start(): Unit =
         NettySyncServer()
             .port(8088)
+            .modifyConfig(c => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
             .startAndWait()
 

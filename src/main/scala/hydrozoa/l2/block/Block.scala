@@ -34,7 +34,6 @@ def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
 
 def finalDummyBlock(major: Int): Block =
     Block(
-        BlockHeader(0, BlockTypeL2.Final, 0, major, 0, H32.hash(IArray())),
-        BlockBody(Set.empty)
+      BlockHeader(0, BlockTypeL2.Final, 0, major, 0, H32.hash(IArray())),
+      BlockBody(Set.empty)
     )
-

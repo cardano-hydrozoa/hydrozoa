@@ -5,12 +5,11 @@ import hydrozoa.node.server.AwaitingDeposit
 import hydrozoa.{AddressBechL1, NativeScript, ParticipantSecretKey, TxIx}
 
 trait FinalizationTxBuilder {
-    def mkFinalization(
+    def buildFinalizationDraft(
         recipe: FinalizationRecipe
     ): Either[String, FinalizationTx]
 }
 
 case class FinalizationRecipe(
-    majorVersion: Int,
-    depositsToProtect: Set[AwaitingDeposit]
+    majorVersion: Int
 )

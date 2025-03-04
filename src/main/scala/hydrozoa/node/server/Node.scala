@@ -101,9 +101,7 @@ class Node(
                     log
                   )
                 )
-
-                // FIXME: wait for the tx?
-                // FIXME: can we extract seed address from init tx? I think no
+                
                 // Emulate l1 init event
                 multisigEventManager.map(_.handleInitTx(initTx, seedAddress))
 
@@ -195,8 +193,7 @@ class Node(
               addWitness(depositTx, wallet.sign(depositTx))
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
-
-        // FIXME: wait for the tx?
+        
         // Emulate L1 deposit event
         multisigEventManager.map(_.handleDepositTx(depositTx, depositTxHash))
 
@@ -250,14 +247,10 @@ class Node(
         val block: Block = finalDummyBlock(nextMajorVersion)
 
         // Tx
-        val Some(headBechAddress) = headStateManager.headBechAddress
-        val Some(headNativeScript) = headStateManager.headNativeScript
-        val Some(beaconTokenName) = headStateManager.beaconTokenName
-        val depositsToProtect: Set[AwaitingDeposit] = headStateManager.peekDeposits
-        val recipe = FinalizationRecipe(nextMajorVersion, depositsToProtect)
+        val recipe = FinalizationRecipe(nextMajorVersion)
 
         val Right(finalizationTxDraft: FinalizationTx) =
-            finalizationTxBuilder.mkFinalization(recipe)
+            finalizationTxBuilder.buildFinalizationDraft(recipe)
 
         // Consensus
         val ownWit: TxKeyWitness = signTx(finalizationTxDraft.toTx, ownKeys._1)
