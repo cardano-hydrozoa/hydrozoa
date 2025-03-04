@@ -3,7 +3,7 @@ package hydrozoa.l1.multisig.tx.initialization
 import hydrozoa.*
 
 trait InitTxBuilder {
-    def mkInitDraft(recipe: InitTxRecipe): Either[String, (L1Tx, AddressBechL1)]
+    def mkInitializationTxDraft(recipe: InitTxRecipe): Either[String, (L1Tx, AddressBechL1)]
 }
 
 case class InitTxRecipe(

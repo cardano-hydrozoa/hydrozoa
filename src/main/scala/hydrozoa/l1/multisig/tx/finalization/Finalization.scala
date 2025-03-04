@@ -5,7 +5,7 @@ import hydrozoa.node.server.AwaitingDeposit
 import hydrozoa.{AddressBechL1, NativeScript, ParticipantSecretKey, TxIx}
 
 trait FinalizationTxBuilder {
-    def buildFinalizationDraft(
+    def buildFinalizationTxDraft(
         recipe: FinalizationRecipe
     ): Either[String, FinalizationTx]
 }

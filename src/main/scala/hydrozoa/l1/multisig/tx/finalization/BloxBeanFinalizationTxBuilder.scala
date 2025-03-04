@@ -21,7 +21,7 @@ class BloxBeanFinalizationTxBuilder(
     private lazy val backendService = ctx.backendService
     private lazy val builder = mkBuilder[Tx](ctx)
 
-    override def buildFinalizationDraft(
+    override def buildFinalizationTxDraft(
         r: FinalizationRecipe
     ): Either[String, FinalizationTx] =
 
