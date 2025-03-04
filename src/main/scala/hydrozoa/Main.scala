@@ -4,6 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.AppCtx.yaciDevKit
 import hydrozoa.infra.genNodeKey
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
+import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
@@ -35,6 +36,8 @@ object Cli:
         val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, headStateReader)
         val settlementTxBuilder: SettlementTxBuilder =
             BloxBeanSettlementTxBuilder(ctx, headStateReader)
+        val finalizationTxBuilder: FinalizationTxBuilder =
+            BloxBeanFinalizationTxBuilder(ctx, headStateReader)
 
         val network: HydrozoaNetwork =
             MockHydrozoaNetwork(
@@ -42,6 +45,7 @@ object Cli:
               initTxBuilder,
               refundTxBuilder,
               settlementTxBuilder,
+              finalizationTxBuilder,
               cardano,
               ownKeys._2
             )
@@ -56,6 +60,7 @@ object Cli:
           depositTxBuilder,
           refundTxBuilder,
           settlementTxBuilder,
+          finalizationTxBuilder,
           log
         )
 

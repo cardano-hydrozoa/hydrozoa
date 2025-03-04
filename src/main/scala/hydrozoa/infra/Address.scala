@@ -28,7 +28,7 @@ def addressToBloxbean(network: Network, address: v1.Address): Address =
                 case StakingHash(stakingHash) =>
                     val stakingCredential: Credential = credentialToBloxbean(stakingHash)
                     getBaseAddress(credential, stakingCredential, network)
-                case StakingPtr(_, _, _) => ??? // FIXME do we need pointers?
+                case StakingPtr(_, _, _) => ??? // TODO do we need pointers?
 
 def credentialToBloxbean(credential: v1.Credential): Credential =
     credential match

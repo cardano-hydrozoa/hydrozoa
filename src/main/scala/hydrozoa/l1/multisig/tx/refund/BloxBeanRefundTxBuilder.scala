@@ -73,13 +73,13 @@ class BloxBeanRefundTxBuilder(
             return Left("Deposit utxo should be locked at the head's address.")
 
         // TODO: move to Node as well, not a concern of this function
-        // FIXME: this fails with Yaci - it doesn't expose GET /api/v1/genesis
+        // TODO: this fails with Yaci - it doesn't expose GET /api/v1/genesis
         // val Right(genesis) = ctx.backendService.getNetworkInfoService.getNetworkInfo.toEither
         // val slotLength = genesis.getSlotLength
         // val slotZero = genesis.getSystemStart
         // val beginSlot = ...
 
-        // FIXME: temporary workaround - add 60 slots to the tip
+        // TODO: temporary workaround - add 60 slots to the tip
         val lastBlockSlot = ctx.backendService.getBlockService.getLatestBlock.getValue.getSlot
         val beginSlot = lastBlockSlot + 60
 

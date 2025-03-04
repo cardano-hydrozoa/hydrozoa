@@ -8,15 +8,16 @@ import hydrozoa.l1.Cardano
 import hydrozoa.l1.event.MultisigEventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, FinalizationTx, SettlementTx}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.wallet.Wallet
-import hydrozoa.l2.block.{Block, majorDummyBlock}
-import hydrozoa.l2.consensus.network.{AckMajorCombined, HydrozoaNetwork, ReqInit, ReqRefundLater}
-import hydrozoa.l2.consensus.{HeadParams}
+import hydrozoa.l2.block.{Block, finalDummyBlock, majorDummyBlock}
+import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -30,6 +31,7 @@ class Node(
     depositTxBuilder: DepositTxBuilder,
     refundTxBuilder: RefundTxBuilder,
     settlementTxBuilder: SettlementTxBuilder,
+    finalizationTxBuilder: FinalizationTxBuilder,
     log: Logger
 ):
 
@@ -59,9 +61,9 @@ class Node(
         )
 
         // Builds and balance Cardano tx
-        val txDraft = initTxBuilder.mkInitDraft(initTxRecipe) match
-            case Right(v)  => v
-            case Left(err) => return Left(err)
+        val (txDraft, seedAddress) = initTxBuilder.mkInitDraft(initTxRecipe) match
+            case Right(v, seedAddress) => (v, seedAddress)
+            case Left(err)             => return Left(err)
 
         val ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
 
@@ -93,15 +95,15 @@ class Node(
                   MultisigEventManager(
                     HeadParams.default,
                     headNativeScript,
+                    beaconTokenName,
                     AddressBechL1(headAddress),
                     headStateManager,
                     log
                   )
                 )
-
-                // FIXME: wait for the tx?
+                
                 // Emulate l1 init event
-                multisigEventManager.map(_.handleInitTx(initTx))
+                multisigEventManager.map(_.handleInitTx(initTx, seedAddress))
 
         ret
     }
@@ -135,7 +137,7 @@ class Node(
          */
 
         // Check deadline
-        val Some(maturity, window, expiry) = headStateManager.depositTimingParams()
+        val Some(maturity, window, expiry) = headStateManager.depositTimingParams
         val latestBlockTime = cardano.lastBlockTime
         val minimalDeadline = latestBlockTime + maturity + window + expiry
 
@@ -191,8 +193,7 @@ class Node(
               addWitness(depositTx, wallet.sign(depositTx))
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
-
-        // FIXME: wait for the tx?
+        
         // Emulate L1 deposit event
         multisigEventManager.map(_.handleDepositTx(depositTx, depositTxHash))
 
@@ -204,7 +205,11 @@ class Node(
     def submit(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex(hex))
 
-    def produceMajorBlock(): Either[String, String] =
+    def handleNextMajorBlock(nextBlockFinal: Boolean): Either[String, String] =
+        if nextBlockFinal then produceFinalBlock else produceMajorBlock
+
+    def produceMajorBlock: Either[String, String] =
+
         val awaitingDeposits: Set[AwaitingDeposit] = headStateManager.peekDeposits
 
         log.info(s"Awaiting deposits: $awaitingDeposits")
@@ -234,3 +239,32 @@ class Node(
         multisigEventManager.map(_.handleSettlementTx(settlementTx, settlementTxId))
 
         Right(serializeTxHex(settlementTx))
+
+    def produceFinalBlock: Either[String, String] =
+
+        // Block
+        val nextMajorVersion: Int = headStateManager.currentMajorVersion + 1
+        val block: Block = finalDummyBlock(nextMajorVersion)
+
+        // Tx
+        val recipe = FinalizationRecipe(nextMajorVersion)
+
+        val Right(finalizationTxDraft: FinalizationTx) =
+            finalizationTxBuilder.buildFinalizationDraft(recipe)
+
+        // Consensus
+        val ownWit: TxKeyWitness = signTx(finalizationTxDraft.toTx, ownKeys._1)
+        val ackFinalCombined: Set[AckFinalCombined] = network.reqFinal(block)
+        // TODO: broadcast ownWit
+
+        // Sign and submit
+        val wits: Set[TxKeyWitness] = ackFinalCombined.map(_.finalization) + ownWit
+        val finalizationTx: L1Tx = wits.foldLeft(finalizationTxDraft.toTx)(addWitness)
+        log.info(s"Finalization tx: ${serializeTxHex(finalizationTx)}")
+        val Right(finalizationTxId) = cardano.submit(finalizationTx)
+        log.info(s"Finalization tx submitted: $finalizationTxId")
+
+        // TODO: temporary: handle the event
+        multisigEventManager.map(_.handleFinalizationTx(finalizationTx, finalizationTxId))
+
+        Right(serializeTxHex(finalizationTx))
