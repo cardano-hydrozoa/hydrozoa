@@ -4,7 +4,7 @@ import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, PostDatedRefundTx}
 import hydrozoa.{ParticipantSecretKey, TxIx}
 
 trait RefundTxBuilder {
-    def mkPostDatedRefund(
+    def mkPostDatedRefundTxDraft(
         recipe: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx]
 }

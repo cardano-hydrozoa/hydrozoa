@@ -5,7 +5,7 @@ import hydrozoa.node.server.AwaitingDeposit
 import hydrozoa.{ParticipantSecretKey, TxIx}
 
 trait SettlementTxBuilder {
-    def mkSettlement(
+    def mkSettlementTxDraft(
         recipe: SettlementRecipe
     ): Either[String, SettlementTx]
 }

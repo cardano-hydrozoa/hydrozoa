@@ -46,7 +46,7 @@ class MockHydrozoaNetwork(
           beaconTokenName
         )
 
-        val Right(tx, _) = initTxBuilder.mkInitDraft(initTxRecipe)
+        val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         val wit1: TxKeyWitness = signTx(tx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx, keys2._1)
@@ -55,7 +55,7 @@ class MockHydrozoaNetwork(
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
         val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
-        val Right(tx) = refundTxBuilder.mkPostDatedRefund(recipe)
+        val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
 
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
@@ -65,7 +65,7 @@ class MockHydrozoaNetwork(
         // TODO: check block type
         val recipe =
             SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
-        val Right(tx) = settlementTxBuilder.mkSettlement(recipe)
+        val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
@@ -83,7 +83,7 @@ class MockHydrozoaNetwork(
 
         val recipe = FinalizationRecipe(block.blockHeader.versionMajor)
 
-        val Right(tx) = finalizationTxBuilder.buildFinalizationDraft(recipe)
+        val Right(tx) = finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
         val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)

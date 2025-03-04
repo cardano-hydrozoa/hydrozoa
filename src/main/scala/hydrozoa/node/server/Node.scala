@@ -61,7 +61,7 @@ class Node(
         )
 
         // Builds and balance Cardano tx
-        val (txDraft, seedAddress) = initTxBuilder.mkInitDraft(initTxRecipe) match
+        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
             case Right(v, seedAddress) => (v, seedAddress)
             case Left(err)             => return Left(err)
 
@@ -162,14 +162,14 @@ class Node(
         val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-        val Right(depositTx, index) = depositTxBuilder.mkDepositTx(depositTxRecipe)
+        val Right(depositTx, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
         val depositTxHash = txHash(depositTx)
 
         log.info(s"Deposit tx: ${serializeTxHex(depositTx)}")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
         val Right(refundTxDraft) =
-            refundTxBuilder.mkPostDatedRefund(
+            refundTxBuilder.mkPostDatedRefundTxDraft(
               PostDatedRefundRecipe(DepositTx(depositTx), index)
             )
 
@@ -220,7 +220,7 @@ class Node(
 
         val txRecipe = SettlementRecipe(awaitingDeposits, nextMajorVersion)
 
-        val Right(settlementTxDraft: SettlementTx) = settlementTxBuilder.mkSettlement(txRecipe)
+        val Right(settlementTxDraft: SettlementTx) = settlementTxBuilder.mkSettlementTxDraft(txRecipe)
 
         val ownWit: TxKeyWitness = signTx(settlementTxDraft.toTx, ownKeys._1)
 
@@ -250,7 +250,7 @@ class Node(
         val recipe = FinalizationRecipe(nextMajorVersion)
 
         val Right(finalizationTxDraft: FinalizationTx) =
-            finalizationTxBuilder.buildFinalizationDraft(recipe)
+            finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
         // Consensus
         val ownWit: TxKeyWitness = signTx(finalizationTxDraft.toTx, ownKeys._1)
