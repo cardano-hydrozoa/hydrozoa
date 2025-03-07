@@ -32,7 +32,7 @@ object CryptoHash:
     opaque type H32 = IArray[Byte]
 
     object H32 {
-        def apply(bytes: IArray[Byte]): H32 =
+        private def apply(bytes: IArray[Byte]): H32 =
             require(bytes.length == 32, "Blake2b256 hash must be exactly 32 bytes long")
             bytes
 

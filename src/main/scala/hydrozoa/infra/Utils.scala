@@ -5,6 +5,8 @@ import com.bloxbean.cardano.client.api.model.Utxo.UtxoBuilder
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.Datum
+import scalus.builtin.ByteString
 
 import scala.jdk.CollectionConverters.*
 
@@ -33,3 +35,7 @@ def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
       output.getInlineDatum.serializeToHex,
       null // no scripts
     )
+
+def encodeHex(bytes: IArray[Byte]): String = HexUtil.encodeHexString(bytes.toArray)
+
+def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))

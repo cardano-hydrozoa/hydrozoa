@@ -17,6 +17,7 @@ case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 case class TxId(hash: String)
 
 // Transacion output index
+// TODO: use BigInt
 case class TxIx(ix: Long)
 
 // Policy ID
