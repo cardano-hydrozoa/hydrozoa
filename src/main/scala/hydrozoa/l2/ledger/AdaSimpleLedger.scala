@@ -8,26 +8,38 @@ import hydrozoa.{AddressBechL2, TxId, TxIx}
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
-class AdaSimpleLedger extends L2Ledger[UTxOs, L2Event, L2EventHash, Verifier[L2Event]]:
+class AdaSimpleLedger(verifier: Verifier[L2Event])
+    extends L2Ledger[UTxOs, L2Event, L2EventHash, Verifier[L2Event]]:
     val activeState: UTxOs = mutable.Map.empty
 
     def submit(event: L2Event): L2EventHash =
-        require(NoopVerifier.isValid(event), true)
+        require(verifier.isValid(event), true)
         event match
-            case deposit: L2Deposit       => handleDeposit(deposit)
+            case genesis: L2Genesis       => handleGenesis(genesis)
             case tx: L2Transaction        => ???
-            case withdrawal: L2Withdrawal => ???
+            case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
 
-    private def handleDeposit(d: L2Deposit): L2EventHash = {
-        val s = s"Depositing ${d.deposit.amount} ADA to ${d.deposit.address}"
+    private def handleGenesis(d: L2Genesis): L2EventHash =
+        val s = s"Depositing ${d.genesis}"
         println(s)
         val hash = CryptoHash.H32.hash(IArray.from(s.getBytes))
         val txId = TxId(encodeHex(hash.bytes))
-        val txIn = mkTxIn(txId, TxIx(0))
-        val txOut = mkTxOut(d.deposit.address, d.deposit.amount)
-        activeState.put(txIn, txOut)
+        d.genesis.utxosAdded.zipWithIndex.foreach(output =>
+            val txIn = mkTxIn(txId, TxIx(output._2))
+            val txOut = mkTxOut(output._1.address, output._1.amount)
+            activeState.put(txIn, txOut)
+        )
         txId
-    }
+
+    private def handleWithdrawal(d: L2Withdrawal): L2EventHash =
+        val txIn = mkTxIn(d.withdrawal.utxoRef._1, d.withdrawal.utxoRef._2)
+        activeState.remove(txIn) match
+            case Some(txOut) =>
+                val s = s"Withdrawing utxo $txOut"
+                val txId = TxId(encodeHex(CryptoHash.H32.hash(IArray.from(s.getBytes)).bytes))
+                println(s"$s, withdrawal id: $txId")
+                txId
+            case None => throw IllegalArgumentException(s"Withdrawal utxo not found: $d")
 
     def event(hash: L2EventHash): Option[L2Event] = ???
 
@@ -36,32 +48,37 @@ class AdaSimpleLedger extends L2Ledger[UTxOs, L2Event, L2EventHash, Verifier[L2E
     def isEmpty: Boolean = activeState.isEmpty
 
 object AdaSimpleLedger:
-    def mkDeposit(address: AddressBechL2, ada: Int): L2Deposit =
-        DepositEvent(SimpleDeposit(address, ada))
-    def mkTransaction(from: AddressBechL2, to: AddressBechL2, ada: Int): L2Transaction =
-        TransactionEvent(SimpleTransaction(from, to, ada))
-    def mkWithdrawals(utxo: (TxId, TxIx)): L2Withdrawal =
-        WithdrawalEvent(SimpleWithdrawal(utxo))
+    def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
+        GenesisL2Event(SimpleGenesis(Set(SimpleUtxo(address, ada))))
+    def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =
+        TransactionL2Event(
+          SimpleTransaction(inputs = Set(input), outputs = Set(SimpleUtxo(address, ada)))
+        )
+    def mkWithdrawal(utxo: (TxId, TxIx)): L2Withdrawal =
+        WithdrawalL2Event(SimpleWithdrawal(utxo))
 
-case class SimpleDeposit(
+case class SimpleGenesis(
+    utxosAdded: Set[SimpleUtxo]
+)
+
+case class SimpleTransaction(
+    inputs: Set[(TxId, TxIx)],
+    outputs: Set[SimpleUtxo]
+)
+
+case class SimpleWithdrawal(
+    utxoRef: (TxId, TxIx) // FIXME: multiple
+)
+
+case class SimpleUtxo(
     address: AddressBechL2,
     amount: Int
 )
 
-case class SimpleTransaction(
-    from: AddressBechL2,
-    to: AddressBechL2,
-    ada: Int
-)
-
-case class SimpleWithdrawal(
-    utxo: (TxId, TxIx)
-)
-
-type L2Event = Event[SimpleDeposit, SimpleTransaction, SimpleWithdrawal]
-type L2Deposit = DepositEvent[SimpleDeposit, SimpleTransaction, SimpleWithdrawal]
-type L2Transaction = TransactionEvent[SimpleDeposit, SimpleTransaction, SimpleWithdrawal]
-type L2Withdrawal = WithdrawalEvent[SimpleDeposit, SimpleTransaction, SimpleWithdrawal]
+type L2Event = AnyL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
+type L2Genesis = GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
+type L2Transaction = TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
+type L2Withdrawal = WithdrawalL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
 type L2EventHash = TxId
 
 object NoopVerifier extends Verifier[Any]:

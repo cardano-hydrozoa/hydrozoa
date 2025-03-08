@@ -9,7 +9,7 @@ package hydrozoa.l2.ledger
   * @tparam V
   *   type for event verifier
   */
-trait L2Ledger[+U, E, H, -V]:
+trait L2Ledger[+U, +E, H, -V]:
     def activeState: U
     def submit(event: L2Event): H
     def event(hash: H): Option[E]
@@ -19,5 +19,5 @@ trait L2Ledger[+U, E, H, -V]:
 /** @tparam E
   *   type for events
   */
-trait Verifier[E]:
+trait Verifier[-E]:
     def isValid(event: E): Boolean
