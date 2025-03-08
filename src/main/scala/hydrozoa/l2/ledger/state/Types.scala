@@ -12,6 +12,7 @@ opaque type TxOut = scalus.TxOut
 
 type UTxOs = mutable.Map[TxIn, TxOut]
 
+// FIXME: move to another package
 def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
     val sTxId = scalus.TxId(ByteString.fromHex(txId.hash))
     val sTxIx = BigInt.apply(txIx.ix.intValue)
@@ -21,3 +22,8 @@ def mkTxOut(bech32: hydrozoa.AddressBechL2, ada: Int): TxOut =
     val address = decodeBech32AddressL2(bech32)
     val value = scalus.Value.lovelace(ada * 1_000_000)
     scalus.TxOut(address = address, value = value, datumHash = Nothing)
+
+def checkSumInvariant(inputs: Set[TxOut], outputs: Set[TxOut]): Boolean =
+    val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
+    val after: scalus.Value = outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
+    before == after
