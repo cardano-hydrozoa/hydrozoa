@@ -1,13 +1,18 @@
 package hydrozoa.l2.consensus.network
 
 import hydrozoa.infra.{genNodeKey, signTx}
-import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.node.server.{HeadStateManager, HeadStateReader}
+import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(
-    txBuilder: InitTxBuilder,
+    headStateManager: HeadStateReader,
+    initTxBuilder: InitTxBuilder,
+    refundTxBuilder: RefundTxBuilder,
     cardano: Cardano,
     theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HydrozoaNetwork {
@@ -36,12 +41,18 @@ class MockHydrozoaNetwork(
           beaconTokenName
         )
 
-        val tx: L1Tx = txBuilder.mkInitDraft(initTxRecipe) match
-            case Right(tx) => tx
-            case Left(err) => println(err); ???
+        val Right(tx) = initTxBuilder.mkInitDraft(initTxRecipe)
 
         val wit1: TxKeyWitness = signTx(tx, keys1._1)
         val wit2: TxKeyWitness = signTx(tx, keys2._1)
         Set(wit1, wit2)
     }
+
+    def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
+        val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
+        val Right(tx) = refundTxBuilder.mkPostDatedRefund(recipe)
+
+        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        Set(wit1, wit2)
 }

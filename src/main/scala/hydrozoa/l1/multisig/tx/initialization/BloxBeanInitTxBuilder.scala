@@ -2,12 +2,12 @@ package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.{ada, asset}
-import com.bloxbean.cardano.client.api.model.{ProtocolParams, Result}
+import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
-import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
+import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import com.bloxbean.cardano.client.transaction.spec.{Asset, Transaction}
+import hydrozoa.infra.toEither
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
 import hydrozoa.{AppCtx, L1Tx}
 import scalus.bloxbean.*
@@ -16,11 +16,6 @@ import scalus.builtin.Data.toData
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
-
-extension [A](result: Result[A])
-    def toEither: Either[String, A] =
-        if result.isSuccessful then Right(result.getValue)
-        else Left(result.getResponse)
 
 class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
 
@@ -45,6 +40,7 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
 
     override def mkInitDraft(r: InitTxRecipe): Either[String, L1Tx] =
         for
+            // TODO: Should be passed as an arg, but cannot be serialized easily.
             seedUtxo <- backendService.getUtxoService
                 .getTxOutput(r.txId.hash, r.txIx.ix.intValue)
                 .toEither
@@ -71,22 +67,11 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
                 .payToContract(r.headAddressBech32, treasuryValue.asJava, treasuryDatum)
                 .from(seedUtxo.getAddress)
 
-            ret: Transaction = quickTxBuilder
+            ret = quickTxBuilder
                 .compose(tx)
                 .withTxEvaluator(evaluator)
                 .withRequiredSigners(Address(seedUtxo.getAddress))
-                // FIXME: This hack ensures the number of key witness is correct
-                // Adding the same witness four times makes the witness set
-                // of the same size we expect to have and allows the balancer
-                // to evaluate fees correctly.
-                // Since this key is indeed a signer for this tx, it somehow
-                // works well without further interventions (I guess thanks
-                // to serialization logic).
-                .withSigner(SignerProviders.signerFrom(ctx.account))
-                .withSigner(SignerProviders.signerFrom(ctx.account))
-                .withSigner(SignerProviders.signerFrom(ctx.account))
-                .withSigner(SignerProviders.signerFrom(ctx.account))
-                // end of signature fees hack.
+                .additionalSignersCount(4) // TODO: magic number
                 .build()
         yield L1Tx(ret.serialize())
 }

@@ -4,32 +4,47 @@ import com.bloxbean.cardano.client.crypto.Blake2bUtil.{blake2bHash224, blake2bHa
 import com.bloxbean.cardano.client.crypto.KeyGenUtil
 import hydrozoa.{ParticipantSecretKey, ParticipantVerificationKey}
 
-// Cryptographic hash functions used in Hydrozoa
+// Opaque types and functions for cryptographic hashes used in Hydrozoa.
 
-// H28
+object CryptoHash:
 
-// FIXME: how to protect the constructor?
-case class H28(bytes: Array[Byte])
+    // H28 - Blake2b224
+    opaque type H28 = IArray[Byte]
 
-def mkH28(bytes: Array[Byte]): H28 =
-    bytes.length match
-        case 28 => H28(bytes)
-// FIXME:  _ => what's the proper way?
+    object H28 {
+        def apply(bytes: IArray[Byte]): H28 =
+            require(bytes.length == 28, "Blake2b224 hash must be exactly 28 bytes long")
+            bytes
 
-// H32
+        def hash(input: IArray[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash224(IArray.genericWrapArray(input).toArray)))
 
-// FIXME: how to protect the constructor?
-case class H32(bytes: Array[Byte])
+        // Remove once we have
+        def hash_(input: Array[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash224(input)))
 
-def mkH32(bytes: Array[Byte]): H32 = bytes.length match
-    case 32 => H32(bytes)
-// FIXME:  _ => what's the proper way?
+        extension (x: H28) {
+            def bytes: IArray[Byte] = x
+        }
+    }
 
-// H28 hash function = Blake2b-224
-val hydrozoaH28: Array[Byte] => H28 = mkH28.compose(blake2bHash224)
+    // H32 - Blake2b256
+    opaque type H32 = IArray[Byte]
 
-// H32 hash function - Blake2b-256
-val hydrozoaH32: Array[Byte] => H32 = mkH32.compose(blake2bHash256)
+    object H32 {
+        def apply(bytes: IArray[Byte]): H32 =
+            require(bytes.length == 32, "Blake2b256 hash must be exactly 32 bytes long")
+            bytes
+
+        def hash(input: IArray[Byte]): H28 =
+            apply(IArray.from[Byte](blake2bHash256(IArray.genericWrapArray(input).toArray)))
+
+        extension (x: H32) {
+            def bytes: IArray[Byte] = x
+        }
+    }
+
+// Generating nodes keys
 
 // Generating keys for a node
 def genNodeKey(): (ParticipantSecretKey, ParticipantVerificationKey) = {

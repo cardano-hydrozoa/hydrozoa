@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.common.model.Network
 import com.bloxbean.cardano.client.crypto.VerificationKey
 import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPubkey}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import hydrozoa.infra.hydrozoaH28
+import hydrozoa.infra.CryptoHash.*
 import hydrozoa.{
     ParticipantVerificationKey,
     TxId,
@@ -29,7 +29,7 @@ def mkHeadNativeScriptAndAddress(
     network: HNetwork
 ): (HNativeScript, String) = {
     val script = vKeys
-        // FIXME: compose vs multiple map?
+        // TODO: compose vs multiple map?
         .map(_.bytes)
         .map(VerificationKey.create)
         .map(ScriptPubkey.create)
@@ -43,7 +43,7 @@ def mkHeadNativeScriptAndAddress(
   *   treasury beacon token name
   */
 def mkBeaconTokenName(txId: TxId, txIx: TxIx): String =
-    val name = hydrozoaH28(
+    val name = H28.hash_(
       (txId.hash.getBytes.toList ++ BigInt(txIx.ix).toByteArray.toList).toArray
     )
     encodeHexString(assetNamePrefix ++ name.bytes, true)
