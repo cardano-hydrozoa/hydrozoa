@@ -1,9 +1,9 @@
 package hydrozoa.l1.multisig.tx.initialization
 
-import hydrozoa.{L1Tx, NativeScript, TxId, TxIx}
+import hydrozoa.*
 
 trait InitTxBuilder {
-    def mkInitDraft(recipe: InitTxRecipe): Either[String, L1Tx]
+    def mkInitDraft(recipe: InitTxRecipe): Either[String, (L1Tx, AddressBechL1)]
 }
 
 case class InitTxRecipe(

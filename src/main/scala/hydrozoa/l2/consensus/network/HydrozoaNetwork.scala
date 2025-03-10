@@ -15,6 +15,8 @@ trait HydrozoaNetwork {
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 
     def reqMajor(block: Block): Set[AckMajorCombined]
+
+    def reqFinal(block: Block): Set[AckFinalCombined]
 }
 
 case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
@@ -26,4 +28,10 @@ case class AckMajorCombined(
     rollouts: Set[TxKeyWitness],
     settlement: TxKeyWitness,
     nextBlockFinal: Boolean
+)
+
+case class AckFinalCombined(
+    blockHeader: BlockHeader,
+    rollouts: Set[TxKeyWitness],
+    finalization: TxKeyWitness
 )

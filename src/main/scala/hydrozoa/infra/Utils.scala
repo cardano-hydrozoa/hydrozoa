@@ -13,7 +13,7 @@ extension [A](result: Result[A])
         if result.isSuccessful then Right(result.getValue)
         else Left(result.getResponse)
 
-    // FIXME
+    // TODO: we don't handle errors properly so far
     def force: A =
         if result.isSuccessful then result.getValue
         else throw RuntimeException("Unexpected left")
