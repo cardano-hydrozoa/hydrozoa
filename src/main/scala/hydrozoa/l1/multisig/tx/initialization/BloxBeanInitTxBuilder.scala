@@ -58,7 +58,7 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
             )
 
             treasuryDatum = Interop.toPlutusData(
-              mkInitMultisigTreasuryDatum(ByteString.empty).toData
+              mkInitMultisigTreasuryDatum(0, ByteString.empty).toData
             )
 
             tx = Tx()

@@ -36,7 +36,7 @@ object CryptoHash:
             require(bytes.length == 32, "Blake2b256 hash must be exactly 32 bytes long")
             bytes
 
-        def hash(input: IArray[Byte]): H28 =
+        def hash(input: IArray[Byte]): H32 =
             apply(IArray.from[Byte](blake2bHash256(IArray.genericWrapArray(input).toArray)))
 
         extension (x: H32) {

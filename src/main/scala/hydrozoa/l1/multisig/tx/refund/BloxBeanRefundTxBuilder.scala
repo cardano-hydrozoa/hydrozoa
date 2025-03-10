@@ -63,7 +63,7 @@ class BloxBeanRefundTxBuilder(
           )
         )
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress()
+        val Some(headAddressBech32) = headStateReader.headBechAddress
 
         val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
 
@@ -120,7 +120,7 @@ class BloxBeanRefundTxBuilder(
 
         // TODO: Add native script before balancing
         // I didn't find the way to add native script
-        val Some(headNativeScript) = headStateReader.headNativeScript()
+        val Some(headNativeScript) = headStateReader.headNativeScript
         val script = NativeScript.deserializeScriptRef(headNativeScript.bytes)
         ret.getWitnessSet.setNativeScripts(List(script).asJava)
 
