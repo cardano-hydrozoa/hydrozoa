@@ -63,7 +63,7 @@ class Node(
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
-        val userWit = wallet.sign(txDraft)
+        val userWit = wallet.createTxKeyWitness(txDraft)
 
         // All wits are here, we can sign and submit
         val wits = peersWits + ownWit + userWit
@@ -173,7 +173,7 @@ class Node(
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(depositTx, wallet.sign(depositTx))
+              addWitness(depositTx, wallet.createTxKeyWitness(depositTx))
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 

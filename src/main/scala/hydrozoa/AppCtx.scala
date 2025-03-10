@@ -11,24 +11,24 @@ import scalus.ledger.api.v1.PubKeyHash
 
 case class AppCtx(
     network: Network,
-    account: Account,
     backendService: BackendService
 ) {
-    lazy val pubKeyHash: PubKeyHash = PubKeyHash(
-      ByteString.fromArray(account.hdKeyPair().getPublicKey.getKeyHash)
+    def pubKeyHash(accountIndex: Int) = PubKeyHash(
+      ByteString.fromArray(account(accountIndex).hdKeyPair().getPublicKey.getKeyHash)
     )
+
+    def account(accountIndex: Int) = new Account(network, AppCtx.mnemonic, accountIndex)
 }
 
 object AppCtx {
+    val mnemonic =
+        "test test test test test test test test test test test test test test test test test test test test test test test sauce"
 
     def yaciDevKit(): AppCtx = {
         val url = "http://localhost:8080/api/v1/"
         val network = new Network(0, 42)
-        val mnemonic =
-            "test test test test test test test test test test test test test test test test test test test test test test test sauce"
         AppCtx(
           network,
-          new Account(network, mnemonic),
           new BFBackendService(url, "")
         )
     }

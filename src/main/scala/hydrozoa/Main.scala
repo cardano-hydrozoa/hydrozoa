@@ -25,7 +25,7 @@ object Cli:
 
         // Components
         val log: Logger = Logger("Hydrozoa")
-        val wallet: Wallet = MockWallet(ctx)
+        val wallet: Wallet = MockWallet(ctx, 0)
         val cardano: Cardano = YaciDevKitCardano(ctx)
 
         val initTxBuilder: InitTxBuilder = BloxBeanInitTxBuilder(ctx)
