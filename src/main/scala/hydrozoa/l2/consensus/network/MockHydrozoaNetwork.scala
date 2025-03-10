@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus.network
 
-import hydrozoa.infra.{genNodeKey, signTx}
+import hydrozoa.infra.{genNodeKey, createTxKeyWitness}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
@@ -43,8 +43,8 @@ class MockHydrozoaNetwork(
 
         val Right(tx) = initTxBuilder.mkInitDraft(initTxRecipe)
 
-        val wit1: TxKeyWitness = signTx(tx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx, keys2._1)
         Set(wit1, wit2)
     }
 
@@ -52,7 +52,7 @@ class MockHydrozoaNetwork(
         val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefund(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx.toTx, keys2._1)
         Set(wit1, wit2)
 }

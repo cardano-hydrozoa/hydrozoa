@@ -57,7 +57,7 @@ class Node(
             case Right(v)  => v
             case Left(err) => return Left(err)
 
-        val ownWit: TxKeyWitness = signTx(txDraft, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(txDraft, ownKeys._1)
 
         val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
         // TODO: broadcast ownWit
@@ -157,7 +157,7 @@ class Node(
             )
 
         // Own signature
-        val ownWit: TxKeyWitness = signTx(refundTxDraft.toTx, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(refundTxDraft.toTx, ownKeys._1)
 
         // ReqRefundLater
         // TODO: Add a comment to explain how it's guaranteed that

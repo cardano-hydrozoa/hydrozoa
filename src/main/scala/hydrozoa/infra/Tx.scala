@@ -20,9 +20,9 @@ def serializeTxHex(tx: L1Tx): String = HexUtil.encodeHexString(tx.bytes)
 // TODO: generalize fot both L1 and L2
 def deserializeTxHex(hex: String): L1Tx = L1Tx(HexUtil.decodeHexString(hex))
 
-// Pure function to sign a transaction with a test wallet using HD key.
+// Pure function to create a transaction key witness with a HD key.
 // TODO: handle exceptions
-def signTxWallet(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
+def createTxKeyWitness(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
 
     // See TransactionSigner
 
@@ -37,9 +37,9 @@ def signTxWallet(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
     TxKeyWitness(signature, pair.getPublicKey.getKeyData)
 }
 
-// Pure function to sign a transaction with an ordinary key.
+// Pure function to create a transaction key witness with a peer node's key.
 // TODO: handle exceptions
-def signTx(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
+def createTxKeyWitness(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
 
     // See TransactionSigner
 
