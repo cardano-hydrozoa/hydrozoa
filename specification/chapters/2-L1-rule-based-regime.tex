@@ -341,46 +341,40 @@ Redeemers:
   \item[Withdraw.] Withdraw treasury funds and update its active utxo set accordingly.
     Conditions:
     \begin{enumerate}
-      \item Let \code{withdrawals} be a list of triples in the content of \code{WithdrawRedeemer}:
-          \begin{equation*}
-            \T{WithdrawRedeemer} \coloneq \left[\left\{
-            \begin{array}{lll}
-              \T{key} &::& \T{OutputRef} \\
-              \T{utxo} &::& \T{Output^{L2}} \\
-              \T{proof} &::& \T{Proof}
-            \end{array}\right\}\right]
-          \end{equation*}
-          In each triple:
-            \begin{itemize}
-              \item The \code{key} is an output reference of a utxo in the active utxo set corresponding to the \code{utxosActive} field of \code{treasuryInput}.
-              \item The \code{utxo} is an output with addresses translated to L1 network.
-              \item The \code{proof} is a Merkle inclusion proof.
-            \end{itemize}
       \item Let \code{treasuryInput} be the input being spent.
       \item Let \code{headMp} be the corresponding field in \code{treasuryInput}.
       \item Let \code{headId} be the asset name of the only \code{headMp} token in \code{treasuryInput} with CIP-67 prefix \headBeaconToken{}.
-      \item Let \code{treasuryOutput} be the output holding the (\code{headMp}, \code{headId}) beacon token.
-      \item Starting with the \code{utxosActive} field in \code{treasuryInput}, folding over \code{withdrawals} with the Merkle library's \code{delete} function must produce a result matching the \code{utxosActive} field of \code{treasuryOutput}:%
-        \footnote{The details of this function depend on the Merkle library that Hydrozoa implementation will use.
-        For example, see the \inlineColored{delete} function in the Merkle Patricia Forestry library \citep{MatthiasBenkortMerklePatriciaForestry2024}.}
-        \begin{equation*}
-        \begin{split}
-          &\T{validWithdrawals} \; \T{in} \; \T{ws} \; \T{out} \coloneq
-            (\T{foldl} \; \T{delete} \; \T{in} \; \T{ws} = \T{out}) \\
-          &\T{delete} ::
-            \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} ->
-            (\T{OutputRef}, \T{Output^{L2}}, \T{Proof}) ->
-            \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
-        \end{split}
-        \end{equation*}
-      \item All \code{withdrawnUtxos} are outputs of the transaction:
-         \begin{equation*}
-         \begin{split}
-            &\T{withdrawnUtxos} :: [Output^{L2}] \\
-            &\T{withdrawnUtxos} \coloneq \; \T{map} \; \T{utxo} \; \T{withdrawals}
-         \end{split}
-         \end{equation*}
-      \item \code{treasuryInput} must hold the sum of all tokens in \code{treasuryOutput} and the outputs of \code{withdrawals}.
+      \item Let \code{withdrawals} be a list of triples provided as a redeemer argument.
+          Each triple contains an output reference, an L2 output, and a Merkle inclusion proof.
+          The proof shows a path from some Merkle root hash to the L2 output at the output reference.
+          \begin{equation*}
+            \left[\left(
+              \T{OutputRef},\;
+              \T{Output^{L2}},\;
+              \T{MerkleProof}
+            \right)\right]
+          \end{equation*}
+      \item Let \code{treasuryOutput} be the first transaction output. It must hold the (\code{headMp}, \code{headId}) beacon token.
+      \item Let \code{outputsRemaining} be a mutable variable initialized to the transaction's outputs, excluding \code{treasuryOutput}.
+      \item Let \code{valueTotal} be a mutable variable initialized to the value of \code{treasuryOutput}.
+      \item Let \code{rootHash} be a mutable variable initialized to the \code{utxosActive} of \code{treasuryInput}.
+      \item For each triple \codeMath{(\T{outref}, \T{outputL2}, \T{proof})} in \code{withdrawals}:
+        \begin{enumerate}
+          \item Let \code{outputL1} be the first element in \code{outputsRemaining}, which must exist.
+          \item \code{outputL1} and \code{outputL2} must match on the \code{value}, \code{datum}, and \code{script} fields.
+          \item \code{outputL1} and \code{outputL2} must match on the \code{addr} field by payment credential and staking reference, but not network ID.
+          \item Update \code{outputsRemaining} by excluding \code{outputL1}.
+          \item Update \code{valueTotal} by adding the value of \code{outputL1}.
+          \item Update \code{rootHash} by applying the Merkle library's \code{delete} function with the triple:
+            \begin{equation*}
+              \T{delete} ::
+                \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} ->
+                (\T{OutputRef}, \T{Output^{L2}}, \T{Proof}) ->
+                \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
+            \end{equation*}
+        \end{enumerate}
+      \item \code{valueTotal} must match the value of \code{treasuryInput}.
+      \item \code{rootHash} must match the \code{utxosActive} of \code{treasuryOutput}.
     \end{enumerate}
   \item[Deinit.] De-initialize the head, removing all traces of it.
     Conditions:%
