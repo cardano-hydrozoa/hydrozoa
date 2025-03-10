@@ -2,24 +2,29 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\input{\subfix{00-meta.tex}}
-
 \begin{center}
-    {\fontsize{1.5em}{1.8em}\selectfont \hydrozoatitle}\\[1cm]
-    \hydrozoaauthors{1.1em}{1.2em}{0em}{3}\\[1cm]
+  {\fontsize{1.5em}{1.8em}\selectfont \hydrozoatitle}\\[1cm]%
+  \setlength{\tabcolsep}{0.8em}%
+  \hspace{2\tabcolsep}%
+  \hydrozoaauthors{1.1em}{1.2em}{1.6em}{3}\\[1cm]%
 \end{center}
 
 \begin{abstract}[-0.5em]{1.5cm}
+Hydrozoa is a dynamic, near-isomorphic multi-party state channel protocol.
+It allows a group of peers to transact with one another directly outside of the Cardano blockchain (on L2), significantly minimizing their activity on the Cardano blockchain (on L1).
+The peers enjoy high throughput, instant finality, and low costs while transacting with each other in this way.
+If the peers unanimously consent, they can add new peers, remove existing peers, deposit funds from L1, and withdraw funds from L2.
 \end{abstract}
 
-% \begingroup
-%    \begin{center}
-%        \vspace{1cm}
-%        {\Large \textbf{Contributors}}\\[1.8em]
-%        \setlength{\tabcolsep}{0.8em}
-%        \hydrozoacontributors{1.1em}{1.2em}{1.6em}{3}
-%    \end{center}
-% \endgroup
+\begingroup
+  \begin{center}
+    \vspace{1cm}
+    {\Large \textbf{Contributors}}\\[1.8em]%
+    \setlength{\tabcolsep}{0.8em}%
+    \hspace{2\tabcolsep}%
+    \hydrozoacontributors{1.1em}{1.2em}{1.6em}{3}%
+  \end{center}
+\endgroup
 
 \vfill\copyrightnotice
 
