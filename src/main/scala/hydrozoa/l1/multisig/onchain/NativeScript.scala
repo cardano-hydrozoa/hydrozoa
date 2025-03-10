@@ -45,7 +45,7 @@ def mkHeadNativeScriptAndAddress(
   *   treasury beacon token name
   */
 def mkBeaconTokenName(txId: TxId, txIx: TxIx): String =
-    val name = H28.hash_(
+    val name = H28.hash_[(TxId, TxIx)](
       (txId.hash.getBytes.toList ++ BigInt(txIx.ix).toByteArray.toList).toArray
     )
     encodeHexString(treasuryBeaconPrefix ++ name.bytes, true)
