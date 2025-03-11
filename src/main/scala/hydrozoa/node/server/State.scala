@@ -3,6 +3,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
+import hydrozoa.l2.event.{L2Event, L2NonGenesis}
 import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier}
 
 import scala.collection.mutable
@@ -27,8 +28,8 @@ private case class Open(
 ) extends HeadState
     with MultisigRegime {
     val blocksConfirmedL2: mutable.Seq[Block] = mutable.Seq[Block]()
-    val confirmedEventsL2: Unit = () // TODO: with block number
-    val poolEventsL2: Unit = () // TODO: only txs and withdrawals
+    val confirmedEventsL2: mutable.Set[L2Event] = mutable.Set()
+    val poolEventsL2: mutable.Set[L2NonGenesis] = mutable.Set()
     var finalizing = false
     // TODO: peers
     // TODO: stateL1
@@ -72,9 +73,15 @@ trait OpenNodeState extends StateApi:
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
+
     def peekDeposits: Set[AwaitingDeposit]
+    def poolEventsL2: mutable.Set[L2NonGenesis]
+
     def enqueueDeposit(deposit: AwaitingDeposit): Unit
-    def stepMajor(
+
+    def stateL2: AdaSimpleLedger
+    def finalizing: Boolean
+    def majorBlockL2Effect(
         txId: TxId,
         txIx: TxIx,
         newMajor: Int,
@@ -136,10 +143,14 @@ class NodeStateManager(log: Logger) { self =>
 
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
+        def poolEventsL2 = openState.poolEventsL2
+
         def peekDeposits: Set[AwaitingDeposit] = openState.awaitingDeposits.toList.toSet
         def enqueueDeposit(deposit: AwaitingDeposit): Unit = openState.awaitingDeposits.add(deposit)
+        def finalizing: Boolean = openState.finalizing
+        def stateL2: AdaSimpleLedger = openState.stateL2
 
-        def stepMajor(
+        def majorBlockL2Effect(
             txId: TxId,
             txIx: TxIx,
             newMajor: Int,

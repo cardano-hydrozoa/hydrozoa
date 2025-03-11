@@ -70,7 +70,7 @@ case class MultisigEventManager(
         //  - the treasury
         val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
-        state.asOpen(_.stepMajor(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits))
+        state.asOpen(_.majorBlockL2Effect(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits))
 
     def handleFinalizationTx(tx: L1Tx, txHash: TxId) =
         log.info(s"Handling finalization tx: $txHash")

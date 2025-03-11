@@ -44,16 +44,17 @@ class NodeApi(node: Node):
         .errorOut(stringBody)
         .handle(submitL1)
 
-    private val majorEndpoint =
+    private val nextBlockEndpoint =
         endpoint.post
             .in("l2")
-            .in("major")
+            .in("next")
             .in(query[Option[String]]("nextBlockFinal"))
             .out(stringBody)
             .errorOut(stringBody)
-            .handle(major)
+            .handle(nextBlock)
 
-    private val apiEndpoints = List(initEndpoint, depositEndpoint, submitL1Endpoint, majorEndpoint)
+    private val apiEndpoints =
+        List(initEndpoint, depositEndpoint, submitL1Endpoint, nextBlockEndpoint)
 
     private val swaggerEndpoints = SwaggerInterpreter()
         .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Hydrozoa Head API", "0.1")
@@ -98,8 +99,8 @@ class NodeApi(node: Node):
     private def submitL1(tx: String): Either[String, String] =
         node.submit(tx).map(_.toString)
 
-    private def major(nextBlockFinal: Option[String]): Either[String, String] =
+    private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
         val b = nextBlockFinal match
             case Some(_) => true
             case None    => false
-        node.handleNextMajorBlock(b)
+        node.handleNextBlock(b)

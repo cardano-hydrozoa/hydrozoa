@@ -14,11 +14,17 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.wallet.Wallet
-import hydrozoa.l2.block.{Block, finalDummyBlock, majorDummyBlock}
+import hydrozoa.l2.block.*
+import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
+import hydrozoa.l2.event.{L2Transaction, L2Withdrawal}
+import hydrozoa.l2.ledger.event.{TransactionL2Event, WithdrawalL2Event}
+import hydrozoa.l2.ledger.state.UTxOs
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
+
+import scala.collection.mutable
 
 class Node(
     state: NodeStateManager,
@@ -213,8 +219,84 @@ class Node(
     def submit(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex(hex))
 
-    def handleNextMajorBlock(nextBlockFinal: Boolean): Either[String, String] =
-        if nextBlockFinal then produceFinalBlock else produceMajorBlock
+    /** Manually triggers next block creation procedure.
+      * @param nextBlockFinal
+      * @return
+      */
+    def handleNextBlock(nextBlockFinal: Boolean): Either[String, String] =
+        // FIXME: remove
+        // if nextBlockFinal then produceFinalBlock else produceMajorBlock
+
+        // 1. Initialize the variables and arguments.
+
+        // (a) Let block be a mutable variable initialized to an empty BlockL2
+        val blockBuilder: BlockBuilder = BlockBuilder()
+
+        // (b) Let previousBlock be the latest block in blocksConfirmedL2
+        val previousBlock = state.asOpen(_.l2Tip)
+
+        // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
+        val previousMajorBlock = state.asOpen(_.l2LastMajor)
+
+        // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
+        // var utxosActive: UTxOs = state.asOpen(_.utxosActive)
+
+        // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
+        val utxosAdded: UtxoSetL2 = mutable.Set()
+
+        // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
+        val utxosWithdrawn: UtxoSetL2 = mutable.Set()
+
+        // 2. Set block.timeCreation to timeCurrent.
+        blockBuilder.withTimeCreation(timeCurrent)
+
+        val stateL2 = state.asOpen(_.stateL2)
+        val poolEvents = state.asOpen(_.poolEventsL2)
+
+        // 3. For each non-genesis L2 event...
+        poolEvents.foreach(_ match
+            case tx: L2Transaction =>
+                try
+                    val txId = stateL2.submit(TransactionL2Event(tx.simpleTransaction))
+                    blockBuilder.withConfirmedEvent(txId, tx)
+                catch
+                    case e: IllegalArgumentException =>
+                        blockBuilder.withInvalidEvent(???, tx)
+            case wd: L2Withdrawal =>
+                try
+                    val txId = stateL2.submit(WithdrawalL2Event(wd.simpleWithdrawal))
+                    blockBuilder.withConfirmedEvent(txId, wd)
+                    utxosWithdrawn.addAll(???)
+                catch
+                    case e: IllegalArgumentException =>
+                        blockBuilder.withInvalidEvent(???, wd)
+        )
+
+        // 4. If finalizing is False...
+        val finalizing = state.asOpen(_.finalizing)
+        if !finalizing then
+            val awaitingDeposits = state.asOpen(_.peekDeposits)
+            // TODO: check deposits timing
+            val eligibleDeposits = awaitingDeposits.filter(_ => true)
+//            utxosAdded = stateL2.submit(mkGenesisEvent(eligibleDeposits))
+            blockBuilder.withDeposits(eligibleDeposits)
+        // 5. If finalizing is True...
+        else utxosWithdrawn = stateL2.flush()
+
+        // 6. Set block.blockType...
+        val multisigRegimeKeepAlive = false // TODO: implement
+        blockBuilder.withBlockType {
+            if finalizing then Final
+            else if utxosAdded.nonEmpty || utxosWithdrawn.nonEmpty || multisigRegimeKeepAlive
+            then Major
+            else Minor
+        }
+
+        // 7. Set the rest of the block header...
+        ???
+
+        // 8. Return
+        (blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn)
 
     def produceMajorBlock: Either[String, String] =
 

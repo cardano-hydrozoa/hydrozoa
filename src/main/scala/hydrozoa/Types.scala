@@ -41,3 +41,8 @@ opaque type UDiffTime = BigInt
 object UDiffTime:
     inline def apply(i: Int): UDiffTime = BigInt.apply(i)
 extension (x: UDiffTime) def +(i: UDiffTime): UDiffTime = i + x
+
+opaque type PosixTime = BigInt
+
+// FIXME: move to another module
+def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
