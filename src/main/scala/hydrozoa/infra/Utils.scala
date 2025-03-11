@@ -5,6 +5,8 @@ import com.bloxbean.cardano.client.api.model.Utxo.UtxoBuilder
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.Datum
+import scalus.builtin.ByteString
 
 import scala.jdk.CollectionConverters.*
 
@@ -12,6 +14,11 @@ extension [A](result: Result[A])
     def toEither: Either[String, A] =
         if result.isSuccessful then Right(result.getValue)
         else Left(result.getResponse)
+
+    // TODO: we don't handle errors properly so far
+    def force: A =
+        if result.isSuccessful then result.getValue
+        else throw RuntimeException("Unexpected left")
 
 // Make an Utxo from an output reference + TransactionOutput
 // For now has some limitations:
@@ -28,3 +35,7 @@ def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
       output.getInlineDatum.serializeToHex,
       null // no scripts
     )
+
+def encodeHex(bytes: IArray[Byte]): String = HexUtil.encodeHexString(bytes.toArray)
+
+def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))

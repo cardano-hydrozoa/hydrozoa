@@ -36,3 +36,5 @@ artifacts
 project/
 target/
 
+# tx dumping ground
+/txs.out
