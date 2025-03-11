@@ -2,38 +2,49 @@ package hydrozoa.l2.ledger
 
 import hydrozoa.infra.{CryptoHash, encodeHex}
 import hydrozoa.l2.ledger.event.*
-import hydrozoa.l2.ledger.state.{UTxOs, checkSumInvariant, mkTxIn, mkTxOut}
+import hydrozoa.l2.ledger.state.*
 import hydrozoa.{AddressBechL2, TxId, TxIx}
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 class AdaSimpleLedger(verifier: Verifier[L2Event])
-    extends L2Ledger[UTxOs, L2Event, L2EventHash, Verifier[L2Event]]:
-    val activeState: UTxOs = mutable.Map.empty
+    extends L2Ledger[
+      Utxos,
+      SimpleGenesis,
+      SimpleTransaction,
+      SimpleWithdrawal,
+      UtxosDiff,
+      L2Event,
+      L2EventHash,
+      Verifier[L2Event]
+    ]:
+    val activeState: Utxos = mutable.Map.empty
 
-    def submit(event: L2Event): L2EventHash =
+    override def submit[E1 <: L2Event](
+        event: E1
+    ): Either[(L2EventHash, String), (L2EventHash, event.UtxosDiff)] =
         require(verifier.isValid(event), true)
         event match
             case genesis: L2Genesis       => handleGenesis(genesis)
             case tx: L2Transaction        => handleTransaction(tx)
             case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
 
-    private def handleGenesis(event: L2Genesis): L2EventHash =
+    private def handleGenesis(event: L2Genesis) =
         val s = s"L2 genesis event: ${event.genesis}"
         println(s)
         val txId = eventHash(s)
 
-        // TODO: atomicity
-        event.genesis.utxosAdded.zipWithIndex.foreach(output =>
+        val utxoDiff = event.genesis.utxosAdded.zipWithIndex.map(output =>
             val txIn = mkTxIn(txId, TxIx(output._2))
             val txOut = mkTxOut(output._1.address, output._1.amount)
-            activeState.put(txIn, txOut)
+            (txIn, txOut)
         )
-        txId
+        activeState.addAll(utxoDiff)
+        Right((txId, utxoDiff))
 
-    private def handleTransaction(event: L2Transaction): L2EventHash =
-        
+    private def handleTransaction(event: L2Transaction) =
+
         val s = s"L2 transaction event: ${event.transaction}"
         println(s)
         val txId = eventHash(s)
@@ -42,36 +53,33 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
         val spentRefs = event.transaction.inputs.map(i => mkTxIn(i._1, i._2))
         val extraneousRefs = spentRefs.filterNot(activeState.contains)
 
-        if extraneousRefs.nonEmpty then
-            throw IllegalArgumentException(s"Extraneous inputs in the tx: $extraneousRefs")
-        
-        val spentOutputs = spentRefs.map(activeState.get).map(_.get)
-        
-        // Outputs
-        val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-            val txIn = mkTxIn(txId, TxIx(output._2))
-            val txOut = mkTxOut(output._1.address, output._1.amount)
-            (txIn, txOut)
-        )
+        if extraneousRefs.nonEmpty then Left(txId, s"Extraneous inputs in the tx: $extraneousRefs")
+        else
+            val spentOutputs = spentRefs.map(activeState.get).map(_.get)
 
-        if !checkSumInvariant(spentOutputs, newUtxos.map(_._2)) then
-            throw IllegalArgumentException(s"Sum invariant is not hold for tx $txId")    
-        
-        // FIXME: atomicity
-        spentRefs.foreach(activeState.remove)
-        newUtxos.foreach(activeState.put.tupled)
+            // Outputs
+            val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
+                val txIn = mkTxIn(txId, TxIx(output._2))
+                val txOut = mkTxOut(output._1.address, output._1.amount)
+                (txIn, txOut)
+            )
 
-        txId
+            if !checkSumInvariant(spentOutputs, newUtxos.map(_._2)) then
+                Left(txId, s"Sum invariant is not hold for tx $txId")
+            else
+                // FIXME: atomicity
+                spentRefs.foreach(activeState.remove)
+                newUtxos.foreach(activeState.put.tupled)
 
-    private def handleWithdrawal(d: L2Withdrawal): L2EventHash =
+                Right((txId, Set[(TxIn, TxOut)]()))
+
+    private def handleWithdrawal(d: L2Withdrawal) =
         val txIn = mkTxIn(d.withdrawal.utxoRef._1, d.withdrawal.utxoRef._2)
+        val s = s"L2 withdraw event: $txIn"
+        val txId = eventHash(s)
         activeState.remove(txIn) match
-            case Some(txOut) =>
-                val s = s"L2 withdraw event: $txOut"
-                val txId = eventHash(s)
-                println(s"$s, withdrawal id: $txId")
-                txId
-            case None => throw IllegalArgumentException(s"Withdrawal utxo not found: $d")
+            case Some(txOut) => Right(txId, Set((txIn, txOut)))
+            case None        => Left(txId, s"Withdrawal utxo not found: $d")
 
     private def eventHash(s: String): TxId =
         TxId(encodeHex(CryptoHash.H32.hash(IArray.from(s.getBytes)).bytes))
@@ -110,10 +118,19 @@ case class SimpleUtxo(
     amount: Int
 )
 
-type L2Event = AnyL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
-type L2Genesis = GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
-type L2Transaction = TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
-type L2Withdrawal = WithdrawalL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal]
+type L2Event = AnyL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type L2Genesis = GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type L2Transaction =
+    TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+
+def mkL2T(simple: SimpleTransaction) =
+    TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff](simple)
+
+type L2Withdrawal = WithdrawalL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+
+def mkL2W(simple: SimpleWithdrawal) =
+    WithdrawalL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff](simple)
+
 type L2EventHash = TxId
 
 object NoopVerifier extends Verifier[Any]:

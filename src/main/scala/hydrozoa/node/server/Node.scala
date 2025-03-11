@@ -18,9 +18,10 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.event.{L2Transaction, L2Withdrawal}
+import hydrozoa.l2.event.{L2Transaction_, L2Withdrawal_}
 import hydrozoa.l2.ledger.event.{TransactionL2Event, WithdrawalL2Event}
-import hydrozoa.l2.ledger.state.UTxOs
+import hydrozoa.l2.ledger.{mkL2T, mkL2W}
+import hydrozoa.l2.ledger.state.{MutableUTxOsDiff, Utxos, UtxosDiff}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -233,19 +234,19 @@ class Node(
         val blockBuilder: BlockBuilder = BlockBuilder()
 
         // (b) Let previousBlock be the latest block in blocksConfirmedL2
-        val previousBlock = state.asOpen(_.l2Tip)
+        // val previousBlock = state.asOpen(_.l2Tip)
 
         // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
-        val previousMajorBlock = state.asOpen(_.l2LastMajor)
+        // val previousMajorBlock = state.asOpen(_.l2LastMajor)
 
         // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
         // var utxosActive: UTxOs = state.asOpen(_.utxosActive)
 
         // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
-        val utxosAdded: UtxoSetL2 = mutable.Set()
+        val utxosAdded: MutableUTxOsDiff = mutable.Set()
 
         // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-        val utxosWithdrawn: UtxoSetL2 = mutable.Set()
+        val utxosWithdrawn: MutableUTxOsDiff = mutable.Set()
 
         // 2. Set block.timeCreation to timeCurrent.
         blockBuilder.withTimeCreation(timeCurrent)
@@ -254,23 +255,19 @@ class Node(
         val poolEvents = state.asOpen(_.poolEventsL2)
 
         // 3. For each non-genesis L2 event...
-        poolEvents.foreach(_ match
-            case tx: L2Transaction =>
-                try
-                    val txId = stateL2.submit(TransactionL2Event(tx.simpleTransaction))
-                    blockBuilder.withConfirmedEvent(txId, tx)
-                catch
-                    case e: IllegalArgumentException =>
-                        blockBuilder.withInvalidEvent(???, tx)
-            case wd: L2Withdrawal =>
-                try
-                    val txId = stateL2.submit(WithdrawalL2Event(wd.simpleWithdrawal))
-                    blockBuilder.withConfirmedEvent(txId, wd)
-                    utxosWithdrawn.addAll(???)
-                catch
-                    case e: IllegalArgumentException =>
-                        blockBuilder.withInvalidEvent(???, wd)
-        )
+        poolEvents.foreach {
+            case tx: L2Transaction_ =>
+                stateL2.submit(mkL2T(tx.simpleTransaction)) match
+                    case Right(txId, _)   => blockBuilder.withConfirmedEvent(txId, tx)
+                    case Left(txId, _err) => blockBuilder.withInvalidEvent(txId, tx)
+            case wd: L2Withdrawal_ =>
+                stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
+                    case Right(txId, utxosDiff) =>
+                        blockBuilder.withConfirmedEvent(txId, wd)
+                        utxosWithdrawn.addAll(utxosDiff)
+                    case Left(txId, _err) =>
+                        blockBuilder.withInvalidEvent(txId, wd)
+        }
 
         // 4. If finalizing is False...
         val finalizing = state.asOpen(_.finalizing)
@@ -281,7 +278,7 @@ class Node(
 //            utxosAdded = stateL2.submit(mkGenesisEvent(eligibleDeposits))
             blockBuilder.withDeposits(eligibleDeposits)
         // 5. If finalizing is True...
-        else utxosWithdrawn = stateL2.flush()
+        else utxosWithdrawn.addAll(???) // stateL2.activeState
 
         // 6. Set block.blockType...
         val multisigRegimeKeepAlive = false // TODO: implement
@@ -296,7 +293,8 @@ class Node(
         ???
 
         // 8. Return
-        (blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn)
+        // (blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn)
+        ???
 
     def produceMajorBlock: Either[String, String] =
 

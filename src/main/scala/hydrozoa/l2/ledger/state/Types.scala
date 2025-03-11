@@ -10,7 +10,10 @@ import scala.collection.mutable
 opaque type TxIn = scalus.TxOutRef
 opaque type TxOut = scalus.TxOut
 
-type UTxOs = mutable.Map[TxIn, TxOut]
+type Utxos = mutable.Map[TxIn, TxOut]
+
+type UtxosDiff = Set[(TxIn, TxOut)]
+type MutableUTxOsDiff = mutable.Set[(TxIn, TxOut)]
 
 // FIXME: move to another package
 def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =

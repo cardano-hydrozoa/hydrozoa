@@ -2,7 +2,8 @@ package hydrozoa.l2.block
 
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.EventType.{Genesis, Transaction, Withdrawal}
-import hydrozoa.l2.event.{L2Event, L2Genesis, L2Transaction, L2Withdrawal}
+import hydrozoa.l2.event.{L2Event, L2Genesis, L2Transaction_, L2Withdrawal_}
+import hydrozoa.l2.ledger.state.Utxos
 import hydrozoa.node.server.AwaitingDeposit
 import hydrozoa.{PosixTime, TxId}
 
@@ -38,7 +39,7 @@ enum EventType:
     case Withdrawal
 
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
-type UtxoSetL2 = mutable.Set[Unit]
+type UtxoSetL2 = Utxos
 
 def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
     Block(
@@ -82,5 +83,5 @@ class BlockBuilder:
 
 def eventTypeTag(e: L2Event): EventType = e match
     case _: L2Genesis     => Genesis
-    case _: L2Transaction => Transaction
-    case _: L2Withdrawal  => Withdrawal
+    case _: L2Transaction_ => Transaction
+    case _: L2Withdrawal_  => Withdrawal
