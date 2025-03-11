@@ -36,7 +36,7 @@ class BloxBeanSettlementTxBuilder(
 
         val treasuryValue: List[Amount] = utxos.toList.flatMap(u => u.getAmount.asScala)
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress
+        val headAddressBech32 = headStateReader.headBechAddress
 
         val treasuryDatum = Interop.toPlutusData(
           mkInitMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
@@ -51,7 +51,7 @@ class BloxBeanSettlementTxBuilder(
             )
             .from(headAddressBech32.bech32)
 
-        val Some(headNativeScript) = headStateReader.headNativeScript
+        val headNativeScript = headStateReader.headNativeScript
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         val ret = builder

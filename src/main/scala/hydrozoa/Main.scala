@@ -12,7 +12,7 @@ import hydrozoa.l1.wallet.{MockWallet, Wallet}
 import hydrozoa.l1.{Cardano, YaciDevKitCardano}
 import hydrozoa.l2.consensus.network.{HydrozoaNetwork, MockHydrozoaNetwork}
 import hydrozoa.node.api.NodeApi
-import hydrozoa.node.server.{HeadStateManager, HeadStateReader, Node}
+import hydrozoa.node.server.{NodeStateManager, HeadStateReader, Node}
 
 object Cli:
 
@@ -27,21 +27,21 @@ object Cli:
         val cardano: Cardano = YaciDevKitCardano(ctx)
 
         // Global head manager (for mocked head during Milestone 2)
-        val headStateManager: HeadStateManager = HeadStateManager(log)
-        val headStateReader: HeadStateReader = HeadStateReader(headStateManager)
+        val nodeStateManager: NodeStateManager = NodeStateManager(log)
+        val nodeStateReader: HeadStateReader = HeadStateReader(nodeStateManager)
 
         // Tx Builders
         val initTxBuilder: InitTxBuilder = BloxBeanInitTxBuilder(ctx)
-        val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, headStateReader)
-        val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, headStateReader)
+        val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, nodeStateReader)
+        val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, nodeStateReader)
         val settlementTxBuilder: SettlementTxBuilder =
-            BloxBeanSettlementTxBuilder(ctx, headStateReader)
+            BloxBeanSettlementTxBuilder(ctx, nodeStateReader)
         val finalizationTxBuilder: FinalizationTxBuilder =
-            BloxBeanFinalizationTxBuilder(ctx, headStateReader)
+            BloxBeanFinalizationTxBuilder(ctx, nodeStateReader)
 
         val network: HydrozoaNetwork =
             MockHydrozoaNetwork(
-              headStateReader,
+              nodeStateReader,
               initTxBuilder,
               refundTxBuilder,
               settlementTxBuilder,
@@ -51,7 +51,7 @@ object Cli:
             )
 
         val node = Node(
-          headStateManager,
+          nodeStateManager,
           ownKeys,
           network,
           cardano,

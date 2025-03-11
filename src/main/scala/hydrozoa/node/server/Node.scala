@@ -21,7 +21,7 @@ import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
 class Node(
-    headStateManager: HeadStateManager,
+    state: NodeStateManager,
     ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
     network: HydrozoaNetwork,
     cardano: Cardano,
@@ -101,7 +101,7 @@ class Node(
                     headNativeScript,
                     beaconTokenName,
                     AddressBechL1(headAddress),
-                    headStateManager,
+                    state,
                     log
                   )
                 )
@@ -141,7 +141,7 @@ class Node(
          */
 
         // Check deadline
-        val Some(maturity, window, expiry) = headStateManager.depositTimingParams
+        val (maturity, window, expiry) = state.asOpen(_.depositTimingParams)
         val latestBlockTime = cardano.lastBlockTime
         val minimalDeadline = latestBlockTime + maturity + window + expiry
 
@@ -218,11 +218,11 @@ class Node(
 
     def produceMajorBlock: Either[String, String] =
 
-        val awaitingDeposits: Set[AwaitingDeposit] = headStateManager.peekDeposits
+        val (awaitingDeposits, nextMajorVersion) = state.asOpen { s =>
+            (s.peekDeposits, s.currentMajorVersion + 1)
+        }
 
         log.info(s"Awaiting deposits: $awaitingDeposits")
-
-        val nextMajorVersion: Int = headStateManager.currentMajorVersion + 1
 
         val block: Block = majorDummyBlock(nextMajorVersion, awaitingDeposits)
 
@@ -231,7 +231,7 @@ class Node(
         val Right(settlementTxDraft: SettlementTx) =
             settlementTxBuilder.mkSettlementTxDraft(txRecipe)
 
-        val ownWit: TxKeyWitness = signTx(settlementTxDraft.toTx, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(settlementTxDraft.toTx, ownKeys._1)
 
         val ackMajorCombined: Set[AckMajorCombined] = network.reqMajor(block)
 
@@ -254,7 +254,9 @@ class Node(
     def produceFinalBlock: Either[String, String] =
 
         // Block
-        val nextMajorVersion: Int = headStateManager.currentMajorVersion + 1
+        val (nextMajorVersion) = state.asOpen { s =>
+            s.currentMajorVersion + 1
+        }
         val block: Block = finalDummyBlock(nextMajorVersion)
 
         // Tx
@@ -264,7 +266,7 @@ class Node(
             finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
         // Consensus
-        val ownWit: TxKeyWitness = signTx(finalizationTxDraft.toTx, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(finalizationTxDraft.toTx, ownKeys._1)
         val ackFinalCombined: Set[AckFinalCombined] = network.reqFinal(block)
         // TODO: broadcast ownWit
 

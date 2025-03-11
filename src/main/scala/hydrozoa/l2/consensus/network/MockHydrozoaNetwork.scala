@@ -67,8 +67,8 @@ class MockHydrozoaNetwork(
             SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
         val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx.toTx, keys2._1)
         Set(wit1, wit2).map(w =>
             AckMajorCombined(
               block.blockHeader,
@@ -85,8 +85,8 @@ class MockHydrozoaNetwork(
 
         val Right(tx) = finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx.toTx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx.toTx, keys2._1)
         Set(wit1, wit2).map(w =>
             AckFinalCombined(
               block.blockHeader,

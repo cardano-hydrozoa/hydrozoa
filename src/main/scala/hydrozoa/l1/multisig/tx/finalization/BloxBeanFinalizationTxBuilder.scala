@@ -31,11 +31,11 @@ class BloxBeanFinalizationTxBuilder(
             .force
 
         // Native script
-        val Some(headNativeScript) = headStateReader.headNativeScript
+        val headNativeScript = headStateReader.headNativeScript
         val script = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         // Beacon token to burn
-        val Some(beaconTokenName) = headStateReader.beaconTokenName
+        val beaconTokenName = headStateReader.beaconTokenName
         val beaconTokenAsset = AssetUtil.getUnit(script.getPolicyId, beaconTokenName)
         val beaconTokenToBurn = Asset.builder
             .name(beaconTokenName)
@@ -47,8 +47,8 @@ class BloxBeanFinalizationTxBuilder(
             .filterNot(_.getUnit == beaconTokenAsset)
 
         // Addresses
-        val Some(headAddressBech32) = headStateReader.headBechAddress
-        val Some(seedAddress) = headStateReader.seedAddress
+        val headAddressBech32 = headStateReader.headBechAddress
+        val seedAddress = headStateReader.seedAddress
 
         val tx = Tx()
             .collectFrom(List(treasuryUtxo).asJava)

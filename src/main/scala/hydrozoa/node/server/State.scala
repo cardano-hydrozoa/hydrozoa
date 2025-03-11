@@ -1,166 +1,208 @@
 package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
-import hydrozoa.node.server.HeadState.{Free, MultisigRegime}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier}
 
 import scala.collection.mutable
 
-// Milestone 2: shared global state
-class HeadStateManager(log: Logger) {
+/* The head state. Currently, we support only one head per a [set] of nodes.
+ */
 
-    private var headState: HeadState = Free(Array.empty)
+sealed trait HeadState
 
-    // TODO: separate objects for every state
-    private val awaitingDeposits = mutable.Set[AwaitingDeposit]()
-    private var treasuryRef: Option[(TxId, TxIx)] = None
-    private var majorVersion = 0
-    private var nextBlockFinal = false
-    // FIXME: move to HeadState, doesn't change over the course of head's lifecycle
-    private var seedAddress: Option[AddressBechL1] = None
+sealed trait MultisigRegime
 
-    // transitions
-    def init(
+sealed trait RuleBasedRegime
+
+private case class Initializing(nodes: Array[PeerNode]) extends HeadState with MultisigRegime
+
+private case class Open(
+    headParams: HeadParams,
+    headNativeScript: NativeScript,
+    headBechAddress: AddressBechL1,
+    beaconTokenName: String, // FIXME: use more specific type
+    seedAddress: AddressBechL1
+) extends HeadState
+    with MultisigRegime {
+    val blocksConfirmedL2: mutable.Seq[Block] = mutable.Seq[Block]()
+    val confirmedEventsL2: Unit = () // TODO: with block number
+    val poolEventsL2: Unit = () // TODO: only txs and withdrawals
+    var finalizing = false
+    // TODO: peers
+    // TODO: stateL1
+    val stateL2 = AdaSimpleLedger(NoopVerifier)
+
+    def timeCurrent(): Unit = ()
+
+    // Additional to spec, likely will be gone
+    val awaitingDeposits: mutable.Set[AwaitingDeposit] = mutable.Set[AwaitingDeposit]()
+    var treasuryRef: Option[(TxId, TxIx)] = None
+    var majorVersion = 0 // FIXME: use blocksConfirmedL2
+}
+
+private case class Finalizing() extends HeadState with MultisigRegime
+
+private case class Closed() extends HeadState with RuleBasedRegime
+
+private case class Disputing() extends HeadState with RuleBasedRegime
+
+/*
+ * APIs for every possible state of the head + additional state when the head is absent.
+ */
+
+trait StateApi
+
+trait HeadAbsentState extends StateApi:
+    def initializeHead(
         headParams: HeadParams,
         headNativeScript: NativeScript,
         headBechAddress: AddressBechL1,
         beaconTokenName: String,
         treasuryRef: (TxId, TxIx),
         seedAddress: AddressBechL1
-    ): Unit = headState match
-        case Free(_) =>
-            headState =
-                MultisigRegime(headParams, headNativeScript, headBechAddress, beaconTokenName)
-            this.treasuryRef = Some(treasuryRef)
-            this.seedAddress = Some(seedAddress)
-        case _ => log.error(s"Initialization can happen only in free state.")
+    ): Unit
 
-    def finalize_(): Unit =
-        headState match
-            case MultisigRegime(_, _, _, _) =>
-                headState = Free(Array.empty) // TODO:
-                treasuryRef = None
-                seedAddress = None
-                majorVersion = 0
-                nextBlockFinal = false
-                awaitingDeposits.clear()
-            case _ => log.error(s"Finalization can happen only in multisig regime.")
-
-    // operations over a particular state  - namely MultiSig
-    def enqueueDeposit(deposit: AwaitingDeposit) =
-        headState match
-            case MultisigRegime(_, _, _, _) =>
-                awaitingDeposits.add(deposit)
-            case _ => log.error(s"Deposits can be queued only in multisig regime.")
-
-    def peekDeposits: Set[AwaitingDeposit] = awaitingDeposits.toList.toSet
-
-    def currentMajorVersion = majorVersion
-
-    def currentTreasuryRef = treasuryRef
-
+trait OpenNodeState extends StateApi:
+    def currentMajorVersion: Int
+    def currentTreasuryRef: (TxId, TxIx)
+    def headNativeScript: NativeScript
+    def headBechAddress: AddressBechL1
+    def beaconTokenName: String // TODO: use more concrete type
+    def seedAddress: AddressBechL1
+    def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
+    def peekDeposits: Set[AwaitingDeposit]
+    def enqueueDeposit(deposit: AwaitingDeposit): Unit
     def stepMajor(
         txId: TxId,
         txIx: TxIx,
         newMajor: Int,
         absorbedDeposits: Set[SettledDeposit]
-    ): Unit =
-        headState match
-            case MultisigRegime(_, _, _, _) =>
-                if newMajor == majorVersion + 1 then
-                    // TODO: verify all absorbed deposits are on the list
-                    // TODO: atomicity
-                    // TODO: create L2 utxos
-                    absorbedDeposits.map(awaited).map(awaitingDeposits.remove)
-                    log.info(s"Settled deposits: $absorbedDeposits")
-                    majorVersion = newMajor
-                    log.info(s"Step into next major version $newMajor")
-                    treasuryRef = Some(txId, txIx)
-                    log.info(s"New treasury utxo is $treasuryRef")
-                else
-                    log.error(
-                      s"Can't step into wrong major version, expected: ${majorVersion + 1}, got: $newMajor"
-                    )
-            case _ => log.error(s"Stepping into the next major block requires multisig regime.")
+    ): Unit
+    def finalizeHead(): Unit
 
-    // utils
-    def headNativeScript: Option[NativeScript] = headState match
-        case MultisigRegime(_, s, _, _) => Some(s)
+/** The class that provides read-write access to the state.
+  * @param log
+  */
+class NodeStateManager(log: Logger) { self =>
 
-    def beaconTokenName: Option[String] = headState match
-        case MultisigRegime(_, _, _, tn) => Some(tn)
+    private var knownPeerNodes: mutable.Set[PeerNode] = mutable.Set.empty
 
-    def headBechAddress: Option[AddressBechL1] = headState match
-        case MultisigRegime(_, _, a, _) => Some(a)
+    private var headState: Option[HeadState] = None
 
-    // FIXME: rename
-    def getSeedAddress = seedAddress
+    private class HeadAbsentStateImpl extends HeadAbsentState:
+        def initializeHead(
+            headParams: HeadParams,
+            headNativeScript: NativeScript,
+            headBechAddress: AddressBechL1,
+            beaconTokenName: String,
+            treasuryRef: (TxId, TxIx),
+            seedAddress: AddressBechL1
+        ): Unit =
+            val newHead = Open(
+              headParams,
+              headNativeScript,
+              headBechAddress,
+              beaconTokenName,
+              seedAddress
+            )
+            newHead.treasuryRef = Some(treasuryRef)
+            self.headState = Some(newHead)
 
-    def depositTimingParams: Option[(UDiffTime, UDiffTime, UDiffTime)] = headState match
-        case MultisigRegime(
+    private class OpenNodeStateImpl(openState: Open) extends OpenNodeState:
+        def currentMajorVersion: Int = openState.majorVersion
+
+        def currentTreasuryRef: (TxId, TxIx) = openState.treasuryRef match
+            case Some(ref) => ref
+            case None => throw IllegalStateException("Corrupted node state: missing treasury ref.")
+
+        def headNativeScript: NativeScript = openState.headNativeScript
+        def headBechAddress: AddressBechL1 = openState.headBechAddress
+        def beaconTokenName: String = openState.beaconTokenName
+        def seedAddress: AddressBechL1 = openState.seedAddress
+
+        def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) =
+            val Open(
               HeadParams(
                 L2ConsensusParams(depositMarginMaturity, depositMarginExpiry),
                 minimalDepositWindow
               ),
               _,
               a,
+              _,
               _
-            ) =>
-            Some(depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
+            ) = openState
+
+            (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
+
+        def peekDeposits: Set[AwaitingDeposit] = openState.awaitingDeposits.toList.toSet
+        def enqueueDeposit(deposit: AwaitingDeposit): Unit = openState.awaitingDeposits.add(deposit)
+
+        def stepMajor(
+            txId: TxId,
+            txIx: TxIx,
+            newMajor: Int,
+            absorbedDeposits: Set[SettledDeposit]
+        ): Unit =
+            if newMajor == openState.majorVersion + 1 then
+                // TODO: verify all absorbed deposits are on the list
+                // TODO: atomicity
+                // TODO: create L2 utxos
+                absorbedDeposits.map(awaited).map(openState.awaitingDeposits.remove)
+                log.info(s"Settled deposits: $absorbedDeposits")
+                openState.majorVersion = newMajor
+                log.info(s"Step into next major version $newMajor")
+                openState.treasuryRef = Some(txId, txIx)
+                log.info(s"New treasury utxo is $openState.treasuryRef")
+            else
+                throw IllegalStateException(
+                  s"Can't step into wrong major version, expected: " +
+                      s"${openState.majorVersion + 1}, got: $newMajor"
+                )
+
+        def finalizeHead(): Unit =
+            headState = None
+
+    def asAbsent[A](foo: HeadAbsentState => A): A =
+        headState match
+            case None => foo(HeadAbsentStateImpl())
+            // Should be this: (initializing state is missing now).
+            // case Some(Initializing(_)) => foo(HeadAbsentStateImpl())
+            case _ =>
+                throw IllegalStateException("The head is missing or not in Initializing state.")
+
+    def asOpen[A](foo: OpenNodeState => A): A =
+        headState match
+            case Some(open: Open) => foo(OpenNodeStateImpl(open))
+            case _ => throw IllegalStateException("The head is missing or in a Open state.")
 
 }
 
-// A read-only wrapper around HeadStateManager
-// TODO: probbaly should be a singleton object
-class HeadStateReader(manager: HeadStateManager) {
-    def headNativeScript: Option[NativeScript] = manager.headNativeScript
-    def beaconTokenName: Option[String] = manager.beaconTokenName
-    def headBechAddress: Option[AddressBechL1] = manager.headBechAddress
-    def depositTimingParams: Option[(UDiffTime, UDiffTime, UDiffTime)] =
-        manager.depositTimingParams
-    def currentMajorVersion = manager.currentMajorVersion
-    def currentTreasuryRef = manager.currentTreasuryRef match
-        case Some(x) => x // FIXME
-    def seedAddress = manager.getSeedAddress
-    def peekDeposits = manager.peekDeposits
+class HeadStateReader(manager: NodeStateManager) {
+    def headNativeScript: NativeScript = manager.asOpen(_.headNativeScript)
+    def beaconTokenName: String = manager.asOpen(_.beaconTokenName)
+    def headBechAddress: AddressBechL1 = manager.asOpen(_.headBechAddress)
+    def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) =
+        manager.asOpen(_.depositTimingParams)
+    def currentTreasuryRef: (TxId, TxIx) = manager.asOpen(_.currentTreasuryRef)
+    def seedAddress: AddressBechL1 = manager.asOpen(_.seedAddress)
 }
 
-// TODO: revise
-enum HeadState:
-    // Hydrozoa node is running and can be asked to prepare the init tx.
-    case Free(knownPeers: Array[Peer])
-    // The init transaction is settled.
-    case MultisigRegime(
-        headParams: HeadParams,
-        headNativeScript: NativeScript,
-        headBechAddress: AddressBechL1,
-        beaconTokenName: String // FIXME: type
-    )
+/** Represent a node (Hydrozoa process) run by a peer (a user/operator).
+  */
+case class PeerNode()
 
-case class Peer()
+// Additional stuff
 
 case class AwaitingDeposit(
     txId: TxId,
     txIx: TxIx
 )
 
+def awaited(d: SettledDeposit): AwaitingDeposit = AwaitingDeposit(d.txId, d.txIx)
+
 case class SettledDeposit(
     txId: TxId,
     txIx: TxIx
-)
-
-def awaited(d: SettledDeposit): AwaitingDeposit = AwaitingDeposit(d.txId, d.txIx)
-
-/** Temporary withdrawal - once we have L2 ledger we can remove lovelace and address fields.
-  *
-  * @param txId
-  * @param txIx
-  * @param lovelace
-  * @param address
-  */
-case class Withdrawal(
-    txId: TxId,
-    txIx: TxIx,
-    lovelace: Int,
-    address: AddressBechL1
 )

@@ -44,7 +44,7 @@ class BloxBeanRefundTxBuilder(
           )
         )
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress
+        val headAddressBech32 = headStateReader.headBechAddress
 
         val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
 
@@ -80,7 +80,7 @@ class BloxBeanRefundTxBuilder(
 
         tx.from(headAddressBech32.bech32)
 
-        val Some(headNativeScript) = headStateReader.headNativeScript
+        val headNativeScript = headStateReader.headNativeScript
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         val ret = builder

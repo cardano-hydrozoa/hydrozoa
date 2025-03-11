@@ -31,7 +31,7 @@ class BloxBeanDepositTxBuilder(
 
         println(fundUtxo)
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress
+        val headAddressBech32 = headStateReader.headBechAddress
 
         // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
         val amountList: List[Amount] = List(ada(100))

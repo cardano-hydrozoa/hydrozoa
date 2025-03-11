@@ -24,7 +24,8 @@ enum BlockTypeL2:
 
 case class BlockBody(depositsAbsorbed: Set[AwaitingDeposit])
 
-opaque type RH32UtxoSetL2 = H32
+opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
+type UtxoSetL2 = Unit 
 
 def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
     Block(
