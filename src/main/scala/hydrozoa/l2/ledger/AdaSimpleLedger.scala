@@ -32,12 +32,12 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
 
     private def handleGenesis(event: L2Genesis) =
         val s = s"L2 genesis event: ${event.genesis}"
-        println(s)
         val txId = eventHash(s)
+        println(s"L2 genesis txId: $txId, content: $s")
 
         val utxoDiff = event.genesis.utxosAdded.zipWithIndex.map(output =>
             val txIn = mkTxIn(txId, TxIx(output._2))
-            val txOut = mkTxOut(output._1.address, output._1.amount)
+            val txOut = mkTxOut(output._1.address, output._1.coins)
             (txIn, txOut)
         )
         activeState.addAll(utxoDiff)
@@ -45,9 +45,9 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
 
     private def handleTransaction(event: L2Transaction) =
 
-        val s = s"L2 transaction event: ${event.transaction}"
-        println(s)
+        val s = s"L2 simple transaction: ${event.transaction}"
         val txId = eventHash(s)
+        println(s"L2 tx txId: $txId, content: $s")
 
         // Inputs
         val spentRefs = event.transaction.inputs.map(i => mkTxIn(i._1, i._2))
@@ -60,7 +60,7 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
             // Outputs
             val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
                 val txIn = mkTxIn(txId, TxIx(output._2))
-                val txOut = mkTxOut(output._1.address, output._1.amount)
+                val txOut = mkTxOut(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
 
@@ -75,8 +75,9 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
 
     private def handleWithdrawal(d: L2Withdrawal) =
         val txIn = mkTxIn(d.withdrawal.utxoRef._1, d.withdrawal.utxoRef._2)
-        val s = s"L2 withdraw event: $txIn"
+        val s = s"Simple withdrawing: $txIn"
         val txId = eventHash(s)
+        println(s"L2 withdraw: $txId, content: $s")
         activeState.remove(txIn) match
             case Some(txOut) => Right(txId, Set((txIn, txOut)))
             case None        => Left(txId, s"Withdrawal utxo not found: $d")
@@ -115,12 +116,15 @@ case class SimpleWithdrawal(
 
 case class SimpleUtxo(
     address: AddressBechL2,
-    amount: Int
+    coins: BigInt
 )
 
 type L2Event = AnyL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
 
 type L2Genesis = GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+
+def mkL2G(simple: SimpleGenesis) =
+    GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff](simple)
 
 type L2Transaction =
     TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]

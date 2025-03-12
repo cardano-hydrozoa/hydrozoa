@@ -20,7 +20,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.event.{L2Transaction_, L2Withdrawal_}
 import hydrozoa.l2.ledger.state.{MutableUTxOsDiff, UtxosDiff}
-import hydrozoa.l2.ledger.{mkL2T, mkL2W}
+import hydrozoa.l2.ledger.*
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -112,8 +112,10 @@ class Node(
                   )
                 )
 
-                // Emulate l1 init event
+                // Emulate L1 init event
                 multisigEventManager.map(_.handleInitTx(initTx, seedAddress))
+
+        println(state.asOpen(_.stateL1))
 
         ret
     }
@@ -213,6 +215,8 @@ class Node(
 
         // TODO: store the post-dated refund in the store along with the deposit id
 
+        println(state.asOpen(_.stateL1))
+
         Right(DepositResponse(refundTx, (depositTxHash, index)))
     }
 
@@ -233,10 +237,10 @@ class Node(
         val blockBuilder: BlockBuilder = BlockBuilder()
 
         // (b) Let previousBlock be the latest block in blocksConfirmedL2
-        // val previousBlock = state.asOpen(_.l2Tip)
+        val previousBlock = state.asOpen(_.l2Tip)
 
         // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
-        // val previousMajorBlock = state.asOpen(_.l2LastMajor)
+        val previousMajorBlock = state.asOpen(_.l2LastMajor)
 
         // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
         // var utxosActive: UTxOs = state.asOpen(_.utxosActive)
@@ -269,6 +273,12 @@ class Node(
                         blockBuilder.withInvalidEvent(txId, wd)
         }
 
+        def mkGenesisEvent(ds: DepositUtxos): SimpleGenesis =
+            SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toSet)
+
+        // FIXME: implement
+        def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
+
         // 4. If finalizing is False...
         val finalizing = state.asOpen(_.finalizing)
         if !finalizing then
@@ -276,8 +286,7 @@ class Node(
             // TODO: check deposits timing
             val eligibleDeposits: DepositUtxos =
                 UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
-//            mkGenesisEvent(eligibleDeposits)
-            stateL2.submit(???) match
+            stateL2.submit(mkL2G(mkGenesisEvent(eligibleDeposits))) match
                 case Right(_, utxos) => utxosAdded.addAll(utxos)
                 case Left(_, _)      => ??? // unreachable
             blockBuilder.withDeposits(eligibleDeposits.map.keySet.toSet) // output refs only
@@ -298,11 +307,20 @@ class Node(
         println((stateL2.activeState, utxosAdded, utxosWithdrawn))
 
         // 7. Set the rest of the block header...
-        ???
+
+        // (a) Set block.blockNum to (previousBlock.blockNum + 1)
+        blockBuilder.withBlockNum(previousBlock.blockHeader.blockNum + 1)
+
+        // (b) Set block.utxosActive to the Merkle root hash of utxosActive
+        // TODO: calculate Merkle root hash
+        blockBuilder.withUtxosActive(RH32UtxoSetL2.dummy)
+        blockBuilder.withPreviousVersions(
+          previousBlock.blockHeader.versionMajor,
+          previousBlock.blockHeader.versionMinor
+        )
 
         // 8. Return
-        // (blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn)
-        ???
+        Right((blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn).toString())
 
 //    def produceMajorBlock: Either[String, String] =
 //

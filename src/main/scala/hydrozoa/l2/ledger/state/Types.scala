@@ -21,9 +21,9 @@ def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
     val sTxIx = BigInt.apply(txIx.ix.intValue)
     scalus.TxOutRef(sTxId, sTxIx)
 
-def mkTxOut(bech32: hydrozoa.AddressBechL2, ada: Int): TxOut =
+def mkTxOut(bech32: hydrozoa.AddressBechL2, coins: BigInt): TxOut =
     val address = decodeBech32AddressL2(bech32)
-    val value = scalus.Value.lovelace(ada * 1_000_000)
+    val value = scalus.Value.lovelace(coins)
     scalus.TxOut(address = address, value = value, datumHash = Nothing)
 
 def checkSumInvariant(inputs: Set[TxOut], outputs: Set[TxOut]): Boolean =

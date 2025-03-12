@@ -1,7 +1,8 @@
 package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.l2.block.Block
+import hydrozoa.l2.block.BlockTypeL2.Major
+import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
 import hydrozoa.l2.event.{L2Event, L2NonGenesis}
 import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier}
@@ -22,7 +23,7 @@ private case class Initializing(nodes: Array[PeerNode]) extends HeadState with M
 private case class Open(
     headParams: HeadParams,
     headNativeScript: NativeScript,
-    headBechAddress: AddressBechL1,
+    headBechAddress: AddressBechL1, // FIXME: can be obtained from stateL1.treasuryUtxo
     beaconTokenName: String, // FIXME: use more specific type
     seedAddress: AddressBechL1
 )(initialTreasury: TreasuryUtxo)
@@ -77,7 +78,10 @@ trait OpenNodeState extends StateApi:
     def peekDeposits: DepositUtxos
     def poolEventsL2: mutable.Set[L2NonGenesis]
     def enqueueDeposit(deposit: DepositUtxo): Unit
+    def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger
+    def l2Tip: Block
+    def l2LastMajor: Block
     def finalizing: Boolean
     def majorBlockL2Effect(
         txId: TxId,
@@ -146,7 +150,13 @@ class NodeStateManager(log: Logger) { self =>
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def finalizing: Boolean = openState.finalizing
+        def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger = openState.stateL2
+
+        def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
+        def l2LastMajor: Block = openState.blocksConfirmedL2
+            .findLast(_.blockHeader.blockType == Major)
+            .getOrElse(zeroBlock)
 
         // FIXME: review
         def majorBlockL2Effect(
