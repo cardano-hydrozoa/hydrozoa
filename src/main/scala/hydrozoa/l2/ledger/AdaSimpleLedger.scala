@@ -119,7 +119,9 @@ case class SimpleUtxo(
 )
 
 type L2Event = AnyL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+
 type L2Genesis = GenesisL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+
 type L2Transaction =
     TransactionL2Event[SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
 

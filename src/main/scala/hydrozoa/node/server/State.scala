@@ -25,21 +25,22 @@ private case class Open(
     headBechAddress: AddressBechL1,
     beaconTokenName: String, // FIXME: use more specific type
     seedAddress: AddressBechL1
-) extends HeadState
+)(initialTreasury: TreasuryUtxo)
+    extends HeadState
     with MultisigRegime {
     val blocksConfirmedL2: mutable.Seq[Block] = mutable.Seq[Block]()
     val confirmedEventsL2: mutable.Set[L2Event] = mutable.Set()
     val poolEventsL2: mutable.Set[L2NonGenesis] = mutable.Set()
     var finalizing = false
     // TODO: peers
-    // TODO: stateL1
+    var stateL1 = MultisigHeadStateL1.empty(initialTreasury)
     val stateL2 = AdaSimpleLedger(NoopVerifier)
 
     def timeCurrent(): Unit = ()
 
     // Additional to spec, likely will be gone
-    val awaitingDeposits: mutable.Set[AwaitingDeposit] = mutable.Set[AwaitingDeposit]()
-    var treasuryRef: Option[(TxId, TxIx)] = None
+//    val awaitingDeposits: mutable.Set[AwaitingDeposit] = mutable.Set[AwaitingDeposit]()
+//    var treasuryRef: Option[(TxId, TxIx)] = None
     var majorVersion = 0 // FIXME: use blocksConfirmedL2
 }
 
@@ -61,7 +62,7 @@ trait HeadAbsentState extends StateApi:
         headNativeScript: NativeScript,
         headBechAddress: AddressBechL1,
         beaconTokenName: String,
-        treasuryRef: (TxId, TxIx),
+        treasuryUtxo: TreasuryUtxo,
         seedAddress: AddressBechL1
     ): Unit
 
@@ -73,12 +74,9 @@ trait OpenNodeState extends StateApi:
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
-
-    def peekDeposits: Set[AwaitingDeposit]
+    def peekDeposits: DepositUtxos
     def poolEventsL2: mutable.Set[L2NonGenesis]
-
-    def enqueueDeposit(deposit: AwaitingDeposit): Unit
-
+    def enqueueDeposit(deposit: DepositUtxo): Unit
     def stateL2: AdaSimpleLedger
     def finalizing: Boolean
     def majorBlockL2Effect(
@@ -104,7 +102,7 @@ class NodeStateManager(log: Logger) { self =>
             headNativeScript: NativeScript,
             headBechAddress: AddressBechL1,
             beaconTokenName: String,
-            treasuryRef: (TxId, TxIx),
+            treasuryUtxo: TreasuryUtxo,
             seedAddress: AddressBechL1
         ): Unit =
             val newHead = Open(
@@ -113,16 +111,15 @@ class NodeStateManager(log: Logger) { self =>
               headBechAddress,
               beaconTokenName,
               seedAddress
-            )
-            newHead.treasuryRef = Some(treasuryRef)
+            )(treasuryUtxo)
             self.headState = Some(newHead)
 
     private class OpenNodeStateImpl(openState: Open) extends OpenNodeState:
         def currentMajorVersion: Int = openState.majorVersion
 
-        def currentTreasuryRef: (TxId, TxIx) = openState.treasuryRef match
-            case Some(ref) => ref
-            case None => throw IllegalStateException("Corrupted node state: missing treasury ref.")
+        def currentTreasuryRef: (TxId, TxIx) =
+            val ref = openState.stateL1.treasuryUtxo.ref
+            (ref.id, ref.ix)
 
         def headNativeScript: NativeScript = openState.headNativeScript
         def headBechAddress: AddressBechL1 = openState.headBechAddress
@@ -145,11 +142,13 @@ class NodeStateManager(log: Logger) { self =>
 
         def poolEventsL2 = openState.poolEventsL2
 
-        def peekDeposits: Set[AwaitingDeposit] = openState.awaitingDeposits.toList.toSet
-        def enqueueDeposit(deposit: AwaitingDeposit): Unit = openState.awaitingDeposits.add(deposit)
+        def peekDeposits: DepositUtxos = openState.stateL1.depositUtxos
+        def enqueueDeposit(d: DepositUtxo): Unit =
+            openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def finalizing: Boolean = openState.finalizing
         def stateL2: AdaSimpleLedger = openState.stateL2
 
+        // FIXME: review
         def majorBlockL2Effect(
             txId: TxId,
             txIx: TxIx,
@@ -160,11 +159,13 @@ class NodeStateManager(log: Logger) { self =>
                 // TODO: verify all absorbed deposits are on the list
                 // TODO: atomicity
                 // TODO: create L2 utxos
-                absorbedDeposits.map(awaited).map(openState.awaitingDeposits.remove)
+                absorbedDeposits
+                    .map(sd => mkOutputRef(sd.txId, sd.txIx))
+                    .map(openState.stateL1.depositUtxos.map.remove)
                 log.info(s"Settled deposits: $absorbedDeposits")
                 openState.majorVersion = newMajor
                 log.info(s"Step into next major version $newMajor")
-                openState.treasuryRef = Some(txId, txIx)
+                openState.stateL1.treasuryUtxo = ??? // treasuryRef = Some(txId, txIx)
                 log.info(s"New treasury utxo is $openState.treasuryRef")
             else
                 throw IllegalStateException(
@@ -206,12 +207,34 @@ case class PeerNode()
 
 // Additional stuff
 
-case class AwaitingDeposit(
-    txId: TxId,
-    txIx: TxIx
+type DepositUtxo = Utxo[L1, DepositTag]
+type DepositUtxos = UtxoSet[L1, DepositTag]
+
+type RolloutUtxo = Utxo[L1, RolloutTag]
+type RolloutUtxos = UtxoSet[L1, RolloutTag]
+
+type TreasuryUtxo = Utxo[L1, TreasuryTag]
+
+case class MultisigHeadStateL1(
+    var treasuryUtxo: TreasuryUtxo,
+    depositUtxos: DepositUtxos,
+    rolloutUtxos: RolloutUtxos
 )
 
-def awaited(d: SettledDeposit): AwaitingDeposit = AwaitingDeposit(d.txId, d.txIx)
+// tags
+final class DepositTag
+final class RolloutTag
+final class TreasuryTag
+
+object MultisigHeadStateL1:
+    def empty(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
+        MultisigHeadStateL1(
+          treasuryUtxo,
+          UtxoSet[L1, DepositTag](mutable.Map.empty),
+          UtxoSet[L1, RolloutTag](mutable.Map.empty)
+        )
+
+// Remove
 
 case class SettledDeposit(
     txId: TxId,

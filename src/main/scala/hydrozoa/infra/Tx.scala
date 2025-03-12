@@ -93,12 +93,17 @@ def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
     L1Tx(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
 }
 
-def onlyAddressOutput(tx: L1Tx, address: AddressBechL1): Option[TxIx] =
+/** @param tx
+  * @param address
+  * @return
+  *   Index and ada amount (should be value).
+  */
+def onlyAddressOutput(tx: L1Tx, address: AddressBechL1): Option[(TxIx, BigInt)] =
     val tx_ = Transaction.deserialize(tx.bytes)
-    tx_.getBody.getOutputs.asScala
-        .indexWhere(output => output.getAddress == address.bech32) match
+    val outputs = tx_.getBody.getOutputs.asScala
+    outputs.indexWhere(output => output.getAddress == address.bech32) match
         case -1 => None
-        case i  => Some(TxIx(i))
+        case i  => Some((TxIx(i), BigInt.apply(outputs.apply(i).getValue.getCoin.longValue())))
 
 def outputDatum(tx: L1Tx, index: TxIx): Data =
     val tx_ = Transaction.deserialize(tx.bytes)

@@ -1,8 +1,7 @@
 package hydrozoa.l1.multisig.tx.settlement
 
 import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, PostDatedRefundTx, SettlementTx}
-import hydrozoa.node.server.AwaitingDeposit
-import hydrozoa.{ParticipantSecretKey, TxIx}
+import hydrozoa.{L1, OutputRef, ParticipantSecretKey, TxIx}
 
 trait SettlementTxBuilder {
     def mkSettlementTxDraft(
@@ -11,6 +10,6 @@ trait SettlementTxBuilder {
 }
 
 case class SettlementRecipe(
-    deposits: Set[AwaitingDeposit],
+    deposits: Seq[OutputRef[L1]],
     majorVersion: Int
 )

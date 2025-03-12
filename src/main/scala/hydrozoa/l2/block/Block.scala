@@ -4,8 +4,7 @@ import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.EventType.{Genesis, Transaction, Withdrawal}
 import hydrozoa.l2.event.{L2Event, L2Genesis, L2Transaction_, L2Withdrawal_}
 import hydrozoa.l2.ledger.state.Utxos
-import hydrozoa.node.server.AwaitingDeposit
-import hydrozoa.{PosixTime, TxId}
+import hydrozoa.{L1, OutputRef, PosixTime, TxId}
 
 import scala.collection.mutable
 
@@ -30,7 +29,7 @@ enum BlockTypeL2:
 
 case class BlockBody(
     eventsValid: Seq[(EventType, TxId)],
-    depositsAbsorbed: Set[AwaitingDeposit]
+    depositsAbsorbed: Seq[OutputRef[L1]]
 )
 
 enum EventType:
@@ -41,17 +40,17 @@ enum EventType:
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 type UtxoSetL2 = Utxos
 
-def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
-    Block(
-      BlockHeader(0, BlockTypeL2.Major, 0, major, 0, H32.hash(IArray())),
-      BlockBody(Seq.empty, depositsAbsorbed)
-    )
-
-def finalDummyBlock(major: Int): Block =
-    Block(
-      BlockHeader(0, BlockTypeL2.Final, 0, major, 0, H32.hash(IArray())),
-      BlockBody(Seq.empty, Set.empty)
-    )
+//def majorDummyBlock(major: Int, depositsAbsorbed: Set[AwaitingDeposit]): Block =
+//    Block(
+//      BlockHeader(0, BlockTypeL2.Major, 0, major, 0, H32.hash(IArray())),
+//      BlockBody(Seq.empty, depositsAbsorbed)
+//    )
+//
+//def finalDummyBlock(major: Int): Block =
+//    Block(
+//      BlockHeader(0, BlockTypeL2.Final, 0, major, 0, H32.hash(IArray())),
+//      BlockBody(Seq.empty, Set.empty)
+//    )
 
 class BlockBuilder:
 
@@ -71,17 +70,17 @@ class BlockBuilder:
         eventsInvalid.appendAll(mutable.Buffer((eventTypeTag(l2Event), txId))) // FIXME:
         this
 
-    def withDeposits(ds: Set[AwaitingDeposit]): BlockBuilder = // FIXME: type
-        ???
+    def withDeposits(ds: Set[OutputRef[L1]]): BlockBuilder = // FIXME: type
+        // ???
         this
 
     def withBlockType(ty: BlockTypeL2): BlockBuilder =
-        ???
+        // ???
         this
 
     def build: Block = ???
 
 def eventTypeTag(e: L2Event): EventType = e match
-    case _: L2Genesis     => Genesis
+    case _: L2Genesis      => Genesis
     case _: L2Transaction_ => Transaction
     case _: L2Withdrawal_  => Withdrawal

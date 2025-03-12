@@ -5,12 +5,12 @@ import hydrozoa.*
 import hydrozoa.infra.{onlyAddressOutput, outputDatum, txHash, txInputsRef}
 import hydrozoa.l1.multisig.state.{MultisigTreasuryDatum, given_FromData_MultisigTreasuryDatum}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.node.server.{AwaitingDeposit, NodeStateManager, SettledDeposit}
+import hydrozoa.node.server.{DepositTag, NodeStateManager, SettledDeposit, TreasuryTag}
 import scalus.builtin.Data.fromData
 
 /** This class is in charge of handling L1 events.
   *
-  * TODO: Apparently we don't need it as it is. See
+  * TODO: Apparently we don't need to hanle all L1 transactions. See
   * https://github.com/cardano-hydrozoa/hydrozoa/issues/11
   *
   * @param state
@@ -28,7 +28,7 @@ case class MultisigEventManager(
         val txId = txHash(initTx)
         log.info(s"Handling init tx $txId") // FIXME: perf
         onlyAddressOutput(initTx, headAddress) match
-            case Some(ix) =>
+            case Some(ix, coins) =>
                 log.info(s"Treasury output index is: $ix");
                 state.asAbsent {
                     _.initializeHead(
@@ -36,20 +36,20 @@ case class MultisigEventManager(
                       nativeScript,
                       headAddress,
                       beaconTokenName,
-                      (txId, ix),
+                      mkUtxo[L1, TreasuryTag](txId, ix, headAddress, coins),
                       seedAddress
                     )
                 }
             case None =>
                 log.error("Can't find treasury in the initialization tx!")
 
-    def handleDepositTx(depositTx: L1Tx, txHash: TxId) =
-        log.info(s"Handling deposit tx ${txHash}")
+    def handleDepositTx(depositTx: L1Tx, txId: TxId) =
+        log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
         onlyAddressOutput(depositTx, headAddress) match
-            case Some(ix) =>
+            case Some(ix, coins) =>
                 log.info(s"Deposit output index is: $ix");
-                state.asOpen(_.enqueueDeposit(AwaitingDeposit(txHash, ix)))
+                state.asOpen(_.enqueueDeposit(mkUtxo[L1, DepositTag](txId, ix, headAddress, coins)))
             case None =>
                 log.error(
                   "Can't find the deposit output in the deposit tx (should not be the case)!"
@@ -70,7 +70,9 @@ case class MultisigEventManager(
         //  - the treasury
         val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
-        state.asOpen(_.majorBlockL2Effect(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits))
+        state.asOpen(
+          _.majorBlockL2Effect(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits)
+        )
 
     def handleFinalizationTx(tx: L1Tx, txHash: TxId) =
         log.info(s"Handling finalization tx: $txHash")

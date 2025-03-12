@@ -9,7 +9,7 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.node.server.{AwaitingDeposit, HeadStateReader}
+import hydrozoa.node.server.{HeadStateReader}
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(

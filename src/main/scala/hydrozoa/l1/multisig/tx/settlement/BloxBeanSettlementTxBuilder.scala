@@ -27,7 +27,7 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val refs = r.deposits.map(d => (d.txId, d.txIx)) + headStateReader.currentTreasuryRef
+        val refs = r.deposits.map(d => (d.id, d.ix)).toSet + headStateReader.currentTreasuryRef
 
         val utxos: Set[Utxo] =
             refs.map(r =>

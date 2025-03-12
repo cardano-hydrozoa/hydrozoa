@@ -1,5 +1,7 @@
 package hydrozoa
 
+import scala.collection.mutable
+
 // Serialized L1 Cardano tx
 case class L1Tx(bytes: Array[Byte])
 
@@ -19,6 +21,25 @@ case class TxId(hash: String)
 // Transaction output index
 // TODO: use BigInt
 case class TxIx(ix: Long)
+
+case class OutputRef[L <: Level](id: TxId, ix: TxIx)
+
+def mkOutputRef[L <: Level](id: TxId, ix: TxIx): OutputRef[L] = OutputRef[L](id, ix)
+
+sealed trait Level
+final class L1 extends Level
+final class L2 extends Level
+
+// FIXME: parameterize AddressBech
+// FIXME: migrate to Value
+case class Output[L <: Level](address: AddressBechL1, coins: BigInt)
+
+case class Utxo[L <: Level, F](ref: OutputRef[L], output: Output[L])
+
+def mkUtxo[L <: Level, F](txId: TxId, txIx: TxIx, address: AddressBechL1, coins: BigInt) =
+    Utxo[L, F](OutputRef[L](txId, txIx), Output(address, coins))
+
+case class UtxoSet[L <: Level, F](map: mutable.Map[OutputRef[L], Output[L]])
 
 // Policy ID
 case class PolicyId(policyId: String)
