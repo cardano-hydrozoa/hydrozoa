@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
-import hydrozoa.l2.event.{L2Event, L2NonGenesis}
+import hydrozoa.l2.event.{L2Event, L2NonGenesisEvent}
 import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier}
 
 import scala.collection.mutable
@@ -31,7 +31,7 @@ private case class Open(
     with MultisigRegime {
     val blocksConfirmedL2: mutable.Seq[Block] = mutable.Seq[Block]()
     val confirmedEventsL2: mutable.Set[L2Event] = mutable.Set()
-    val poolEventsL2: mutable.Set[L2NonGenesis] = mutable.Set()
+    val poolEventsL2: mutable.Set[L2NonGenesisEvent] = mutable.Set()
     var finalizing = false
     // TODO: peers
     var stateL1 = MultisigHeadStateL1.empty(initialTreasury)
@@ -76,7 +76,7 @@ trait OpenNodeState extends StateApi:
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
     def peekDeposits: DepositUtxos
-    def poolEventsL2: mutable.Set[L2NonGenesis]
+    def poolEventsL2: mutable.Set[L2NonGenesisEvent]
     def enqueueDeposit(deposit: DepositUtxo): Unit
     def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger
@@ -146,7 +146,7 @@ class NodeStateManager(log: Logger) { self =>
 
         def poolEventsL2 = openState.poolEventsL2
 
-        def peekDeposits: DepositUtxos = openState.stateL1.depositUtxos
+        def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def finalizing: Boolean = openState.finalizing
@@ -219,16 +219,18 @@ case class PeerNode()
 
 type DepositUtxo = Utxo[L1, DepositTag]
 type DepositUtxos = UtxoSet[L1, DepositTag]
+type MutableDepositUtxos = MutableUtxoSet[L1, DepositTag]
 
 type RolloutUtxo = Utxo[L1, RolloutTag]
 type RolloutUtxos = UtxoSet[L1, RolloutTag]
+type MutableRolloutUtxos = MutableUtxoSet[L1, RolloutTag]
 
 type TreasuryUtxo = Utxo[L1, TreasuryTag]
 
 case class MultisigHeadStateL1(
     var treasuryUtxo: TreasuryUtxo,
-    depositUtxos: DepositUtxos,
-    rolloutUtxos: RolloutUtxos
+    depositUtxos: MutableDepositUtxos,
+    rolloutUtxos: MutableRolloutUtxos
 )
 
 // tags
@@ -240,8 +242,8 @@ object MultisigHeadStateL1:
     def empty(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
         MultisigHeadStateL1(
           treasuryUtxo,
-          UtxoSet[L1, DepositTag](mutable.Map.empty),
-          UtxoSet[L1, RolloutTag](mutable.Map.empty)
+          MutableUtxoSet[L1, DepositTag](mutable.Map.empty),
+          MutableUtxoSet[L1, RolloutTag](mutable.Map.empty)
         )
 
 // Remove

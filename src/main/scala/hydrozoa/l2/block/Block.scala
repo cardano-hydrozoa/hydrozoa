@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
-import hydrozoa.l2.event.{L2Event, L2Genesis, L2Transaction_, L2Withdrawal_}
+import hydrozoa.l2.event.{L2Event, L2GenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.state.Utxos
 
 import scala.collection.mutable
@@ -41,9 +41,8 @@ object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
 /** We don't add genesis events to blocks, since they can't be invalid and because they can be
-  * calculated from `depositsAbsorbed`.
-  */
-// FIXME: move to anothe module
+ * calculated from `depositsAbsorbed`.
+ */
 enum MempoolEventTypeL2:
     case MempoolTransaction
     case MempoolWithdrawal
@@ -61,7 +60,7 @@ Block builder. Missing checks:
     - utxoActive should be set (but it's not always true)
     - minor should have versionMinor > 0
     - major/final should have versionMajor > 0
-    
+
     TODO: add bulk with*
  */
 

@@ -19,9 +19,9 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.event.{L2Transaction_, L2Withdrawal_}
+import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.{MutableUTxOsDiff, UtxosDiff}
+import hydrozoa.l2.ledger.state.{MutableUtxosDiff, UtxosDiff}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -228,108 +228,24 @@ class Node(
       * @param nextBlockFinal
       * @return
       */
-    def handleNextBlock(nextBlockFinal: Boolean): Either[String, String] =
-        
-        // 1. Initialize the variables and arguments.
-        // (a) Let block be a mutable variable initialized to an empty BlockL2
-        // instead on block we use mutable parts and finalize the block
-        // at the end using the block builder
-        val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
-        val eventsInvalid: mutable.Set[(TxId, MempoolEventTypeL2)] = mutable.Set.empty
-        var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
+    def handleNextBlock(_nextBlockFinal: Boolean): Either[String, String] =
 
-        // (b) Let previousBlock be the latest block in blocksConfirmedL2
-        val prevHeader = state.asOpen(_.l2Tip.blockHeader)
+        // FIXME: use nextBlockFinal in Ack*
 
-        // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
-        //val previousMajorBlock = state.asOpen(_.l2LastMajor)
-
+        // FIXME: collect these values atomically
         // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
         // for now (and probably this is legit) we use utxosActive within L2 ledger
         // var utxosActive: UTxOs = state.asOpen(_.utxosActive)
         // TODO: do we need to clone the ledger for block creation?
         val stateL2 = state.asOpen(_.stateL2)
-
-        // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
-        // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-        val utxosAdded, utxosWithdrawn: MutableUTxOsDiff = mutable.Set()
-
-        // 3. For each non-genesis L2 event...
-        state.asOpen(_.poolEventsL2).foreach {
-            case tx: L2Transaction_ =>
-                stateL2.submit(mkL2T(tx.simpleTransaction)) match
-                    case Right(txId, _)   => txValid.add(txId)
-                    case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
-            case wd: L2Withdrawal_ =>
-                stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
-                    case Right(txId, utxosDiff) =>
-                        wdValid.add(txId)
-                        utxosWithdrawn.addAll(utxosDiff)
-                    case Left(txId, _err) =>
-                        eventsInvalid.add(txId, MempoolWithdrawal)
-        }
-
-        // FIXME: move to ledger?
-        def mkGenesisEvent(ds: DepositUtxos): SimpleGenesis =
-            SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toSet)
-
-        // FIXME: implement
-        def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
-
-        // 4. If finalizing is False...
+        val poolEvents = state.asOpen(_.poolEventsL2).toSet
         val finalizing = state.asOpen(_.finalizing)
-        if !finalizing then
-            val awaitingDeposits = state.asOpen(_.peekDeposits)
-            // TODO: check deposits timing
-            val eligibleDeposits: DepositUtxos =
-                UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
-            stateL2.submit(mkL2G(mkGenesisEvent(eligibleDeposits))) match
-                case Right(_, utxos) =>
-                    utxosAdded.addAll(utxos)
-                    // output refs only
-                    depositsAbsorbed = (eligibleDeposits.map.keySet.toSet)
-                case Left(_, _) => ??? // unreachable
+        val awaitingDeposits = state.asOpen(_.peekDeposits)
+        val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
-        // 5. If finalizing is True...
-        // FIXME: flush stateL2 in the effect
-        else utxosWithdrawn.addAll(stateL2.activeState)
+        val (block, utxosAdded, utxosWithdrawn) =
+            createBlock(stateL2, poolEvents, awaitingDeposits, prevHeader, timeCurrent, finalizing)
 
-        println((stateL2.activeState, utxosAdded, utxosWithdrawn))
-
-        // Build the block
-        val blockBuilder = BlockBuilder()
-            .timeCreation(timeCurrent)
-            .blockNum(prevHeader.blockNum + 1)
-            .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
-            .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
-            .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
-
-        // 6. Set block.blockType...
-        val multisigRegimeKeepAlive = false // TODO: implement
-
-        def withdrawalsValid[A <: TBlockMajor, B <: TCheck, C <: TCheck](b: BlockBuilder[A, B, C]) =
-            wdValid.foldLeft(b)((b, e) => b.withWithdrawal(e))
-
-        val block =
-            if finalizing then
-                blockBuilder.finalBlock
-                    .versionMajor(prevHeader.versionMajor + 1)
-                    .apply(withdrawalsValid)
-                    .build
-            else if utxosAdded.nonEmpty || utxosWithdrawn.nonEmpty || multisigRegimeKeepAlive
-            then
-                blockBuilder.majorBlock
-                    .versionMajor(prevHeader.versionMajor + 1)
-                    .apply(withdrawalsValid)
-                    .apply(b => depositsAbsorbed.foldLeft(b)((b, d) => b.withDeposit(d)))
-                    .build
-            else
-                blockBuilder
-                    .versionMajor(prevHeader.versionMajor)
-                    .versionMinor(prevHeader.versionMinor + 1)
-                    .build
-
-        // 8. Return
         Right((block, stateL2.activeState, utxosAdded, utxosWithdrawn).toString())
 
 //    def produceMajorBlock: Either[String, String] =

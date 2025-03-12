@@ -1,5 +1,7 @@
 package hydrozoa
 
+import hydrozoa.node.server.MultisigHeadStateL1
+
 import scala.collection.mutable
 
 // Serialized L1 Cardano tx
@@ -39,7 +41,13 @@ case class Utxo[L <: Level, F](ref: OutputRef[L], output: Output[L])
 def mkUtxo[L <: Level, F](txId: TxId, txIx: TxIx, address: AddressBechL1, coins: BigInt) =
     Utxo[L, F](OutputRef[L](txId, txIx), Output(address, coins))
 
-case class UtxoSet[L <: Level, F](map: mutable.Map[OutputRef[L], Output[L]])
+case class MutableUtxoSet[L <: Level, F](map: mutable.Map[OutputRef[L], Output[L]])
+
+case class UtxoSet[L <: Level, F](map: Map[OutputRef[L], Output[L]])
+
+object UtxoSet:
+    def apply[L <: Level, F](mutableUtxoSet: MutableUtxoSet[L, F]): UtxoSet[L, F] =
+        UtxoSet(mutableUtxoSet.map.toMap)
 
 // Policy ID
 case class PolicyId(policyId: String)

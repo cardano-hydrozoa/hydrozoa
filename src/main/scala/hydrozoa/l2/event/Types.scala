@@ -1,13 +1,13 @@
 package hydrozoa.l2.event
 
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 
 sealed trait L2Event
 
-trait L2Genesis extends L2Event
+sealed trait L2GenesisEvent(simpleGenesis: SimpleGenesis) extends L2Event
 
-trait L2NonGenesis extends L2Event
+sealed trait L2NonGenesisEvent extends L2Event
 
-case class L2Transaction_(simpleTransaction: SimpleTransaction) extends L2NonGenesis
+sealed case class L2TransactionEvent(simpleTransaction: SimpleTransaction) extends L2NonGenesisEvent
 
-case class L2Withdrawal_(simpleWithdrawal: SimpleWithdrawal) extends L2NonGenesis
+sealed case class L2WithdrawalEvent(simpleWithdrawal: SimpleWithdrawal) extends L2NonGenesisEvent

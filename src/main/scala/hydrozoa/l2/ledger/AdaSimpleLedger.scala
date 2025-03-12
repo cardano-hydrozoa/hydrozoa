@@ -3,7 +3,8 @@ package hydrozoa.l2.ledger
 import hydrozoa.infra.{CryptoHash, encodeHex}
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
-import hydrozoa.{AddressBechL2, TxId, TxIx}
+import hydrozoa.node.server.DepositUtxos
+import hydrozoa.{AddressBechL1, AddressBechL2, TxId, TxIx}
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -104,6 +105,13 @@ object AdaSimpleLedger:
 case class SimpleGenesis(
     utxosAdded: Set[SimpleUtxo]
 )
+
+object SimpleGenesis:
+    def apply(ds: DepositUtxos): SimpleGenesis =
+        SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toSet)
+
+// FIXME: implement
+def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
     inputs: Set[(TxId, TxIx)],

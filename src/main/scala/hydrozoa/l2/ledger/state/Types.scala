@@ -13,7 +13,7 @@ opaque type TxOut = scalus.TxOut
 type Utxos = mutable.Map[TxIn, TxOut]
 
 type UtxosDiff = Set[(TxIn, TxOut)]
-type MutableUTxOsDiff = mutable.Set[(TxIn, TxOut)]
+type MutableUtxosDiff = mutable.Set[(TxIn, TxOut)]
 
 // FIXME: move to another package
 def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
