@@ -5,7 +5,7 @@ import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
 import hydrozoa.l2.event.{L2Event, L2NonGenesisEvent}
-import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier, THydrozoaHead}
 
 import scala.collection.mutable
 
@@ -35,7 +35,7 @@ private case class Open(
     var finalizing = false
     // TODO: peers
     var stateL1 = MultisigHeadStateL1.empty(initialTreasury)
-    val stateL2 = AdaSimpleLedger(NoopVerifier)
+    val stateL2 = AdaSimpleLedger()
 
     def timeCurrent(): Unit = ()
 
@@ -79,7 +79,7 @@ trait OpenNodeState extends StateApi:
     def poolEventsL2: mutable.Set[L2NonGenesisEvent]
     def enqueueDeposit(deposit: DepositUtxo): Unit
     def stateL1: MultisigHeadStateL1
-    def stateL2: AdaSimpleLedger
+    def stateL2: AdaSimpleLedger[THydrozoaHead]
     def l2Tip: Block
     def l2LastMajor: Block
     def finalizing: Boolean
@@ -151,7 +151,7 @@ class NodeStateManager(log: Logger) { self =>
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def finalizing: Boolean = openState.finalizing
         def stateL1: MultisigHeadStateL1 = openState.stateL1
-        def stateL2: AdaSimpleLedger = openState.stateL2
+        def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2
 
         def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
         def l2LastMajor: Block = openState.blocksConfirmedL2

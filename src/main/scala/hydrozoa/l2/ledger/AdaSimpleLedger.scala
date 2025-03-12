@@ -9,8 +9,13 @@ import hydrozoa.{AddressBechL1, AddressBechL2, TxId, TxIx}
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
-class AdaSimpleLedger(verifier: Verifier[L2Event])
-    extends L2Ledger[
+sealed trait TInstancePurpose
+sealed trait THydrozoaHead extends TInstancePurpose
+sealed trait TBlockProduction extends TInstancePurpose
+
+case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
+    verifier: Verifier[L2Event]
+) extends L2Ledger[
       Utxos,
       SimpleGenesis,
       SimpleTransaction,
@@ -21,6 +26,16 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
       Verifier[L2Event]
     ]:
     val activeState: Utxos = mutable.Map.empty
+
+    /** Makes a copy of the current ledger for block production purposes.
+      * @param ev
+      *   evidence that we are cloning Hydrozoa ledger, not its clone
+      * @return
+      *   cloned ledger
+      */
+    def blockProduction(implicit
+        ev: InstancePurpose =:= THydrozoaHead
+    ): AdaSimpleLedger[TBlockProduction] = copy()
 
     override def submit[E1 <: L2Event](
         event: E1
@@ -93,6 +108,7 @@ class AdaSimpleLedger(verifier: Verifier[L2Event])
     def isEmpty: Boolean = activeState.isEmpty
 
 object AdaSimpleLedger:
+    def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
     def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
         GenesisL2Event(SimpleGenesis(Set(SimpleUtxo(address, ada))))
     def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =

@@ -27,7 +27,7 @@ import scala.collection.mutable
   *   Immutable block, set of utxos added, set of utxos withdrawn.
   */
 def createBlock(
-                   stateL2: AdaSimpleLedger,
+                   stateL2: AdaSimpleLedger[TBlockProduction],
                    poolEvents: Set[L2NonGenesisEvent],
                    awaitingDeposits: DepositUtxos,
                    prevHeader: BlockHeader,

@@ -4,8 +4,8 @@ import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.infra.encodeHex
 import hydrozoa.{AddressBechL2, TxId, TxIx}
 
-def mkLedger: AdaSimpleLedger = {
-    AdaSimpleLedger(NoopVerifier)
+def mkLedger: AdaSimpleLedger[THydrozoaHead] = {
+    AdaSimpleLedger()
 }
 
 val address = AddressBechL2(
@@ -16,7 +16,7 @@ val address2 = AddressBechL2(
   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
 )
 
-def doSampleGenesis(ledger: AdaSimpleLedger): L2EventHash = {
+def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): L2EventHash = {
     val event = AdaSimpleLedger.mkGenesis(address, 100)
     val Right(hash, _) = ledger.submit(event)
     println(s"Genesis $hash submitted: $event")
@@ -52,11 +52,8 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = TxId(encodeHex(H32.hash(IArray.empty).bytes))
         val ix = TxIx(0)
 
-        val event = AdaSimpleLedger.mkWithdrawal((txId, ix))
-
-        intercept[java.lang.IllegalArgumentException] {
-            ledger.submit(event)
-        }
+        val wd = AdaSimpleLedger.mkWithdrawal((txId, ix))
+        val Left(_) = ledger.submit(wd)
     }
 
     test("correct transaction") {
@@ -78,9 +75,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
 
         val tx = AdaSimpleLedger.mkTransaction((txId, ix), address2, 101)
 
-        intercept[java.lang.IllegalArgumentException] {
-            ledger.submit(tx)
-        }
+        val Left(_) = ledger.submit(tx)
     }
 
 }

@@ -15,17 +15,10 @@ import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.SettlementTxBuilder
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
-import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
-import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.{MutableUtxosDiff, UtxosDiff}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
-
-import scala.collection.mutable
 
 class Node(
     state: NodeStateManager,
@@ -244,9 +237,18 @@ class Node(
         val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
         val (block, utxosAdded, utxosWithdrawn) =
-            createBlock(stateL2, poolEvents, awaitingDeposits, prevHeader, timeCurrent, finalizing)
+            createBlock(
+              stateL2.blockProduction,
+              poolEvents,
+              awaitingDeposits,
+              prevHeader,
+              timeCurrent,
+              finalizing
+            )
 
-        Right((block, stateL2.activeState, utxosAdded, utxosWithdrawn).toString())
+        println (stateL2.activeState)
+
+        Right((block, utxosAdded, utxosWithdrawn).toString())
 
 //    def produceMajorBlock: Either[String, String] =
 //
