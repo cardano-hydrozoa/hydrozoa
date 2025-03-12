@@ -61,6 +61,8 @@ Block builder. Missing checks:
     - utxoActive should be set (but it's not always true)
     - minor should have versionMinor > 0
     - major/final should have versionMajor > 0
+    
+    TODO: add bulk with*
  */
 
 sealed trait TBlockType

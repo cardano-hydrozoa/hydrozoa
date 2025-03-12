@@ -229,9 +229,7 @@ class Node(
       * @return
       */
     def handleNextBlock(nextBlockFinal: Boolean): Either[String, String] =
-        // FIXME: remove
-        // if nextBlockFinal then produceFinalBlock else produceMajorBlock
-
+        
         // 1. Initialize the variables and arguments.
         // (a) Let block be a mutable variable initialized to an empty BlockL2
         // instead on block we use mutable parts and finalize the block
@@ -244,7 +242,7 @@ class Node(
         val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
         // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
-        val previousMajorBlock = state.asOpen(_.l2LastMajor)
+        //val previousMajorBlock = state.asOpen(_.l2LastMajor)
 
         // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
         // for now (and probably this is legit) we use utxosActive within L2 ledger
@@ -256,10 +254,8 @@ class Node(
         // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
         val utxosAdded, utxosWithdrawn: MutableUTxOsDiff = mutable.Set()
 
-        val mempoolEvents = state.asOpen(_.poolEventsL2)
-
         // 3. For each non-genesis L2 event...
-        mempoolEvents.foreach {
+        state.asOpen(_.poolEventsL2).foreach {
             case tx: L2Transaction_ =>
                 stateL2.submit(mkL2T(tx.simpleTransaction)) match
                     case Right(txId, _)   => txValid.add(txId)
