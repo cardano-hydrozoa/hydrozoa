@@ -197,7 +197,7 @@ class NodeStateManager(log: Logger) { self =>
     def asOpen[A](foo: OpenNodeState => A): A =
         headState match
             case Some(open: Open) => foo(OpenNodeStateImpl(open))
-            case _ => throw IllegalStateException("The head is missing or in a Open state.")
+            case _ => throw IllegalStateException("The head is missing or not in a Open state.")
 
 }
 
