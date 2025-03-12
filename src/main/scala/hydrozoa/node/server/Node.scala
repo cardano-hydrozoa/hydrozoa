@@ -16,11 +16,12 @@ import hydrozoa.l1.multisig.tx.settlement.SettlementTxBuilder
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
+import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.event.{L2Transaction_, L2Withdrawal_}
-import hydrozoa.l2.ledger.state.{MutableUTxOsDiff, UtxosDiff}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.state.{MutableUTxOsDiff, UtxosDiff}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
@@ -232,47 +233,47 @@ class Node(
         // if nextBlockFinal then produceFinalBlock else produceMajorBlock
 
         // 1. Initialize the variables and arguments.
-
         // (a) Let block be a mutable variable initialized to an empty BlockL2
-        val blockBuilder: BlockBuilder = BlockBuilder()
+        // instead on block we use mutable parts and finalize the block
+        // at the end using the block builder
+        val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
+        val eventsInvalid: mutable.Set[(TxId, MempoolEventTypeL2)] = mutable.Set.empty
+        var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
 
         // (b) Let previousBlock be the latest block in blocksConfirmedL2
-        val previousBlock = state.asOpen(_.l2Tip)
+        val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
         // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
         val previousMajorBlock = state.asOpen(_.l2LastMajor)
 
         // (d) Let utxosActive be a mutable variable initialized to stateL2.utxosActive
+        // for now (and probably this is legit) we use utxosActive within L2 ledger
         // var utxosActive: UTxOs = state.asOpen(_.utxosActive)
-
-        // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
-        val utxosAdded: MutableUTxOsDiff = mutable.Set()
-
-        // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-        val utxosWithdrawn: MutableUTxOsDiff = mutable.Set()
-
-        // 2. Set block.timeCreation to timeCurrent.
-        blockBuilder.withTimeCreation(timeCurrent)
-
         // TODO: do we need to clone the ledger for block creation?
         val stateL2 = state.asOpen(_.stateL2)
-        val poolEvents = state.asOpen(_.poolEventsL2)
+
+        // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
+        // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
+        val utxosAdded, utxosWithdrawn: MutableUTxOsDiff = mutable.Set()
+
+        val mempoolEvents = state.asOpen(_.poolEventsL2)
 
         // 3. For each non-genesis L2 event...
-        poolEvents.foreach {
+        mempoolEvents.foreach {
             case tx: L2Transaction_ =>
                 stateL2.submit(mkL2T(tx.simpleTransaction)) match
-                    case Right(txId, _)   => blockBuilder.withConfirmedEvent(txId, tx)
-                    case Left(txId, _err) => blockBuilder.withInvalidEvent(txId, tx)
+                    case Right(txId, _)   => txValid.add(txId)
+                    case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
             case wd: L2Withdrawal_ =>
                 stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
                     case Right(txId, utxosDiff) =>
-                        blockBuilder.withConfirmedEvent(txId, wd)
+                        wdValid.add(txId)
                         utxosWithdrawn.addAll(utxosDiff)
                     case Left(txId, _err) =>
-                        blockBuilder.withInvalidEvent(txId, wd)
+                        eventsInvalid.add(txId, MempoolWithdrawal)
         }
 
+        // FIXME: move to ledger?
         def mkGenesisEvent(ds: DepositUtxos): SimpleGenesis =
             SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toSet)
 
@@ -287,40 +288,53 @@ class Node(
             val eligibleDeposits: DepositUtxos =
                 UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
             stateL2.submit(mkL2G(mkGenesisEvent(eligibleDeposits))) match
-                case Right(_, utxos) => utxosAdded.addAll(utxos)
-                case Left(_, _)      => ??? // unreachable
-            blockBuilder.withDeposits(eligibleDeposits.map.keySet.toSet) // output refs only
+                case Right(_, utxos) =>
+                    utxosAdded.addAll(utxos)
+                    // output refs only
+                    depositsAbsorbed = (eligibleDeposits.map.keySet.toSet)
+                case Left(_, _) => ??? // unreachable
 
         // 5. If finalizing is True...
+        // FIXME: flush stateL2 in the effect
         else utxosWithdrawn.addAll(stateL2.activeState)
-        // FIXME: flush stateL2
-
-        // 6. Set block.blockType...
-        val multisigRegimeKeepAlive = false // TODO: implement
-        blockBuilder.withBlockType {
-            if finalizing then Final
-            else if utxosAdded.nonEmpty || utxosWithdrawn.nonEmpty || multisigRegimeKeepAlive
-            then Major
-            else Minor
-        }
 
         println((stateL2.activeState, utxosAdded, utxosWithdrawn))
 
-        // 7. Set the rest of the block header...
+        // Build the block
+        val blockBuilder = BlockBuilder()
+            .timeCreation(timeCurrent)
+            .blockNum(prevHeader.blockNum + 1)
+            .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
+            .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
+            .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
 
-        // (a) Set block.blockNum to (previousBlock.blockNum + 1)
-        blockBuilder.withBlockNum(previousBlock.blockHeader.blockNum + 1)
+        // 6. Set block.blockType...
+        val multisigRegimeKeepAlive = false // TODO: implement
 
-        // (b) Set block.utxosActive to the Merkle root hash of utxosActive
-        // TODO: calculate Merkle root hash
-        blockBuilder.withUtxosActive(RH32UtxoSetL2.dummy)
-        blockBuilder.withPreviousVersions(
-          previousBlock.blockHeader.versionMajor,
-          previousBlock.blockHeader.versionMinor
-        )
+        def withdrawalsValid[A <: TBlockMajor, B <: TCheck, C <: TCheck](b: BlockBuilder[A, B, C]) =
+            wdValid.foldLeft(b)((b, e) => b.withWithdrawal(e))
+
+        val block =
+            if finalizing then
+                blockBuilder.finalBlock
+                    .versionMajor(prevHeader.versionMajor + 1)
+                    .apply(withdrawalsValid)
+                    .build
+            else if utxosAdded.nonEmpty || utxosWithdrawn.nonEmpty || multisigRegimeKeepAlive
+            then
+                blockBuilder.majorBlock
+                    .versionMajor(prevHeader.versionMajor + 1)
+                    .apply(withdrawalsValid)
+                    .apply(b => depositsAbsorbed.foldLeft(b)((b, d) => b.withDeposit(d)))
+                    .build
+            else
+                blockBuilder
+                    .versionMajor(prevHeader.versionMajor)
+                    .versionMinor(prevHeader.versionMinor + 1)
+                    .build
 
         // 8. Return
-        Right((blockBuilder.build, stateL2.activeState, utxosAdded, utxosWithdrawn).toString())
+        Right((block, stateL2.activeState, utxosAdded, utxosWithdrawn).toString())
 
 //    def produceMajorBlock: Either[String, String] =
 //

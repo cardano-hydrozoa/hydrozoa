@@ -3,7 +3,6 @@ package hydrozoa.l2.block
 import hydrozoa.*
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.EventType.{Genesis, Transaction, Withdrawal}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2Event, L2Genesis, L2Transaction_, L2Withdrawal_}
 import hydrozoa.l2.ledger.state.Utxos
@@ -41,17 +40,28 @@ case class BlockBody(
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
-enum EventType:
-    case Genesis
-    case Transaction
-    case Withdrawal
+/** We don't add genesis events to blocks, since they can't be invalid and because they can be
+  * calculated from `depositsAbsorbed`.
+  */
+// FIXME: move to anothe module
+enum MempoolEventTypeL2:
+    case MempoolTransaction
+    case MempoolWithdrawal
+
+type UtxoSetL2 = Utxos
 
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 
 object RH32UtxoSetL2:
-    def dummy: RH32UtxoSetL2 = H32.hash(IArray())
+    def dummy: RH32UtxoSetL2 = H32.hash(IArray()) // TODO: implement
 
-type UtxoSetL2 = Utxos
+/*
+Block builder. Missing checks:
+    - minor block should contain at least one confirmed tx
+    - utxoActive should be set (but it's not always true)
+    - minor should have versionMinor > 0
+    - major/final should have versionMajor > 0
+ */
 
 sealed trait TBlockType
 sealed trait TBlockMinor extends TBlockType
@@ -62,12 +72,7 @@ sealed trait TCheck
 sealed trait TNone extends TCheck
 sealed trait TSet extends TCheck with TNone
 
-/*
-Missing checks:
- - minor block should contain at least one confirmed tx
- */
-
-case class SafeBlockBuilder[
+case class BlockBuilder[
     BlockType <: TBlockType,
     BlockNum <: TCheck,
     VersionMajor <: TCheck
@@ -84,50 +89,62 @@ case class SafeBlockBuilder[
 ) {
     def majorBlock(implicit
         ev: BlockType =:= TBlockMinor
-    ): SafeBlockBuilder[TBlockMajor, BlockNum, VersionMajor] =
+    ): BlockBuilder[TBlockMajor, BlockNum, VersionMajor] =
         copy(blockType = Major, versionMinor = 0)
 
     def finalBlock(implicit
         ev: BlockType =:= TBlockMinor
-    ): SafeBlockBuilder[TBlockFinal, BlockNum, VersionMajor] =
+    ): BlockBuilder[TBlockFinal, BlockNum, VersionMajor] =
         copy(blockType = Final, versionMinor = 0)
 
     def blockNum(blockNum: Int)(implicit
         ev: BlockNum =:= TNone
-    ): SafeBlockBuilder[BlockType, TSet, VersionMajor] =
+    ): BlockBuilder[BlockType, TSet, VersionMajor] =
         copy(blockNum = blockNum)
 
-    def timeCreation(timeCreation: PosixTime): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
+    def timeCreation(timeCreation: PosixTime): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(timeCreation = timeCreation)
 
     def versionMajor(versionMajor: Int)(implicit
         ev: VersionMajor =:= TNone
-    ): SafeBlockBuilder[BlockType, BlockNum, TSet] =
+    ): BlockBuilder[BlockType, BlockNum, TSet] =
         copy(versionMajor = versionMajor)
 
     def versionMinor(versionMinor: Int)(implicit
         ev: BlockType =:= TBlockMinor
-    ): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(versionMinor = versionMinor)
 
-    def withTransaction(txId: TxId): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
+    def withTransaction(txId: TxId): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, MempoolTransaction)))
 
     def withWithdrawal(txId: TxId)(implicit
         ev: BlockType <:< TBlockMajor
-    ): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, MempoolWithdrawal)))
 
     def withInvalidEvent(
         txId: TxId,
         eventType: MempoolEventTypeL2
-    ): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, eventType)))
 
-    def withDeposits(ds: Set[OutputRef[L1]])(implicit
+    def withDeposit(d: OutputRef[L1])(implicit
         ev: BlockType =:= TBlockMajor
-    ): SafeBlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(depositsAbsorbed = depositsAbsorbed.++(ds))
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+        copy(depositsAbsorbed = depositsAbsorbed.+(d))
+
+    def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+        copy(utxosActive = utxosActive)
+
+    def apply(
+        foo: BlockBuilder[BlockType, BlockNum, VersionMajor] => BlockBuilder[
+          BlockType,
+          BlockNum,
+          VersionMajor
+        ]
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+        foo(this)
 
     def build(implicit
         blockNumEv: BlockNum =:= TSet,
@@ -146,83 +163,7 @@ case class SafeBlockBuilder[
         )
 }
 
-object SafeBlockBuilder {
-    def apply(): SafeBlockBuilder[TBlockMinor, TNone, TNone] =
-        SafeBlockBuilder[TBlockMinor, TNone, TNone]()
+object BlockBuilder {
+    def apply(): BlockBuilder[TBlockMinor, TNone, TNone] =
+        BlockBuilder[TBlockMinor, TNone, TNone]()
 }
-
-enum MempoolEventTypeL2:
-    case MempoolTransaction
-    case MempoolWithdrawal
-
-//sealed trait MempoolEventTypeL2
-//sealed trait MempoolTransaction extends MempoolEventTypeL2
-//sealed trait MempoolWithdrawal extends MempoolEventTypeL2
-
-class BlockBuilder:
-
-    private var timeCreation: Option[PosixTime] = None
-    private val eventsValid: mutable.Buffer[(TxId, EventType)] = mutable.Buffer()
-    private val eventsInvalid: mutable.Buffer[(TxId, EventType)] = mutable.Buffer()
-    private var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
-    private var blockType: Option[BlockTypeL2] = None
-    private var blockNum: Int = 0
-    private var utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
-    private var versionMajor, versionMinor: Int = 0
-
-    def withTimeCreation(timeCurrent: PosixTime) =
-        this.timeCreation = Some(timeCurrent)
-        this
-
-    def withConfirmedEvent(txId: TxId, l2Event: L2Event) =
-        eventsValid.appendAll(mutable.Buffer((txId, eventTypeTag(l2Event)))) // FIXME:
-        this
-
-    def withInvalidEvent(txId: TxId, l2Event: L2Event) =
-        eventsInvalid.appendAll(mutable.Buffer((txId, eventTypeTag(l2Event)))) // FIXME:
-        this
-
-    def withDeposits(ds: Set[OutputRef[L1]]) =
-        this.depositsAbsorbed = ds
-        this
-
-    def withBlockType(ty: BlockTypeL2) =
-        this.blockType = Some(ty)
-        this
-
-    def withBlockNum(num: Int) =
-        this.blockNum = num
-        this
-
-    def withUtxosActive(hash: RH32UtxoSetL2) =
-        this.utxosActive = hash
-        this
-
-    def withPreviousVersions(major: Int, minor: Int) =
-        blockType match
-            case Some(Minor) =>
-                versionMajor = major
-                versionMinor = minor + 1
-            case Some(_) =>
-                versionMajor = major + 1
-                versionMinor = 0
-            case _ => throw IllegalStateException("block type is not known")
-
-    def build: Block =
-//        Block(
-//          BlockHeader(
-//            blockNum,
-//            blockType.get,
-//            timeCreation.get,
-//            versionMajor,
-//            versionMinor,
-//            utxosActive
-//          ),
-//          BlockBody(this.eventsValid.toSeq, this.eventsInvalid.toSeq, this.depositsAbsorbed.toSeq)
-//        )
-        ???
-
-def eventTypeTag(e: L2Event): EventType = e match
-    case _: L2Genesis      => Genesis
-    case _: L2Transaction_ => Transaction
-    case _: L2Withdrawal_  => Withdrawal
