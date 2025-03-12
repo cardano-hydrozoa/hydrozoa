@@ -5,13 +5,13 @@ import org.scalatest.Assertions.assertTypeError;
 
 class SafeBlockBuilderSpec extends munit.ScalaCheckSuite {
 
-    test("no block with block numbers") {
+    test("no blocks without block number") {
         assertTypeError("SafeBlockBuilder().build;")
         assertTypeError("SafeBlockBuilder().majorBlock.build;")
         assertTypeError("SafeBlockBuilder().finalBlock.build;")
     }
 
-    test("no block without major versions") {
+    test("no block without major version") {
         assertTypeError("SafeBlockBuilder().blockNum(42).build;")
         assertTypeError("SafeBlockBuilder().blockNum(42).majorBlock.build;")
         assertTypeError("SafeBlockBuilder().blockNum(42).finalBlock.build;")
@@ -84,7 +84,7 @@ class SafeBlockBuilderSpec extends munit.ScalaCheckSuite {
         );
     }
 
-    test("major block") {
+    test("major blocks") {
         val minorBlock1 = SafeBlockBuilder().blockNum(42).versionMajor(5).majorBlock.build;
         println(minorBlock1)
 
