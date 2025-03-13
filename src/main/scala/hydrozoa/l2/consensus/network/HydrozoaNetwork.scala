@@ -14,6 +14,8 @@ trait HydrozoaNetwork {
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 
+    def reqMinor(block: Block): Set[AckMinor]
+
     def reqMajor(block: Block): Set[AckMajorCombined]
 
     def reqFinal(block: Block): Set[AckFinalCombined]
@@ -22,6 +24,12 @@ trait HydrozoaNetwork {
 case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
 
 case class ReqRefundLater(depositTx: L1Tx, index: TxIx)
+
+case class AckMinor(
+    blockHeader: BlockHeader,
+    signature: Unit,
+    nextBlockFinal: Boolean
+)
 
 case class AckMajorCombined(
     blockHeader: BlockHeader,

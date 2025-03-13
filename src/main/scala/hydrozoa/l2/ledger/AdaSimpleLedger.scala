@@ -25,6 +25,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       L2EventHash,
       Verifier[L2Event]
     ]:
+
     val activeState: Utxos = mutable.Map.empty
 
     /** Makes a copy of the current ledger for block production purposes.
@@ -51,11 +52,13 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         val txId = eventHash(s)
         println(s"L2 genesis txId: $txId, content: $s")
 
-        val utxoDiff = event.genesis.utxosAdded.zipWithIndex.map(output =>
-            val txIn = mkTxIn(txId, TxIx(output._2))
-            val txOut = mkTxOut(output._1.address, output._1.coins)
-            (txIn, txOut)
-        )
+        val utxoDiff = event.genesis.utxosAdded.zipWithIndex
+            .map(output =>
+                val txIn = mkTxIn(txId, TxIx(output._2))
+                val txOut = mkTxOut(output._1.address, output._1.coins)
+                (txIn, txOut)
+            )
+            .toSet
         activeState.addAll(utxoDiff)
         Right((txId, utxoDiff))
 
@@ -101,16 +104,26 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
     private def eventHash(s: String): TxId =
         TxId(encodeHex(CryptoHash.H32.hash(IArray.from(s.getBytes)).bytes))
 
-    def event(hash: L2EventHash): Option[L2Event] = ???
+    override def event(hash: L2EventHash): Option[L2Event] = ???
 
-    def allEvents: Set[L2EventHash] = ???
+    override def allEvents: Set[L2EventHash] = ???
 
-    def isEmpty: Boolean = activeState.isEmpty
+    override def isEmpty: Boolean = activeState.isEmpty
+
+    override def flush: Utxos =
+        val ret = activeState.clone()
+        activeState.clear()
+        ret
+
+    override def forward(activeState: Utxos): Unit =
+        // TODO: revise
+        this.activeState.clear()
+        this.activeState.addAll(activeState)
 
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
     def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
-        GenesisL2Event(SimpleGenesis(Set(SimpleUtxo(address, ada))))
+        GenesisL2Event(SimpleGenesis(List(SimpleUtxo(address, ada))))
     def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =
         TransactionL2Event(
           SimpleTransaction(inputs = Set(input), outputs = Set(SimpleUtxo(address, ada)))
@@ -119,19 +132,19 @@ object AdaSimpleLedger:
         WithdrawalL2Event(SimpleWithdrawal(utxo))
 
 case class SimpleGenesis(
-    utxosAdded: Set[SimpleUtxo]
+    utxosAdded: List[SimpleUtxo]
 )
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =
-        SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toSet)
+        SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toList)
 
 // FIXME: implement
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
     inputs: Set[(TxId, TxIx)],
-    outputs: Set[SimpleUtxo]
+    outputs: Set[SimpleUtxo] // FIXME: use Array
 )
 
 case class SimpleWithdrawal(

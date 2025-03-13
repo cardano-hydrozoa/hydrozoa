@@ -2,10 +2,10 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, zeroBlock}
+import hydrozoa.l2.block.{Block, MempoolEventTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
-import hydrozoa.l2.event.{L2Event, L2NonGenesisEvent}
-import hydrozoa.l2.ledger.{AdaSimpleLedger, NoopVerifier, THydrozoaHead}
+import hydrozoa.l2.event.{L2Event, L2GenesisEvent, L2NonGenesisEvent}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, THydrozoaHead}
 
 import scala.collection.mutable
 
@@ -29,20 +29,13 @@ private case class Open(
 )(initialTreasury: TreasuryUtxo)
     extends HeadState
     with MultisigRegime {
-    val blocksConfirmedL2: mutable.Seq[Block] = mutable.Seq[Block]()
-    val confirmedEventsL2: mutable.Set[L2Event] = mutable.Set()
-    val poolEventsL2: mutable.Set[L2NonGenesisEvent] = mutable.Set()
+    val blocksConfirmedL2: mutable.Buffer[Block] = mutable.Buffer()
+    val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
+    val poolEventsL2: mutable.Buffer[L2NonGenesisEvent] = mutable.Buffer()
     var finalizing = false
-    // TODO: peers
-    var stateL1 = MultisigHeadStateL1.empty(initialTreasury)
-    val stateL2 = AdaSimpleLedger()
-
-    def timeCurrent(): Unit = ()
-
-    // Additional to spec, likely will be gone
-//    val awaitingDeposits: mutable.Set[AwaitingDeposit] = mutable.Set[AwaitingDeposit]()
-//    var treasuryRef: Option[(TxId, TxIx)] = None
-    var majorVersion = 0 // FIXME: use blocksConfirmedL2
+    // TODO: add peers
+    var stateL1: MultisigHeadStateL1 = MultisigHeadStateL1.empty(initialTreasury)
+    val stateL2: AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger()
 }
 
 private case class Finalizing() extends HeadState with MultisigRegime
@@ -68,7 +61,6 @@ trait HeadAbsentState extends StateApi:
     ): Unit
 
 trait OpenNodeState extends StateApi:
-    def currentMajorVersion: Int
     def currentTreasuryRef: (TxId, TxIx)
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
@@ -76,19 +68,24 @@ trait OpenNodeState extends StateApi:
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
     def peekDeposits: DepositUtxos
-    def poolEventsL2: mutable.Set[L2NonGenesisEvent]
+    def immutablePoolEventsL2: Set[L2NonGenesisEvent]
+    def immutableBlocksConfirmedL2: Seq[Block]
+    def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def enqueueDeposit(deposit: DepositUtxo): Unit
     def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def l2Tip: Block
     def l2LastMajor: Block
     def finalizing: Boolean
-    def majorBlockL2Effect(
-        txId: TxId,
-        txIx: TxIx,
-        newMajor: Int,
-        absorbedDeposits: Set[SettledDeposit]
+    def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
+    def addBlock(block: Block): Unit
+    def confirmMempoolEvents(
+        blockNum: Int,
+        eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+        mbGenesis: Option[(TxId, SimpleGenesis)],
+        eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
     ): Unit
+    def removeAbsorbedDeposits: Unit
     def finalizeHead(): Unit
 
 /** The class that provides read-write access to the state.
@@ -119,7 +116,6 @@ class NodeStateManager(log: Logger) { self =>
             self.headState = Some(newHead)
 
     private class OpenNodeStateImpl(openState: Open) extends OpenNodeState:
-        def currentMajorVersion: Int = openState.majorVersion
 
         def currentTreasuryRef: (TxId, TxIx) =
             val ref = openState.stateL1.treasuryUtxo.ref
@@ -144,7 +140,11 @@ class NodeStateManager(log: Logger) { self =>
 
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
-        def poolEventsL2 = openState.poolEventsL2
+        def immutablePoolEventsL2: Set[L2NonGenesisEvent] = openState.poolEventsL2.toSet
+
+        def immutableBlocksConfirmedL2: Seq[Block] = openState.blocksConfirmedL2.toSeq
+
+        def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = openState.eventsConfirmedL2.toSeq
 
         def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
@@ -158,30 +158,43 @@ class NodeStateManager(log: Logger) { self =>
             .findLast(_.blockHeader.blockType == Major)
             .getOrElse(zeroBlock)
 
-        // FIXME: review
-        def majorBlockL2Effect(
-            txId: TxId,
-            txIx: TxIx,
-            newMajor: Int,
-            absorbedDeposits: Set[SettledDeposit]
+        def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
+            log.info(s"New treasury utxo is $openState.treasuryRef")
+            openState.stateL1.treasuryUtxo =
+                mkUtxo[L1, TreasuryTag](txId, txIx, headBechAddress, coins)
+
+        def addBlock(block: Block): Unit = openState.blocksConfirmedL2.append(block)
+
+        def confirmMempoolEvents(
+            blockNum: Int,
+            eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+            mbGenesis: Option[(TxId, SimpleGenesis)],
+            eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
         ): Unit =
-            if newMajor == openState.majorVersion + 1 then
-                // TODO: verify all absorbed deposits are on the list
-                // TODO: atomicity
-                // TODO: create L2 utxos
-                absorbedDeposits
-                    .map(sd => mkOutputRef(sd.txId, sd.txIx))
-                    .map(openState.stateL1.depositUtxos.map.remove)
-                log.info(s"Settled deposits: $absorbedDeposits")
-                openState.majorVersion = newMajor
-                log.info(s"Step into next major version $newMajor")
-                openState.stateL1.treasuryUtxo = ??? // treasuryRef = Some(txId, txIx)
-                log.info(s"New treasury utxo is $openState.treasuryRef")
-            else
-                throw IllegalStateException(
-                  s"Can't step into wrong major version, expected: " +
-                      s"${openState.majorVersion + 1}, got: $newMajor"
-                )
+            // Add valid events
+            eventsValid.foreach((txId, _) =>
+                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                    case -1 => throw IllegalStateException(s"pool event $txId was not found")
+                    case i =>
+                        val event = openState.poolEventsL2.remove(i)
+                        openState.eventsConfirmedL2.append((event, blockNum))
+            )
+            // 2. Add genesis if exists
+            mbGenesis.foreach((txId, g) =>
+                // FIXME: timeCurrent
+                val event = L2GenesisEvent(timeCurrent, txId, g)
+                openState.eventsConfirmedL2.append((event, blockNum))
+            )
+            // 3. Remove invalid events
+            eventsInvalid.foreach((txId, _) =>
+                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                    case -1 => throw IllegalStateException(s"pool event $txId was not found")
+                    case i  => openState.poolEventsL2.remove(i)
+            )
+
+        // TODO: remove only absorbed deposits
+        // TODO: matching L2 utxosAdded and deposits
+        def removeAbsorbedDeposits: Unit = openState.stateL1.depositUtxos.map.clear()
 
         def finalizeHead(): Unit =
             headState = None

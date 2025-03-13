@@ -58,23 +58,20 @@ case class MultisigEventManager(
     def handleSettlementTx(tx: L1Tx, txHash: TxId) =
         log.info(s"Handling settlement tx $txHash")
 
-        val treasury = state.asOpen(_.currentTreasuryRef)
-
+        // val treasury = state.asOpen(_.currentTreasuryRef)
         // Inputs of a settlement tx should be either deposits or the treasury
-        val inputs: Set[(TxId, TxIx)] = txInputsRef(tx)
-        val deposits = (inputs - treasury).map((id, ix) => SettledDeposit(id, ix))
+        // val inputs: Set[(TxId, TxIx)] = txInputsRef(tx)
+        // val deposits = (inputs - treasury).map((id, ix) => SettledDeposit(id, ix))
 
         // TODO: Outputs of settlement might be
         //  - withdrawals
         //  - the rollout
         //  - the treasury
-        val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
+        // val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
-        state.asOpen(
-          _.majorBlockL2Effect(txHash, TxIx(0), newTreasury.versionMajor.intValue, deposits)
-        )
+        val Some(treasury) = onlyAddressOutput(tx, headAddress)
+        state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
 
     def handleFinalizationTx(tx: L1Tx, txHash: TxId) =
         log.info(s"Handling finalization tx: $txHash")
-
         state.asOpen(_.finalizeHead())

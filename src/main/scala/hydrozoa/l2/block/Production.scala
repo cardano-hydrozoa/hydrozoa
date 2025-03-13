@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.{MutableUtxosDiff, UtxosDiff}
+import hydrozoa.l2.ledger.state.{MutableUtxosDiff, Utxos, UtxosDiff}
 import hydrozoa.node.server.{DepositTag, DepositUtxos}
 
 import scala.collection.mutable
@@ -27,13 +27,13 @@ import scala.collection.mutable
   *   Immutable block, set of utxos added, set of utxos withdrawn.
   */
 def createBlock(
-                   stateL2: AdaSimpleLedger[TBlockProduction],
-                   poolEvents: Set[L2NonGenesisEvent],
-                   awaitingDeposits: DepositUtxos,
-                   prevHeader: BlockHeader,
-                   timeCreation: PosixTime,
-                   finalizing: Boolean
-): (Block, UtxosDiff, UtxosDiff) =
+    stateL2: AdaSimpleLedger[TBlockProduction],
+    poolEvents: Set[L2NonGenesisEvent],
+    awaitingDeposits: DepositUtxos,
+    prevHeader: BlockHeader,
+    timeCreation: PosixTime,
+    finalizing: Boolean
+): (Block, Utxos, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)]) =
 
     // 1. Initialize the variables and arguments.
     // (a) Let block be a mutable variable initialized to an empty BlockL2
@@ -65,21 +65,25 @@ def createBlock(
                     eventsInvalid.add(txId, MempoolWithdrawal)
     }
 
-    // FIXME: move to ledger?
-
     // 4. If finalizing is False...
-    if !finalizing then
+    val mbGenesis = if !finalizing then
         // TODO: check deposits timing
         val eligibleDeposits = UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
-        stateL2.submit(mkL2G(SimpleGenesis(eligibleDeposits))) match
-            case Right(_, utxos) =>
-                utxosAdded.addAll(utxos)
-                // output refs only
-                depositsAbsorbed = eligibleDeposits.map.keySet.toSet
-            case Left(_, _) => ??? // unreachable
+        if eligibleDeposits.map.isEmpty then None
+        else
+            val genesis: SimpleGenesis = SimpleGenesis(eligibleDeposits)
+            stateL2.submit(mkL2G(genesis)) match
+                case Right(txId, utxos) =>
+                    utxosAdded.addAll(utxos)
+                    // output refs only
+                    depositsAbsorbed = eligibleDeposits.map.keySet.toSet
+                    Some(txId, genesis)
+                case Left(_, _) => ??? // unreachable
+    else None
 
     // 5. If finalizing is True...
-    else utxosWithdrawn.addAll(stateL2.activeState)
+    if (finalizing)
+        utxosWithdrawn.addAll(stateL2.flush)
 
     // Build the block
     val blockBuilder = BlockBuilder()
@@ -114,4 +118,4 @@ def createBlock(
                 .versionMinor(prevHeader.versionMinor + 1)
                 .build
 
-    (block, utxosAdded.toSet, utxosWithdrawn.toSet)
+    (block, stateL2.activeState, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)

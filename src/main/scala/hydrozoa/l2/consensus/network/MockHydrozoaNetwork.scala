@@ -53,13 +53,18 @@ class MockHydrozoaNetwork(
         Set(wit1, wit2)
     }
 
-    def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
+    override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
         val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
 
         val wit1: TxKeyWitness = createTxKeyWitness(tx.toTx, keys1._1)
         val wit2: TxKeyWitness = createTxKeyWitness(tx.toTx, keys2._1)
         Set(wit1, wit2)
+
+    override def reqMinor(block: Block): Set[AckMinor] =
+        Set(keys1, keys2).map(_ =>
+            AckMinor(block.blockHeader, (), false)
+        )
 
     override def reqMajor(block: Block): Set[AckMajorCombined] =
         // TODO: check block type
@@ -94,4 +99,5 @@ class MockHydrozoaNetwork(
               w
             )
         )
+
 }
