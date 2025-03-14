@@ -41,8 +41,8 @@ object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
 /** We don't add genesis events to blocks, since they can't be invalid and because they can be
- * calculated from `depositsAbsorbed`.
- */
+  * calculated from `depositsAbsorbed`.
+  */
 enum MempoolEventTypeL2:
     case MempoolTransaction
     case MempoolWithdrawal
@@ -83,6 +83,7 @@ case class BlockBuilder[
     timeCreation: PosixTime = timeCurrent,
     versionMajor: Int = 0,
     versionMinor: Int = 0,
+    // FIXME: add type tags
     eventsValid: Set[(TxId, MempoolEventTypeL2)] = Set.empty,
     eventsInvalid: Set[(TxId, MempoolEventTypeL2)] = Set.empty,
     depositsAbsorbed: Set[OutputRef[L1]] = Set.empty,
@@ -128,7 +129,7 @@ case class BlockBuilder[
         txId: TxId,
         eventType: MempoolEventTypeL2
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(eventsValid = eventsValid.+((txId, eventType)))
+        copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
     def withDeposit(d: OutputRef[L1])(implicit
         ev: BlockType =:= TBlockMajor

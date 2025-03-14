@@ -77,6 +77,7 @@ trait OpenNodeState extends StateApi:
     def immutableBlocksConfirmedL2: Seq[Block]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def enqueueDeposit(deposit: DepositUtxo): Unit
+    def poolEventL2(event: L2NonGenesisEvent): Unit
     def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def l2Tip: Block
@@ -154,6 +155,7 @@ class NodeStateManager(log: Logger) { self =>
         def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
+        def poolEventL2(event: L2NonGenesisEvent): Unit = openState.poolEventsL2.append(event)
         def finalizing: Boolean = openState.finalizing
         def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2

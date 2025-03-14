@@ -18,10 +18,15 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.SimpleGenesis
+import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
+import hydrozoa.l2.ledger.{SimpleGenesis, mkL2T, mkL2W}
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff}
+import hydrozoa.node.api.SubmitRequestL2
+import hydrozoa.node.api.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
+
+val txDump: os.Path = os.pwd / "txs.out"
 
 class Node(
     state: NodeStateManager,
@@ -38,7 +43,6 @@ class Node(
 ):
 
     var multisigEventManager: Option[MultisigEventManager] = None
-    val txDump: os.Path = os.pwd / "txs.out"
 
     def initializeHead(amount: Long, txId: TxId, txIx: TxIx): Either[InitializeError, TxId] = {
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $amount ADA")
@@ -217,8 +221,24 @@ class Node(
         Right(DepositResponse(refundTx, (depositTxHash, index)))
     }
 
-    def submit(hex: String): Either[String, TxId] =
+    def submitL1(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex(hex))
+
+    def submitL2(req: SubmitRequestL2): Either[String, TxId] =
+        state.asOpen { s =>
+            val ledger = s.stateL2
+
+            val (txId, event) = req match
+                case Transaction(tx) =>
+                    val Right(txId, _) = ledger.evaluate(mkL2T(tx))
+                    (txId, L2TransactionEvent(timeCurrent, txId, tx))
+                case Withdrawal(wd) =>
+                    val Right(txId, _) = ledger.evaluate(mkL2W(wd))
+                    (txId, L2WithdrawalEvent(timeCurrent, txId, wd))
+
+            s.poolEventL2(event)
+            Right(txId)
+        }
 
     /** Manually triggers next block creation procedure.
       * @param nextBlockFinal
@@ -229,7 +249,8 @@ class Node(
         // FIXME: split up
 
         // FIXME: use nextBlockFinal in Ack*
-        println(">>>>>>>>>>>> handleNextBlock")
+        println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock")
+
         println("-----------------------   POOL    --------------------------------------")
         println(state.asOpen(_.immutablePoolEventsL2))
         println("-----------------------   L1 State --------------------------------------")
@@ -340,6 +361,9 @@ class Node(
                 println("-----------------------   POOL    ---------------------------------------")
                 println(state.asOpen(_.immutablePoolEventsL2))
                 println
+                println("-----------------------   L2 State   ------------------------------------")
+                println(state.asOpen(_.stateL2.activeState))
+                println
                 println("------------------------  BLOCKS   --------------------------------------")
                 println(state.asOpen(_.immutableBlocksConfirmedL2))
                 println
@@ -372,14 +396,5 @@ class Node(
             //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
             //  They can be known from L1 major block effects (currently not implemented).
             s.removeAbsorbedDeposits(depositsAbsorbed)
-
-            // FIXME untie
-            mbGenesis.foreach { (_, b) =>
-                // FIXME: txId will be different - we can reuse virtual txId
-                val vGenTx = mkVirtualGenesisTx(depositsAbsorbed, b)
-                val serializedTx = serializeTxHex(vGenTx)
-                log.info(s"Virtual genesis tx: $serializedTx")
-                os.write.append(txDump, "\n" + serializedTx)
-            }
 
         }

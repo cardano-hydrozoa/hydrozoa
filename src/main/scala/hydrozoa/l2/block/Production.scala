@@ -1,11 +1,12 @@
 package hydrozoa.l2.block
 
 import hydrozoa.*
+import hydrozoa.infra.serializeTxHex
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.{MutableUtxosDiff, Utxos, UtxosDiff}
-import hydrozoa.node.server.{DepositTag, DepositUtxos}
+import hydrozoa.node.server.{DepositTag, DepositUtxos, txDump}
 
 import scala.collection.mutable
 
@@ -56,13 +57,18 @@ def createBlock(
     poolEvents.foreach {
         case tx: L2TransactionEvent =>
             stateL2.submit(mkL2T(tx.simpleTransaction)) match
-                case Right(txId, _)   => txValid.add(txId)
+                case Right(txId, mbCardanoTx, _) =>
+                    // FIXME: move out
+                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
+                    txValid.add(txId)
                 case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
         case wd: L2WithdrawalEvent =>
             stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
-                case Right(txId, utxosDiff) =>
+                case Right(txId, mbCardanoTx, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
+                    // FIXME: move out
+                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
                 case Left(txId, _err) =>
                     eventsInvalid.add(txId, MempoolWithdrawal)
     }
@@ -75,10 +81,12 @@ def createBlock(
         else
             val genesis: SimpleGenesis = SimpleGenesis(eligibleDeposits)
             stateL2.submit(mkL2G(genesis)) match
-                case Right(txId, utxos) =>
+                case Right(txId, mbCardanoTx, utxos) =>
                     utxosAdded.addAll(utxos)
                     // output refs only
                     depositsAbsorbed = eligibleDeposits.map.keySet.toSet
+                    // FIXME: move out
+                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable
     else None

@@ -1,10 +1,10 @@
 package hydrozoa.l2.ledger
 
-import hydrozoa.infra.{CryptoHash, encodeHex}
+import hydrozoa.infra.*
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
 import hydrozoa.node.server.DepositUtxos
-import hydrozoa.{AddressBechL1, AddressBechL2, TxId, TxIx}
+import hydrozoa.*
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -36,23 +36,44 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       */
     def blockProduction(implicit
         ev: InstancePurpose =:= THydrozoaHead
-    ): AdaSimpleLedger[TBlockProduction] = copy()
+    ): AdaSimpleLedger[TBlockProduction] =
+        val ledgerForBlockProduction: AdaSimpleLedger[TBlockProduction] = copy()
+        ledgerForBlockProduction.updateUtxosActive(activeState.clone())
+        ledgerForBlockProduction
 
     override def submit[E1 <: L2Event](
         event: E1
-    ): Either[(L2EventHash, String), (L2EventHash, event.UtxosDiff)] =
+    ): Either[(L2EventHash, String), (L2EventHash, Option[L1Tx], event.UtxosDiff)] =
         require(verifier.isValid(event), true)
         event match
             case genesis: L2Genesis       => handleGenesis(genesis)
             case tx: L2Transaction        => handleTransaction(tx)
             case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
 
-    private def handleGenesis(event: L2Genesis) =
-        val s = s"L2 genesis event: ${event.genesis}"
-        val txId = eventHash(s)
-        println(s"L2 genesis txId: $txId, content: $s")
+    override def evaluate[E1 <: L2Event](event: E1): Either[String, (L2EventHash, Option[L1Tx])] =
+        event match
+            case event: L2Genesis =>
+                val s = s"L2 simple genesis: ${event.genesis}"
+                val cardanoTx = mkVirtualGenesisTx(event.genesis)
+                val txId = txHash(cardanoTx)
+                println(s"L2 genesis event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
+                Right(txId, Some(cardanoTx))
+            case event: L2Transaction =>
+                val s = s"L2 simple transaction: ${event.transaction}"
+                val cardanoTx = mkCardanoL2Tx(event.transaction)
+                val txId = txHash(cardanoTx)
+                println(s"L2 tx event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
+                Right(txId, Some(cardanoTx))
+            case event: L2Withdrawal =>
+                val s = s"Simple withdrawing: ${event.withdrawal}"
+                val txId = eventHash(s)
+                println(s"L2 withdrawal event, txId: $txId, content: $s")
+                Right(txId, None)
 
-        val utxoDiff = event.genesis.ouputs.zipWithIndex
+    private def handleGenesis(event: L2Genesis) =
+        val Right(txId, mbCardanoTx) = evaluate(event)
+
+        val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
                 val txIn = mkTxIn(txId, TxIx(output._2))
                 val txOut = mkTxOut(output._1.address, output._1.coins)
@@ -60,13 +81,10 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             )
             .toSet
         activeState.addAll(utxoDiff)
-        Right((txId, utxoDiff))
+        Right((txId, mbCardanoTx, utxoDiff))
 
     private def handleTransaction(event: L2Transaction) =
-
-        val s = s"L2 simple transaction: ${event.transaction}"
-        val txId = eventHash(s)
-        println(s"L2 tx txId: $txId, content: $s")
+        val Right(txId, mbCardanoTx) = evaluate(event)
 
         // Inputs
         val spentRefs = event.transaction.inputs.map(i => mkTxIn(i._1, i._2))
@@ -90,16 +108,22 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                 spentRefs.foreach(activeState.remove)
                 newUtxos.foreach(activeState.put.tupled)
 
-                Right((txId, Set[(TxIn, TxOut)]()))
+                Right((txId, mbCardanoTx, Set[(TxIn, TxOut)]()))
 
-    private def handleWithdrawal(d: L2Withdrawal) =
-        val txIn = mkTxIn(d.withdrawal.utxoRef._1, d.withdrawal.utxoRef._2)
-        val s = s"Simple withdrawing: $txIn"
-        val txId = eventHash(s)
-        println(s"L2 withdraw: $txId, content: $s")
-        activeState.remove(txIn) match
-            case Some(txOut) => Right(txId, Set((txIn, txOut)))
-            case None        => Left(txId, s"Withdrawal utxo not found: $d")
+    private def handleWithdrawal(event: L2Withdrawal) =
+        val Right(txId, mbCardanoTx) = evaluate(event)
+
+        // Inputs
+        val withdrawnRefs = event.withdrawal.inputs.map(i => mkTxIn(i._1, i._2))
+        val extraneousRefs = withdrawnRefs.filterNot(activeState.contains)
+
+        if extraneousRefs.nonEmpty then
+            Left(txId, s"Extraneous inputs in the withdrawal: $extraneousRefs")
+        else
+            val withdrawnOutputs = withdrawnRefs.map(activeState.get).map(_.get)
+
+            withdrawnRefs.foreach(activeState.remove)
+            Right(txId, mbCardanoTx, withdrawnRefs.zip(withdrawnOutputs).toSet)
 
     private def eventHash(s: String): TxId =
         TxId(encodeHex(CryptoHash.H32.hash(IArray.from(s.getBytes)).bytes))
@@ -123,32 +147,37 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
     def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
-        GenesisL2Event(SimpleGenesis(List(SimpleOuput(address, ada))))
+        GenesisL2Event(SimpleGenesis(Seq.empty, List(SimpleOuput(address, ada))))
     def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =
         TransactionL2Event(
-          SimpleTransaction(inputs = Set(input), outputs = Set(SimpleOuput(address, ada)))
+          SimpleTransaction(inputs = List(input), outputs = List(SimpleOuput(address, ada)))
         )
     def mkWithdrawal(utxo: (TxId, TxIx)): L2Withdrawal =
-        WithdrawalL2Event(SimpleWithdrawal(utxo))
+        WithdrawalL2Event(SimpleWithdrawal(List(utxo)))
 
 case class SimpleGenesis(
-    ouputs: List[SimpleOuput]
+    virtualInputs: Seq[OutputRef[L1]],
+    outputs: List[SimpleOuput]
 )
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =
-        SimpleGenesis(ds.map.values.map(o => SimpleOuput(liftAddress(o.address), o.coins)).toList)
+        SimpleGenesis(ds.map.keySet.toSeq, ds.map.values.map(o => SimpleOuput(liftAddress(o.address), o.coins)).toList)
 
 // FIXME: implement
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
-    inputs: Set[(TxId, TxIx)],
-    outputs: Set[SimpleOuput] // FIXME: use Array
+    inputs: List[
+      (TxId, TxIx)
+    ], // Should be Set, using List since Set is not supported in Tapir's Schema deriving
+    outputs: List[SimpleOuput]
 )
 
 case class SimpleWithdrawal(
-    utxoRef: (TxId, TxIx) // FIXME: multiple
+    inputs: List[
+      (TxId, TxIx)
+    ] // Should be Set, using List since Set is not supported in Tapir's Schema deriving
 )
 
 case class SimpleOuput(

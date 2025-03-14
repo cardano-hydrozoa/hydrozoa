@@ -26,7 +26,7 @@ def mkTxOut(bech32: hydrozoa.AddressBechL2, coins: BigInt): TxOut =
     val value = scalus.Value.lovelace(coins)
     scalus.TxOut(address = address, value = value, datumHash = Nothing)
 
-def checkSumInvariant(inputs: Set[TxOut], outputs: Set[TxOut]): Boolean =
+def checkSumInvariant(inputs: List[TxOut], outputs: List[TxOut]): Boolean =
     val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
     val after: scalus.Value = outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
     before == after

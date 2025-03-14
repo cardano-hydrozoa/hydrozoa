@@ -11,7 +11,7 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l2.ledger.SimpleGenesis
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction}
 import org.bouncycastle.i18n.filter.TrustedInput
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
@@ -118,22 +118,50 @@ def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
     val tx_ = Transaction.deserialize(tx.bytes)
     tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
 
-/**
- * @param inputs
- * @param genesis
- * @return
- *  Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
- */
-def mkVirtualGenesisTx(inputs: Seq[OutputRef[L1]], genesis: SimpleGenesis): L1Tx =
+/** @param inputs
+  * @param genesis
+  * @return
+  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
+  */
+def mkVirtualGenesisTx(genesis: SimpleGenesis): L1Tx =
 
-    val virtualInputs = inputs.map { input =>
+    val virtualInputs = genesis.virtualInputs.map { input =>
         TransactionInput.builder
             .transactionId(input.id.hash)
             .index(input.ix.ix.intValue)
             .build
     }.toList
 
-    val virtualOutputs = genesis.ouputs.map { output =>
+    val virtualOutputs = genesis.outputs.map { output =>
+        TransactionOutput.builder
+            .address(output.address.bech32)
+            .value(Value.builder.coin(output.coins.bigInteger).build)
+            .build
+    }
+
+    val body = TransactionBody.builder
+        .inputs(virtualInputs.asJava)
+        .outputs(virtualOutputs.asJava)
+        .build
+
+    val tx = Transaction.builder.era(Era.Conway).body(body).build
+    L1Tx(tx.serialize)
+
+/** @param inputs
+  * @param genesis
+  * @return
+  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
+  */
+def mkCardanoL2Tx(simpleTx: SimpleTransaction): L1Tx =
+
+    val virtualInputs = simpleTx.inputs.map { input =>
+        TransactionInput.builder
+            .transactionId(input._1.hash)
+            .index(input._2.ix.intValue)
+            .build
+    }
+
+    val virtualOutputs = simpleTx.outputs.map { output =>
         TransactionOutput.builder
             .address(output.address.bech32)
             .value(Value.builder.coin(output.coins.bigInteger).build)

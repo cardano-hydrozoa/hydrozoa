@@ -1,7 +1,9 @@
 package hydrozoa.l2.ledger
 
+import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.infra.encodeHex
+import hydrozoa.node.api.{SubmitRequestL2, given}
 import hydrozoa.{AddressBechL2, TxId, TxIx}
 
 def mkLedger: AdaSimpleLedger[THydrozoaHead] = {
@@ -18,7 +20,7 @@ val address2 = AddressBechL2(
 
 def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): L2EventHash = {
     val event = AdaSimpleLedger.mkGenesis(address, 100)
-    val Right(hash, _) = ledger.submit(event)
+    val Right(hash, _, _) = ledger.submit(event)
     println(s"Genesis $hash submitted: $event")
     println(ledger.activeState)
     hash
@@ -41,7 +43,9 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val ledger = mkLedger
         val genesis = doSampleGenesis(ledger)
         val ix = TxIx(0)
+
         val event = AdaSimpleLedger.mkWithdrawal((genesis, ix))
+        println(writeToString(SubmitRequestL2.Withdrawal(event.withdrawal)))
         ledger.submit(event)
         assert(ledger.isEmpty)
     }
@@ -63,6 +67,9 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val ix = TxIx(0)
 
         val tx = AdaSimpleLedger.mkTransaction((txId, ix), address2, 100)
+
+        println(writeToString(SubmitRequestL2.Transaction(tx.transaction)))
+
         ledger.submit(tx)
         println(ledger.activeState)
     }
