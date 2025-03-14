@@ -115,7 +115,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         activeState.clear()
         ret
 
-    override def forward(activeState: Utxos): Unit =
+    override def updateUtxosActive(activeState: Utxos): Unit =
         // TODO: revise
         this.activeState.clear()
         this.activeState.addAll(activeState)
@@ -123,35 +123,35 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
     def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
-        GenesisL2Event(SimpleGenesis(List(SimpleUtxo(address, ada))))
+        GenesisL2Event(SimpleGenesis(List(SimpleOuput(address, ada))))
     def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =
         TransactionL2Event(
-          SimpleTransaction(inputs = Set(input), outputs = Set(SimpleUtxo(address, ada)))
+          SimpleTransaction(inputs = Set(input), outputs = Set(SimpleOuput(address, ada)))
         )
     def mkWithdrawal(utxo: (TxId, TxIx)): L2Withdrawal =
         WithdrawalL2Event(SimpleWithdrawal(utxo))
 
 case class SimpleGenesis(
-    utxosAdded: List[SimpleUtxo]
+    utxosAdded: List[SimpleOuput]
 )
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =
-        SimpleGenesis(ds.map.values.map(o => SimpleUtxo(liftAddress(o.address), o.coins)).toList)
+        SimpleGenesis(ds.map.values.map(o => SimpleOuput(liftAddress(o.address), o.coins)).toList)
 
 // FIXME: implement
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
-    inputs: Set[(TxId, TxIx)],
-    outputs: Set[SimpleUtxo] // FIXME: use Array
+                                inputs: Set[(TxId, TxIx)],
+                                outputs: Set[SimpleOuput] // FIXME: use Array
 )
 
 case class SimpleWithdrawal(
     utxoRef: (TxId, TxIx) // FIXME: multiple
 )
 
-case class SimpleUtxo(
+case class SimpleOuput(
     address: AddressBechL2,
     coins: BigInt
 )

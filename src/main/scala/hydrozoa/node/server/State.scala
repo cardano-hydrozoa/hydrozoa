@@ -29,7 +29,12 @@ private case class Open(
 )(initialTreasury: TreasuryUtxo)
     extends HeadState
     with MultisigRegime {
-    val blocksConfirmedL2: mutable.Buffer[Block] = mutable.Buffer()
+    // FIXME: use instead zeroBlock
+    // FIXME: keep block record
+    val genesisBlock: Unit = ()
+    val blocksConfirmedL2: mutable.Buffer[Block] = mutable.Buffer() // BlockRecord
+    // FIXME:
+    val blockPending: Option[BlockRecord] = None
     val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
     val poolEventsL2: mutable.Buffer[L2NonGenesisEvent] = mutable.Buffer()
     var finalizing = false
@@ -68,7 +73,7 @@ trait OpenNodeState extends StateApi:
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
     def peekDeposits: DepositUtxos
-    def immutablePoolEventsL2: Set[L2NonGenesisEvent]
+    def immutablePoolEventsL2: Seq[L2NonGenesisEvent]
     def immutableBlocksConfirmedL2: Seq[Block]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def enqueueDeposit(deposit: DepositUtxo): Unit
@@ -85,7 +90,7 @@ trait OpenNodeState extends StateApi:
         mbGenesis: Option[(TxId, SimpleGenesis)],
         eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
     ): Unit
-    def removeAbsorbedDeposits: Unit
+    def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit
     def finalizeHead(): Unit
 
 /** The class that provides read-write access to the state.
@@ -140,7 +145,7 @@ class NodeStateManager(log: Logger) { self =>
 
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
-        def immutablePoolEventsL2: Set[L2NonGenesisEvent] = openState.poolEventsL2.toSet
+        def immutablePoolEventsL2: Seq[L2NonGenesisEvent] = openState.poolEventsL2.toSeq
 
         def immutableBlocksConfirmedL2: Seq[Block] = openState.blocksConfirmedL2.toSeq
 
@@ -192,9 +197,8 @@ class NodeStateManager(log: Logger) { self =>
                     case i  => openState.poolEventsL2.remove(i)
             )
 
-        // TODO: remove only absorbed deposits
-        // TODO: matching L2 utxosAdded and deposits
-        def removeAbsorbedDeposits: Unit = openState.stateL1.depositUtxos.map.clear()
+        def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit =
+            deposits.foreach(openState.stateL1.depositUtxos.map.remove)
 
         def finalizeHead(): Unit =
             headState = None
@@ -243,6 +247,7 @@ type TreasuryUtxo = Utxo[L1, TreasuryTag]
 case class MultisigHeadStateL1(
     var treasuryUtxo: TreasuryUtxo,
     depositUtxos: MutableDepositUtxos,
+    // FIXME: move to rollout effect
     rolloutUtxos: MutableRolloutUtxos
 )
 
@@ -259,6 +264,7 @@ object MultisigHeadStateL1:
           MutableUtxoSet[L1, RolloutTag](mutable.Map.empty)
         )
 
+case class BlockRecord()
 // Remove
 
 case class SettledDeposit(

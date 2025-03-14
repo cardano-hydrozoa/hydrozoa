@@ -19,7 +19,7 @@ trait L2Ledger[U, G, T, W, UD, E <: AnyL2Event[G, T, W, UD], H, -V]:
     def allEvents: Set[H]
     def isEmpty: Boolean
     def flush: U
-    def forward(activeState: U): Unit
+    def updateUtxosActive(activeState: U): Unit
 
 /** @tparam E
   *   type for events

@@ -24,16 +24,18 @@ import scala.collection.mutable
   * @param finalizing
   *   finalization flag
   * @return
-  *   Immutable block, set of utxos added, set of utxos withdrawn.
+  *   Immutable block, set of utxos added, set of utxos withdrawn and optional genesis event.
+  *   Returns None if a block can't be produced at the moment, i.e. no event in the pool, no
+  *   deposits to absorb, and multisig regime keep-alive is not yet needed.
   */
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
-    poolEvents: Set[L2NonGenesisEvent],
+    poolEvents: Seq[L2NonGenesisEvent],
     awaitingDeposits: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
-): (Block, Utxos, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)]) =
+): Option[(Block, Utxos, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
 
     // 1. Initialize the variables and arguments.
     // (a) Let block be a mutable variable initialized to an empty BlockL2
@@ -85,6 +87,13 @@ def createBlock(
     if (finalizing)
         utxosWithdrawn.addAll(stateL2.flush)
 
+    // 6. Set block.blockType...
+    val multisigRegimeKeepAlive = false // TODO: implement
+
+    // No block if it's empty and keep-alive is not needed.
+    if (poolEvents.isEmpty && depositsAbsorbed.isEmpty && !multisigRegimeKeepAlive)
+        return None
+        
     // Build the block
     val blockBuilder = BlockBuilder()
         .timeCreation(timeCreation)
@@ -92,10 +101,7 @@ def createBlock(
         .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
         .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
         .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
-
-    // 6. Set block.blockType...
-    val multisigRegimeKeepAlive = false // TODO: implement
-
+    
     def withdrawalsValid[A <: TBlockMajor, B <: TCheck, C <: TCheck](b: BlockBuilder[A, B, C]) =
         wdValid.foldLeft(b)((b, e) => b.withWithdrawal(e))
 
@@ -118,4 +124,4 @@ def createBlock(
                 .versionMinor(prevHeader.versionMinor + 1)
                 .build
 
-    (block, stateL2.activeState, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
+    Some(block, stateL2.activeState, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
