@@ -11,10 +11,15 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction}
-import org.bouncycastle.i18n.filter.TrustedInput
+import hydrozoa.l2.ledger.state.{TxIn, unwrapTxIn}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleOutput, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
-import scalus.builtin.Data
+import scalus.builtin.{Data, ByteString as ScalusByteString}
+import scalus.ledger.api.v1
+import scalus.ledger.api.v1.{TokenName, TxOut, TxOutRef}
+import scalus.prelude.AssocMap
+import scalus.prelude.Maybe.Just
+import scalus.prelude.Prelude.given_Eq_ByteString
 
 import scala.jdk.CollectionConverters.*
 
@@ -118,8 +123,7 @@ def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
     val tx_ = Transaction.deserialize(tx.bytes)
     tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
 
-/** @param inputs
-  * @param genesis
+/** @param genesis
   * @return
   *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
@@ -147,12 +151,11 @@ def mkVirtualGenesisTx(genesis: SimpleGenesis): L1Tx =
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     L1Tx(tx.serialize)
 
-/** @param inputs
-  * @param genesis
+/** @param simpleTx
   * @return
   *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkCardanoL2Tx(simpleTx: SimpleTransaction): L1Tx =
+def mkVirtualTransactionL2(simpleTx: SimpleTransaction): L1Tx =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -175,3 +178,49 @@ def mkCardanoL2Tx(simpleTx: SimpleTransaction): L1Tx =
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     L1Tx(tx.serialize)
+
+def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
+    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
+    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
+    TransactionOutput.builder
+        .address(
+          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
+        ) // FIXME: network
+        .value(Value.builder.coin(coins.bigInteger).build)
+        .build
+
+
+def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput  = {
+    TransactionInput.builder()
+        .transactionId(input.id.hash.toHex)
+        .index(input.idx.intValue)
+        .build()
+}
+
+/** @param withdrawas
+  * @return
+  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
+  */
+def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxOut]): L1Tx =
+
+    val virtualInputs = withdrawal.inputs.map { input =>
+        TransactionInput.builder
+            .transactionId(input._1.hash)
+            .index(input._2.ix.intValue)
+            .build
+    }
+
+    val outputsL1 = virtualOutputs.map(toBloxBeanTransactionOutput)
+
+    val body = TransactionBody.builder
+        .inputs(virtualInputs.asJava)
+        .outputs(outputsL1.asJava)
+        .build
+
+    val tx = Transaction.builder.era(Era.Conway).body(body).build
+    L1Tx(tx.serialize)
+
+def augmentWithVirtualInputs(tx: L1Tx, virtualInputs:Set[TxIn]): L1Tx =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    tx_.getBody.getInputs.addAll(virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava)
+    L1Tx(tx_.serialize())

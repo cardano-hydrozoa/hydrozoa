@@ -2,6 +2,7 @@ package hydrozoa.l2.consensus.network
 
 import hydrozoa.*
 import hydrozoa.l2.block.{Block, BlockHeader}
+import hydrozoa.l2.ledger.state.UtxosDiff
 
 trait HydrozoaNetwork {
 
@@ -16,7 +17,8 @@ trait HydrozoaNetwork {
 
     def reqMinor(block: Block): Set[AckMinor]
 
-    def reqMajor(block: Block): Set[AckMajorCombined]
+    // FIXME: remove utxosWithdrawn once we have block validation
+    def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined]
 
     def reqFinal(block: Block): Set[AckFinalCombined]
 }

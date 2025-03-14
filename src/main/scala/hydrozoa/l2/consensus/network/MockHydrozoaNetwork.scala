@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus.network
 
-import hydrozoa.infra.{genNodeKey, createTxKeyWitness}
+import hydrozoa.infra.{createTxKeyWitness, genNodeKey}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
@@ -9,7 +9,8 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.node.server.{HeadStateReader}
+import hydrozoa.l2.ledger.state.UtxosDiff
+import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
 class MockHydrozoaNetwork(
@@ -66,10 +67,10 @@ class MockHydrozoaNetwork(
             AckMinor(block.blockHeader, (), false)
         )
 
-    override def reqMajor(block: Block): Set[AckMajorCombined] =
+    override def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined] =
         // TODO: check block type
         val recipe =
-            SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
+            SettlementRecipe(block.blockBody.depositsAbsorbed, utxosWithdrawn, block.blockHeader.versionMajor)
         val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
         val wit1: TxKeyWitness = createTxKeyWitness(tx.toTx, keys1._1)

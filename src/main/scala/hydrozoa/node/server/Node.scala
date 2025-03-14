@@ -19,8 +19,8 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
-import hydrozoa.l2.ledger.{SimpleGenesis, mkL2T, mkL2W}
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff}
+import hydrozoa.l2.ledger.{SimpleGenesis, mkL2T, mkL2W}
 import hydrozoa.node.api.SubmitRequestL2
 import hydrozoa.node.api.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -276,6 +276,7 @@ class Node(
           timeCurrent,
           finalizing
         ) match
+            // FIXME utxosAdded is not used I think
             case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
                 block.blockHeader.blockType match
                     case Minor =>
@@ -288,6 +289,7 @@ class Node(
                         // Create settlement tx draft
                         val txRecipe = SettlementRecipe(
                           block.blockBody.depositsAbsorbed,
+                          utxosWithdrawn,
                           block.blockHeader.versionMajor
                         )
                         val Right(settlementTxDraft: SettlementTx) =
@@ -296,7 +298,7 @@ class Node(
                             createTxKeyWitness(settlementTxDraft.toTx, ownKeys._1)
                         // TODO: broadcast ownWit
                         // Confirm block
-                        val acksMajorCombined = network.reqMajor(block)
+                        val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
 
                         // Immediate L2 effect
                         applyAnyBlockL2Effect(block, utxosActive, mbGenesis)
@@ -306,9 +308,18 @@ class Node(
                         val settlementTx: L1Tx = wits.foldLeft(settlementTxDraft.toTx)(addWitness)
                         val serializedTx = serializeTxHex(settlementTx)
                         log.info(s"Settlement tx: $serializedTx")
-                        os.write.append(txDump, "\n" + serializedTx)
+
+                        // Submit settlement tx
                         val Right(settlementTxId) = cardano.submit(settlementTx)
                         log.info(s"Settlement tx submitted: $settlementTxId")
+
+                        // Dump augmented virtual tx
+                        os.write.append(
+                          txDump,
+                          "\n" + serializeTxHex(
+                            augmentWithVirtualInputs(settlementTx, utxosWithdrawn.map(_._1))
+                          )
+                        )
 
                         // Emulate L1 event
                         // TODO: I don't think we have to wait L1 event in reality

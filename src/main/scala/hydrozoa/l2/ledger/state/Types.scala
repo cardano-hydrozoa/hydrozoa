@@ -1,6 +1,7 @@
 package hydrozoa.l2.ledger.state
 
-import hydrozoa.infra.decodeBech32AddressL2
+import hydrozoa.infra.{decodeBech32AddressL2}
+import hydrozoa.l2.ledger.SimpleOutput
 import scalus.builtin.ByteString
 import scalus.prelude.Maybe.Nothing
 import scalus.ledger.api.v1 as scalus
@@ -21,10 +22,14 @@ def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
     val sTxIx = BigInt.apply(txIx.ix.intValue)
     scalus.TxOutRef(sTxId, sTxIx)
 
+def unwrapTxIn(txIn: TxIn): scalus.TxOutRef = txIn
+
 def mkTxOut(bech32: hydrozoa.AddressBechL2, coins: BigInt): TxOut =
     val address = decodeBech32AddressL2(bech32)
     val value = scalus.Value.lovelace(coins)
     scalus.TxOut(address = address, value = value, datumHash = Nothing)
+
+def unwrapTxOut(txOut: TxOut): scalus.TxOut = txOut
 
 def checkSumInvariant(inputs: List[TxOut], outputs: List[TxOut]): Boolean =
     val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)

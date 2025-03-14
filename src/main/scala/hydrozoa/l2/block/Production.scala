@@ -67,8 +67,9 @@ def createBlock(
                 case Right(txId, mbCardanoTx, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
-                    // FIXME: move out
-                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
+                // FIXME: move out
+                // TODO: it's not necessary now, settlement txs do the job
+                // mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
                 case Left(txId, _err) =>
                     eventsInvalid.add(txId, MempoolWithdrawal)
     }
