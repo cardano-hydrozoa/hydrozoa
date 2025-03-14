@@ -366,8 +366,20 @@ class Node(
               body.eventsInvalid
             )
 
+            val depositsAbsorbed = body.depositsAbsorbed
+
             // FIXME: we should it clean up immediately, so the next block won't pick it up again
             //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
             //  They can be known from L1 major block effects (currently not implemented).
-            s.removeAbsorbedDeposits(body.depositsAbsorbed)
+            s.removeAbsorbedDeposits(depositsAbsorbed)
+
+            // FIXME untie
+            mbGenesis.foreach { (_, b) =>
+                // FIXME: txId will be different - we can reuse virtual txId
+                val vGenTx = mkVirtualGenesisTx(depositsAbsorbed, b)
+                val serializedTx = serializeTxHex(vGenTx)
+                log.info(s"Virtual genesis tx: $serializedTx")
+                os.write.append(txDump, "\n" + serializedTx)
+            }
+
         }

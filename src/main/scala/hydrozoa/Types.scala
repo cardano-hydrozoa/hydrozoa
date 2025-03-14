@@ -21,7 +21,7 @@ case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 case class TxId(hash: String)
 
 // Transaction output index
-// TODO: use BigInt
+// TODO: use Int, Long is too long
 case class TxIx(ix: Long)
 
 case class OutputRef[L <: Level](id: TxId, ix: TxIx)

@@ -5,11 +5,14 @@ import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.*
 import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
-import com.bloxbean.cardano.client.transaction.spec.Transaction
+import com.bloxbean.cardano.client.spec.Era
+import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
+import hydrozoa.l2.ledger.SimpleGenesis
+import org.bouncycastle.i18n.filter.TrustedInput
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
 
@@ -114,3 +117,33 @@ def outputDatum(tx: L1Tx, index: TxIx): Data =
 def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
     val tx_ = Transaction.deserialize(tx.bytes)
     tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
+
+/**
+ * @param inputs
+ * @param genesis
+ * @return
+ *  Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
+ */
+def mkVirtualGenesisTx(inputs: Seq[OutputRef[L1]], genesis: SimpleGenesis): L1Tx =
+
+    val virtualInputs = inputs.map { input =>
+        TransactionInput.builder
+            .transactionId(input.id.hash)
+            .index(input.ix.ix.intValue)
+            .build
+    }.toList
+
+    val virtualOutputs = genesis.ouputs.map { output =>
+        TransactionOutput.builder
+            .address(output.address.bech32)
+            .value(Value.builder.coin(output.coins.bigInteger).build)
+            .build
+    }
+
+    val body = TransactionBody.builder
+        .inputs(virtualInputs.asJava)
+        .outputs(virtualOutputs.asJava)
+        .build
+
+    val tx = Transaction.builder.era(Era.Conway).body(body).build
+    L1Tx(tx.serialize)

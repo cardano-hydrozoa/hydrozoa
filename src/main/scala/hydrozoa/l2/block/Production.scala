@@ -93,7 +93,7 @@ def createBlock(
     // No block if it's empty and keep-alive is not needed.
     if (poolEvents.isEmpty && depositsAbsorbed.isEmpty && !multisigRegimeKeepAlive)
         return None
-        
+
     // Build the block
     val blockBuilder = BlockBuilder()
         .timeCreation(timeCreation)
@@ -101,7 +101,7 @@ def createBlock(
         .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
         .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
         .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
-    
+
     def withdrawalsValid[A <: TBlockMajor, B <: TCheck, C <: TCheck](b: BlockBuilder[A, B, C]) =
         wdValid.foldLeft(b)((b, e) => b.withWithdrawal(e))
 

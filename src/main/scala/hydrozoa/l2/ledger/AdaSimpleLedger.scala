@@ -52,7 +52,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         val txId = eventHash(s)
         println(s"L2 genesis txId: $txId, content: $s")
 
-        val utxoDiff = event.genesis.utxosAdded.zipWithIndex
+        val utxoDiff = event.genesis.ouputs.zipWithIndex
             .map(output =>
                 val txIn = mkTxIn(txId, TxIx(output._2))
                 val txOut = mkTxOut(output._1.address, output._1.coins)
@@ -132,7 +132,7 @@ object AdaSimpleLedger:
         WithdrawalL2Event(SimpleWithdrawal(utxo))
 
 case class SimpleGenesis(
-    utxosAdded: List[SimpleOuput]
+    ouputs: List[SimpleOuput]
 )
 
 object SimpleGenesis:
@@ -143,8 +143,8 @@ object SimpleGenesis:
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
-                                inputs: Set[(TxId, TxIx)],
-                                outputs: Set[SimpleOuput] // FIXME: use Array
+    inputs: Set[(TxId, TxIx)],
+    outputs: Set[SimpleOuput] // FIXME: use Array
 )
 
 case class SimpleWithdrawal(
