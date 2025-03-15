@@ -2,16 +2,120 @@
 \graphicspath{{\subfix{../images/}}}
 \begin{document}
 
-\chapter*{Future work}%
+\chapter{Future work}%
 \label{h:future-work}%
-\addcontentsline{toc}{chapter}{Future work}%
 
-% TODO Observer scripts
+In this appendix, we describe some interesting further developments of the Hydrozoa protocol beyond the current specification.
+Of these, only adding/removing peers (\cref{h:future-work-add-remove-members}) is formally in scope for the Catalyst Fund 13 Hydrozoa project \citep{FlerovskyCatalystMilestonesHydrozoa2024}, but we will look for opportunities to pursue this future work where we can.
 
-% TODO Withdrawn utxos field in tx body, instead of degenerate txs for withdrawals.
+\section{Add/remove peers}%
+\label{h:future-work-add-remove-members}%
 
-% TODO fragmented treasury -- overcome token limits of single utxo
+The Cardano community identified dynamic peer membership as a highly desirable feature for running Hydrozoa heads.
+Indeed, the ability to add or remove a peer from a head by unanimous consent would significantly boost the flexibility of operating them.
+It will likely improve the chances that peers stay in the multisig regime, as any peer wanting to exit could do so in an orderly fashion with minimal disruption, rather than resorting to finalization or dispute resolution.
 
-% TODO Add/remove members from Hydrozoa head
+In terms of the L1 protocol currently described in this specification (\cref{h:l1-multisig-regime,h:l1-rule-based-regime}), changing the peers list in the multisig regime%
+  \footnote{Changing the peers list in the rule-based regime is infeasible because their inability to reach a timely consensus is the reason why the head is in this regime.}
+  can be as simple as a single multi-signed transaction that:
+\begin{enumerate}
+  \item Spends the head's multisig treasury utxo.  
+  \item Burns the head's beacon token.
+  \item Mints a new head beacon token with a minting policy corresponding to the new peer list.
+  \item Sends the multisig treasury utxo input's funds and the newly minted head beacon token to the head native script address corresponding to the new peer list.
+    The datum is the same as in the treasury input.
+\end{enumerate}
+
+The main challenge of implementing this feature involves adapting the L2 protocol (\cref{h:l2-consensus-protocol}) to negotiate this transition seamlessly.
+Pragmatically, we have decided to postpone this until the current specification is implemented.
+However, we are committed to implementing this feature in the final milestone of the Hydrozoa Catalyst project \citep{FlerovskyCatalystMilestonesHydrozoa2024}.
+
+\section{Minting on L2}%
+\label{h:future-work-minting}%
+
+Many dApps on Cardano rely on custom tokens to authenticate their internal state,%
+\footnote{For example, see the Cardano Swaps peer-to-peer DeFi protocol \citep{fallen-icarusCardanoSwapsP2P2025}.}
+  but Hydrozoa currently precludes minting and burning on L2.
+Supporting this feature opens up a range of complex issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
+
+Fortunately, the Midgard team is exploring a promising approach to this problem.
+The Hydrozoa team is in close contact with the Midgard team and will likely adapt Midgard's solution to L2 minting when it is more fully developed.
+
+\section{Observer scripts}%
+\label{h:future-work-observer-scripts}%
+
+Cardano CIP-112 \citep{DiSarroCIP112ObserveScript2024}, which is expected to arrive on Cardano mainnet in an upcoming hardfork, introduces observer scripts to Cardano's ledger rules.
+Observer scripts could revolutionize dApps on a scale similar to the reference inputs/scripts of the Vasil hardfork.
+
+\subsection{Alternative to withdraw-zero trick}%
+\label{h:observer-script-withdraw-zero-trick}%
+
+Many dApps on Cardano rely on withdraw-zero staking validators to optimize performance,%
+\footnote{For example, Hydrozoa itself uses a withdraw-zero staking validator for performance optimization when tallying votes in the rule-based regime (\cref{h:l1-rule-based-dispute-resolution}).}
+but this specification currently precludes staking actions on L2.
+However, observer scripts allow dApp developers to implement the same functionality without using withdraw-zero staking validators, reducing overhead and complexity.
+
+Instead of conjuring a complex workaround to enable staking actions on L2, Hydrozoa will wait for CIP-112 to be implemented and merged to Cardano mainnet.
+
+\subsection{Eliminate post-dated transactions}%
+\label{h:observer-script-eliminate-post-dated-txs}%
+
+Currently, Hydrozoa relies on multi-signed post-dated transactions for two features:
+\begin{itemize}
+  \item Refunding a deposit after its deadline (\cref{h:l1-rule-based-transition}).
+  \item Transitioning the head from the multisig regime to the rule-based regime after the multisig regime timeout (\cref{h:l1-rule-based-transition}).
+\end{itemize}
+These transactions must be multi-signed because they spend utxos from the head's multisig native address.
+However, they are only intended as a fallback when the peers fail to reach a timely consensus on the preferred alternatives. For this reason, the L2 consensus protocol requires them to be post-dated; in this way, they can be multi-signed ahead of time while the peers can still reach a timely consensus.
+
+Still, managing these post-dated contingencies incurs a significant communication and storage overhead for Hydrozoa heads.
+Luckily, observer scripts will allow Hydrozoa to replace the post-dated transactions by adding a \code{RequireObserver} clause to the head's native script.
+With such a clause, the native script can selectively forward its validation to a Plutus-based observer script.
+
+With observer scripts, we can redefine the head's native script as follows:
+\begin{equation*}
+\begin{split}
+  &\T{headNativeScript} :: \T{Set} \; \T{PubKeyHash} -> \T{Timelock} \\
+  &\T{headNativeScript} \; \T{keys} \coloneq
+    \T{AnyOf} \; \left[
+    \begin{array}{l}
+      \T{AllOf} \; (\T{map} \; \T{Signature} \; \T{keys}) \\
+      \T{RequireObserver} \; (\T{headObserverScriptHash \; \T{keys}})
+    \end{array}\right] \\
+  &\T{headObserverScriptHash} ::
+      \T{Set} \; \T{PubKeyHash} -> \mathcal{H}_{32} \; \T{PlutusScript}
+\end{split}
+\end{equation*}
+
+This new observer script can classify its spent input as the treasury utxo or a deposit utxo. Then, it can decide whether to allow the rule-based transition or refund by comparing the transaction's time validity lower bound to the datum.
+In other words, it allows a rule-based exit from a state managed by a native script.
+
+\subsection{Fragmented treasury}%
+\label{h:observer-script-fragmented-treasury}%
+
+Cardano's ledger rules limit the serialized size of a utxo's value field based on the Alonzo-era \code{MaxValSize} protocol parameter.
+In other words, a Hydrozoa head that stores its entire treasury in a single utxo is limited in the variety of asset classes it can hold. For example, a million ADA will fit, but a million different NFTs might not fit in a single utxo.
+
+Given the somewhat transient nature of state channels and the small numbers, we do not expect this constraint to affect most typical Hydrozoa use cases.
+However, if this becomes a problem, we could explore how to fragment a Hydrozoa head's treasury across multiple utxos.
+Observer scripts are helpful for fragmented treasuries because they facilitate an orderly transition of treasury fragments to the rule-based regime.
+
+\section{Hydrozoa network and L2 interoperability}%
+\label{h:hydrozoa-network-l2-interoperability}%
+
+From the recent article ``Cardano Layer 2 Interoperability:
+Midgard and Hydrozoa'' \citep{FlerovskyDisarroCardanoLayer22024}:
+\tipbox{
+Midgard and Hydrozoa are Layer 2 (L2) solutions at the forefront of Cardano's next scalability era.
+Interoperability between them (and other L2s) mitigates their relative weaknesses while reaping the full benefits of their strengths.
+Midgard provides massive throughput and a non-multisig consensus protocol ideal for many smart-contract-based dApps to co-exist on a single ledger with vast userbases, but it suffers from delayed settlement for withdrawals to L1.
+A Hydrozoa head provides instant finality and low cost for its peers' transactions and withdrawals, but only its peers benefit from the protocol's full security guarantees.
+
+An eUTXO-enhanced hashed timelock contract (HTLC) could work well as a universal mechanism of L2-L2 transfers of funds and information.
+An HTLC transfer from Midgard to a Hydrozoa head can eliminate the Midgard settlement delay for any peer of the Hydrozoa head.
+HTLC transfers within a network of Hydrozoa heads liberate the flow of funds and information within the network, with Midgard, and with other L2s that support HTLCs (incl. Bitcoin Lightning).
+
+Standardizing L2-L2 transfers, L2 state queries, and wallet integration can mitigate the UX fragmentation problem as Cardano pursues complementary L2 solutions.
+}
 
 \end{document}
