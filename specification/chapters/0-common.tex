@@ -1,0 +1,61 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Constants
+
+% Head beacon token -- CIP-67 prefix label
+\def\headBeaconToken#{\inlineColored{4937}}
+
+% Head dispute token -- CIP-67 prefix label
+\def\headDisputeToken#{\inlineColored{3477}}
+
+% Head rollout token -- CIP-67 prefix label
+\def\headRolloutToken#{\inlineColored{7655}}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Types
+
+% Block header
+\def\blockHeaderTypeName#{\T{BlockHeader^{L2}}}
+\def\blockHeaderTypeBody#{
+  \left\{
+    \begin{array}{lll}
+      \T{blockNum} &::& \T{UInt} \\
+      \T{blockType} &::& \T{BlockType^{L2}} \\
+      \T{timeCreation} &::& \T{PosixTime} \\
+      \T{versionMajor} &::& \T{UInt} \\
+      \T{versionMinor} &::& \T{UInt} \\
+      \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}}
+    \end{array}
+  \right\}
+}
+
+% L2 head state
+\def\headStateTypeName#{\T{HeadState}}
+\def\headStateTypeBody#{
+  \left\{
+    \begin{array}{lll}
+      \T{blocksConfirmedL2} &::& \T{Sequence} \; \T{Block^{L2}} \\
+      \T{eventsL2} &::& \T{Table} \; \T{Event^{L2}} \\
+      \T{finalizing} &::& \T{Bool} \\
+      \T{params} &::& \T{ParamsConsensusL2} \\
+      \T{peers} &::& [( \T{PubKeyHash}, \T{VerificationKey})] \\
+      \T{stateL1} &::& \T{MultisigHeadState^{L1}} \\
+      \T{stateL2} &::& \T{LedgerState^{L2}} \\
+      \T{timeCurrent} &::& \T{PosixTime}
+    \end{array}
+  \right\}
+}
+
+% L2 consensus parameters
+\def\paramsConsensusTypeName#{\T{ParamsConsensusL2}}
+\def\paramsConsensusTypeBody#{
+  \left\{
+    \begin{array}{lll}
+      \T{blockLatencyTolerance} &::& \T{UDiffTime} \\
+      \T{depositMarginMaturity} &::& \T{UDiffTime} \\
+      \T{depositMarginExpiry} &::& \T{UDiffTime} \\
+      \T{multisigRegimeKeepAlive} &::& \T{UDiffTime} \\
+      \T{multisigRegimeTimeout} &::& \T{UDiffTime}
+    \end{array}
+  \right\}
+}
