@@ -2,14 +2,12 @@ package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.{ada, asset}
-import com.bloxbean.cardano.client.api.model.ProtocolParams
-import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
-import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
+import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.toEither
+import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AddressBechL1, AppCtx, L1Tx}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
@@ -20,25 +18,14 @@ import scala.jdk.CollectionConverters.*
 class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
 
     private val backendService = ctx.backendService
+    private val builder = mkBuilder[Tx](ctx)
 
-    lazy val protocolParams: ProtocolParams = {
-        val result = backendService.getEpochService.getProtocolParameters
-        if !result.isSuccessful then sys.error(result.getResponse)
-        result.getValue
-    }
-    private lazy val quickTxBuilder = QuickTxBuilder(backendService)
-
-    private lazy val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
-
-    private lazy val evaluator = ScalusTransactionEvaluator(
-      slotConfig = SlotConfig.Preprod,
-      protocolParams = protocolParams,
-      utxoSupplier = utxoSupplier,
-      scriptSupplier = NoScriptSupplier(),
-      mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
-    )
-
-    override def mkInitDraft(r: InitTxRecipe): Either[String, L1Tx] =
+    /** @param r
+      *   recipe
+      * @return
+      *   error or a tuple - tx + seed address
+      */
+    override def mkInitializationTxDraft(r: InitTxRecipe): Either[String, (L1Tx, AddressBechL1)] =
         for
             // TODO: Should be passed as an arg, but cannot be serialized easily.
             seedUtxo <- backendService.getUtxoService
@@ -58,7 +45,7 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
             )
 
             treasuryDatum = Interop.toPlutusData(
-              mkInitMultisigTreasuryDatum(ByteString.empty).toData
+              mkInitMultisigTreasuryDatum(0, ByteString.empty).toData
             )
 
             tx = Tx()
@@ -67,11 +54,11 @@ class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
                 .payToContract(r.headAddressBech32, treasuryValue.asJava, treasuryDatum)
                 .from(seedUtxo.getAddress)
 
-            ret = quickTxBuilder
-                .compose(tx)
-                .withTxEvaluator(evaluator)
+            ret = builder
+                .apply(tx)
                 .withRequiredSigners(Address(seedUtxo.getAddress))
-                .additionalSignersCount(4) // TODO: magic number
+                // TODO: magic number
+                .additionalSignersCount(4)
                 .build()
-        yield L1Tx(ret.serialize())
+        yield (L1Tx(ret.serialize()), AddressBechL1(seedUtxo.getAddress))
 }

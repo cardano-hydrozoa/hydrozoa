@@ -5,10 +5,15 @@ import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.*
 import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
+import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
+import scalus.bloxbean.Interop
+import scalus.builtin.Data
+
+import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
 
@@ -87,3 +92,20 @@ def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
     L1Tx(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
 }
+
+def onlyAddressOutput(tx: L1Tx, address: AddressBechL1): Option[TxIx] =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    tx_.getBody.getOutputs.asScala
+        .indexWhere(output => output.getAddress == address.bech32) match
+        case -1 => None
+        case i  => Some(TxIx(i))
+
+def outputDatum(tx: L1Tx, index: TxIx): Data =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    val output = tx_.getBody.getOutputs.get(index.ix.intValue)
+    val datum = output.getInlineDatum
+    Interop.toScalusData(datum)
+
+def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
+    val tx_ = Transaction.deserialize(tx.bytes)
+    tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
