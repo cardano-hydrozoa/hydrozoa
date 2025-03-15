@@ -1,0 +1,103 @@
+\documentclass[../hydrozoa.tex]{subfiles}
+\graphicspath{{\subfix{../images/}}}
+\begin{document}
+
+\chapter{Deterministic rollout algorithm}%
+\label{h:deterministic-rollout-algorithm}%
+
+The Hydrozoa protocol strives to generate L1 transactions deterministically whenever they require consensus from all peers (i.e., in the multisig regime).
+This determinism allows the L2 consensus protocol and block validation procedure to focus on the essential contents of blocks without getting distracted in verifying the minutiae of the blocks' effects expressed as L1 transactions.
+
+This determinism is easy to accomplish for a refund (\cref{h:l1-multisig-refund}) and a transition to the rule-based regime (\cref{h:l1-rule-based-transition}) because each of those transactions has a bounded number of inputs/outputs that are guaranteed to fit within Cardano's transaction size limit.
+On the other hand, settlement of a major block on L1 (\cref{h:l1-multisig-settlement}) may require a large number of L2 withdrawals to be paid out on L1, such that one or more rollout transactions may be needed to handle its overflow of L1 outputs.
+Finalization (\cref{h:l1-multisig-finalization}) is also unconstrained in the number of L2 withdrawals it can pay out.
+
+This appendix describes the deterministic algorithm that assigns withdrawn L2 utxos to the outputs of a settlement/finalization transaction and its rollout transactions.
+
+\section{Settlement transaction}%
+\label{h:deterministic-rollout-settlement}%
+
+Suppose we have a treasury utxo with sufficient funds, and we need to settle a major L2 block on L1 such that all these conditions are satisfied:
+\begin{enumerate}
+  \item Absorb a given set of L1 deposit utxos (\code{depositsAbsorbed}) in the ascending order of output reference.
+    The number of deposits in this set is constrained such that the deposits (as spent inputs) fit well within Cardano's transaction size limit.
+  \item Pay out L1 utxos equivalent to a given set of L2 withdrawn utxos (\code{utxosWithdrawn}) in the ascending order of output reference.
+    The number of withdrawals in this set is unconstrained.
+  \item Spend the treasury utxo and reproduce it with the total deposited funds added and the total withdrawn funds removed.
+\end{enumerate}
+
+The deterministic algorithm's goal for the settlement transaction is to absorb \code{depositsAbsorbed} and to pay out as many L2 withdrawn utxos in \code{utxosWithdrawn} as possible, deferring payout for the rest to subsequent rollout transactions.
+It greedily achieves this goal by following these steps:
+\begin{enumerate}
+  \item Let \code{txFixedPart} be a partial transaction draft that meets conditions (1) and (3) above and has signatures from all peers.
+  \item For \codeMath{i} ranging from 1 to (\codeMath{\T{size} \; \T{utxosWithdrawn}}), define a candidate transaction as the variation of \code{txFixedPart} that meets all these additional conditions:
+    \begin{enumerate}
+      \item Let \code{utxosWithdrawnPrefix} be the first \codeMath{i} L2 utxos in \code{utxosWithdrawn}.
+      \item Produce L1 utxos equivalent to \code{utxosWithdrawnPrefix}.
+        Equivalence means that each L2 utxo has a corresponding L1 utxo that contains the same funds and datum at the same address.
+      \item If \codeMath{i} is less than (\codeMath{\T{size} \; \T{utxosWithdrawn}}), produce an L1 rollout utxo that contains an empty datum, a newly-minted rollout beacon token (\cref{h:l1-multisig-utxo-state}) and the rest of the funds that need to be paid out
+        (\codeMath{\T{value} \; (\T{utxosWithdrawn} \setminus \T{utxosWithdrawnPrefix})}).
+    \end{enumerate}
+  \item Select the largest-\codeMath{i} candidate that fits within Cardano's transaction size limit.
+\end{enumerate}
+
+If the settlement transaction produces an L1 rollout utxo, then the deterministic algorithm meets the rest of condition (2) above via one or more rollout transactions (\cref{h:deterministic-rollout-rollouts}).
+
+\section{Finalization transaction}%
+\label{h:deterministic-rollout-finalization}%
+
+Suppose we have a treasury utxo with sufficient funds, and we need to finalize the head on L1 such that all these conditions are satisfied:
+\begin{enumerate}
+  \item Absorb no L1 deposit utxos (\codeMath{\T{depositsAbsorbed} \coloneq \varnothing}).
+  \item Pay out L1 utxos equivalent to a given set of L2 withdrawn utxos (\code{utxosWithdrawn}) in the ascending order of output reference.
+    The number of withdrawals in this set is unconstrained.
+  \item Spend the treasury utxo but do not reproduce it.
+\end{enumerate}
+
+The deterministic algorithm's goal for the finalization transaction is to pay out as many L2 withdrawn utxos in \code{utxosWithdrawn} as possible, deferring payout for the rest to subsequent rollout transactions.
+It greedily achieves this goal by following these steps:
+\begin{enumerate}
+  \item Let \code{txFixedPart} be a partial transaction draft that meets conditions (1) and (3) above and has signatures from all peers.
+  \item For \codeMath{i} ranging from 1 to (\codeMath{\T{size} \; \T{utxosWithdrawn}}), define a candidate transaction as the variation of \code{txFixedPart} that meets all these additional conditions:
+    \begin{enumerate}
+      \item Let \code{utxosWithdrawnPrefix} be the first \codeMath{i} L2 utxos in \code{utxosWithdrawn}.
+      \item Produce L1 utxos equivalent to \code{utxosWithdrawnPrefix}.
+        Equivalence means that each L2 utxo has a corresponding L1 utxo that contains the same funds and datum at the same address.
+      \item If \codeMath{i} is less than (\codeMath{\T{size} \; \T{utxosWithdrawn}}), produce an L1 rollout utxo that contains an empty datum, a newly-minted rollout beacon token (\cref{h:l1-multisig-utxo-state}), and the rest of the funds that need to be paid out
+        (\codeMath{\T{value} \; (\T{utxosWithdrawn} \setminus \T{utxosWithdrawnPrefix})}).
+    \end{enumerate}
+  \item Select the largest-\codeMath{i} candidate that fits within Cardano's transaction size limit.
+\end{enumerate}
+
+If the finalization transaction produces an L1 rollout utxo, then the deterministic algorithm meets the rest of condition (2) above via one or more rollout transactions (\cref{h:deterministic-rollout-rollouts}).
+
+\section{Rollout transactions}%
+\label{h:deterministic-rollout-rollouts}%
+
+Suppose we have an L1 rollout utxo with sufficient funds, and we need to construct one or more rollout transactions that collectively meet all these conditions:
+\begin{enumerate}
+  \item Pay out L1 utxos equivalent to a given set of L2 withdrawn utxos (\code{utxosWithdrawn}) in the ascending order of output reference.
+    The number of withdrawals in this set is unconstrained.
+  \item Spend the L1 rollout utxo.
+  \item Burn the rollout beacon token in the L1 rollout utxo.
+\end{enumerate}
+
+The deterministic algorithm's goal for each rollout transaction is to pay out as many L2 withdrawn utxos in \code{utxosWithdrawn} as possible, deferring payout for the rest to subsequent rollout transactions.
+It greedily achieves this goal by following these steps:
+\begin{enumerate}
+  \item Let \code{txFixedPart} be a partial transaction draft that meets condition (2) above and has signatures from all peers.
+  \item For \codeMath{i} ranging from 1 to (\codeMath{\T{size} \; \T{utxosWithdrawn}}), define a candidate transaction as the variation of \code{txFixedPart} that meets all these additional conditions:
+    \begin{enumerate}
+      \item Let \code{utxosWithdrawnPrefix} be the first \codeMath{i} L2 utxos in \code{utxosWithdrawn}.
+      \item Produce L1 utxos equivalent to \code{utxosWithdrawnPrefix}.
+        Equivalence means that each L2 utxo has a corresponding L1 utxo that contains the same funds and datum at the same address.
+      \item If \codeMath{i} is less than (\codeMath{\T{size} \; \T{utxosWithdrawn}}), produce an L1 rollout utxo that contains an empty datum, the rollout beacon token (\cref{h:l1-multisig-utxo-state}), and the rest of the funds that need to be paid out
+        (\codeMath{\T{value} \; (\T{utxosWithdrawn} \setminus \T{utxosWithdrawnPrefix})}).
+      \item Otherwise, burn the rollout beacon token.
+    \end{enumerate}
+  \item Select the largest-\codeMath{i} candidate that fits within Cardano's transaction size limit.
+\end{enumerate}
+
+The deterministic algorithm recursively generates a sequence of rollout transactions until all three of the above conditions are met.
+
+\end{document}

@@ -14,7 +14,7 @@ The L2 ledger state has this type:
 \end{equation*}
 These fields are interpreted as follows:
 \begin{description}
-  \item[active utxos.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
+  \item[utxos active.] The set of utxos (\cref{h:l2-utxo-set}) that can be spent in transactions or withdrawn.
     These utxos are created by L2 transactions and genesis events.
 \end{description}
 
@@ -22,28 +22,23 @@ These fields are interpreted as follows:
 \label{h:l2-ledger-rules}%
 
 Hydrozoa's L2 ledger rules are the same as Cardano's ledger rules,%
-\footnote{At the time of writing, Cardano mainnet uses the Plomin hardfork's Conway-era ledger rules \citep{IntersectMBOCardanoLedgerV117402025}.}
+\footnote{This specification is pinned to this version of the Cardano ledger rules: \citep{IntersectMBOCardanoLedgerV117402025}.}
 but with the following additions:
 \begin{description}
     \item[No staking or governance actions.]
       Hydrozoa's consensus protocol is not based on Ouroboros proof-of-stake, and its governance protocol is not based on Cardano's hard-fork-combinator update mechanism.
       Furthermore, Hydrozoa's L1 scripts cannot authorize arbitrary staking or governance actions on behalf of users.
       For this reason, staking and governance actions cannot be used in L2 transactions.%
-      \footnote{We are aware that many dApps on Cardano rely on withdraw-zero staking validators (for performance gains), which are not available without staking actions.
-        However, instead of conjuring a complex workaround, Hydrozoa will wait for the implementation of CIP-112 \citep{DiSarroCIP112ObserveScript2024} in an upcoming hardfork.
-        The observer scripts of CIP-112 allow dApp developers to implement the same functionality without withdraw-zero staking validators in a more principled and performant way.}
-        % TODO add minting subsection to future work section
-    \item[No pre-Conway features.] Hydrozoa does not need to maintain backwards compatibility with pre-Conway eras.
+      \footnote{In future work (\cref{h:observer-script-withdraw-zero-trick}), Hydrozoa may implement support on L2 for observer scripts (CIP-112 \citep{DiSarroCIP112ObserveScript2024}) as a better alternative for dApps that currently rely on withdraw-zero staking validators for performance optimization.}
+    \item[No pre-Conway features.] Hydrozoa does not need to maintain backward compatibility with pre-Conway eras.
       L2 utxos cannot use bootstrap addresses or Shelley addresses with Plutus versions older than Plutus V3.
 
       Public key hash credentials, native scripts, and Plutus scripts at or above V3 are allowed.
     \item[No datum hashes in outputs.] Hydrozoa requires all utxo datums to be inline, which avoids the need to index the datum-hash to datum map from transactions' datum witnesses.
     \item[No minting or burning of tokens.]
-      Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens on chain, which makes it impossible to reflect such events when L2 state is settled on L1.
+      Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens onchain, so enforcing such events is impossible when settling the L2 state on L1.
       Thus, L2 transactions cannot mint or burn tokens.%
-      \footnote{We are also aware that many dApps on Cardano rely on token minting and burning to authenticate their internal state.
-        However, supporting this feature opens up a range of difficult issues that have not yet yielded satisfactory solutions in discussions \citep{IOGExcludePhantomTokens2025}.
-        Fortunately, the Midgard team is exploring a new approach to this problem, which we may adopt in future extensions to Hydrozoa.}
+      \footnote{In future work (\cref{h:future-work-minting}), Hydrozoa may implement support for minting and burning on L2.}
     \item[Different network ID.] Hydrozoa L2 transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
 \end{description}
 
@@ -99,16 +94,17 @@ An output is a tuple describing a bundle of tokens, data, and a script that have
 \label{h:ledger-transaction}%
 
 An L2 transaction spends one or more utxos in \code{utxosActive}, replacing them with zero or more new utxos.
-The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions, but with the additions listed in \cref{h:l2-ledger-rules}.
+The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules for L1 transactions but with the additions listed in \cref{h:l2-ledger-rules}.
 
 Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
-Instead, we express them as requirements for certain fields in transactions to always be omitted or to be restricted to a narrower selection of values.
+Instead, we express them as requirements for specific transaction fields to be omitted or restricted to a narrower selection of values.
 
 The hydra node software should reject (with an error message) L2 transactions that violate these requirements, while peers should ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
 
-In the following type listing:
+In the following type definition, we use these notational conventions:
 \begin{itemize}
-  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted. We indicate these by prefixing their field types with a question mark (\code{?}).
+  \item Some fields are already optional in Cardano transactions, with suitable defaults provided when omitted.
+  We indicate these by prefixing their field types with a question mark (\code{?}).
   \item We indicate fields that must be omitted in Hydrozoa L2 transactions by prefixing their field names with an empty-set symbol (\code{$\varnothing$}).
 \end{itemize}
 \begingroup
@@ -158,7 +154,7 @@ In the following type listing:
 \label{h:ledger-withdrawal}%
 
 A withdrawal is an L2 ledger event that spends one or more utxos in \code{utxosActive} but does not output any utxos.
-The L2 ledger rules for withdrawals are similar to transactions, but with the following modifications:
+The L2 ledger rules for withdrawals are similar to transactions but with the following modifications:
 \begin{description}
   \item[No outputs.] Withdrawals cannot create utxos in \code{utxosActive}.
   \item[No fees.] Withdrawals do not pay transaction fees.
@@ -208,7 +204,7 @@ Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Ca
 \begin{itemize}
   \item Minimum fee amount
   \item Minimum collateral amount
-  \item Non-empty collateral inputs (if Plutus scripts used)
+  \item Non-empty collateral inputs (if Plutus scripts are used)
   \item Collateral balancing:
     \begin{equation*}
       \sum \T{lovelace} (\T{collateral\_inputs}) =
@@ -221,13 +217,13 @@ Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Ca
     \end{equation*}
 \end{itemize}
 
-Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting certain protocol parameters to zero.
-However, since the other rules are affected protocol parameters, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
+Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting specific protocol parameters to zero.
+However, since protocol parameters do not affect the other rules, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
 
 \section{Genesis}%
 \label{h:ledger-genesis}%
 
-L2 genesis is a ledger event that is automatically inserted into the ledger's history immediately following the affirmed events of a confirmed major L2 block.
+L2 genesis is a ledger event automatically inserted into the ledger's history immediately following the affirmed events of a confirmed major L2 block.
 It adds new utxos to the \code{utxosActive} set without spending any utxos:
 \begin{equation*}
   \T{Genesis^{L2}} \coloneq \left\{
@@ -239,7 +235,8 @@ These L2 utxos uniquely correspond to the L1 \code{absorbedDeposits} of the majo
 \begin{description}
   \item[output reference:]~
     \begin{description}
-      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}. Incidentally, this is also the genesis event's unique ID (\code{TxId}).
+      \item[id.] The Blake2b-256 hash (\codeMath{\mathcal{H}_{32}}) of \code{absorbedDeposits}.
+      Incidentally, this is also the genesis event's unique ID (\code{TxId}).
       \item[index.] The corresponding L1 deposit's positional index in \code{depositsAbsorbed}.
     \end{description}
   \item[output:]~
