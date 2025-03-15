@@ -4,6 +4,8 @@
 \usepackage{hydrozoa-notation}
 
 \usepackage{subfiles}
+\input{frontmatter/00-meta}
+\input{chapters/0-common}
 \begin{document}
 
 \frontmatter
@@ -23,7 +25,10 @@
 
 \subfile{chapters/5-l2-consensus}
 
-\subfile{backmatter/a-future-work}
+\appendix
+\subfile{backmatter/A-future-work}
+\subfile{backmatter/B-deterministic-rollout-algorithm}
+\subfile{backmatter/C-architecture}
 
 \cleardoublepage
 \phantomsection
