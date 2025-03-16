@@ -5,7 +5,7 @@ import hydrozoa.infra.serializeTxHex
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.{MutableUtxosDiff, Utxos, UtxosDiff}
+import hydrozoa.l2.ledger.state.*
 import hydrozoa.node.server.{DepositTag, DepositUtxos, txDump}
 
 import scala.collection.mutable
@@ -36,7 +36,7 @@ def createBlock(
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
-): Option[(Block, Utxos, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
+): Option[(Block, Utxos, UtxosDiff, OrderedUtxosDiff, List[L1Tx], Option[(TxId, SimpleGenesis)])] =
 
     // 1. Initialize the variables and arguments.
     // (a) Let block be a mutable variable initialized to an empty BlockL2
@@ -51,7 +51,10 @@ def createBlock(
 
     // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
     // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-    val utxosAdded, utxosWithdrawn: MutableUtxosDiff = mutable.Set()
+    val utxosAdded: MutableUtxosDiff = mutable.Set()
+    val utxosWithdrawn: MutableOrderedUtxosDiff = mutable.Buffer()
+
+    val withdrawalTxs = mutable.Buffer[L1Tx]()
 
     // 3. For each non-genesis L2 event...
     poolEvents.foreach {
@@ -67,9 +70,7 @@ def createBlock(
                 case Right(txId, mbCardanoTx, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
-                // FIXME: move out
-                // TODO: it's not necessary now, settlement txs do the job
-                // mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
+                    mbCardanoTx.foreach(tx => withdrawalTxs.append(tx))
                 case Left(txId, _err) =>
                     eventsInvalid.add(txId, MempoolWithdrawal)
     }
@@ -133,4 +134,11 @@ def createBlock(
                 .versionMinor(prevHeader.versionMinor + 1)
                 .build
 
-    Some(block, stateL2.activeState, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
+    Some(
+      block,
+      stateL2.activeState,
+      utxosAdded.toSet,
+      utxosWithdrawn.toList,
+      withdrawalTxs.toList,
+      mbGenesis
+    )

@@ -9,7 +9,7 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.ledger.state.UtxosDiff
+import hydrozoa.l2.ledger.state.{OrderedUtxosDiff, UtxosDiff}
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
 
@@ -67,7 +67,7 @@ class MockHydrozoaNetwork(
             AckMinor(block.blockHeader, (), false)
         )
 
-    override def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined] =
+    override def reqMajor(block: Block, utxosWithdrawn: OrderedUtxosDiff): Set[AckMajorCombined] =
         // TODO: check block type
         val recipe =
             SettlementRecipe(block.blockBody.depositsAbsorbed, utxosWithdrawn, block.blockHeader.versionMajor)

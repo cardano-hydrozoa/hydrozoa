@@ -66,9 +66,10 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                 Right(txId, Some(cardanoTx))
             case event: L2Withdrawal =>
                 val s = s"Simple withdrawing: ${event.withdrawal}"
-                val virtualOutputs = resolveInputs(event.withdrawal.inputs)
+//                val virtualOutputs = resolveInputs(event.withdrawal.inputs)
                 val cardanoTx =
-                    mkVirtualWithdrawalTx(event.withdrawal, virtualOutputs.map(unwrapTxOut(_)))
+                    // mkVirtualWithdrawalTx(event.withdrawal, virtualOutputs.map(unwrapTxOut(_)))
+                    mkVirtualWithdrawalTx(event.withdrawal)
                 val txId = txHash(cardanoTx)
                 println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 Right(txId, Some(cardanoTx))

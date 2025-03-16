@@ -19,7 +19,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
-import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff}
+import hydrozoa.l2.ledger.state.{OrderedUtxosDiff, Utxos, UtxosDiff}
 import hydrozoa.l2.ledger.{SimpleGenesis, mkL2T, mkL2W}
 import hydrozoa.node.api.SubmitRequestL2
 import hydrozoa.node.api.SubmitRequestL2.{Transaction, Withdrawal}
@@ -277,7 +277,7 @@ class Node(
           finalizing
         ) match
             // FIXME utxosAdded is not used I think
-            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
+            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, withdrawalTxs, mbGenesis) =>
                 block.blockHeader.blockType match
                     case Minor =>
                         // TODO: produce and broadcast own signature
@@ -313,13 +313,11 @@ class Node(
                         val Right(settlementTxId) = cardano.submit(settlementTx)
                         log.info(s"Settlement tx submitted: $settlementTxId")
 
-                        // Dump augmented virtual tx
-                        os.write.append(
-                          txDump,
-                          "\n" + serializeTxHex(
-                            augmentWithVirtualInputs(settlementTx, utxosWithdrawn.map(_._1))
-                          )
-                        )
+                        // Dump settlement tx
+                        os.write.append(txDump, "\n" + serializedTx);
+
+                        // Dump withdrawal txs
+                        dumpVirtualWithdrawals(withdrawalTxs, utxosWithdrawn, settlementTx)
 
                         // Emulate L1 event
                         // TODO: I don't think we have to wait L1 event in reality
@@ -408,4 +406,17 @@ class Node(
             //  They can be known from L1 major block effects (currently not implemented).
             s.removeAbsorbedDeposits(depositsAbsorbed)
 
+        }
+
+    private def dumpVirtualWithdrawals(
+        withdrawalTxs: List[L1Tx],
+        _utxosWithdrawn: OrderedUtxosDiff,
+        settlementTx: L1Tx
+    ): Unit =
+        var taken = 1 // the first output is treasury
+        withdrawalTxs.foreach { tx =>
+            val (augmentedTx, numOutputs) = augmentWithdrawal(tx, settlementTx, taken)
+            taken = taken + numOutputs
+            val serializedTx = serializeTxHex(augmentedTx)
+            os.write.append(txDump, "\n" + serializedTx)
         }

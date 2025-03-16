@@ -15,6 +15,8 @@ type Utxos = mutable.Map[TxIn, TxOut]
 
 type UtxosDiff = Set[(TxIn, TxOut)]
 type MutableUtxosDiff = mutable.Set[(TxIn, TxOut)]
+type MutableOrderedUtxosDiff = mutable.Buffer[(TxIn, TxOut)]
+type OrderedUtxosDiff = List[(TxIn, TxOut)]
 
 // FIXME: move to another package
 def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
