@@ -29,7 +29,8 @@ lazy val core = (project in file("."))
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
-        "org.scalactic" %% "scalactic" % "3.2.19"
+        "org.scalactic" %% "scalactic" % "3.2.19",
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test
       )
     )
 
