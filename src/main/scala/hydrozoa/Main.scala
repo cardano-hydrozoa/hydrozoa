@@ -5,7 +5,7 @@ import hydrozoa.AppCtx.yaciDevKit
 import hydrozoa.infra.genNodeKey
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitTxBuilder, InitTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.wallet.{MockWallet, Wallet}
@@ -31,7 +31,7 @@ object Cli:
         val nodeStateReader: HeadStateReader = HeadStateReader(nodeStateManager)
 
         // Tx Builders
-        val initTxBuilder: InitTxBuilder = BloxBeanInitTxBuilder(ctx)
+        val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(ctx)
         val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, nodeStateReader)
         val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, nodeStateReader)
         val settlementTxBuilder: SettlementTxBuilder =

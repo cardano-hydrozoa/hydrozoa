@@ -15,7 +15,7 @@ import scalus.builtin.Data.toData
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
-class BloxBeanInitTxBuilder(ctx: AppCtx) extends InitTxBuilder {
+class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
 
     private val backendService = ctx.backendService
     private val builder = mkBuilder[Tx](ctx)
