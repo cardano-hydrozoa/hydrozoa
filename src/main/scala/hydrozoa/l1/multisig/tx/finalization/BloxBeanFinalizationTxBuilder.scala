@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder}
-import hydrozoa.l1.multisig.tx.MultisigTxs.FinalizationTx
+import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, TxAny, TxL1}
 
@@ -64,5 +64,5 @@ class BloxBeanFinalizationTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(FinalizationTx(TxL1(ret.serialize)))
+        Right(TxL1(ret.serialize))
 }

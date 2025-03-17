@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.initialization
 
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.MultisigTxs.InitializationTx
+import hydrozoa.l1.multisig.tx.InitializationTx
 
 trait InitTxBuilder {
     def mkInitializationTxDraft(

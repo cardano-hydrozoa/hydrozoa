@@ -7,7 +7,7 @@ import hydrozoa.l1.Cardano
 import hydrozoa.l1.event.MultisigL1EventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, FinalizationTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, SettlementTx}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -71,18 +71,18 @@ class Node(
             case Right(v, seedAddress) => (v, seedAddress)
             case Left(err)             => return Left(err)
 
-        val ownWit: TxKeyWitness = createTxKeyWitness(txDraft.toTxL1, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(txDraft, ownKeys._1)
 
         val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
-        val userWit = wallet.createTxKeyWitness(txDraft.toTxL1)
+        val userWit = wallet.createTxKeyWitness(txDraft)
 
         // All wits are here, we can sign and submit
         val wits = peersWits + ownWit + userWit
 
-        val initTx = wits.foldLeft(txDraft.toTxL1)(addWitness)
+        val initTx = wits.foldLeft(txDraft)(addWitness)
 
 //        log.whenInfoEnabled {
         val serializedTx = serializeTxHex(initTx)
@@ -173,13 +173,13 @@ class Node(
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(txDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
-        val depositTxHash = txHash(txDraft.toTxL1)
+        val depositTxHash = txHash(txDraft)
 
-        val serializedTx = serializeTxHex(txDraft.toTxL1)
+        val serializedTx = serializeTxHex(txDraft)
         log.info(s"Deposit tx: $serializedTx")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        TxDump.dumpTx(txDraft.toTxL1)
+        TxDump.dumpTx(txDraft)
 
         val Right(refundTxDraft) =
             refundTxBuilder.mkPostDatedRefundTxDraft(
@@ -187,7 +187,7 @@ class Node(
             )
 
         // Own signature
-        val ownWit: TxKeyWitness = createTxKeyWitness(refundTxDraft.toTxL1, ownKeys._1)
+        val ownWit: TxKeyWitness = createTxKeyWitness(refundTxDraft, ownKeys._1)
 
         // ReqRefundLater
         // TODO: Add a comment to explain how it's guaranteed that
@@ -197,7 +197,7 @@ class Node(
 
         val wits = peersWits + ownWit
 
-        val refundTx = wits.foldLeft(refundTxDraft.toTxL1)(addWitness)
+        val refundTx = wits.foldLeft(refundTxDraft)(addWitness)
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
         TxDump.dumpTx(refundTx)
@@ -205,12 +205,12 @@ class Node(
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(txDraft.toTxL1, wallet.createTxKeyWitness(txDraft.toTxL1))
+              addWitness(txDraft, wallet.createTxKeyWitness(txDraft))
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
         // Emulate L1 deposit event
-        multisigL1EventManager.map(_.handleDepositTx(txDraft.toTxL1, depositTxHash))
+        multisigL1EventManager.map(_.handleDepositTx(txDraft, depositTxHash))
 
         // TODO: store the post-dated refund in the store along with the deposit id
 
@@ -293,19 +293,19 @@ class Node(
                         val Right(settlementTxDraft: SettlementTx) =
                             settlementTxBuilder.mkSettlementTxDraft(txRecipe)
                         val ownWit: TxKeyWitness =
-                            createTxKeyWitness(settlementTxDraft.toTx, ownKeys._1)
+                            createTxKeyWitness(settlementTxDraft, ownKeys._1)
                         // TODO: broadcast ownWit
                         // Confirm block
                         val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
 
-                        TxDump.dumpTx(settlementTxDraft.toTx)
+                        TxDump.dumpTx(settlementTxDraft)
 
                         // Immediate L2 effect
                         applyAnyBlockL2Effect(block, utxosActive, mbGenesis)
 
                         // L1 effect
                         val wits: Set[TxKeyWitness] = acksMajorCombined.map(_.settlement) + ownWit
-                        val settlementTx: TxAny = wits.foldLeft(settlementTxDraft.toTx)(addWitness)
+                        val settlementTx: TxAny = wits.foldLeft(settlementTxDraft)(addWitness)
                         val serializedTx = serializeTxHex(settlementTx)
                         log.info(s"Settlement tx: $serializedTx")
 
@@ -334,7 +334,7 @@ class Node(
                         val Right(finalizationTxDraft: FinalizationTx) =
                             finalizationTxBuilder.buildFinalizationTxDraft(recipe)
                         val ownWit: TxKeyWitness =
-                            createTxKeyWitness(finalizationTxDraft.toTxL1, ownKeys._1)
+                            createTxKeyWitness(finalizationTxDraft, ownKeys._1)
                         // TODO: broadcast ownWit
 
                         // Confirm block
@@ -345,12 +345,12 @@ class Node(
 
                         // L1 effect
                         val wits: Set[TxKeyWitness] = acksFinalCombined.map(_.finalization) + ownWit
-                        val finalizationTx = wits.foldLeft(finalizationTxDraft.toTxL1)(addWitness)
+                        val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
                         val serializedTx = serializeTxHex(finalizationTx)
 
                         log.info(s"Finalization tx: $serializedTx")
                         TxDump.dumpTx(finalizationTx)
-                        
+
                         val Right(finalizationTxId) = cardano.submit(finalizationTx)
                         log.info(s"Finalization tx submitted: $finalizationTxId")
 

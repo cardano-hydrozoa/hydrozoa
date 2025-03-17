@@ -1,6 +1,6 @@
 package hydrozoa.l1.multisig.tx.refund
 
-import hydrozoa.l1.multisig.tx.MultisigTxs.{DepositTx, PostDatedRefundTx}
+import hydrozoa.l1.multisig.tx.{DepositTx, PostDatedRefundTx}
 import hydrozoa.{ParticipantSecretKey, TxIx}
 
 trait RefundTxBuilder {

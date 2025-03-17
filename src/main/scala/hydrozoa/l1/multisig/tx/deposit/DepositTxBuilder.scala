@@ -1,8 +1,8 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
-import hydrozoa.{TxAny, TxId, TxIx}
+import hydrozoa.l1.multisig.tx.DepositTx
+import hydrozoa.{TxId, TxIx}
 
 trait DepositTxBuilder {
 

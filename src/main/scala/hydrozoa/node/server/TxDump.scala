@@ -1,7 +1,7 @@
 package hydrozoa.node.server
 
 import hydrozoa.infra.serializeTxHex
-import hydrozoa.l1.multisig.tx.MultisigTxs.InitializationTx
+import hydrozoa.l1.multisig.tx.InitializationTx
 import hydrozoa.{AnyLevel, TxAny, L1, L2, Tx}
 
 object TxDump:

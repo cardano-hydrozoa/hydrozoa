@@ -1,7 +1,6 @@
 package hydrozoa.l1.multisig.tx.finalization
 
-import hydrozoa.l1.multisig.tx.MultisigTxs.FinalizationTx
-import hydrozoa.{AddressBechL1, NativeScript, ParticipantSecretKey, TxIx}
+import hydrozoa.l1.multisig.tx.FinalizationTx
 
 trait FinalizationTxBuilder {
     def buildFinalizationTxDraft(
