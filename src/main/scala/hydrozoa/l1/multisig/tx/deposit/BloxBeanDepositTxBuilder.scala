@@ -1,12 +1,12 @@
 package hydrozoa.l1.multisig.tx.deposit
+
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.ada
-import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams}
-import com.bloxbean.cardano.client.backend.api.DefaultUtxoSupplier
+import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.quicktx.{QuickTxBuilder, Tx}
+import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
-import hydrozoa.infra.toEither
+import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, L1Tx, TxIx}
@@ -15,54 +15,43 @@ import scalus.builtin.Data.toData
 
 import scala.jdk.CollectionConverters.*
 
-// TODO factor out common parts into a separate component
 class BloxBeanDepositTxBuilder(
     ctx: AppCtx,
     headStateReader: HeadStateReader
 ) extends DepositTxBuilder {
 
     private val backendService = ctx.backendService
+    private val builder = mkBuilder[Tx](ctx)
 
-    lazy val protocolParams: ProtocolParams = {
-        val result = backendService.getEpochService.getProtocolParameters
-        if !result.isSuccessful then sys.error(result.getResponse)
-        result.getValue
-    }
-    private lazy val quickTxBuilder = QuickTxBuilder(backendService)
+    override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (L1Tx, TxIx)] =
 
-    private lazy val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
+        val Right(fundUtxo) = backendService.getUtxoService
+            .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
+            .toEither
 
-    private lazy val evaluator = ScalusTransactionEvaluator(
-      slotConfig = SlotConfig.Preprod,
-      protocolParams = protocolParams,
-      utxoSupplier = utxoSupplier,
-      scriptSupplier = NoScriptSupplier(),
-      mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
-    )
+        println(fundUtxo)
 
-    override def mkDepositTx(r: DepositTxRecipe): Either[String, (L1Tx, TxIx)] =
-        for
-            fundUtxo <- backendService.getUtxoService
-                .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
-                .toEither
+        val Some(headAddressBech32) = headStateReader.headBechAddress
 
-            Some(headAddressBech32) = headStateReader.headBechAddress
-            // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
-            amountList: List[Amount] = List(ada(100))
-            datum: PlutusData = Interop.toPlutusData(r.datum.toData)
+        // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
+        val amountList: List[Amount] = List(ada(100))
+        val datum: PlutusData = Interop.toPlutusData(r.datum.toData)
+        val depositorAddress = fundUtxo.getAddress
 
-            tx = Tx()
-                .collectFrom(List(fundUtxo).asJava)
-                .payToContract(headAddressBech32.bech32, amountList.asJava, datum)
-                .from(fundUtxo.getAddress)
+        val tx = Tx()
+            .collectFrom(List(fundUtxo).asJava)
+            .payToContract(headAddressBech32.bech32, amountList.asJava, datum)
+            .from(depositorAddress)
 
-            ret: Transaction = quickTxBuilder
-                .compose(tx)
-                .withTxEvaluator(evaluator)
-                .withRequiredSigners(Address(fundUtxo.getAddress))
-                .build()
+        val ret: Transaction = builder
+            .apply(tx)
+            .withRequiredSigners(Address(depositorAddress))
+            .feePayer(depositorAddress)
+            .build()
 
-            index = ret.getBody.getOutputs.asScala
-                .indexWhere(output => output.getAddress == headAddressBech32.bech32)
-        yield (L1Tx(ret.serialize()), TxIx(index))
+        // Deposit output
+        val index = ret.getBody.getOutputs.asScala
+            .indexWhere(output => output.getAddress == headAddressBech32.bech32)
+
+        Right(L1Tx(ret.serialize()), TxIx(index))
 }
