@@ -27,7 +27,7 @@ class BloxBeanDepositTxBuilder(
     override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (DepositTx, TxIx)] =
 
         val Right(fundUtxo) = backendService.getUtxoService
-            .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
+            .getTxOutput(r.deposit._1.hash, r.deposit._2.ix.intValue)
             .toEither
 
         println(fundUtxo)

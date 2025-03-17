@@ -35,14 +35,13 @@ class MockHydrozoaNetwork(
 
         // Native script, head address, and token
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network())
-        val beaconTokenName = mkBeaconTokenName(req.txId, req.txIx)
+        val beaconTokenName = mkBeaconTokenName(req.seedOutputRef)
 
         // Recipe to build init tx
         val initTxRecipe = InitTxRecipe(
           headAddress,
-          req.txId,
-          req.txIx,
-          req.amount,
+          req.seedOutputRef,
+          req.coins,
           headNativeScript,
           beaconTokenName
         )

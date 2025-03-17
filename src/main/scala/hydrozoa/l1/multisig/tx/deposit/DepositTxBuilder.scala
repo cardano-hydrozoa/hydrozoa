@@ -2,7 +2,7 @@ package hydrozoa.l1.multisig.tx.deposit
 
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.DepositTx
-import hydrozoa.{TxId, TxIx}
+import hydrozoa.{OutputRefL1, TxId, TxIx}
 
 trait DepositTxBuilder {
 
@@ -14,6 +14,6 @@ trait DepositTxBuilder {
 }
 
 case class DepositTxRecipe(
-    utxo: (TxId, TxIx), // the only UTXO with deposit funds in user's wallet
+    deposit: OutputRefL1, // the only UTXO with deposit funds in user's wallet
     datum: DepositDatum // datum for deposit utxo
 )

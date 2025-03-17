@@ -11,12 +11,12 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l2.ledger.state.{TxIn, unwrapTxIn}
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleOutput, SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.state.{OutputRefInt, unwrapTxIn}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.{Data, ByteString as ScalusByteString}
 import scalus.ledger.api.v1
-import scalus.ledger.api.v1.{TokenName, TxOut, TxOutRef}
+import scalus.ledger.api.v1.{TokenName, TxOut}
 import scalus.prelude.AssocMap
 import scalus.prelude.Maybe.Just
 import scalus.prelude.Prelude.given_Eq_ByteString
@@ -119,9 +119,12 @@ def outputDatum(tx: TxAny, index: TxIx): Data =
     val datum = output.getInlineDatum
     Interop.toScalusData(datum)
 
-def txInputsRef(tx: TxAny): Set[(TxId, TxIx)] =
+// TODO: unused
+def txInputs[L <: AnyLevel](tx: TxAny): Set[OutputRef[L]] =
     val tx_ = Transaction.deserialize(tx.bytes)
-    tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
+    tx_.getBody.getInputs.asScala
+        .map(ti => OutputRef[L](TxId(ti.getTransactionId), TxIx(ti.getIndex)))
+        .toSet
 
 /** @param genesis
   * @return
@@ -131,8 +134,8 @@ def mkVirtualGenesisTx(genesis: SimpleGenesis): Tx[L2] =
 
     val virtualInputs = genesis.virtualInputs.map { input =>
         TransactionInput.builder
-            .transactionId(input.id.hash)
-            .index(input.ix.ix.intValue)
+            .transactionId(input.txId.hash)
+            .index(input.outputIx.ix.intValue)
             .build
     }.toList
 
@@ -220,7 +223,7 @@ def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxO
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
 
-def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[TxIn]): Tx[L] =
+def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[OutputRefInt]): Tx[L] =
     val tx_ = Transaction.deserialize(tx.bytes)
     tx_.getBody.getInputs.addAll(
       virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava

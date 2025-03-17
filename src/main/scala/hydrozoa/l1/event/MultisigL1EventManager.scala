@@ -3,8 +3,9 @@ package hydrozoa.l1.event
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{onlyAddressOutput, txHash}
+import hydrozoa.l1.multisig.state.{DepositTag, TreasuryTag}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.node.server.{DepositTag, NodeStateManager, TreasuryTag}
+import hydrozoa.node.server.NodeStateManager
 
 /** This class is in charge of handling L1 events.
   *
@@ -54,16 +55,14 @@ case class MultisigL1EventManager(
     def handleSettlementTx(tx: TxAny, txHash: TxId) =
         log.info(s"Handling settlement tx $txHash")
 
-        // val treasury = state.asOpen(_.currentTreasuryRef)
-        // Inputs of a settlement tx should be either deposits or the treasury
-        // val inputs: Set[(TxId, TxIx)] = txInputsRef(tx)
-        // val deposits = (inputs - treasury).map((id, ix) => SettledDeposit(id, ix))
+        /** TODO: Outputs of settlement might be
+          *   - withdrawals
+          *   - the rollout
+          *   - the treasury
+          */
 
-        // TODO: Outputs of settlement might be
-        //  - withdrawals
-        //  - the rollout
-        //  - the treasury
-        // val newTreasury: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
+        // TODO: handle datum
+        // val newTreasuryDatum: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
         val Some(treasury) = onlyAddressOutput(tx, headAddress)
         state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))

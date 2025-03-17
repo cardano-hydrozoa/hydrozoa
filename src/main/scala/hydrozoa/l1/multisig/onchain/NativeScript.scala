@@ -7,6 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPub
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
 import hydrozoa.{
+    OutputRefL1,
     ParticipantVerificationKey,
     TxId,
     TxIx,
@@ -44,8 +45,10 @@ def mkHeadNativeScriptAndAddress(
 /** @return
   *   treasury beacon token name
   */
-def mkBeaconTokenName(txId: TxId, txIx: TxIx): String =
-    val name = H28.hash_[(TxId, TxIx)](
-      (txId.hash.getBytes.toList ++ BigInt(txIx.ix).toByteArray.toList).toArray
+def mkBeaconTokenName(seedOutput: OutputRefL1): String =
+    val name = H28.hash_[OutputRefL1](
+      (seedOutput.txId.hash.getBytes.toList ++ BigInt(
+        seedOutput.outputIx.ix
+      ).toByteArray.toList).toArray
     )
     encodeHexString(treasuryBeaconPrefix ++ name.bytes, true)

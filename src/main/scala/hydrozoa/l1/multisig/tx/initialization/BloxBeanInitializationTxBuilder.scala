@@ -32,7 +32,7 @@ class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
         for
             // TODO: Should be passed as an arg, but cannot be serialized easily.
             seedUtxo <- backendService.getUtxoService
-                .getTxOutput(r.txId.hash, r.txIx.ix.intValue)
+                .getTxOutput(r.seedOutput.txId.hash, r.seedOutput.outputIx.ix.intValue)
                 .toEither
 
             beaconToken = Asset.builder
@@ -43,7 +43,7 @@ class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
             script = NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
 
             treasuryValue = List(
-              ada(r.amount),
+              ada(r.coins),
               asset(script.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
             )
 

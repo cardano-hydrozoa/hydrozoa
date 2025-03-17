@@ -1,6 +1,7 @@
 package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.l1.multisig.state.*
 import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, MempoolEventTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
@@ -66,7 +67,7 @@ trait HeadAbsentState extends StateApi:
     ): Unit
 
 trait OpenNodeState extends StateApi:
-    def currentTreasuryRef: (TxId, TxIx)
+    def currentTreasuryRef: OutputRefL1
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
@@ -99,7 +100,7 @@ trait OpenNodeState extends StateApi:
   */
 class NodeStateManager(log: Logger) { self =>
 
-    private var knownPeerNodes: mutable.Set[PeerNode] = mutable.Set.empty
+    private var knownPee: mutable.Set[PeerNode] = mutable.Set.empty
 
     private var headState: Option[HeadState] = None
 
@@ -123,10 +124,7 @@ class NodeStateManager(log: Logger) { self =>
 
     private class OpenNodeStateImpl(openState: Open) extends OpenNodeState:
 
-        def currentTreasuryRef: (TxId, TxIx) =
-            val ref = openState.stateL1.treasuryUtxo.ref
-            (ref.id, ref.ix)
-
+        def currentTreasuryRef: OutputRefL1 = openState.stateL1.treasuryUtxo.ref
         def headNativeScript: NativeScript = openState.headNativeScript
         def headBechAddress: AddressBechL1 = openState.headBechAddress
         def beaconTokenName: String = openState.beaconTokenName
@@ -147,11 +145,8 @@ class NodeStateManager(log: Logger) { self =>
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
         def immutablePoolEventsL2: Seq[L2NonGenesisEvent] = openState.poolEventsL2.toSeq
-
         def immutableBlocksConfirmedL2: Seq[Block] = openState.blocksConfirmedL2.toSeq
-
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = openState.eventsConfirmedL2.toSeq
-
         def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
@@ -159,7 +154,6 @@ class NodeStateManager(log: Logger) { self =>
         def finalizing: Boolean = openState.finalizing
         def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2
-
         def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
         def l2LastMajor: Block = openState.blocksConfirmedL2
             .findLast(_.blockHeader.blockType == Major)
@@ -226,45 +220,13 @@ class HeadStateReader(manager: NodeStateManager) {
     def headBechAddress: AddressBechL1 = manager.asOpen(_.headBechAddress)
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) =
         manager.asOpen(_.depositTimingParams)
-    def currentTreasuryRef: (TxId, TxIx) = manager.asOpen(_.currentTreasuryRef)
+    def currentTreasuryRef: OutputRefL1 = manager.asOpen(_.currentTreasuryRef)
     def seedAddress: AddressBechL1 = manager.asOpen(_.seedAddress)
 }
 
 /** Represent a node (Hydrozoa process) run by a peer (a user/operator).
   */
 case class PeerNode()
-
-// Additional stuff
-
-type DepositUtxo = Utxo[L1, DepositTag]
-type DepositUtxos = UtxoSet[L1, DepositTag]
-type MutableDepositUtxos = MutableUtxoSet[L1, DepositTag]
-
-type RolloutUtxo = Utxo[L1, RolloutTag]
-type RolloutUtxos = UtxoSet[L1, RolloutTag]
-type MutableRolloutUtxos = MutableUtxoSet[L1, RolloutTag]
-
-type TreasuryUtxo = Utxo[L1, TreasuryTag]
-
-case class MultisigHeadStateL1(
-    var treasuryUtxo: TreasuryUtxo,
-    depositUtxos: MutableDepositUtxos,
-    // FIXME: move to rollout effect
-    rolloutUtxos: MutableRolloutUtxos
-)
-
-// tags
-final class DepositTag
-final class RolloutTag
-final class TreasuryTag
-
-object MultisigHeadStateL1:
-    def empty(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
-        MultisigHeadStateL1(
-          treasuryUtxo,
-          MutableUtxoSet[L1, DepositTag](mutable.Map.empty),
-          MutableUtxoSet[L1, RolloutTag](mutable.Map.empty)
-        )
 
 case class BlockRecord()
 // Remove

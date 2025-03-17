@@ -1,37 +1,35 @@
 package hydrozoa.l2.ledger.state
 
-import hydrozoa.infra.{decodeBech32AddressL2}
-import hydrozoa.l2.ledger.SimpleOutput
+import hydrozoa.OutputRefL2
+import hydrozoa.infra.decodeBech32AddressL2
 import scalus.builtin.ByteString
 import scalus.prelude.Maybe.Nothing
 import scalus.ledger.api.v1 as scalus
 
 import scala.collection.mutable
 
-opaque type TxIn = scalus.TxOutRef
-opaque type TxOut = scalus.TxOut
+opaque type OutputRefInt = scalus.TxOutRef
+opaque type OutputInt = scalus.TxOut
 
-type Utxos = mutable.Map[TxIn, TxOut]
-
-type UtxosDiff = Set[(TxIn, TxOut)]
-type MutableUtxosDiff = mutable.Set[(TxIn, TxOut)]
-
-// FIXME: move to another package
-def mkTxIn(txId: hydrozoa.TxId, txIx: hydrozoa.TxIx): TxIn =
-    val sTxId = scalus.TxId(ByteString.fromHex(txId.hash))
-    val sTxIx = BigInt.apply(txIx.ix.intValue)
+def liftOutputRef(outputRefL2: OutputRefL2): OutputRefInt =
+    val sTxId = scalus.TxId(ByteString.fromHex(outputRefL2.txId.hash))
+    val sTxIx = BigInt(outputRefL2.outputIx.ix)
     scalus.TxOutRef(sTxId, sTxIx)
 
-def unwrapTxIn(txIn: TxIn): scalus.TxOutRef = txIn
+def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
 
-def mkTxOut(bech32: hydrozoa.AddressBechL2, coins: BigInt): TxOut =
+def liftOutput(bech32: hydrozoa.AddressBechL2, coins: BigInt): OutputInt =
     val address = decodeBech32AddressL2(bech32)
     val value = scalus.Value.lovelace(coins)
     scalus.TxOut(address = address, value = value, datumHash = Nothing)
 
-def unwrapTxOut(txOut: TxOut): scalus.TxOut = txOut
+def unwrapTxOut(output: OutputInt): scalus.TxOut = output
 
-def checkSumInvariant(inputs: List[TxOut], outputs: List[TxOut]): Boolean =
+type Utxos = mutable.Map[OutputRefInt, OutputInt]
+type UtxosDiff = Set[(OutputRefInt, OutputInt)]
+type UtxosDiffMutable = mutable.Set[(OutputRefInt, OutputInt)]
+
+def checkSumInvariant(inputs: List[OutputInt], outputs: List[OutputInt]): Boolean =
     val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
     val after: scalus.Value = outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
     before == after

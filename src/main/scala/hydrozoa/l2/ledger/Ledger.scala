@@ -1,7 +1,7 @@
 package hydrozoa.l2.ledger
 
 import hydrozoa.l2.ledger.event.AnyL2Event
-import hydrozoa.{TxL2}
+import hydrozoa.TxL2
 
 /** @tparam U
   *   type for representing utxo set

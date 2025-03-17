@@ -1,14 +1,20 @@
 package hydrozoa
 
-import hydrozoa.node.server.MultisigHeadStateL1
+import hydrozoa.l1.multisig.state.MultisigUtxoTag
 
 import scala.collection.mutable
 
-/** Cardano txs in serialized form
+/** Cardano network layers.
+  */
+sealed trait AnyLevel
+sealed trait L1 extends AnyLevel
+sealed trait L2 extends L1
+
+/** Cardano txs in serialized form.
   * @param bytes
   *   CBOR bytes FIXME: use IArray
   * @tparam L
-  *   phantom parameter to distinguish levels (L1, L2, Any)
+  *   phantom parameter to distinguish tx level (L1, L2, Any)
   */
 case class Tx[+L <: AnyLevel](bytes: Array[Byte])
 
@@ -20,8 +26,8 @@ object TxL1:
 
 type TxL2 = Tx[L2]
 
-// Serialized Address
-case class L1Address(bytes: Array[Byte])
+object TxL2:
+    def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
 case class AddressBechL1(bech32: String)
@@ -37,29 +43,37 @@ case class TxId(hash: String)
 // TODO: use Int, Long is too long
 case class TxIx(ix: Long)
 
-case class OutputRef[L <: AnyLevel](id: TxId, ix: TxIx)
+final case class OutputRef[L <: AnyLevel](txId: TxId, outputIx: TxIx)
 
-def mkOutputRef[L <: AnyLevel](id: TxId, ix: TxIx): OutputRef[L] = OutputRef[L](id, ix)
+type OutputRefL1 = OutputRef[L1]
+type OutputRefL2 = OutputRef[L2]
 
-sealed trait AnyLevel
-sealed trait L1 extends AnyLevel
-sealed trait L2 extends L1
+object OutputRefL1:
+    def apply(id: TxId, ix: TxIx): OutputRef[L1] = OutputRef[L1](id, ix)
+
+object OutputRefL2:
+    def apply(id: TxId, ix: TxIx): OutputRef[L2] = OutputRef[L2](id, ix)
 
 // FIXME: parameterize AddressBech
 // FIXME: migrate to Value
 case class Output[L <: AnyLevel](address: AddressBechL1, coins: BigInt)
 
-case class Utxo[L <: AnyLevel, F](ref: OutputRef[L], output: Output[L])
+case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: OutputRef[L], output: Output[L])
 
-def mkUtxo[L <: AnyLevel, F](txId: TxId, txIx: TxIx, address: AddressBechL1, coins: BigInt) =
-    Utxo[L, F](OutputRef[L](txId, txIx), Output(address, coins))
+def mkUtxo[L <: AnyLevel, T <: MultisigUtxoTag](
+    txId: TxId,
+    txIx: TxIx,
+    address: AddressBechL1,
+    coins: BigInt
+) =
+    Utxo[L, T](OutputRef[L](txId, txIx), Output(address, coins))
 
-case class MutableUtxoSet[L <: AnyLevel, F](map: mutable.Map[OutputRef[L], Output[L]])
+case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[OutputRef[L], Output[L]])
 
 case class UtxoSet[L <: AnyLevel, F](map: Map[OutputRef[L], Output[L]])
 
 object UtxoSet:
-    def apply[L <: AnyLevel, F](mutableUtxoSet: MutableUtxoSet[L, F]): UtxoSet[L, F] =
+    def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
         UtxoSet(mutableUtxoSet.map.toMap)
 
 // Policy ID

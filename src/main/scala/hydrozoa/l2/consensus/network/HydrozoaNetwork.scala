@@ -24,7 +24,7 @@ trait HydrozoaNetwork {
     def reqFinal(block: Block): Set[AckFinalCombined]
 }
 
-case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
+case class ReqInit(seedOutputRef: OutputRefL1, coins: Long)
 
 case class ReqRefundLater(depositTx: DepositTx, index: TxIx)
 

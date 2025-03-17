@@ -9,7 +9,7 @@ import hydrozoa.infra.serializeTxHex
 type InitializeError = String
 
 // Simple depositing
-type DepositId = (TxId, TxIx)
+type DepositId = OutputRefL1
 
 case class DepositRequest(
     txId: TxId,
@@ -21,7 +21,7 @@ case class DepositRequest(
     refundDatum: Option[Datum]
 )
 
-case class DepositResponse(postDatedRefundTx: TxAny, depositId: DepositId) {
+case class DepositResponse(postDatedRefundTx: TxL1, depositId: DepositId) {
     // TODO: use JSON
     override def toString: String =
         s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: $depositId"

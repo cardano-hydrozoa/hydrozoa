@@ -2,11 +2,12 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
+import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.{MutableUtxosDiff, Utxos, UtxosDiff}
-import hydrozoa.node.server.{DepositTag, DepositUtxos, TxDump}
+import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
+import hydrozoa.node.server.TxDump
 
 import scala.collection.mutable
 
@@ -51,7 +52,7 @@ def createBlock(
 
     // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
     // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-    val utxosAdded, utxosWithdrawn: MutableUtxosDiff = mutable.Set()
+    val utxosAdded, utxosWithdrawn: UtxosDiffMutable = mutable.Set()
 
     // 3. For each non-genesis L2 event...
     poolEvents.foreach {
@@ -77,10 +78,10 @@ def createBlock(
     // 4. If finalizing is False...
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
-        val eligibleDeposits = UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
+        val eligibleDeposits: DepositUtxos = UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
-            val genesis: SimpleGenesis = SimpleGenesis(eligibleDeposits)
+            val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
             stateL2.submit(mkL2G(genesis)) match
                 case Right(txId, mbCardanoTx, utxos) =>
                     utxosAdded.addAll(utxos)

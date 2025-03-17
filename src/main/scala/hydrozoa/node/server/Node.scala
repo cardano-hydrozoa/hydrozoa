@@ -7,12 +7,12 @@ import hydrozoa.l1.Cardano
 import hydrozoa.l1.event.MultisigL1EventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, SettlementTx}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
+import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, SettlementTx}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -54,14 +54,16 @@ class Node(
         val vKeys = network.participantsKeys() + ownKeys._2
 
         // Native script, head address, and token
+        val seedOutput = OutputRefL1(txId, txIx)
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network())
-        val beaconTokenName = mkBeaconTokenName(txId, txIx)
+        val beaconTokenName = mkBeaconTokenName(seedOutput)
+
+        val treasuryCoins = amount * 1_000_000
 
         val initTxRecipe = InitTxRecipe(
           headAddress,
-          txId,
-          txIx,
-          amount,
+          seedOutput,
+          treasuryCoins,
           headNativeScript,
           beaconTokenName
         )
@@ -73,7 +75,7 @@ class Node(
 
         val ownWit: TxKeyWitness = createTxKeyWitness(txDraft, ownKeys._1)
 
-        val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(txId, txIx, amount))
+        val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(seedOutput, treasuryCoins))
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
@@ -169,7 +171,7 @@ class Node(
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe((r.txId, r.txIx), depositDatum)
+        val depositTxRecipe = DepositTxRecipe(OutputRefL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(txDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
@@ -216,7 +218,7 @@ class Node(
 
         println(state.asOpen(_.stateL1))
 
-        Right(DepositResponse(refundTx, (depositTxHash, index)))
+        Right(DepositResponse(refundTx, OutputRefL1(depositTxHash, index)))
     }
 
     def submitL1(hex: String): Either[String, TxId] =

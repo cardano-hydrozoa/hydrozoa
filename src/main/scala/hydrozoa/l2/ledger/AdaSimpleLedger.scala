@@ -2,9 +2,9 @@ package hydrozoa.l2.ledger
 
 import hydrozoa.*
 import hydrozoa.infra.*
+import hydrozoa.l1.multisig.state.DepositUtxos
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
-import hydrozoa.node.server.DepositUtxos
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -66,24 +66,42 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                 Right(txId, Some(cardanoTx))
             case event: L2Withdrawal =>
                 val s = s"Simple withdrawing: ${event.withdrawal}"
-                val virtualOutputs = resolveInputs(event.withdrawal.inputs)
-                val cardanoTx =
-                    mkVirtualWithdrawalTx(event.withdrawal, virtualOutputs.map(unwrapTxOut(_)))
-                val txId = txHash(cardanoTx)
-                println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
-                Right(txId, Some(cardanoTx))
+                resolveInputs(event.withdrawal.inputs) match
+                    case Left(extraneous) => Left(s"Extreneous utxos found: $extraneous")
+                    case Right(resolved)  =>
+                        // FIXME: why doesn't `resolved.map(unwrapTxOut) work?
+                        val cardanoTx = mkVirtualWithdrawalTx(
+                          event.withdrawal,
+                          resolved.map(o => unwrapTxOut(o))
+                        )
+                        val txId = txHash(cardanoTx)
+                        println(
+                          s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}"
+                        )
+                        Right(txId, Some(cardanoTx))
 
-    // FIXME: handle extraneous utxos
-    private def resolveInputs(inputs: List[(TxId, TxIx)]): List[TxOut] =
-        inputs.map(e => activeState.get(mkTxIn(e._1, e._2)).get)
+    /** Tries to resolve output refs.
+      * @param inputs
+      *   output refs to resolve
+      * @return
+      *   Left if
+      */
+    private def resolveInputs(
+        inputs: List[OutputRefL2]
+    ): Either[List[OutputRefL2], List[OutputInt]] =
+        inputs
+            .map(e => activeState.get(liftOutputRef(e)).toRight(e))
+            .partitionMap(identity) match
+            case (Nil, resolved) => Right(resolved)
+            case (extraneous, _) => Left(extraneous)
 
     private def handleGenesis(event: L2Genesis) =
         val Right(txId, mbCardanoTx) = evaluate(event)
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = mkTxIn(txId, TxIx(output._2))
-                val txOut = mkTxOut(output._1.address, output._1.coins)
+                val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
             .toSet
@@ -94,7 +112,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         val Right(txId, mbCardanoTx) = evaluate(event)
 
         // Inputs
-        val spentRefs = event.transaction.inputs.map(i => mkTxIn(i._1, i._2))
+        val spentRefs = event.transaction.inputs.map(i => liftOutputRef(i))
         val extraneousRefs = spentRefs.filterNot(activeState.contains)
 
         if extraneousRefs.nonEmpty then Left(txId, s"Extraneous inputs in the tx: $extraneousRefs")
@@ -103,8 +121,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
             // Outputs
             val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-                val txIn = mkTxIn(txId, TxIx(output._2))
-                val txOut = mkTxOut(output._1.address, output._1.coins)
+                val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
 
@@ -115,13 +133,13 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                 spentRefs.foreach(activeState.remove)
                 newUtxos.foreach(activeState.put.tupled)
 
-                Right((txId, mbCardanoTx, Set[(TxIn, TxOut)]()))
+                Right((txId, mbCardanoTx, Set[(OutputRefInt, OutputInt)]()))
 
     private def handleWithdrawal(event: L2Withdrawal) =
         val Right(txId, mbCardanoTx) = evaluate(event)
 
         // Inputs
-        val withdrawnRefs = event.withdrawal.inputs.map(i => mkTxIn(i._1, i._2))
+        val withdrawnRefs = event.withdrawal.inputs.map(i => liftOutputRef(i))
         val extraneousRefs = withdrawnRefs.filterNot(activeState.contains)
 
         if extraneousRefs.nonEmpty then
@@ -151,15 +169,16 @@ object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
     def mkGenesis(address: AddressBechL2, ada: Int): L2Genesis =
         GenesisL2Event(SimpleGenesis(Seq.empty, List(SimpleOutput(address, ada))))
-    def mkTransaction(input: (TxId, TxIx), address: AddressBechL2, ada: Int): L2Transaction =
+    def mkTransaction(input: OutputRefL2, address: AddressBechL2, ada: Int): L2Transaction =
         TransactionL2Event(
           SimpleTransaction(inputs = List(input), outputs = List(SimpleOutput(address, ada)))
         )
-    def mkWithdrawal(utxo: (TxId, TxIx)): L2Withdrawal =
+    def mkWithdrawal(utxo: OutputRefL2): L2Withdrawal =
         WithdrawalL2Event(SimpleWithdrawal(List(utxo)))
 
 case class SimpleGenesis(
-    virtualInputs: Seq[OutputRef[L1]], // FIXME: these are needed for virtual tx only
+    // FIXME: these are needed for virtual tx only
+    virtualInputs: Seq[OutputRef[L1]],
     outputs: List[SimpleOutput]
 )
 
@@ -174,16 +193,14 @@ object SimpleGenesis:
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
-    inputs: List[
-      (TxId, TxIx)
-    ], // Should be Set, using List since Set is not supported in Tapir's Schema deriving
+    // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
+    inputs: List[OutputRefL2],
     outputs: List[SimpleOutput]
 )
 
 case class SimpleWithdrawal(
-    inputs: List[
-      (TxId, TxIx)
-    ] // Should be Set, using List since Set is not supported in Tapir's Schema deriving
+    // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
+    inputs: List[OutputRefL2]
 )
 
 case class SimpleOutput(

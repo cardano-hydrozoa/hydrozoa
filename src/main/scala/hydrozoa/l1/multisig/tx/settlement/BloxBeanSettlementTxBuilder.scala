@@ -30,11 +30,11 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val refs = r.deposits.map(d => (d.id, d.ix)).toSet + headStateReader.currentTreasuryRef
+        val refs = r.deposits.toSet + headStateReader.currentTreasuryRef
 
         val utxos: Set[Utxo] =
             refs.map(r =>
-                backendService.getUtxoService.getTxOutput(r._1.hash, r._2.ix.intValue).force
+                backendService.getUtxoService.getTxOutput(r.txId.hash, r.outputIx.ix.toInt).force
             )
 
         val outputsWithdrawn =
