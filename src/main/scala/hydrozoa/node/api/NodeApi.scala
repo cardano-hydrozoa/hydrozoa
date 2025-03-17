@@ -7,6 +7,8 @@ import sttp.tapir.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
+import scala.concurrent.duration.{FiniteDuration, SECONDS}
+
 /** Hydrozoa Node API, currently backed by Tapir HTTP server.
   */
 class NodeApi(node: Node):
@@ -43,7 +45,13 @@ class NodeApi(node: Node):
         .handle(submitL1)
 
     private val majorEndpoint =
-        endpoint.post.in("l2").in("major").out(stringBody).errorOut(stringBody).handle(major)
+        endpoint.post
+            .in("l2")
+            .in("major")
+            .in(query[Option[String]]("nextBlockFinal"))
+            .out(stringBody)
+            .errorOut(stringBody)
+            .handle(major)
 
     private val apiEndpoints = List(initEndpoint, depositEndpoint, submitL1Endpoint, majorEndpoint)
 
@@ -53,6 +61,7 @@ class NodeApi(node: Node):
     def start(): Unit =
         NettySyncServer()
             .port(8088)
+            .modifyConfig(c => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
             .startAndWait()
 
@@ -89,4 +98,8 @@ class NodeApi(node: Node):
     private def submitL1(tx: String): Either[String, String] =
         node.submit(tx).map(_.toString)
 
-    private def major(u: Unit): Either[String, String] = node.produceMajorBlock()
+    private def major(nextBlockFinal: Option[String]): Either[String, String] =
+        val b = nextBlockFinal match
+            case Some(_) => true
+            case None    => false
+        node.handleNextMajorBlock(b)

@@ -32,3 +32,12 @@ object MultisigTxs:
         extension (tx: SettlementTx) {
             def toTx: L1Tx = tx
         }
+
+    opaque type FinalizationTx = L1Tx
+
+    object FinalizationTx:
+        inline def apply(tx: L1Tx): FinalizationTx = tx
+
+        extension (tx: FinalizationTx) {
+            def toTx: L1Tx = tx
+        }
