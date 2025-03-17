@@ -1,10 +1,10 @@
 package hydrozoa.l2.ledger
 
+import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
 import hydrozoa.node.server.DepositUtxos
-import hydrozoa.*
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -43,14 +43,14 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
     override def submit[E1 <: L2Event](
         event: E1
-    ): Either[(L2EventHash, String), (L2EventHash, Option[L1Tx], event.UtxosDiff)] =
+    ): Either[(L2EventHash, String), (L2EventHash, Option[TxL2], event.UtxosDiff)] =
         require(verifier.isValid(event), true)
         event match
             case genesis: L2Genesis       => handleGenesis(genesis)
             case tx: L2Transaction        => handleTransaction(tx)
             case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
 
-    override def evaluate[E1 <: L2Event](event: E1): Either[String, (L2EventHash, Option[L1Tx])] =
+    override def evaluate[E1 <: L2Event](event: E1): Either[String, (L2EventHash, Option[TxL2])] =
         event match
             case event: L2Genesis =>
                 val s = s"L2 simple genesis: ${event.genesis}"
@@ -134,10 +134,6 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
     private def eventHash(s: String): TxId =
         TxId(encodeHex(CryptoHash.H32.hash(IArray.from(s.getBytes)).bytes))
-
-    override def event(hash: L2EventHash): Option[L2Event] = ???
-
-    override def allEvents: Set[L2EventHash] = ???
 
     override def isEmpty: Boolean = activeState.isEmpty
 

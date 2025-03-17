@@ -9,7 +9,7 @@ import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMul
 import hydrozoa.l1.multisig.tx.MultisigTxs.SettlementTx
 import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AppCtx, TxAny, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
@@ -82,5 +82,5 @@ class BloxBeanSettlementTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(SettlementTx.apply(L1Tx(ret.serialize())))
+        Right(SettlementTx(TxL1(ret.serialize())))
 }

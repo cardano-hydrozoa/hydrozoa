@@ -25,17 +25,17 @@ import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
 
-def txHash(tx: L1Tx): TxId = TxId(getTxHash(tx.bytes))
+def txHash(tx: TxAny): TxId = TxId(getTxHash(tx.bytes))
 
 // TODO: generalize fot both L1 and L2
-def serializeTxHex(tx: L1Tx): String = HexUtil.encodeHexString(tx.bytes)
+def serializeTxHex[L <: AnyLevel](tx: Tx[L]): String = HexUtil.encodeHexString(tx.bytes)
 
 // TODO: generalize fot both L1 and L2
-def deserializeTxHex(hex: String): L1Tx = L1Tx(HexUtil.decodeHexString(hex))
+def deserializeTxHex(hex: String): TxAny = Tx[AnyLevel](HexUtil.decodeHexString(hex))
 
 // Pure function to create a transaction key witness with a HD key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
+def createTxKeyWitness(tx: TxAny, pair: HdKeyPair): TxKeyWitness = {
 
     // See TransactionSigner
 
@@ -52,7 +52,7 @@ def createTxKeyWitness(tx: L1Tx, pair: HdKeyPair): TxKeyWitness = {
 
 // Pure function to create a transaction key witness with a peer node's key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWitness = {
+def createTxKeyWitness(tx: TxAny, participantKey: ParticipantSecretKey): TxKeyWitness = {
 
     // See TransactionSigner
 
@@ -77,7 +77,7 @@ def createTxKeyWitness(tx: L1Tx, participantKey: ParticipantSecretKey): TxKeyWit
 }
 
 // Pure function to add a key witness to a transaction.
-def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
+def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
     val txBytes = TransactionBytes(tx.bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
@@ -98,7 +98,7 @@ def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
     vkWitnessArray.add(vkeyWitness)
 
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    L1Tx(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
+    Tx[L](txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
 }
 
 /** @param tx
@@ -106,20 +106,20 @@ def addWitness(tx: L1Tx, wit: TxKeyWitness): L1Tx = {
   * @return
   *   Index and ada amount (should be value).
   */
-def onlyAddressOutput(tx: L1Tx, address: AddressBechL1): Option[(TxIx, BigInt)] =
+def onlyAddressOutput(tx: TxAny, address: AddressBechL1): Option[(TxIx, BigInt)] =
     val tx_ = Transaction.deserialize(tx.bytes)
     val outputs = tx_.getBody.getOutputs.asScala
     outputs.indexWhere(output => output.getAddress == address.bech32) match
         case -1 => None
         case i  => Some((TxIx(i), BigInt.apply(outputs.apply(i).getValue.getCoin.longValue())))
 
-def outputDatum(tx: L1Tx, index: TxIx): Data =
+def outputDatum(tx: TxAny, index: TxIx): Data =
     val tx_ = Transaction.deserialize(tx.bytes)
     val output = tx_.getBody.getOutputs.get(index.ix.intValue)
     val datum = output.getInlineDatum
     Interop.toScalusData(datum)
 
-def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
+def txInputsRef(tx: TxAny): Set[(TxId, TxIx)] =
     val tx_ = Transaction.deserialize(tx.bytes)
     tx_.getBody.getInputs.asScala.map(ti => (TxId(ti.getTransactionId), TxIx(ti.getIndex))).toSet
 
@@ -127,7 +127,7 @@ def txInputsRef(tx: L1Tx): Set[(TxId, TxIx)] =
   * @return
   *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkVirtualGenesisTx(genesis: SimpleGenesis): L1Tx =
+def mkVirtualGenesisTx(genesis: SimpleGenesis): Tx[L2] =
 
     val virtualInputs = genesis.virtualInputs.map { input =>
         TransactionInput.builder
@@ -149,13 +149,13 @@ def mkVirtualGenesisTx(genesis: SimpleGenesis): L1Tx =
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
-    L1Tx(tx.serialize)
+    Tx[L2](tx.serialize)
 
 /** @param simpleTx
   * @return
   *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkVirtualTransactionL2(simpleTx: SimpleTransaction): L1Tx =
+def mkVirtualTransactionL2(simpleTx: SimpleTransaction): Tx[L2] =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -177,7 +177,7 @@ def mkVirtualTransactionL2(simpleTx: SimpleTransaction): L1Tx =
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
-    L1Tx(tx.serialize)
+    Tx[L2](tx.serialize)
 
 def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
     val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
@@ -189,9 +189,9 @@ def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
         .value(Value.builder.coin(coins.bigInteger).build)
         .build
 
-
-def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput  = {
-    TransactionInput.builder()
+def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
+    TransactionInput
+        .builder()
         .transactionId(input.id.hash.toHex)
         .index(input.idx.intValue)
         .build()
@@ -201,7 +201,7 @@ def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput  = {
   * @return
   *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxOut]): L1Tx =
+def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxOut]): Tx[L2] =
 
     val virtualInputs = withdrawal.inputs.map { input =>
         TransactionInput.builder
@@ -218,9 +218,11 @@ def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxO
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
-    L1Tx(tx.serialize)
+    Tx[L2](tx.serialize)
 
-def augmentWithVirtualInputs(tx: L1Tx, virtualInputs:Set[TxIn]): L1Tx =
+def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[TxIn]): Tx[L] =
     val tx_ = Transaction.deserialize(tx.bytes)
-    tx_.getBody.getInputs.addAll(virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava)
-    L1Tx(tx_.serialize())
+    tx_.getBody.getInputs.addAll(
+      virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava
+    )
+    Tx[L](tx_.serialize())

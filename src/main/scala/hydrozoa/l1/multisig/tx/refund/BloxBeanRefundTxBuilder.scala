@@ -11,7 +11,7 @@ import hydrozoa.infra.{addressToBloxbean, mkBuilder, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.MultisigTxs.PostDatedRefundTx
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AppCtx, TxAny, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
 import scalus.prelude.Maybe.{Just, Nothing}
@@ -31,7 +31,7 @@ class BloxBeanRefundTxBuilder(
         r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] =
 
-        val txBytes = r.depositTx.toTx.bytes
+        val txBytes = r.depositTx.toTxL1.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
         val txIxInt = r.txIx.ix.intValue()
@@ -92,5 +92,5 @@ class BloxBeanRefundTxBuilder(
             .feePayer(refundAddress.toBech32)
             .build
 
-        Right(PostDatedRefundTx.apply(L1Tx(ret.serialize())))
+        Right(PostDatedRefundTx.apply(TxL1(ret.serialize)))
 }

@@ -21,7 +21,7 @@ case class DepositRequest(
     refundDatum: Option[Datum]
 )
 
-case class DepositResponse(postDatedRefundTx: L1Tx, depositId: DepositId) {
+case class DepositResponse(postDatedRefundTx: TxAny, depositId: DepositId) {
     // TODO: use JSON
     override def toString: String =
         s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: $depositId"

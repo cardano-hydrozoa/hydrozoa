@@ -1,43 +1,52 @@
 package hydrozoa.l1.multisig.tx
 
-import hydrozoa.L1Tx
+import hydrozoa.{L1, ParticipantSecretKey, Tx, TxKeyWitness}
 
 // Opaque types for different types of txs used in multisig regime.
 
 object MultisigTxs:
 
-    opaque type DepositTx = L1Tx
+    opaque type InitializationTx = Tx[L1]
+
+    object InitializationTx:
+        inline def apply(tx: Tx[L1]): InitializationTx = tx
+
+        extension (tx: InitializationTx) {
+            def toTxL1: Tx[L1] = tx
+        }
+
+    opaque type DepositTx = Tx[L1]
 
     object DepositTx:
-        inline def apply(tx: L1Tx): DepositTx = tx
+        inline def apply(tx: Tx[L1]): DepositTx = tx
 
         extension (tx: DepositTx) {
-            def toTx: L1Tx = tx
+            def toTxL1: Tx[L1] = tx
         }
 
-    opaque type PostDatedRefundTx = L1Tx
+    opaque type PostDatedRefundTx = Tx[L1]
 
     object PostDatedRefundTx:
-        inline def apply(tx: L1Tx): PostDatedRefundTx = tx
+        inline def apply(tx: Tx[L1]): PostDatedRefundTx = tx
 
         extension (tx: PostDatedRefundTx) {
-            def toTx: L1Tx = tx
+            def toTxL1: Tx[L1] = tx
         }
 
-    opaque type SettlementTx = L1Tx
+    opaque type SettlementTx = Tx[L1]
 
     object SettlementTx:
-        inline def apply(tx: L1Tx): SettlementTx = tx
+        inline def apply(tx: Tx[L1]): SettlementTx = tx
 
         extension (tx: SettlementTx) {
-            def toTx: L1Tx = tx
+            def toTx: Tx[L1] = tx
         }
 
-    opaque type FinalizationTx = L1Tx
+    opaque type FinalizationTx = Tx[L1]
 
     object FinalizationTx:
-        inline def apply(tx: L1Tx): FinalizationTx = tx
+        inline def apply(tx: Tx[L1]): FinalizationTx = tx
 
         extension (tx: FinalizationTx) {
-            def toTx: L1Tx = tx
+            def toTxL1: Tx[L1] = tx
         }

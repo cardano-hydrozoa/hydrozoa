@@ -2,20 +2,16 @@ package hydrozoa.l1.event
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{onlyAddressOutput, outputDatum, txHash, txInputsRef}
-import hydrozoa.l1.multisig.state.{MultisigTreasuryDatum, given_FromData_MultisigTreasuryDatum}
+import hydrozoa.infra.{onlyAddressOutput, txHash}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.node.server.{DepositTag, NodeStateManager, SettledDeposit, TreasuryTag}
-import scalus.builtin.Data.fromData
+import hydrozoa.node.server.{DepositTag, NodeStateManager, TreasuryTag}
 
 /** This class is in charge of handling L1 events.
   *
-  * TODO: Apparently we don't need to hanle all L1 transactions. See
+  * TODO: Apparently we don't need to handle all L1 transactions. See
   * https://github.com/cardano-hydrozoa/hydrozoa/issues/11
-  *
-  * @param state
   */
-case class MultisigEventManager(
+case class MultisigL1EventManager(
     headParams: HeadParams,
     nativeScript: NativeScript,
     beaconTokenName: String,
@@ -24,9 +20,9 @@ case class MultisigEventManager(
     log: Logger
 ):
 
-    def handleInitTx(initTx: L1Tx, seedAddress: AddressBechL1) =
+    def handleInitTx(initTx: TxAny, seedAddress: AddressBechL1) =
         val txId = txHash(initTx)
-        log.info(s"Handling init tx $txId") // FIXME: perf
+        log.info(s"Handling init tx $txId") // TODO: perf
         onlyAddressOutput(initTx, headAddress) match
             case Some(ix, coins) =>
                 log.info(s"Treasury output index is: $ix");
@@ -43,7 +39,7 @@ case class MultisigEventManager(
             case None =>
                 log.error("Can't find treasury in the initialization tx!")
 
-    def handleDepositTx(depositTx: L1Tx, txId: TxId) =
+    def handleDepositTx(depositTx: TxAny, txId: TxId) =
         log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
         onlyAddressOutput(depositTx, headAddress) match
@@ -55,7 +51,7 @@ case class MultisigEventManager(
                   "Can't find the deposit output in the deposit tx (should not be the case)!"
                 )
 
-    def handleSettlementTx(tx: L1Tx, txHash: TxId) =
+    def handleSettlementTx(tx: TxAny, txHash: TxId) =
         log.info(s"Handling settlement tx $txHash")
 
         // val treasury = state.asOpen(_.currentTreasuryRef)
@@ -72,6 +68,6 @@ case class MultisigEventManager(
         val Some(treasury) = onlyAddressOutput(tx, headAddress)
         state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
 
-    def handleFinalizationTx(tx: L1Tx, txHash: TxId) =
+    def handleFinalizationTx(tx: TxAny, txHash: TxId) =
         log.info(s"Handling finalization tx: $txHash")
         state.asOpen(_.finalizeHead())

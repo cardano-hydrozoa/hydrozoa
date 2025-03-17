@@ -1,7 +1,7 @@
 package hydrozoa.l1.wallet
 
-import hydrozoa.{L1Tx, TxKeyWitness}
+import hydrozoa.{TxAny, TxKeyWitness}
 
 trait Wallet {
-    def createTxKeyWitness(tx: L1Tx): TxKeyWitness
+    def createTxKeyWitness(tx: TxAny): TxKeyWitness
 }

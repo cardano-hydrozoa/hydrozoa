@@ -6,7 +6,7 @@ import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdraw
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.{MutableUtxosDiff, Utxos, UtxosDiff}
-import hydrozoa.node.server.{DepositTag, DepositUtxos, txDump}
+import hydrozoa.node.server.{DepositTag, DepositUtxos, TxDump}
 
 import scala.collection.mutable
 
@@ -59,7 +59,7 @@ def createBlock(
             stateL2.submit(mkL2T(tx.simpleTransaction)) match
                 case Right(txId, mbCardanoTx, _) =>
                     // FIXME: move out
-                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
+                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
                     txValid.add(txId)
                 case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
         case wd: L2WithdrawalEvent =>
@@ -87,7 +87,7 @@ def createBlock(
                     // output refs only
                     depositsAbsorbed = eligibleDeposits.map.keySet.toSet
                     // FIXME: move out
-                    mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
+                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable
     else None

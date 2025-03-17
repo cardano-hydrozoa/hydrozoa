@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder}
 import hydrozoa.l1.multisig.tx.MultisigTxs.FinalizationTx
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AppCtx, TxAny, TxL1}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -64,5 +64,5 @@ class BloxBeanFinalizationTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(FinalizationTx.apply(L1Tx(ret.serialize())))
+        Right(FinalizationTx(TxL1(ret.serialize)))
 }

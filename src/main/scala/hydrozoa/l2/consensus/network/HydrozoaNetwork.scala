@@ -1,6 +1,7 @@
 package hydrozoa.l2.consensus.network
 
 import hydrozoa.*
+import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
 import hydrozoa.l2.ledger.state.UtxosDiff
 
@@ -25,7 +26,7 @@ trait HydrozoaNetwork {
 
 case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
 
-case class ReqRefundLater(depositTx: L1Tx, index: TxIx)
+case class ReqRefundLater(depositTx: DepositTx, index: TxIx)
 
 case class AckMinor(
     blockHeader: BlockHeader,
