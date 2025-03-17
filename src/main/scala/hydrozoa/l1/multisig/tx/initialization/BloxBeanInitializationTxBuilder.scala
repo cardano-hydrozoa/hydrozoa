@@ -10,7 +10,6 @@ import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMul
 import hydrozoa.l1.multisig.tx.InitializationTx
 import hydrozoa.{AddressBechL1, AppCtx, TxL1}
 import scalus.bloxbean.*
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 
 import java.math.BigInteger
@@ -48,20 +47,20 @@ class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
             )
 
             treasuryDatum = Interop.toPlutusData(
-              mkInitMultisigTreasuryDatum(0, ByteString.empty).toData
+              mkInitMultisigTreasuryDatum.toData
             )
 
-            tx = Tx()
+            txPartial = Tx()
                 .mintAssets(script, beaconToken)
                 .collectFrom(List(seedUtxo).asJava)
                 .payToContract(r.headAddressBech32, treasuryValue.asJava, treasuryDatum)
                 .from(seedUtxo.getAddress)
 
-            ret = builder
-                .apply(tx)
+            initializationTx = builder
+                .apply(txPartial)
                 .withRequiredSigners(Address(seedUtxo.getAddress))
                 // TODO: magic number
                 .additionalSignersCount(4)
                 .build()
-        yield (TxL1(ret.serialize), AddressBechL1(seedUtxo.getAddress))
+        yield (TxL1(initializationTx.serialize), AddressBechL1(seedUtxo.getAddress))
 }

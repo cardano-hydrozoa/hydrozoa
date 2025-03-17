@@ -72,7 +72,7 @@ trait OpenNodeState extends StateApi:
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
-    def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
+    def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
     def peekDeposits: DepositUtxos
     def immutablePoolEventsL2: Seq[L2NonGenesisEvent]
     def immutableBlocksConfirmedL2: Seq[Block]
@@ -130,7 +130,7 @@ class NodeStateManager(log: Logger) { self =>
         def beaconTokenName: String = openState.beaconTokenName
         def seedAddress: AddressBechL1 = openState.seedAddress
 
-        def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) =
+        def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
             val Open(
               HeadParams(
                 L2ConsensusParams(depositMarginMaturity, depositMarginExpiry),
@@ -218,7 +218,7 @@ class HeadStateReader(manager: NodeStateManager) {
     def headNativeScript: NativeScript = manager.asOpen(_.headNativeScript)
     def beaconTokenName: String = manager.asOpen(_.beaconTokenName)
     def headBechAddress: AddressBechL1 = manager.asOpen(_.headBechAddress)
-    def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) =
+    def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
         manager.asOpen(_.depositTimingParams)
     def currentTreasuryRef: OutputRefL1 = manager.asOpen(_.currentTreasuryRef)
     def seedAddress: AddressBechL1 = manager.asOpen(_.seedAddress)

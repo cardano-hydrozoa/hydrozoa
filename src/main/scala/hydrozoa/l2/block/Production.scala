@@ -1,7 +1,6 @@
 package hydrozoa.l2.block
 
 import hydrozoa.*
-import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
@@ -17,7 +16,7 @@ import scala.collection.mutable
   *   clone of the L2 ledger FIXME: what's the best way to do that?
   * @param poolEvents
   *   pooled events
-  * @param awaitingDeposits
+  * @param depositsPending
   *   deposits that can be absorbed in the block
   * @param prevHeader
   *   previsus block's header
@@ -33,7 +32,7 @@ import scala.collection.mutable
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
     poolEvents: Seq[L2NonGenesisEvent],
-    awaitingDeposits: DepositUtxos,
+    depositsPending: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
@@ -78,7 +77,8 @@ def createBlock(
     // 4. If finalizing is False...
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
-        val eligibleDeposits: DepositUtxos = UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
+        val eligibleDeposits: DepositUtxos =
+            UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)

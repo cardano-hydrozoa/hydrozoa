@@ -27,17 +27,17 @@ import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
 class Node(
-    state: NodeStateManager,
-    ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
-    network: HydrozoaNetwork,
-    cardano: Cardano,
-    wallet: Wallet,
-    initTxBuilder: InitTxBuilder,
-    depositTxBuilder: DepositTxBuilder,
-    refundTxBuilder: RefundTxBuilder,
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    log: Logger
+              state: NodeStateManager,
+              ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
+              network: HeadPeerNetwork,
+              cardano: Cardano,
+              wallet: Wallet,
+              initTxBuilder: InitTxBuilder,
+              depositTxBuilder: DepositTxBuilder,
+              refundTxBuilder: RefundTxBuilder,
+              settlementTxBuilder: SettlementTxBuilder,
+              finalizationTxBuilder: FinalizationTxBuilder,
+              log: Logger
 ):
 
     // FIXME: find the proper place for it
@@ -265,13 +265,13 @@ class Node(
         val stateL2 = state.asOpen(_.stateL2)
         val poolEvents = state.asOpen(_.immutablePoolEventsL2)
         val finalizing = state.asOpen(_.finalizing)
-        val awaitingDeposits = state.asOpen(_.peekDeposits)
+        val deposits = state.asOpen(_.peekDeposits)
         val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
         createBlock(
           stateL2.blockProduction,
           poolEvents,
-          awaitingDeposits,
+          deposits,
           prevHeader,
           timeCurrent,
           finalizing

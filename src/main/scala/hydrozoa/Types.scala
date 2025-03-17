@@ -92,11 +92,11 @@ case class NativeScript(bytes: Array[Byte])
 case class Datum(bytes: Array[Byte])
 
 // UDiffTime
-opaque type UDiffTime = BigInt
+opaque type UDiffTimeMilli = BigInt
 
-object UDiffTime:
-    inline def apply(i: Int): UDiffTime = BigInt.apply(i)
-extension (x: UDiffTime) def +(i: UDiffTime): UDiffTime = i + x
+object UDiffTimeMilli:
+    inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
+extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x
 
 opaque type PosixTime = BigInt
 

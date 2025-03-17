@@ -10,7 +10,7 @@ import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.wallet.{MockWallet, Wallet}
 import hydrozoa.l1.{Cardano, YaciDevKitCardano}
-import hydrozoa.l2.consensus.network.{HydrozoaNetwork, MockHydrozoaNetwork}
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkMock}
 import hydrozoa.node.api.NodeApi
 import hydrozoa.node.server.{NodeStateManager, HeadStateReader, Node}
 
@@ -39,8 +39,8 @@ object Cli:
         val finalizationTxBuilder: FinalizationTxBuilder =
             BloxBeanFinalizationTxBuilder(ctx, nodeStateReader)
 
-        val network: HydrozoaNetwork =
-            MockHydrozoaNetwork(
+        val network: HeadPeerNetwork =
+            HeadPeerNetworkMock(
               nodeStateReader,
               initTxBuilder,
               refundTxBuilder,

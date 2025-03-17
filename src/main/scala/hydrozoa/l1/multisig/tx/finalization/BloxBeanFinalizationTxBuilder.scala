@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder}
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, TxAny, TxL1}
+import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -50,19 +50,19 @@ class BloxBeanFinalizationTxBuilder(
         val headAddressBech32 = headStateReader.headBechAddress
         val seedAddress = headStateReader.seedAddress
 
-        val tx = Tx()
+        val txPartial = Tx()
             .collectFrom(List(treasuryUtxo).asJava)
             .payToAddress(seedAddress.bech32, treasuryValue.asJava)
             .mintAssets(script, beaconTokenToBurn)
             .withChangeAddress(seedAddress.bech32)
             .from(headAddressBech32.bech32)
 
-        val ret = builder
-            .apply(tx)
+        val finalizationTx = builder
+            .apply(txPartial)
             .feePayer(seedAddress.bech32)
             // TODO: magic numbers
             .additionalSignersCount(3)
             .build
 
-        Right(TxL1(ret.serialize))
+        Right(TxL1(finalizationTx.serialize))
 }

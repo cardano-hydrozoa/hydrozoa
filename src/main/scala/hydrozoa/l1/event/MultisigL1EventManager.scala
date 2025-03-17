@@ -2,7 +2,7 @@ package hydrozoa.l1.event
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{onlyAddressOutput, txHash}
+import hydrozoa.infra.{onlyOutputToAddress, txHash}
 import hydrozoa.l1.multisig.state.{DepositTag, TreasuryTag}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.server.NodeStateManager
@@ -24,7 +24,7 @@ case class MultisigL1EventManager(
     def handleInitTx(initTx: TxAny, seedAddress: AddressBechL1) =
         val txId = txHash(initTx)
         log.info(s"Handling init tx $txId") // TODO: perf
-        onlyAddressOutput(initTx, headAddress) match
+        onlyOutputToAddress(initTx, headAddress) match
             case Some(ix, coins) =>
                 log.info(s"Treasury output index is: $ix");
                 state.asAbsent {
@@ -43,7 +43,7 @@ case class MultisigL1EventManager(
     def handleDepositTx(depositTx: TxAny, txId: TxId) =
         log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
-        onlyAddressOutput(depositTx, headAddress) match
+        onlyOutputToAddress(depositTx, headAddress) match
             case Some(ix, coins) =>
                 log.info(s"Deposit output index is: $ix");
                 state.asOpen(_.enqueueDeposit(mkUtxo[L1, DepositTag](txId, ix, headAddress, coins)))
@@ -64,7 +64,7 @@ case class MultisigL1EventManager(
         // TODO: handle datum
         // val newTreasuryDatum: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
-        val Some(treasury) = onlyAddressOutput(tx, headAddress)
+        val Some(treasury) = onlyOutputToAddress(tx, headAddress)
         state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
 
     def handleFinalizationTx(tx: TxAny, txHash: TxId) =

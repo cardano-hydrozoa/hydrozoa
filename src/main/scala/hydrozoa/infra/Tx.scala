@@ -104,14 +104,13 @@ def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
 /** @param tx
   * @param address
   * @return
-  *   Index and ada amount (should be value).
+  *   Index and ada amount iff tx has exactly one output to address specified. TODO: should be value
   */
-def onlyAddressOutput(tx: TxAny, address: AddressBechL1): Option[(TxIx, BigInt)] =
-    val tx_ = Transaction.deserialize(tx.bytes)
-    val outputs = tx_.getBody.getOutputs.asScala
-    outputs.indexWhere(output => output.getAddress == address.bech32) match
-        case -1 => None
-        case i  => Some((TxIx(i), BigInt.apply(outputs.apply(i).getValue.getCoin.longValue())))
+def onlyOutputToAddress(tx: TxAny, address: AddressBechL1): Option[(TxIx, BigInt)] =
+    val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala.toList
+    outputs.filter(output => output.getAddress == address.bech32) match
+        case List(elem) => Some((TxIx(outputs.indexOf(elem)), elem.getValue.getCoin.longValue()))
+        case _          => None
 
 def outputDatum(tx: TxAny, index: TxIx): Data =
     val tx_ = Transaction.deserialize(tx.bytes)
