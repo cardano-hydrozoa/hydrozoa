@@ -4,10 +4,11 @@ import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{force, mkBuilder}
-import hydrozoa.l1.multisig.tx.MultisigTxs.FinalizationTx
+import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
+import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
+import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -31,24 +32,36 @@ class BloxBeanFinalizationTxBuilder(
             .force
 
         // Native script
-        val Some(headNativeScript) = headStateReader.headNativeScript
+        val headNativeScript = headStateReader.headNativeScript
         val script = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         // Beacon token to burn
-        val Some(beaconTokenName) = headStateReader.beaconTokenName
+        val beaconTokenName = headStateReader.beaconTokenName
         val beaconTokenAsset = AssetUtil.getUnit(script.getPolicyId, beaconTokenName)
         val beaconTokenToBurn = Asset.builder
             .name(beaconTokenName)
             .value(BigInteger.valueOf(-1))
             .build
 
+        val outputsWithdrawn =
+            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(unwrapTxOut(w._2)))
+
+        val withdrawnAda =
+            outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
+
         // Treasury utxo value minus the beacon token
         val treasuryValue = treasuryUtxo.getAmount.asScala.toList
             .filterNot(_.getUnit == beaconTokenAsset)
 
+        // Subtract withdrawn lovelace
+        treasuryValue.foreach(a =>
+            if a.getUnit.equals("lovelace") then
+                a.setQuantity((a.getQuantity.subtract(withdrawnAda)))
+        )
+
         // Addresses
-        val Some(headAddressBech32) = headStateReader.headBechAddress
-        val Some(seedAddress) = headStateReader.seedAddress
+        val headAddressBech32 = headStateReader.headBechAddress
+        val seedAddress = headStateReader.seedAddress
 
         val tx = Tx()
             .collectFrom(List(treasuryUtxo).asJava)
@@ -59,10 +72,12 @@ class BloxBeanFinalizationTxBuilder(
 
         val ret = builder
             .apply(tx)
+            // Should be one
+            .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsWithdrawn.asJava))
             .feePayer(seedAddress.bech32)
             // TODO: magic numbers
             .additionalSignersCount(3)
             .build
 
-        Right(FinalizationTx.apply(L1Tx(ret.serialize())))
+        Right(MultisigTx(TxL1(ret.serialize)))
 }

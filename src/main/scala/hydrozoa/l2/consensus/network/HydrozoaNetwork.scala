@@ -1,7 +1,9 @@
 package hydrozoa.l2.consensus.network
 
 import hydrozoa.*
+import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
+import hydrozoa.l2.ledger.state.UtxosDiff
 
 trait HydrozoaNetwork {
 
@@ -14,14 +16,24 @@ trait HydrozoaNetwork {
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 
-    def reqMajor(block: Block): Set[AckMajorCombined]
+    def reqMinor(block: Block): Set[AckMinor]
 
-    def reqFinal(block: Block): Set[AckFinalCombined]
+    // FIXME: remove utxosWithdrawn once we have block validation
+    def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined]
+
+    // FIXME: remove utxosWithdrawn once we have block validation
+    def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined]
 }
 
-case class ReqInit(txId: TxId, txIx: TxIx, amount: Long)
+case class ReqInit(seedOutputRef: OutputRefL1, coins: Long)
 
-case class ReqRefundLater(depositTx: L1Tx, index: TxIx)
+case class ReqRefundLater(depositTx: DepositTx, index: TxIx)
+
+case class AckMinor(
+    blockHeader: BlockHeader,
+    signature: Unit,
+    nextBlockFinal: Boolean
+)
 
 case class AckMajorCombined(
     blockHeader: BlockHeader,

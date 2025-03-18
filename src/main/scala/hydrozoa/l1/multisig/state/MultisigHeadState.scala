@@ -1,0 +1,38 @@
+package hydrozoa.l1.multisig.state
+
+import hydrozoa.{L1, UtxoSetMutable, Utxo, UtxoSet}
+
+import scala.collection.mutable
+
+case class MultisigHeadStateL1(
+    var treasuryUtxo: TreasuryUtxo,
+    depositUtxos: DepositUtxosMutable,
+    // FIXME: move to rollout effect
+    rolloutUtxos: RolloutUtxosMutable
+)
+
+object MultisigHeadStateL1:
+    def empty(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
+        MultisigHeadStateL1(
+          treasuryUtxo,
+          UtxoSetMutable[L1, DepositTag](mutable.Map.empty),
+          UtxoSetMutable[L1, RolloutTag](mutable.Map.empty)
+        )
+
+type TreasuryUtxo = Utxo[L1, TreasuryTag]
+
+// tags
+sealed trait MultisigUtxoTag
+sealed trait DepositTag extends MultisigUtxoTag
+sealed trait RolloutTag extends MultisigUtxoTag
+sealed trait TreasuryTag extends MultisigUtxoTag
+
+// Additional stuff
+
+type DepositUtxo = Utxo[L1, DepositTag]
+type DepositUtxos = UtxoSet[L1, DepositTag]
+type DepositUtxosMutable = UtxoSetMutable[L1, DepositTag]
+
+type RolloutUtxo = Utxo[L1, RolloutTag]
+type RolloutUtxos = UtxoSet[L1, RolloutTag]
+type RolloutUtxosMutable = UtxoSetMutable[L1, RolloutTag]

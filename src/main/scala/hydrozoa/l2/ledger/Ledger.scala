@@ -1,5 +1,8 @@
 package hydrozoa.l2.ledger
 
+import hydrozoa.l2.ledger.event.AnyL2Event
+import hydrozoa.TxL2
+
 /** @tparam U
   *   type for representing utxo set
   * @tparam E
@@ -9,12 +12,20 @@ package hydrozoa.l2.ledger
   * @tparam V
   *   type for event verifier
   */
-trait L2Ledger[+U, +E, H, -V]:
+trait L2Ledger[U, G, T, W, UD, E <: AnyL2Event[H, G, T, W, UD], H, -V]:
+
     def activeState: U
-    def submit(event: L2Event): H
-    def event(hash: H): Option[E]
-    def allEvents: Set[H]
+
+    /** Submits an event, returning its hash and dependent type for UTxO diff.
+      * @param event
+      * @tparam SomeEvent
+      * @return
+      */
+    def submit[SomeEvent <: E](event: SomeEvent): Either[(H, String), (H, event.UtxosDiff)]
+
     def isEmpty: Boolean
+    def flush: U
+    def updateUtxosActive(activeState: U): Unit
 
 /** @tparam E
   *   type for events

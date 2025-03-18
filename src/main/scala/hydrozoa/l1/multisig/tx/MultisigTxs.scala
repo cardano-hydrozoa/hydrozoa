@@ -1,43 +1,27 @@
 package hydrozoa.l1.multisig.tx
 
-import hydrozoa.L1Tx
+import hydrozoa.TxL1
 
-// Opaque types for different types of txs used in multisig regime.
+sealed trait MultisigTxTag
+sealed trait InitializationTxTag extends MultisigTxTag
+sealed trait DepositTxTag extends MultisigTxTag
+sealed trait PostDatedRefundTxTag extends MultisigTxTag
+sealed trait SettlementTxTag extends MultisigTxTag
+sealed trait FinalizationTxTag extends MultisigTxTag
 
-object MultisigTxs:
+opaque type MultisigTx[+T <: MultisigTxTag] = TxL1
 
-    opaque type DepositTx = L1Tx
+type InitializationTx = MultisigTx[InitializationTxTag]
+type DepositTx = MultisigTx[DepositTxTag] // it's not a multisig tx
+type PostDatedRefundTx = MultisigTx[PostDatedRefundTxTag]
+type SettlementTx = MultisigTx[SettlementTxTag]
+type FinalizationTx = MultisigTx[FinalizationTxTag]
 
-    object DepositTx:
-        inline def apply(tx: L1Tx): DepositTx = tx
+object MultisigTx:
+    def apply[T <: MultisigTxTag](tx: TxL1): MultisigTx[T] = tx
+    def toL1Tx[T <: MultisigTxTag](multisigTx: MultisigTx[T]): TxL1 = multisigTx
 
-        extension (tx: DepositTx) {
-            def toTx: L1Tx = tx
-        }
-
-    opaque type PostDatedRefundTx = L1Tx
-
-    object PostDatedRefundTx:
-        inline def apply(tx: L1Tx): PostDatedRefundTx = tx
-
-        extension (tx: PostDatedRefundTx) {
-            def toTx: L1Tx = tx
-        }
-
-    opaque type SettlementTx = L1Tx
-
-    object SettlementTx:
-        inline def apply(tx: L1Tx): SettlementTx = tx
-
-        extension (tx: SettlementTx) {
-            def toTx: L1Tx = tx
-        }
-
-    opaque type FinalizationTx = L1Tx
-
-    object FinalizationTx:
-        inline def apply(tx: L1Tx): FinalizationTx = tx
-
-        extension (tx: FinalizationTx) {
-            def toTx: L1Tx = tx
-        }
+// FIXME: can't be used for some reason
+//extension [T <: MultisigTxTag](tx: MultisigTx[T]) {
+//    def toL1Tx(multisigTx: MultisigTx[T]): TxL1 = multisigTx
+//}

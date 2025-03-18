@@ -1,16 +1,17 @@
 package hydrozoa.l2.consensus.network
 
-import hydrozoa.infra.{genNodeKey, signTx}
+import hydrozoa.infra.{createTxKeyWitness, genNodeKey}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
-import hydrozoa.l1.multisig.tx.MultisigTxs.DepositTx
+import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.node.server.{AwaitingDeposit, HeadStateReader}
-import hydrozoa.{L1Tx, ParticipantVerificationKey, TxKeyWitness}
+import hydrozoa.l2.ledger.state.UtxosDiff
+import hydrozoa.node.server.HeadStateReader
+import hydrozoa.{ParticipantVerificationKey, TxAny, TxKeyWitness}
 
 class MockHydrozoaNetwork(
     headStateReader: HeadStateReader,
@@ -34,41 +35,47 @@ class MockHydrozoaNetwork(
 
         // Native script, head address, and token
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network())
-        val beaconTokenName = mkBeaconTokenName(req.txId, req.txIx)
+        val beaconTokenName = mkBeaconTokenName(req.seedOutputRef)
 
         // Recipe to build init tx
         val initTxRecipe = InitTxRecipe(
           headAddress,
-          req.txId,
-          req.txIx,
-          req.amount,
+          req.seedOutputRef,
+          req.coins,
           headNativeScript,
           beaconTokenName
         )
 
         val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
-        val wit1: TxKeyWitness = signTx(tx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx, keys2._1)
         Set(wit1, wit2)
     }
 
-    def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
-        val recipe = PostDatedRefundRecipe(DepositTx(req.depositTx), req.index)
+    override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
+        val recipe = PostDatedRefundRecipe(req.depositTx, req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx, keys2._1)
         Set(wit1, wit2)
 
-    override def reqMajor(block: Block): Set[AckMajorCombined] =
+    override def reqMinor(block: Block): Set[AckMinor] =
+        Set(keys1, keys2).map(_ => AckMinor(block.blockHeader, (), false))
+
+    override def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined] =
         // TODO: check block type
         val recipe =
-            SettlementRecipe(block.blockBody.depositsAbsorbed, block.blockHeader.versionMajor)
+            SettlementRecipe(
+              block.blockHeader.versionMajor,
+              block.blockBody.depositsAbsorbed,
+              utxosWithdrawn
+            )
         val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx, keys2._1)
         Set(wit1, wit2).map(w =>
             AckMajorCombined(
               block.blockHeader,
@@ -78,15 +85,15 @@ class MockHydrozoaNetwork(
             )
         )
 
-    override def reqFinal(block: Block): Set[AckFinalCombined] =
+    override def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined] =
         // TODO: check block type
 
-        val recipe = FinalizationRecipe(block.blockHeader.versionMajor)
+        val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
 
         val Right(tx) = finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
-        val wit1: TxKeyWitness = signTx(tx.toTx, keys1._1)
-        val wit2: TxKeyWitness = signTx(tx.toTx, keys2._1)
+        val wit1: TxKeyWitness = createTxKeyWitness(tx, keys1._1)
+        val wit2: TxKeyWitness = createTxKeyWitness(tx, keys2._1)
         Set(wit1, wit2).map(w =>
             AckFinalCombined(
               block.blockHeader,
@@ -94,4 +101,5 @@ class MockHydrozoaNetwork(
               w
             )
         )
+
 }

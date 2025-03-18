@@ -8,8 +8,9 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
+import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx, TxIx}
+import hydrozoa.{AppCtx, TxAny, TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
 
@@ -23,15 +24,15 @@ class BloxBeanDepositTxBuilder(
     private val backendService = ctx.backendService
     private val builder = mkBuilder[Tx](ctx)
 
-    override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (L1Tx, TxIx)] =
+    override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (DepositTx, TxIx)] =
 
         val Right(fundUtxo) = backendService.getUtxoService
-            .getTxOutput(r.utxo._1.hash, r.utxo._2.ix.intValue)
+            .getTxOutput(r.deposit._1.hash, r.deposit._2.ix.intValue)
             .toEither
 
         println(fundUtxo)
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress
+        val headAddressBech32 = headStateReader.headBechAddress
 
         // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
         val amountList: List[Amount] = List(ada(100))
@@ -53,5 +54,5 @@ class BloxBeanDepositTxBuilder(
         val index = ret.getBody.getOutputs.asScala
             .indexWhere(output => output.getAddress == headAddressBech32.bech32)
 
-        Right(L1Tx(ret.serialize()), TxIx(index))
+        Right(MultisigTx(TxL1(ret.serialize)), TxIx(index))
 }

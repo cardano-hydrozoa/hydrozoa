@@ -19,12 +19,18 @@ lazy val core = (project in file("."))
         // Logging
         "com.typesafe.scala-logging" %% "scala-logging" % "3.9.4",
         "ch.qos.logback" % "logback-classic" % "1.2.10",
-        "org.scala-lang" %% "toolkit" % "0.7.0"
+        "org.scala-lang" %% "toolkit" % "0.7.0",
+        // JSON
+        "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
+        "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.2" % "compile-internal",
+        "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
+        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
+        "org.scalactic" %% "scalactic" % "3.2.19",
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test
       )
     )
 

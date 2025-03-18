@@ -1,12 +1,13 @@
 package hydrozoa.l1.wallet
 
 import com.bloxbean.cardano.client.crypto.bip32.HdKeyPair
-import hydrozoa.infra.signTxWallet
-import hydrozoa.{AppCtx, L1Tx, TxKeyWitness}
+import hydrozoa.infra
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
+import hydrozoa.{AppCtx, TxAny, TxKeyWitness}
 
-class MockWallet(ctx: AppCtx) extends Wallet {
-    override def sign(tx: L1Tx): TxKeyWitness = {
-        val pair: HdKeyPair = ctx.account.hdKeyPair
-        signTxWallet(tx, pair)
+class MockWallet(ctx: AppCtx, accountIndex: Int) extends Wallet {
+    override def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T]): TxKeyWitness = {
+        val pair: HdKeyPair = ctx.account(accountIndex).hdKeyPair
+        infra.createTxKeyWitness(tx, pair)
     }
 }

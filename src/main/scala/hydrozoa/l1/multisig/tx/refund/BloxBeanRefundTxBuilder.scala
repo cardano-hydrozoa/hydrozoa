@@ -9,9 +9,9 @@ import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{addressToBloxbean, mkBuilder, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
-import hydrozoa.l1.multisig.tx.MultisigTxs.PostDatedRefundTx
+import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx}
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, L1Tx}
+import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
 import scalus.prelude.Maybe.{Just, Nothing}
@@ -31,7 +31,7 @@ class BloxBeanRefundTxBuilder(
         r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] =
 
-        val txBytes = r.depositTx.toTx.bytes
+        val txBytes = MultisigTx.toL1Tx(r.depositTx).bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
         val txIxInt = r.txIx.ix.intValue()
@@ -44,7 +44,7 @@ class BloxBeanRefundTxBuilder(
           )
         )
 
-        val Some(headAddressBech32) = headStateReader.headBechAddress
+        val headAddressBech32 = headStateReader.headBechAddress
 
         val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
 
@@ -80,7 +80,7 @@ class BloxBeanRefundTxBuilder(
 
         tx.from(headAddressBech32.bech32)
 
-        val Some(headNativeScript) = headStateReader.headNativeScript
+        val headNativeScript = headStateReader.headNativeScript
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         val ret = builder
@@ -92,5 +92,5 @@ class BloxBeanRefundTxBuilder(
             .feePayer(refundAddress.toBech32)
             .build
 
-        Right(PostDatedRefundTx.apply(L1Tx(ret.serialize())))
+        Right(MultisigTx(TxL1(ret.serialize)))
 }

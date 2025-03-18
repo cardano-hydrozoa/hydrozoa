@@ -29,10 +29,10 @@ Currently, Hydrozoa works against a private network provided by
 [Yaci DevKit](https://github.com/bloxbean/yaci-devkit).
 Here is the [link](https://devkit.yaci.xyz/docker) to installation page.
 
-Create and run the network:
+Enter `devkit`'s CLI, create the node and run it:
 
 ```shell
-devkit
+devkit start
 > create-node
 > start
 ```

@@ -1,10 +1,33 @@
 package hydrozoa
 
-// Serialized L1 Cardano tx
-case class L1Tx(bytes: Array[Byte])
+import hydrozoa.l1.multisig.state.MultisigUtxoTag
 
-// Serialized Address
-case class L1Address(bytes: Array[Byte])
+import scala.collection.mutable
+
+/** Cardano network layers.
+  */
+sealed trait AnyLevel
+sealed trait L1 extends AnyLevel
+sealed trait L2 extends AnyLevel
+
+/** Cardano txs in serialized form.
+  * @param bytes
+  *   CBOR bytes FIXME: use IArray
+  * @tparam L
+  *   phantom parameter to distinguish tx level (L1, L2, Any)
+  */
+case class Tx[+L <: AnyLevel](bytes: Array[Byte])
+
+type TxAny = Tx[AnyLevel]
+type TxL1 = Tx[L1]
+
+object TxL1:
+    def apply(bytes: Array[Byte]): TxL1 = Tx[L1](bytes)
+
+type TxL2 = Tx[L2]
+
+object TxL2:
+    def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
 case class AddressBechL1(bech32: String)
@@ -17,8 +40,41 @@ case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 case class TxId(hash: String)
 
 // Transaction output index
-// TODO: use BigInt
+// TODO: use Int, Long is too long
 case class TxIx(ix: Long)
+
+final case class OutputRef[L <: AnyLevel](txId: TxId, outputIx: TxIx)
+
+type OutputRefL1 = OutputRef[L1]
+type OutputRefL2 = OutputRef[L2]
+
+object OutputRefL1:
+    def apply(id: TxId, ix: TxIx): OutputRef[L1] = OutputRef[L1](id, ix)
+
+object OutputRefL2:
+    def apply(id: TxId, ix: TxIx): OutputRef[L2] = OutputRef[L2](id, ix)
+
+// FIXME: parameterize AddressBech
+// FIXME: migrate to Value
+case class Output[L <: AnyLevel](address: AddressBechL1, coins: BigInt)
+
+case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: OutputRef[L], output: Output[L])
+
+def mkUtxo[L <: AnyLevel, T <: MultisigUtxoTag](
+    txId: TxId,
+    txIx: TxIx,
+    address: AddressBechL1,
+    coins: BigInt
+) =
+    Utxo[L, T](OutputRef[L](txId, txIx), Output(address, coins))
+
+case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[OutputRef[L], Output[L]])
+
+case class UtxoSet[L <: AnyLevel, F](map: Map[OutputRef[L], Output[L]])
+
+object UtxoSet:
+    def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
+        UtxoSet(mutableUtxoSet.map.toMap)
 
 // Policy ID
 case class PolicyId(policyId: String)
@@ -41,3 +97,8 @@ opaque type UDiffTime = BigInt
 object UDiffTime:
     inline def apply(i: Int): UDiffTime = BigInt.apply(i)
 extension (x: UDiffTime) def +(i: UDiffTime): UDiffTime = i + x
+
+opaque type PosixTime = BigInt
+
+// FIXME: move to another module
+def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
