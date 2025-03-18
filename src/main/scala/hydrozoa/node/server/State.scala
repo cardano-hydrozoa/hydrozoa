@@ -3,10 +3,14 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, MempoolEventTypeL2, zeroBlock}
+import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
-import hydrozoa.l2.event.{L2Event, L2GenesisEvent, L2NonGenesisEvent}
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, THydrozoaHead}
+import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 
 import scala.collection.mutable
 
@@ -37,7 +41,7 @@ private case class Open(
     // FIXME:
     val blockPending: Option[BlockRecord] = None
     val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
-    val poolEventsL2: mutable.Buffer[L2NonGenesisEvent] = mutable.Buffer()
+    val poolEventsL2: mutable.Buffer[L2NonGenesis] = mutable.Buffer()
     var finalizing = false
     // TODO: add peers
     var stateL1: MultisigHeadStateL1 = MultisigHeadStateL1.empty(initialTreasury)
@@ -74,23 +78,24 @@ trait OpenNodeState extends StateApi:
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
     def peekDeposits: DepositUtxos
-    def immutablePoolEventsL2: Seq[L2NonGenesisEvent]
+    def immutablePoolEventsL2: Seq[L2NonGenesis]
     def immutableBlocksConfirmedL2: Seq[Block]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def enqueueDeposit(deposit: DepositUtxo): Unit
-    def poolEventL2(event: L2NonGenesisEvent): Unit
+    def poolEventL2(event: L2NonGenesis): Unit
     def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def l2Tip: Block
     def l2LastMajor: Block
     def finalizing: Boolean
+    def setFinalizing(): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def addBlock(block: Block): Unit
     def confirmMempoolEvents(
         blockNum: Int,
-        eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+        eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         mbGenesis: Option[(TxId, SimpleGenesis)],
-        eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
+        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
     ): Unit
     def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit
     def finalizeHead(): Unit
@@ -144,14 +149,15 @@ class NodeStateManager(log: Logger) { self =>
 
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
-        def immutablePoolEventsL2: Seq[L2NonGenesisEvent] = openState.poolEventsL2.toSeq
+        def immutablePoolEventsL2: Seq[L2NonGenesis] = openState.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[Block] = openState.blocksConfirmedL2.toSeq
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = openState.eventsConfirmedL2.toSeq
         def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
-        def poolEventL2(event: L2NonGenesisEvent): Unit = openState.poolEventsL2.append(event)
+        def poolEventL2(event: L2NonGenesis): Unit = openState.poolEventsL2.append(event)
         def finalizing: Boolean = openState.finalizing
+        def setFinalizing(): Unit = openState.finalizing = true
         def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2
         def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
@@ -168,27 +174,35 @@ class NodeStateManager(log: Logger) { self =>
 
         def confirmMempoolEvents(
             blockNum: Int,
-            eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+            eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
+            eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit =
             // Add valid events
             eventsValid.foreach((txId, _) =>
-                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                openState.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = openState.poolEventsL2.remove(i)
                         openState.eventsConfirmedL2.append((event, blockNum))
+                        // Dump L2 tx
+                        TxDump.dumpL2Tx(event match
+                            case L2Transaction(_, transaction) =>
+                                AdaSimpleLedger.adopt(transaction)._1
+                            case L2Withdrawal(_, withdrawal) => AdaSimpleLedger.adopt(withdrawal)._1
+                        )
             )
             // 2. Add genesis if exists
-            mbGenesis.foreach((txId, g) =>
+            mbGenesis.foreach((txId, genesis) =>
                 // FIXME: timeCurrent
-                val event = L2GenesisEvent(timeCurrent, txId, g)
+                val event = AdaSimpleLedger.mkGenesisEvent(genesis)
                 openState.eventsConfirmedL2.append((event, blockNum))
+                // Dump L2 tx
+                TxDump.dumpL2Tx(AdaSimpleLedger.adopt(genesis)._1)
             )
             // 3. Remove invalid events
             eventsInvalid.foreach((txId, _) =>
-                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                openState.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i  => openState.poolEventsL2.remove(i)
             )

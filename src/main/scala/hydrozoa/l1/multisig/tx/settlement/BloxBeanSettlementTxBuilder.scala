@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkMultisigTreasuryDatum}
-import hydrozoa.l1.multisig.tx.SettlementTx
+import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, TxL1}
@@ -81,5 +81,5 @@ class BloxBeanSettlementTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(TxL1(settlementTx.serialize()))
+        Right(MultisigTx(TxL1(settlementTx.serialize())))
 }

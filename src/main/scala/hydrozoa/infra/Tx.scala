@@ -11,7 +11,7 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l2.ledger.state.{OutputRefInt, unwrapTxIn}
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.{Data, ByteString as ScalusByteString}
@@ -25,21 +25,28 @@ import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
 
-def txHash(tx: TxAny): TxId = TxId(getTxHash(tx.bytes))
+def txHash[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): TxId = TxId(
+  getTxHash(getAnyTxBytes(tx))
+)
 
-// TODO: generalize fot both L1 and L2
-def serializeTxHex[L <: AnyLevel](tx: Tx[L]): String = HexUtil.encodeHexString(tx.bytes)
+def serializeTxHex[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): String =
+    HexUtil.encodeHexString(getAnyTxBytes(tx))
+
+def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) =
+    tx match
+        case multisig: MultisigTx[T] => MultisigTx.toL1Tx(multisig).bytes
+        case tx: Tx[L]               => tx.bytes
 
 // TODO: generalize fot both L1 and L2
 def deserializeTxHex(hex: String): TxAny = Tx[AnyLevel](HexUtil.decodeHexString(hex))
 
 // Pure function to create a transaction key witness with a HD key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: TxAny, pair: HdKeyPair): TxKeyWitness = {
+def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T], pair: HdKeyPair): TxKeyWitness = {
 
     // See TransactionSigner
 
-    val txBytes = TransactionBytes(tx.bytes)
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
     val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
     val signature = signingProvider.signExtended(
@@ -52,12 +59,15 @@ def createTxKeyWitness(tx: TxAny, pair: HdKeyPair): TxKeyWitness = {
 
 // Pure function to create a transaction key witness with a peer node's key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: TxAny, participantKey: ParticipantSecretKey): TxKeyWitness = {
+def createTxKeyWitness[T <: MultisigTxTag](
+    tx: MultisigTx[T],
+    participantKey: ParticipantSecretKey
+): TxKeyWitness = {
 
     // See TransactionSigner
 
     val secretKey = SecretKey.create(participantKey.bytes)
-    val txBytes = TransactionBytes(tx.bytes)
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
     val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
 
@@ -77,8 +87,8 @@ def createTxKeyWitness(tx: TxAny, participantKey: ParticipantSecretKey): TxKeyWi
 }
 
 // Pure function to add a key witness to a transaction.
-def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
-    val txBytes = TransactionBytes(tx.bytes)
+def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] = {
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
 
@@ -98,7 +108,7 @@ def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
     vkWitnessArray.add(vkeyWitness)
 
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    Tx[L](txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
+    MultisigTx(TxL1(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes))
 }
 
 /** @param tx
@@ -132,18 +142,29 @@ def txInputs[L <: AnyLevel](tx: TxAny): Set[OutputRef[L]] =
         .map(ti => OutputRef[L](TxId(ti.getTransactionId), TxIx(ti.getIndex)))
         .toSet
 
-/** @param genesis
-  * @return
-  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
-  */
-def mkVirtualGenesisTx(genesis: SimpleGenesis): Tx[L2] =
+def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
+    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
+    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
+    TransactionOutput.builder
+        .address(
+          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
+        ) // FIXME: network
+        .value(Value.builder.coin(coins.bigInteger).build)
+        .build
 
-    val virtualInputs = genesis.virtualInputs.map { input =>
-        TransactionInput.builder
-            .transactionId(input.txId.hash)
-            .index(input.outputIx.ix.intValue)
-            .build
-    }.toList
+def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
+    TransactionInput
+        .builder()
+        .transactionId(input.id.hash.toHex)
+        .index(input.idx.intValue)
+        .build()
+}
+
+// ----------------------------------------------------------------------------
+// Cardano L2 transactions for the simplified ledger
+// ----------------------------------------------------------------------------
+
+def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
 
     val virtualOutputs = genesis.outputs.map { output =>
         TransactionOutput.builder
@@ -153,18 +174,17 @@ def mkVirtualGenesisTx(genesis: SimpleGenesis): Tx[L2] =
     }
 
     val body = TransactionBody.builder
-        .inputs(virtualInputs.asJava)
         .outputs(virtualOutputs.asJava)
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
-    Tx[L2](tx.serialize)
+    TxL2(tx.serialize)
 
 /** @param simpleTx
   * @return
-  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
+  *   Virtual L2 transaction that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkVirtualTransactionL2(simpleTx: SimpleTransaction): Tx[L2] =
+def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -186,31 +206,12 @@ def mkVirtualTransactionL2(simpleTx: SimpleTransaction): Tx[L2] =
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
-    Tx[L2](tx.serialize)
+    TxL2(tx.serialize)
 
-def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
-    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
-    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
-    TransactionOutput.builder
-        .address(
-          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
-        ) // FIXME: network
-        .value(Value.builder.coin(coins.bigInteger).build)
-        .build
-
-def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
-    TransactionInput
-        .builder()
-        .transactionId(input.id.hash.toHex)
-        .index(input.idx.intValue)
-        .build()
-}
-
-/** @param withdrawas
+/** @param withdrawal
   * @return
-  *   Virtual genesis tx that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxOut]): Tx[L2] =
+def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
     val virtualInputs = withdrawal.inputs.map { input =>
         TransactionInput.builder
@@ -219,19 +220,16 @@ def mkVirtualWithdrawalTx(withdrawal: SimpleWithdrawal, virtualOutputs: List[TxO
             .build
     }
 
-    val outputsL1 = virtualOutputs.map(toBloxBeanTransactionOutput)
-
     val body = TransactionBody.builder
         .inputs(virtualInputs.asJava)
-        .outputs(outputsL1.asJava)
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
 
-def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[OutputRefInt]): Tx[L] =
-    val tx_ = Transaction.deserialize(tx.bytes)
-    tx_.getBody.getInputs.addAll(
-      virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava
-    )
-    Tx[L](tx_.serialize())
+//def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[OutputRefInt]): Tx[L] =
+//    val tx_ = Transaction.deserialize(tx.bytes)
+//    tx_.getBody.getInputs.addAll(
+//      virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava
+//    )
+//    Tx[L](tx_.serialize())

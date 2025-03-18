@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
-import hydrozoa.l1.multisig.tx.DepositTx
+import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, TxIx, TxL1}
 import scalus.bloxbean.*
@@ -54,5 +54,5 @@ class BloxBeanDepositTxBuilder(
         val index = depositTx.getBody.getOutputs.asScala
             .indexWhere(output => output.getAddress == headAddressBech32.bech32)
 
-        Right(TxL1(depositTx.serialize), TxIx(index))
+        Right(MultisigTx(TxL1(depositTx.serialize)), TxIx(index))
 }

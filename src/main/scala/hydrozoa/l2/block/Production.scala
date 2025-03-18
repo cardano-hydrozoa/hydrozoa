@@ -2,13 +2,17 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
-import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
-import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
-import hydrozoa.node.server.TxDump
 
 import scala.collection.mutable
+
+// TODO: unify in terms of abstract ledger and types
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
@@ -31,7 +35,7 @@ import scala.collection.mutable
   */
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
-    poolEvents: Seq[L2NonGenesisEvent],
+    poolEvents: Seq[L2NonGenesis],
     depositsPending: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
@@ -43,7 +47,7 @@ def createBlock(
     // instead on block we use mutable parts and finalize the block
     // at the end using the block builder
     val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
-    val eventsInvalid: mutable.Set[(TxId, MempoolEventTypeL2)] = mutable.Set.empty
+    val eventsInvalid: mutable.Set[(TxId, NonGenesisL2EventLabel)] = mutable.Set.empty
     var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
 
     // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
@@ -55,23 +59,17 @@ def createBlock(
 
     // 3. For each non-genesis L2 event...
     poolEvents.foreach {
-        case tx: L2TransactionEvent =>
-            stateL2.submit(mkL2T(tx.simpleTransaction)) match
-                case Right(txId, mbCardanoTx, _) =>
-                    // FIXME: move out
-                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
-                    txValid.add(txId)
-                case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
-        case wd: L2WithdrawalEvent =>
-            stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
-                case Right(txId, mbCardanoTx, utxosDiff) =>
+        case tx: L2Transaction =>
+            stateL2.submit(tx) match
+                case Right(txId, _)   => txValid.add(txId)
+                case Left(txId, _err) => eventsInvalid.add(txId, TransactionL2EventLabel)
+        case wd: L2Withdrawal =>
+            stateL2.submit(wd) match
+                case Right(txId, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
-                // FIXME: move out
-                // TODO: it's not necessary now, settlement txs do the job
-                // mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
                 case Left(txId, _err) =>
-                    eventsInvalid.add(txId, MempoolWithdrawal)
+                    eventsInvalid.add(txId, WithdrawalL2EventLabel)
     }
 
     // 4. If finalizing is False...
@@ -82,15 +80,12 @@ def createBlock(
         if eligibleDeposits.map.isEmpty then None
         else
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
-            stateL2.submit(mkL2G(genesis)) match
-                case Right(txId, mbCardanoTx, utxos) =>
+            stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
+                case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    // output refs only
-                    depositsAbsorbed = eligibleDeposits.map.keySet.toSet
-                    // FIXME: move out
-                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
+                    depositsAbsorbed = eligibleDeposits.map.keySet
                     Some(txId, genesis)
-                case Left(_, _) => ??? // unreachable
+                case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None
 
     // 5. If finalizing is True...
@@ -101,7 +96,12 @@ def createBlock(
     val multisigRegimeKeepAlive = false // TODO: implement
 
     // No block if it's empty and keep-alive is not needed.
-    if (poolEvents.isEmpty && depositsAbsorbed.isEmpty && !multisigRegimeKeepAlive)
+    if (
+      poolEvents.isEmpty
+      && depositsAbsorbed.isEmpty
+      && !finalizing
+      && !multisigRegimeKeepAlive
+    )
         return None
 
     // Build the block

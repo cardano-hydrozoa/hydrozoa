@@ -4,8 +4,9 @@ import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{force, mkBuilder}
-import hydrozoa.l1.multisig.tx.FinalizationTx
+import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
+import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
+import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
 import hydrozoa.{AppCtx, TxL1}
 
@@ -42,9 +43,21 @@ class BloxBeanFinalizationTxBuilder(
             .value(BigInteger.valueOf(-1))
             .build
 
+        val outputsWithdrawn =
+            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(unwrapTxOut(w._2)))
+
+        val withdrawnAda =
+            outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
+
         // Treasury utxo value minus the beacon token
         val treasuryValue = treasuryUtxo.getAmount.asScala.toList
             .filterNot(_.getUnit == beaconTokenAsset)
+
+        // Subtract withdrawn lovelace
+        treasuryValue.foreach(a =>
+            if a.getUnit.equals("lovelace") then
+                a.setQuantity((a.getQuantity.subtract(withdrawnAda)))
+        )
 
         // Addresses
         val headAddressBech32 = headStateReader.headBechAddress
@@ -59,10 +72,12 @@ class BloxBeanFinalizationTxBuilder(
 
         val finalizationTx = builder
             .apply(txPartial)
+            // Should be one
+            .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsWithdrawn.asJava))
             .feePayer(seedAddress.bech32)
             // TODO: magic numbers
             .additionalSignersCount(3)
             .build
 
-        Right(TxL1(finalizationTx.serialize))
+        Right(MultisigTx(TxL1(finalizationTx.serialize)))
 }

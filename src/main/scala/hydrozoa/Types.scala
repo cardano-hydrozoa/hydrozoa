@@ -8,7 +8,7 @@ import scala.collection.mutable
   */
 sealed trait AnyLevel
 sealed trait L1 extends AnyLevel
-sealed trait L2 extends L1
+sealed trait L2 extends AnyLevel
 
 /** Cardano txs in serialized form.
   * @param bytes

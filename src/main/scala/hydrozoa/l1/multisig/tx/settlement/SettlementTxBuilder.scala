@@ -11,7 +11,7 @@ trait SettlementTxBuilder {
 }
 
 case class SettlementRecipe(
+    majorVersion: Int,
     deposits: Seq[OutputRef[L1]],
-    utxosWithdrawn: UtxosDiff,
-    majorVersion: Int
+    utxosWithdrawn: UtxosDiff
 )
