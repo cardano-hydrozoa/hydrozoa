@@ -2,7 +2,7 @@ package hydrozoa.l1.event
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{onlyAddressOutput, txHash}
+import hydrozoa.infra.{NoMatch, TooManyMatches, onlyOutputToAddress, txHash}
 import hydrozoa.l1.multisig.state.{DepositTag, TreasuryTag}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.server.NodeStateManager
@@ -24,8 +24,8 @@ case class MultisigL1EventManager(
     def handleInitTx(initTx: TxAny, seedAddress: AddressBechL1) =
         val txId = txHash(initTx)
         log.info(s"Handling init tx $txId") // TODO: perf
-        onlyAddressOutput(initTx, headAddress) match
-            case Some(ix, coins) =>
+        onlyOutputToAddress(initTx, headAddress) match
+            case Right(ix, coins) =>
                 log.info(s"Treasury output index is: $ix");
                 state.asAbsent {
                     _.initializeHead(
@@ -37,20 +37,24 @@ case class MultisigL1EventManager(
                       seedAddress
                     )
                 }
-            case None =>
-                log.error("Can't find treasury in the initialization tx!")
+            case Left(err) =>
+                err match
+                    case _: NoMatch => log.error("Can't find treasury in the initialization tx!")
+                    case _: TooManyMatches =>
+                        log.error("Initialization tx contains more than one multisig outputs!")
 
     def handleDepositTx(depositTx: TxAny, txId: TxId) =
         log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
-        onlyAddressOutput(depositTx, headAddress) match
-            case Some(ix, coins) =>
+        onlyOutputToAddress(depositTx, headAddress) match
+            case Right(ix, coins) =>
                 log.info(s"Deposit output index is: $ix");
                 state.asOpen(_.enqueueDeposit(mkUtxo[L1, DepositTag](txId, ix, headAddress, coins)))
-            case None =>
-                log.error(
-                  "Can't find the deposit output in the deposit tx (should not be the case)!"
-                )
+            case Left(err) =>
+                err match
+                    case _: NoMatch => log.error("Can't find the deposit output in the deposit tx!")
+                    case _: TooManyMatches =>
+                        log.error("deposit tx contains more than one multisig outputs!")
 
     def handleSettlementTx(tx: TxAny, txHash: TxId) =
         log.info(s"Handling settlement tx $txHash")
@@ -64,7 +68,7 @@ case class MultisigL1EventManager(
         // TODO: handle datum
         // val newTreasuryDatum: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
 
-        val Some(treasury) = onlyAddressOutput(tx, headAddress)
+        val Right(treasury) = onlyOutputToAddress(tx, headAddress)
         state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
 
     def handleFinalizationTx(tx: TxAny, txHash: TxId) =

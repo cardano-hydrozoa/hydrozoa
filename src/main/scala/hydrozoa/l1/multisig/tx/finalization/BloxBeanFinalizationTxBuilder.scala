@@ -63,15 +63,15 @@ class BloxBeanFinalizationTxBuilder(
         val headAddressBech32 = headStateReader.headBechAddress
         val seedAddress = headStateReader.seedAddress
 
-        val tx = Tx()
+        val txPartial = Tx()
             .collectFrom(List(treasuryUtxo).asJava)
             .payToAddress(seedAddress.bech32, treasuryValue.asJava)
             .mintAssets(script, beaconTokenToBurn)
             .withChangeAddress(seedAddress.bech32)
             .from(headAddressBech32.bech32)
 
-        val ret = builder
-            .apply(tx)
+        val finalizationTx = builder
+            .apply(txPartial)
             // Should be one
             .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsWithdrawn.asJava))
             .feePayer(seedAddress.bech32)
@@ -79,5 +79,5 @@ class BloxBeanFinalizationTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(MultisigTx(TxL1(ret.serialize)))
+        Right(MultisigTx(TxL1(finalizationTx.serialize)))
 }

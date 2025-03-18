@@ -5,7 +5,7 @@ import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
 import hydrozoa.l2.ledger.state.UtxosDiff
 
-trait HydrozoaNetwork {
+trait HeadPeerNetwork {
 
     /** @return
       *   verification keys for known participants

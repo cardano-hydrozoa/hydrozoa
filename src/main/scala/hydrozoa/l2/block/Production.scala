@@ -20,7 +20,7 @@ import scala.collection.mutable
   *   clone of the L2 ledger FIXME: what's the best way to do that?
   * @param poolEvents
   *   pooled events
-  * @param awaitingDeposits
+  * @param depositsPending
   *   deposits that can be absorbed in the block
   * @param prevHeader
   *   previsus block's header
@@ -36,7 +36,7 @@ import scala.collection.mutable
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
     poolEvents: Seq[L2NonGenesis],
-    awaitingDeposits: DepositUtxos,
+    depositsPending: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
@@ -76,7 +76,7 @@ def createBlock(
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
         val eligibleDeposits: DepositUtxos =
-            UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
+            UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)

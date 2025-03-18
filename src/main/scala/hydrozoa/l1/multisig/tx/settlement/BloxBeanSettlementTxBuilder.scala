@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
-import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
+import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkMultisigTreasuryDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
@@ -29,10 +29,10 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val refs = r.deposits.toSet + headStateReader.currentTreasuryRef
+        val inputsRefs = r.deposits.toSet + headStateReader.currentTreasuryRef
 
-        val utxos: Set[Utxo] =
-            refs.map(r =>
+        val inputUtxos: Set[Utxo] =
+            inputsRefs.map(r =>
                 backendService.getUtxoService.getTxOutput(r.txId.hash, r.outputIx.ix.toInt).force
             )
 
@@ -42,8 +42,9 @@ class BloxBeanSettlementTxBuilder(
         val withdrawnAda =
             outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
 
+        // FIXME: factor out this calculation
         val treasuryValue: List[Amount] =
-            utxos.toList.flatMap(u => u.getAmount.asScala)
+            inputUtxos.toList.flatMap(u => u.getAmount.asScala)
 
         // Subtract withdrawn lovelace
         treasuryValue.foreach(a =>
@@ -54,12 +55,11 @@ class BloxBeanSettlementTxBuilder(
         val headAddressBech32 = headStateReader.headBechAddress
 
         val treasuryDatum = Interop.toPlutusData(
-          mkInitMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
+          mkMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
         )
 
-        // FIXME: var
-        var tx = Tx()
-            .collectFrom(utxos.asJava)
+        val txPartial = Tx()
+            .collectFrom(inputUtxos.asJava)
             .payToContract(
               headAddressBech32.bech32,
               treasuryValue.asJava,
@@ -70,8 +70,8 @@ class BloxBeanSettlementTxBuilder(
         val headNativeScript = headStateReader.headNativeScript
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
-        val ret = builder
-            .apply(tx)
+        val settlementTx = builder
+            .apply(txPartial)
             // Should be one
             .preBalanceTx((_, t) =>
                 t.getWitnessSet.getNativeScripts.add(nativeScript)
@@ -81,5 +81,5 @@ class BloxBeanSettlementTxBuilder(
             .additionalSignersCount(3)
             .build
 
-        Right(MultisigTx(TxL1(ret.serialize())))
+        Right(MultisigTx(TxL1(settlementTx.serialize())))
 }

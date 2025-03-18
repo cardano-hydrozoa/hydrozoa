@@ -65,26 +65,29 @@ class BloxBeanRefundTxBuilder(
         val lastBlockSlot = ctx.backendService.getBlockService.getLatestBlock.getValue.getSlot
         val beginSlot = lastBlockSlot + 60
 
-        val tx = Tx()
+        val txPartial = Tx()
             .collectFrom(List(depositUtxo).asJava)
 
         datum.refundDatum match
             case Nothing =>
-                tx.payToAddress(refundAddress.toBech32, lovelace(depositOutput.getValue.getCoin))
+                txPartial.payToAddress(
+                  refundAddress.toBech32,
+                  lovelace(depositOutput.getValue.getCoin)
+                )
             case Just(refundDatum) =>
-                tx.payToContract(
+                txPartial.payToContract(
                   refundAddress.toBech32,
                   lovelace(depositOutput.getValue.getCoin),
                   Interop.toPlutusData(fromCbor(refundDatum))
                 )
 
-        tx.from(headAddressBech32.bech32)
+        txPartial.from(headAddressBech32.bech32)
 
         val headNativeScript = headStateReader.headNativeScript
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
-        val ret = builder
-            .apply(tx)
+        val postDatedRefundTx = builder
+            .apply(txPartial)
             .validFrom(beginSlot)
             .preBalanceTx((_, t) => t.getWitnessSet.getNativeScripts.add(nativeScript))
             // TODO: magic numbers
@@ -92,5 +95,5 @@ class BloxBeanRefundTxBuilder(
             .feePayer(refundAddress.toBech32)
             .build
 
-        Right(MultisigTx(TxL1(ret.serialize)))
+        Right(MultisigTx(TxL1(postDatedRefundTx.serialize)))
 }

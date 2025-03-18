@@ -10,7 +10,7 @@ import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, TxAny, TxIx, TxL1}
+import hydrozoa.{AppCtx, TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
 
@@ -39,20 +39,20 @@ class BloxBeanDepositTxBuilder(
         val datum: PlutusData = Interop.toPlutusData(r.datum.toData)
         val depositorAddress = fundUtxo.getAddress
 
-        val tx = Tx()
+        val txPartial = Tx()
             .collectFrom(List(fundUtxo).asJava)
             .payToContract(headAddressBech32.bech32, amountList.asJava, datum)
             .from(depositorAddress)
 
-        val ret: Transaction = builder
-            .apply(tx)
+        val depositTx: Transaction = builder
+            .apply(txPartial)
             .withRequiredSigners(Address(depositorAddress))
             .feePayer(depositorAddress)
             .build()
 
         // Deposit output
-        val index = ret.getBody.getOutputs.asScala
+        val index = depositTx.getBody.getOutputs.asScala
             .indexWhere(output => output.getAddress == headAddressBech32.bech32)
 
-        Right(MultisigTx(TxL1(ret.serialize)), TxIx(index))
+        Right(MultisigTx(TxL1(depositTx.serialize)), TxIx(index))
 }

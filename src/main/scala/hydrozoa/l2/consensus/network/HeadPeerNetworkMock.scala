@@ -3,7 +3,6 @@ package hydrozoa.l2.consensus.network
 import hydrozoa.infra.{createTxKeyWitness, genNodeKey}
 import hydrozoa.l1.Cardano
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
-import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
@@ -11,9 +10,9 @@ import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.ledger.state.UtxosDiff
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{ParticipantVerificationKey, TxAny, TxKeyWitness}
+import hydrozoa.{ParticipantVerificationKey, TxKeyWitness}
 
-class MockHydrozoaNetwork(
+class HeadPeerNetworkMock(
     headStateReader: HeadStateReader,
     initTxBuilder: InitTxBuilder,
     refundTxBuilder: RefundTxBuilder,
@@ -21,7 +20,7 @@ class MockHydrozoaNetwork(
     finalizationTxBuilder: FinalizationTxBuilder,
     cardano: Cardano,
     theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
-) extends HydrozoaNetwork {
+) extends HeadPeerNetwork {
 
     private val keys1 = genNodeKey()
     private val keys2 = genNodeKey()

@@ -21,7 +21,12 @@ case class MultisigTreasuryDatum(
 type L2ConsensusParamsH32 = ByteString
 
 // TODO: implement hashing for L2ConsensusParamsH32
-def mkInitMultisigTreasuryDatum(major: Int, _params: L2ConsensusParamsH32): MultisigTreasuryDatum =
+// TODO: implement root hash
+def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum = mkMultisigTreasuryDatum(0, ???)
+
+// TODO: implement hashing for L2ConsensusParamsH32
+// TODO: implement root hash
+def mkMultisigTreasuryDatum(major: Int, _params: L2ConsensusParamsH32): MultisigTreasuryDatum =
     MultisigTreasuryDatum(
       ByteString.empty,
       BigInt(major),
