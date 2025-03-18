@@ -11,7 +11,7 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l2.ledger.state.{OutputRefInt, unwrapTxIn}
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.{Data, ByteString as ScalusByteString}
@@ -25,21 +25,28 @@ import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
 
-def txHash(tx: TxAny): TxId = TxId(getTxHash(tx.bytes))
+def txHash[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): TxId = TxId(
+  getTxHash(getAnyTxBytes(tx))
+)
 
-// TODO: generalize fot both L1 and L2
-def serializeTxHex[L <: AnyLevel](tx: Tx[L]): String = HexUtil.encodeHexString(tx.bytes)
+def serializeTxHex[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): String =
+    HexUtil.encodeHexString(getAnyTxBytes(tx))
+
+def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) =
+    tx match
+        case multisig: MultisigTx[T] => MultisigTx.toL1Tx(multisig).bytes
+        case tx: Tx[L]               => tx.bytes
 
 // TODO: generalize fot both L1 and L2
 def deserializeTxHex(hex: String): TxAny = Tx[AnyLevel](HexUtil.decodeHexString(hex))
 
 // Pure function to create a transaction key witness with a HD key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: TxAny, pair: HdKeyPair): TxKeyWitness = {
+def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T], pair: HdKeyPair): TxKeyWitness = {
 
     // See TransactionSigner
 
-    val txBytes = TransactionBytes(tx.bytes)
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
     val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
     val signature = signingProvider.signExtended(
@@ -52,12 +59,15 @@ def createTxKeyWitness(tx: TxAny, pair: HdKeyPair): TxKeyWitness = {
 
 // Pure function to create a transaction key witness with a peer node's key.
 // TODO: handle exceptions
-def createTxKeyWitness(tx: TxAny, participantKey: ParticipantSecretKey): TxKeyWitness = {
+def createTxKeyWitness[T <: MultisigTxTag](
+    tx: MultisigTx[T],
+    participantKey: ParticipantSecretKey
+): TxKeyWitness = {
 
     // See TransactionSigner
 
     val secretKey = SecretKey.create(participantKey.bytes)
-    val txBytes = TransactionBytes(tx.bytes)
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
     val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
 
@@ -77,8 +87,8 @@ def createTxKeyWitness(tx: TxAny, participantKey: ParticipantSecretKey): TxKeyWi
 }
 
 // Pure function to add a key witness to a transaction.
-def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
-    val txBytes = TransactionBytes(tx.bytes)
+def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] = {
+    val txBytes = TransactionBytes(MultisigTx.toL1Tx(tx).bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
 
@@ -98,7 +108,7 @@ def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] = {
     vkWitnessArray.add(vkeyWitness)
 
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    Tx[L](txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes)
+    MultisigTx(TxL1(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes))
 }
 
 /** @param tx

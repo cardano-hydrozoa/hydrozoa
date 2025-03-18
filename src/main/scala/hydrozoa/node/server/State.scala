@@ -83,7 +83,7 @@ trait OpenNodeState extends StateApi:
     def l2Tip: Block
     def l2LastMajor: Block
     def finalizing: Boolean
-    def setFinalizing: Unit
+    def setFinalizing(): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def addBlock(block: Block): Unit
     def confirmMempoolEvents(
@@ -152,7 +152,7 @@ class NodeStateManager(log: Logger) { self =>
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def poolEventL2(event: L2NonGenesis): Unit = openState.poolEventsL2.append(event)
         def finalizing: Boolean = openState.finalizing
-        def setFinalizing: Unit = openState.finalizing = true
+        def setFinalizing(): Unit = openState.finalizing = true
         def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2
         def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
@@ -180,18 +180,21 @@ class NodeStateManager(log: Logger) { self =>
                     case i =>
                         val event = openState.poolEventsL2.remove(i)
                         openState.eventsConfirmedL2.append((event, blockNum))
-                    // FIXME:
-                    // val (tx, _) = stateL2.adopt(event)
-                    // TxDump.dumpTx(tx)
+                        // Dump L2 tx
+                        TxDump.dumpL2Tx(event match
+                            case L2Transaction(_, transaction) =>
+                                AdaSimpleLedger.adopt(transaction)._1
+                            case L2Withdrawal(_, withdrawal) => AdaSimpleLedger.adopt(withdrawal)._1
+                        )
             )
             // 2. Add genesis if exists
-            mbGenesis.foreach((txId, g) =>
+            mbGenesis.foreach((txId, genesis) =>
                 // FIXME: timeCurrent
-                val event = AdaSimpleLedger.mkGenesisEvent(g)
+                val event = AdaSimpleLedger.mkGenesisEvent(genesis)
                 openState.eventsConfirmedL2.append((event, blockNum))
-                // FIXME:
-                // val (tx, _) = stateL2.adopt(event)
-                // TxDump.dumpTx(tx)
+                // Dump L2 tx
+                TxDump.dumpL2Tx(AdaSimpleLedger.adopt(genesis)._1
+            )
             )
             // 3. Remove invalid events
             eventsInvalid.foreach((txId, _) =>

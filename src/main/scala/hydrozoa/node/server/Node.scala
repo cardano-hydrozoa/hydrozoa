@@ -12,7 +12,7 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
-import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, MultisigTx, SettlementTx}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -85,7 +85,7 @@ class Node(
             val serializedTx = serializeTxHex(initTx)
             log.info("Init tx: " + serializedTx)
 
-            cardano.submit(initTx) match
+            cardano.submit(MultisigTx.toL1Tx(initTx)) match
                 case Right(txHash) =>
                     // Put the head into multisig regime state
                     log.info(
@@ -104,9 +104,11 @@ class Node(
                     )
 
                     // Emulate L1 init event
-                    multisigL1EventManager.foreach(_.handleInitTx(initTx, seedAddress))
+                    multisigL1EventManager.foreach(
+                      _.handleInitTx(MultisigTx.toL1Tx(initTx), seedAddress)
+                    )
 
-                    TxDump.dumpTx(initTx)
+                    TxDump.dumpInitTx(initTx)
                     println(state.asOpen(_.stateL1))
                     Right(txHash)
                 case Left(err) => Left(err)
@@ -167,19 +169,21 @@ class Node(
         val depositTxRecipe = DepositTxRecipe(OutputRefL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-        val Right(txDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
-        val depositTxHash = txHash(txDraft)
+        val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
+        val depositTxHash = txHash(depositTxDraft)
 
-        val serializedTx = serializeTxHex(txDraft)
+        val serializedTx = serializeTxHex(depositTxDraft)
         log.info(s"Deposit tx: $serializedTx")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        TxDump.dumpTx(txDraft)
+        TxDump.dumpMultisigTx(depositTxDraft)
 
         val Right(refundTxDraft) =
             refundTxBuilder.mkPostDatedRefundTxDraft(
-              PostDatedRefundRecipe(txDraft, index)
+              PostDatedRefundRecipe(depositTxDraft, index)
             )
+
+        TxDump.dumpMultisigTx(refundTxDraft)
 
         // Own signature
         val ownWit: TxKeyWitness = createTxKeyWitness(refundTxDraft, ownKeys._1)
@@ -187,7 +191,8 @@ class Node(
         // ReqRefundLater
         // TODO: Add a comment to explain how it's guaranteed that
         //  a deposit cannot be stolen by malicious peers
-        val peersWits: Set[TxKeyWitness] = network.reqRefundLater(ReqRefundLater(txDraft, index))
+        val peersWits: Set[TxKeyWitness] =
+            network.reqRefundLater(ReqRefundLater(depositTxDraft, index))
         // TODO: broadcast ownWit
 
         val wits = peersWits + ownWit
@@ -195,17 +200,20 @@ class Node(
         val refundTx = wits.foldLeft(refundTxDraft)(addWitness)
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
-        TxDump.dumpTx(refundTx)
 
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(txDraft, wallet.createTxKeyWitness(txDraft))
+              MultisigTx.toL1Tx(
+                addWitness(depositTxDraft, wallet.createTxKeyWitness(depositTxDraft))
+              )
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
         // Emulate L1 deposit event
-        multisigL1EventManager.map(_.handleDepositTx(txDraft, depositTxHash))
+        multisigL1EventManager.map(
+          _.handleDepositTx(MultisigTx.toL1Tx(depositTxDraft), depositTxHash)
+        )
 
         // TODO: store the post-dated refund in the store along with the deposit id
 
@@ -238,10 +246,6 @@ class Node(
     def handleNextBlock(nextBlockFinal: Boolean): Either[String, String] =
         state.asOpen { s =>
 
-            if (nextBlockFinal) s.setFinalizing
-
-            // FIXME: split up
-
             println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock")
 
             println("-----------------------   POOL    --------------------------------------")
@@ -262,14 +266,19 @@ class Node(
             val prevHeader = state.asOpen(_.l2Tip.blockHeader)
 
             // TODO: separate creation and handling
-            createBlock(
+            val newBlock = createBlock(
               stateL2.blockProduction,
               poolEvents,
               awaitingDeposits,
               prevHeader,
               timeCurrent,
               finalizing
-            ) match
+            )
+
+            // Set finalization flag after producing the block
+            if (nextBlockFinal) s.setFinalizing()
+
+            newBlock match
                 // FIXME utxosAdded is not used I think
                 case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
                     block.blockHeader.blockType match
@@ -294,7 +303,7 @@ class Node(
                             // Confirm block
                             val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
 
-                            TxDump.dumpTx(settlementTxDraft)
+                            TxDump.dumpMultisigTx(settlementTxDraft)
 
                             // Immediate L2 effect
                             applyAnyBlockL2Effect(block, utxosActive, mbGenesis)
@@ -302,12 +311,13 @@ class Node(
                             // L1 effect
                             val wits: Set[TxKeyWitness] =
                                 acksMajorCombined.map(_.settlement) + ownWit
-                            val settlementTx: TxAny = wits.foldLeft(settlementTxDraft)(addWitness)
+                            val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
                             val serializedTx = serializeTxHex(settlementTx)
                             log.info(s"Settlement tx: $serializedTx")
 
                             // Submit settlement tx
-                            val Right(settlementTxId) = cardano.submit(settlementTx)
+                            val Right(settlementTxId) =
+                                cardano.submit(MultisigTx.toL1Tx(settlementTx))
                             log.info(s"Settlement tx submitted: $settlementTxId")
 
                             // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
@@ -321,7 +331,7 @@ class Node(
                             //  may use the old treasury.
 
                             multisigL1EventManager.map(
-                              _.handleSettlementTx(settlementTx, settlementTxId)
+                              _.handleSettlementTx(MultisigTx.toL1Tx(settlementTx), settlementTxId)
                             )
 
                         case Final =>
@@ -347,9 +357,10 @@ class Node(
                             val serializedTx = serializeTxHex(finalizationTx)
 
                             log.info(s"Finalization tx: $serializedTx")
-                            TxDump.dumpTx(finalizationTx)
+                            TxDump.dumpMultisigTx(finalizationTx)
 
-                            val Right(finalizationTxId) = cardano.submit(finalizationTx)
+                            val Right(finalizationTxId) =
+                                cardano.submit(MultisigTx.toL1Tx(finalizationTx))
                             log.info(s"Finalization tx submitted: $finalizationTxId")
 
                             // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
@@ -358,7 +369,10 @@ class Node(
                             // Emulate L1 event
                             // TODO: temporary: handle the event, again, we don't want to wait
                             multisigL1EventManager.map(
-                              _.handleFinalizationTx(finalizationTx, finalizationTxId)
+                              _.handleFinalizationTx(
+                                MultisigTx.toL1Tx(finalizationTx),
+                                finalizationTxId
+                              )
                             )
 
                     val ret = (block, utxosAdded, utxosWithdrawn).toString()

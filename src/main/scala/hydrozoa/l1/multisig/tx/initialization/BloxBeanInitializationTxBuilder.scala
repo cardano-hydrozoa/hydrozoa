@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
-import hydrozoa.l1.multisig.tx.InitializationTx
+import hydrozoa.l1.multisig.tx.{InitializationTx, MultisigTx}
 import hydrozoa.{AddressBechL1, AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
@@ -63,5 +63,5 @@ class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
                 // TODO: magic number
                 .additionalSignersCount(4)
                 .build()
-        yield (TxL1(ret.serialize), AddressBechL1(seedUtxo.getAddress))
+        yield (MultisigTx(TxL1(ret.serialize)), AddressBechL1(seedUtxo.getAddress))
 }

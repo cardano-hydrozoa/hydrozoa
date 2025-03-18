@@ -8,12 +8,7 @@ import scala.collection.mutable
   */
 sealed trait AnyLevel
 sealed trait L1 extends AnyLevel
-sealed trait L2 extends L1
-
-// These two tags are used for virtual txs that can consume inputs from any layer.
-// We use them for combined L1/L2 diagrams.
-sealed trait L1Virtual extends L1 // L1 tx that takes L2 withdrawn inputs
-sealed trait L2Virtual extends L2 // L2 tx (genesis) that takes L1 deposits
+sealed trait L2 extends AnyLevel
 
 /** Cardano txs in serialized form.
   * @param bytes
@@ -33,9 +28,6 @@ type TxL2 = Tx[L2]
 
 object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
-
-type TxL1Virtual = Tx[L1Virtual]
-type TxL2Virtual = Tx[L2Virtual]
 
 // Bech32 addresses
 case class AddressBechL1(bech32: String)

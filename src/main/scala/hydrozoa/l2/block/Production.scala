@@ -1,13 +1,10 @@
 package hydrozoa.l2.block
 
 import hydrozoa.*
-import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.event.NonGenesisL2Event
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
-import hydrozoa.node.server.TxDump
 
 import scala.collection.mutable
 
@@ -95,7 +92,12 @@ def createBlock(
     val multisigRegimeKeepAlive = false // TODO: implement
 
     // No block if it's empty and keep-alive is not needed.
-    if (poolEvents.isEmpty && depositsAbsorbed.isEmpty && !multisigRegimeKeepAlive)
+    if (
+      poolEvents.isEmpty
+      && depositsAbsorbed.isEmpty
+      && !finalizing
+      && !multisigRegimeKeepAlive
+    )
         return None
 
     // Build the block
