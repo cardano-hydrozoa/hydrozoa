@@ -84,6 +84,7 @@ trait OpenNodeState extends StateApi:
     def l2Tip: Block
     def l2LastMajor: Block
     def finalizing: Boolean
+    def setFinalizing: Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def addBlock(block: Block): Unit
     def confirmMempoolEvents(
@@ -152,6 +153,7 @@ class NodeStateManager(log: Logger) { self =>
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
         def poolEventL2(event: L2NonGenesisEvent): Unit = openState.poolEventsL2.append(event)
         def finalizing: Boolean = openState.finalizing
+        def setFinalizing: Unit = openState.finalizing = true
         def stateL1: MultisigHeadStateL1 = openState.stateL1
         def stateL2: AdaSimpleLedger[THydrozoaHead] = openState.stateL2
         def l2Tip: Block = openState.blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
@@ -174,21 +176,27 @@ class NodeStateManager(log: Logger) { self =>
         ): Unit =
             // Add valid events
             eventsValid.foreach((txId, _) =>
-                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                openState.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = openState.poolEventsL2.remove(i)
                         openState.eventsConfirmedL2.append((event, blockNum))
+                    // FIXME:
+                    // val (tx, _) = stateL2.adopt(event)
+                    // TxDump.dumpTx(tx)
             )
             // 2. Add genesis if exists
             mbGenesis.foreach((txId, g) =>
                 // FIXME: timeCurrent
                 val event = L2GenesisEvent(timeCurrent, txId, g)
                 openState.eventsConfirmedL2.append((event, blockNum))
+                // FIXME:
+                // val (tx, _) = stateL2.adopt(event)
+                // TxDump.dumpTx(tx)
             )
             // 3. Remove invalid events
             eventsInvalid.foreach((txId, _) =>
-                openState.poolEventsL2.indexWhere(e => e.getEventId() == txId) match
+                openState.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i  => openState.poolEventsL2.remove(i)
             )

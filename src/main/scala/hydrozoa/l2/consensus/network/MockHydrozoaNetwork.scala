@@ -68,9 +68,9 @@ class MockHydrozoaNetwork(
         // TODO: check block type
         val recipe =
             SettlementRecipe(
+              block.blockHeader.versionMajor,
               block.blockBody.depositsAbsorbed,
-              utxosWithdrawn,
-              block.blockHeader.versionMajor
+              utxosWithdrawn
             )
         val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
@@ -85,10 +85,10 @@ class MockHydrozoaNetwork(
             )
         )
 
-    override def reqFinal(block: Block): Set[AckFinalCombined] =
+    override def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined] =
         // TODO: check block type
 
-        val recipe = FinalizationRecipe(block.blockHeader.versionMajor)
+        val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
 
         val Right(tx) = finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 

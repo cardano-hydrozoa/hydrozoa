@@ -37,4 +37,5 @@ project/
 target/
 
 # tx dumping ground
-/txs.out
+txsl1.out
+txsl2.out

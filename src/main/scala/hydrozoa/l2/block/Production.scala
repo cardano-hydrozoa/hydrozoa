@@ -56,21 +56,15 @@ def createBlock(
 
     // 3. For each non-genesis L2 event...
     poolEvents.foreach {
-        case tx: L2TransactionEvent =>
-            stateL2.submit(mkL2T(tx.simpleTransaction)) match
-                case Right(txId, mbCardanoTx, _) =>
-                    // FIXME: move out
-                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
-                    txValid.add(txId)
+        case tx: L2Transaction =>
+            stateL2.submit(tx) match
+                case Right(txId, _)   => txValid.add(txId)
                 case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
-        case wd: L2WithdrawalEvent =>
-            stateL2.submit(mkL2W(wd.simpleWithdrawal)) match
-                case Right(txId, mbCardanoTx, utxosDiff) =>
+        case wd: L2Withdrawal =>
+            stateL2.submit(wd) match
+                case Right(txId, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
-                // FIXME: move out
-                // TODO: it's not necessary now, settlement txs do the job
-                // mbCardanoTx.foreach(tx => os.write.append(txDump, "\n" + serializeTxHex(tx)))
                 case Left(txId, _err) =>
                     eventsInvalid.add(txId, MempoolWithdrawal)
     }
@@ -78,19 +72,17 @@ def createBlock(
     // 4. If finalizing is False...
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
-        val eligibleDeposits: DepositUtxos = UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
+        val eligibleDeposits: DepositUtxos =
+            UtxoSet[L1, DepositTag](awaitingDeposits.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
-            stateL2.submit(mkL2G(genesis)) match
-                case Right(txId, mbCardanoTx, utxos) =>
+            stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
+                case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    // output refs only
-                    depositsAbsorbed = eligibleDeposits.map.keySet.toSet
-                    // FIXME: move out
-                    mbCardanoTx.foreach(tx => TxDump.dumpTx(tx))
+                    depositsAbsorbed = eligibleDeposits.map.keySet
                     Some(txId, genesis)
-                case Left(_, _) => ??? // unreachable
+                case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None
 
     // 5. If finalizing is True...

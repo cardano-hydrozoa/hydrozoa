@@ -10,6 +10,7 @@ object TxDump:
     private val txDumpL2: os.Path = os.pwd / "txsL2.out"
 
     def dumpTx[L <: L1](tx: Tx[L]): Unit =
+        println(s"dumpTx: $tx")
         val txCbor = serializeTxHex(tx)
         tx match
             case l1Tx: Tx[L1] =>

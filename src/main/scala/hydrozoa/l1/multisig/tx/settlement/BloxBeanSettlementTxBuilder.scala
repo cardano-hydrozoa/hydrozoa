@@ -1,6 +1,5 @@
 package hydrozoa.l1.multisig.tx.settlement
 
-import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
@@ -9,7 +8,7 @@ import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMul
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.server.HeadStateReader
-import hydrozoa.{AppCtx, TxAny, TxL1}
+import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData

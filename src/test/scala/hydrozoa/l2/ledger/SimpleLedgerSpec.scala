@@ -19,8 +19,8 @@ val address2 = AddressBechL2(
 )
 
 def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): L2EventHash = {
-    val event = AdaSimpleLedger.mkGenesis(address, 100)
-    val Right(hash, _, _) = ledger.submit(event)
+    val event = SimpleGenesis(address, 100)
+    val Right(hash, _) = ledger.submit(AdaSimpleLedger.mkGenesisEvent(event))
     println(s"Genesis $hash submitted: $event")
     println(ledger.activeState)
     hash

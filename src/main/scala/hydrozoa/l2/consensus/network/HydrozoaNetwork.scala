@@ -21,7 +21,8 @@ trait HydrozoaNetwork {
     // FIXME: remove utxosWithdrawn once we have block validation
     def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined]
 
-    def reqFinal(block: Block): Set[AckFinalCombined]
+    // FIXME: remove utxosWithdrawn once we have block validation
+    def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined]
 }
 
 case class ReqInit(seedOutputRef: OutputRefL1, coins: Long)

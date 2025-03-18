@@ -13,6 +13,7 @@ sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
 
+// FIXME: move InstancePurpose to L2Ledger
 case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
     verifier: Verifier[L2Event]
 ) extends L2Ledger[
