@@ -4,12 +4,14 @@ import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
-import hydrozoa.l2.event.{L2NonGenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2Event
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
 import hydrozoa.node.server.TxDump
 
 import scala.collection.mutable
+
+// TODO: unify in terms of abstract ledger and types
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
@@ -32,7 +34,7 @@ import scala.collection.mutable
   */
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
-    poolEvents: Seq[L2NonGenesisEvent],
+    poolEvents: Seq[L2NonGenesis],
     awaitingDeposits: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,

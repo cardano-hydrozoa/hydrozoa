@@ -4,7 +4,6 @@ import hydrozoa.*
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
-import hydrozoa.l2.event.{L2Event, L2GenesisEvent, L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.state.Utxos
 
 import scala.collection.mutable

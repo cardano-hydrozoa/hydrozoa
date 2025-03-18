@@ -18,9 +18,8 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.event.{L2TransactionEvent, L2WithdrawalEvent}
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff}
-import hydrozoa.l2.ledger.{SimpleGenesis, mkL2T, mkL2W}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis}
 import hydrozoa.node.api.SubmitRequestL2
 import hydrozoa.node.api.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -222,14 +221,14 @@ class Node(
         state.asOpen { s =>
             val ledger = s.stateL2
 
-            val (txId, event) = req match
+            val event = req match
                 case Transaction(tx) =>
                     AdaSimpleLedger.mkTransactionEvent(tx)
                 case Withdrawal(wd) =>
                     AdaSimpleLedger.mkWithdrawalEvent(wd)
 
             s.poolEventL2(event)
-            Right(txId)
+            Right(event.getEventId)
         }
 
     /** Manually triggers next block creation procedure.

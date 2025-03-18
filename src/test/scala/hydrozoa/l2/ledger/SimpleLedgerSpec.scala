@@ -44,9 +44,9 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val genesis = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val event = AdaSimpleLedger.mkWithdrawal(OutputRefL2(genesis, ix))
-        println(writeToString(SubmitRequestL2.Withdrawal(event.withdrawal)))
-        ledger.submit(event)
+        val withdrawal = SimpleWithdrawal(OutputRefL2(genesis, ix))
+        println(writeToString(SubmitRequestL2.Withdrawal(withdrawal)))
+        ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
         assert(ledger.isEmpty)
     }
 
@@ -56,8 +56,8 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = TxId(encodeHex(H32.hash(IArray.empty).bytes))
         val ix = TxIx(0)
 
-        val wd = AdaSimpleLedger.mkWithdrawal(OutputRefL2(txId, ix))
-        val Left(_) = ledger.submit(wd)
+        val withdrawal = SimpleWithdrawal(OutputRefL2(txId, ix))
+        val Left(_) = ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
     }
 
     test("correct transaction") {
@@ -66,11 +66,11 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val tx = AdaSimpleLedger.mkTransaction(OutputRefL2(txId, ix), address2, 100)
+        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 100)
 
-        println(writeToString(SubmitRequestL2.Transaction(tx.transaction)))
+        println(writeToString(SubmitRequestL2.Transaction(transaction)))
 
-        ledger.submit(tx)
+        ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
         println(ledger.activeState)
     }
 
@@ -80,9 +80,8 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val tx = AdaSimpleLedger.mkTransaction(OutputRefL2(txId, ix), address2, 101)
-
-        val Left(_) = ledger.submit(tx)
+        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 101)
+        val Left(_) = ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
     }
 
 }

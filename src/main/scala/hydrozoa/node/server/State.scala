@@ -5,8 +5,7 @@ import hydrozoa.l1.multisig.state.*
 import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, MempoolEventTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
-import hydrozoa.l2.event.{L2Event, L2GenesisEvent, L2NonGenesisEvent}
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, THydrozoaHead}
+import hydrozoa.l2.ledger.*
 
 import scala.collection.mutable
 
@@ -37,7 +36,7 @@ private case class Open(
     // FIXME:
     val blockPending: Option[BlockRecord] = None
     val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
-    val poolEventsL2: mutable.Buffer[L2NonGenesisEvent] = mutable.Buffer()
+    val poolEventsL2: mutable.Buffer[L2NonGenesis] = mutable.Buffer()
     var finalizing = false
     // TODO: add peers
     var stateL1: MultisigHeadStateL1 = MultisigHeadStateL1.empty(initialTreasury)
@@ -74,11 +73,11 @@ trait OpenNodeState extends StateApi:
     def seedAddress: AddressBechL1
     def depositTimingParams: (UDiffTime, UDiffTime, UDiffTime) // TODO: explicit type
     def peekDeposits: DepositUtxos
-    def immutablePoolEventsL2: Seq[L2NonGenesisEvent]
+    def immutablePoolEventsL2: Seq[L2NonGenesis]
     def immutableBlocksConfirmedL2: Seq[Block]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def enqueueDeposit(deposit: DepositUtxo): Unit
-    def poolEventL2(event: L2NonGenesisEvent): Unit
+    def poolEventL2(event: L2NonGenesis): Unit
     def stateL1: MultisigHeadStateL1
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def l2Tip: Block
@@ -145,13 +144,13 @@ class NodeStateManager(log: Logger) { self =>
 
             (depositMarginMaturity, minimalDepositWindow, depositMarginExpiry)
 
-        def immutablePoolEventsL2: Seq[L2NonGenesisEvent] = openState.poolEventsL2.toSeq
+        def immutablePoolEventsL2: Seq[L2NonGenesis] = openState.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[Block] = openState.blocksConfirmedL2.toSeq
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = openState.eventsConfirmedL2.toSeq
         def peekDeposits: DepositUtxos = UtxoSet(openState.stateL1.depositUtxos)
         def enqueueDeposit(d: DepositUtxo): Unit =
             openState.stateL1.depositUtxos.map.put(d.ref, d.output)
-        def poolEventL2(event: L2NonGenesisEvent): Unit = openState.poolEventsL2.append(event)
+        def poolEventL2(event: L2NonGenesis): Unit = openState.poolEventsL2.append(event)
         def finalizing: Boolean = openState.finalizing
         def setFinalizing: Unit = openState.finalizing = true
         def stateL1: MultisigHeadStateL1 = openState.stateL1
@@ -188,7 +187,7 @@ class NodeStateManager(log: Logger) { self =>
             // 2. Add genesis if exists
             mbGenesis.foreach((txId, g) =>
                 // FIXME: timeCurrent
-                val event = L2GenesisEvent(timeCurrent, txId, g)
+                val event = AdaSimpleLedger.mkGenesisEvent(g)
                 openState.eventsConfirmedL2.append((event, blockNum))
                 // FIXME:
                 // val (tx, _) = stateL2.adopt(event)
