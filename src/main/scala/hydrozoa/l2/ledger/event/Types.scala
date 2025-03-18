@@ -1,7 +1,5 @@
 package hydrozoa.l2.ledger.event
 
-import hydrozoa.TxId
-
 sealed trait AnyL2Event[+H, +G, +T, +W, U](eventId: H) {
     type UtxosDiff = U
     def getEventId: H = eventId
