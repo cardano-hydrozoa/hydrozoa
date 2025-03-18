@@ -3,9 +3,14 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, MempoolEventTypeL2, zeroBlock}
+import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 
 import scala.collection.mutable
 
@@ -88,9 +93,9 @@ trait OpenNodeState extends StateApi:
     def addBlock(block: Block): Unit
     def confirmMempoolEvents(
         blockNum: Int,
-        eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+        eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         mbGenesis: Option[(TxId, SimpleGenesis)],
-        eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
+        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
     ): Unit
     def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit
     def finalizeHead(): Unit
@@ -169,9 +174,9 @@ class NodeStateManager(log: Logger) { self =>
 
         def confirmMempoolEvents(
             blockNum: Int,
-            eventsValid: Seq[(TxId, MempoolEventTypeL2)],
+            eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            eventsInvalid: Seq[(TxId, MempoolEventTypeL2)]
+            eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit =
             // Add valid events
             eventsValid.foreach((txId, _) =>
@@ -193,8 +198,7 @@ class NodeStateManager(log: Logger) { self =>
                 val event = AdaSimpleLedger.mkGenesisEvent(genesis)
                 openState.eventsConfirmedL2.append((event, blockNum))
                 // Dump L2 tx
-                TxDump.dumpL2Tx(AdaSimpleLedger.adopt(genesis)._1
-            )
+                TxDump.dumpL2Tx(AdaSimpleLedger.adopt(genesis)._1)
             )
             // 3. Remove invalid events
             eventsInvalid.foreach((txId, _) =>

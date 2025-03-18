@@ -2,8 +2,12 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
-import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
 
 import scala.collection.mutable
@@ -43,7 +47,7 @@ def createBlock(
     // instead on block we use mutable parts and finalize the block
     // at the end using the block builder
     val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
-    val eventsInvalid: mutable.Set[(TxId, MempoolEventTypeL2)] = mutable.Set.empty
+    val eventsInvalid: mutable.Set[(TxId, NonGenesisL2EventLabel)] = mutable.Set.empty
     var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
 
     // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
@@ -58,14 +62,14 @@ def createBlock(
         case tx: L2Transaction =>
             stateL2.submit(tx) match
                 case Right(txId, _)   => txValid.add(txId)
-                case Left(txId, _err) => eventsInvalid.add(txId, MempoolTransaction)
+                case Left(txId, _err) => eventsInvalid.add(txId, TransactionL2EventLabel)
         case wd: L2Withdrawal =>
             stateL2.submit(wd) match
                 case Right(txId, utxosDiff) =>
                     wdValid.add(txId)
                     utxosWithdrawn.addAll(utxosDiff)
                 case Left(txId, _err) =>
-                    eventsInvalid.add(txId, MempoolWithdrawal)
+                    eventsInvalid.add(txId, WithdrawalL2EventLabel)
     }
 
     // 4. If finalizing is False...

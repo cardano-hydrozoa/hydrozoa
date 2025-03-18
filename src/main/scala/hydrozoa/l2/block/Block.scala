@@ -3,7 +3,11 @@ package hydrozoa.l2.block
 import hydrozoa.*
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.MempoolEventTypeL2.{MempoolTransaction, MempoolWithdrawal}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.Utxos
 
 import scala.collection.mutable
@@ -31,20 +35,13 @@ enum BlockTypeL2:
     case Final
 
 case class BlockBody(
-    eventsValid: Seq[(TxId, MempoolEventTypeL2)],
-    eventsInvalid: Seq[(TxId, MempoolEventTypeL2)],
+    eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
+    eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
     depositsAbsorbed: Seq[OutputRef[L1]]
 )
 
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
-
-/** We don't add genesis events to blocks, since they can't be invalid and because they can be
-  * calculated from `depositsAbsorbed`.
-  */
-enum MempoolEventTypeL2:
-    case MempoolTransaction
-    case MempoolWithdrawal
 
 type UtxoSetL2 = Utxos
 
@@ -83,8 +80,8 @@ case class BlockBuilder[
     versionMajor: Int = 0,
     versionMinor: Int = 0,
     // FIXME: add type tags
-    eventsValid: Set[(TxId, MempoolEventTypeL2)] = Set.empty,
-    eventsInvalid: Set[(TxId, MempoolEventTypeL2)] = Set.empty,
+    eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
+    eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
     depositsAbsorbed: Set[OutputRef[L1]] = Set.empty,
     utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
 ) {
@@ -117,16 +114,16 @@ case class BlockBuilder[
         copy(versionMinor = versionMinor)
 
     def withTransaction(txId: TxId): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(eventsValid = eventsValid.+((txId, MempoolTransaction)))
+        copy(eventsValid = eventsValid.+((txId, TransactionL2EventLabel)))
 
     def withWithdrawal(txId: TxId)(implicit
         ev: BlockType <:< TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(eventsValid = eventsValid.+((txId, MempoolWithdrawal)))
+        copy(eventsValid = eventsValid.+((txId, WithdrawalL2EventLabel)))
 
     def withInvalidEvent(
         txId: TxId,
-        eventType: MempoolEventTypeL2
+        eventType: NonGenesisL2EventLabel
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 

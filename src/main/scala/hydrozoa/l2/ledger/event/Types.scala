@@ -21,3 +21,10 @@ final case class WithdrawalL2Event[+H, +G, +T, +W, U](
     withdrawal: W
 ) extends NonGenesisL2Event[H, G, T, W, U]
     with AnyL2Event[H, G, T, W, U](eventId) {}
+
+/** We don't add genesis events to blocks, since they can't be invalid and because they can be
+  * calculated from `depositsAbsorbed`.
+  */
+enum NonGenesisL2EventLabel:
+    case TransactionL2EventLabel
+    case WithdrawalL2EventLabel
