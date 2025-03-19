@@ -37,7 +37,7 @@ class BloxBeanSettlementTxBuilder(
             )
 
         val outputsWithdrawn =
-            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(unwrapTxOut(w._2)))
+            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
 
         val withdrawnAda =
             outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))

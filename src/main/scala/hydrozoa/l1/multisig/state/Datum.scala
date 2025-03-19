@@ -22,7 +22,7 @@ type L2ConsensusParamsH32 = ByteString
 
 // TODO: implement hashing for L2ConsensusParamsH32
 // TODO: implement root hash
-def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum = mkMultisigTreasuryDatum(0, ???)
+def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum = mkMultisigTreasuryDatum(0, ByteString.empty)
 
 // TODO: implement hashing for L2ConsensusParamsH32
 // TODO: implement root hash

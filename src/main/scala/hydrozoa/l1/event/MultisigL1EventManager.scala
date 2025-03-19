@@ -2,10 +2,16 @@ package hydrozoa.l1.event
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{NoMatch, TooManyMatches, onlyOutputToAddress, txHash}
-import hydrozoa.l1.multisig.state.{DepositTag, TreasuryTag}
+import hydrozoa.infra.*
+import hydrozoa.l1.multisig.state.{
+    DepositDatum,
+    DepositTag,
+    TreasuryTag,
+    given_FromData_DepositDatum
+}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.server.NodeStateManager
+import scalus.builtin.Data.fromData
 
 /** This class is in charge of handling L1 events.
   *
@@ -25,7 +31,7 @@ case class MultisigL1EventManager(
         val txId = txHash(initTx)
         log.info(s"Handling init tx $txId") // TODO: perf
         onlyOutputToAddress(initTx, headAddress) match
-            case Right(ix, coins) =>
+            case Right(ix, coins, _) =>
                 log.info(s"Treasury output index is: $ix");
                 state.asAbsent {
                     _.initializeHead(
@@ -46,15 +52,28 @@ case class MultisigL1EventManager(
     def handleDepositTx(depositTx: TxAny, txId: TxId) =
         log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
+        // FIXME: don't use onlyOutputToAddress
         onlyOutputToAddress(depositTx, headAddress) match
-            case Right(ix, coins) =>
-                log.info(s"Deposit output index is: $ix");
-                state.asOpen(_.enqueueDeposit(mkUtxo[L1, DepositTag](txId, ix, headAddress, coins)))
+            case Right(ix, coins, datumAsData) =>
+                log.info(s"Deposit output index is: $ix")
+                val datum: DepositDatum = fromData(
+                  datumAsData
+                ) // FIXME how to check soundness of data?
+                state.asOpen(
+                  _.enqueueDeposit(
+                    mkUtxo[L1, DepositTag]( // FIXME: pass the whole datum
+                      txId,
+                      ix,
+                      extractAddress(datum.address).asL1,
+                      coins
+                    )
+                  )
+                )
             case Left(err) =>
                 err match
                     case _: NoMatch => log.error("Can't find the deposit output in the deposit tx!")
                     case _: TooManyMatches =>
-                        log.error("deposit tx contains more than one multisig outputs!")
+                        log.error("Deposit tx contains more than one multisig outputs!")
 
     def handleSettlementTx(tx: TxAny, txHash: TxId) =
         log.info(s"Handling settlement tx $txHash")

@@ -8,7 +8,7 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
     TransactionL2EventLabel,
     WithdrawalL2EventLabel
 }
-import hydrozoa.l2.ledger.state.Utxos
+import hydrozoa.l2.ledger.state.UtxosSetOpaqueMutable
 
 import scala.collection.mutable
 
@@ -43,7 +43,7 @@ case class BlockBody(
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
-type UtxoSetL2 = Utxos
+type UtxoSetL2 = UtxosSetOpaqueMutable
 
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 

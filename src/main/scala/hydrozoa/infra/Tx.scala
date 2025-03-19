@@ -14,13 +14,10 @@ import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
-import scalus.builtin.{Data, ByteString as ScalusByteString}
+import scalus.builtin.Data
 import scalus.ledger.api.v1
-import scalus.ledger.api.v1.{TokenName, TxOut}
-import scalus.prelude.AssocMap
-import scalus.prelude.Maybe.Just
-import scalus.prelude.Prelude.given_Eq_ByteString
 
+import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
@@ -119,12 +116,21 @@ def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): Multis
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressBechL1
-): Either[(NoMatch | TooManyMatches), (TxIx, BigInt)] =
+): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Data)] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala.toList
     outputs.filter(output => output.getAddress == address.bech32) match
-        case List(elem) => Right((TxIx(outputs.indexOf(elem)), elem.getValue.getCoin.longValue()))
-        case Nil        => Left(NoMatch())
-        case _          => Left(TooManyMatches())
+        case List(elem) =>
+            Right(
+              (
+                TxIx(outputs.indexOf(elem)),
+                elem.getValue.getCoin.longValue(),
+                Interop.toScalusData(
+                  elem.getInlineDatum
+                ) // FIXME: how does it indicate it's optional?
+              )
+            )
+        case Nil => Left(NoMatch())
+        case _   => Left(TooManyMatches())
 
 final class NoMatch
 final class TooManyMatches
@@ -142,15 +148,21 @@ def txInputs[L <: AnyLevel](tx: TxAny): Set[OutputRef[L]] =
         .map(ti => OutputRef[L](TxId(ti.getTransactionId), TxIx(ti.getIndex)))
         .toSet
 
-def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
-    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
-    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
+def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOutput =
     TransactionOutput.builder
-        .address(
-          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
-        ) // FIXME: network
-        .value(Value.builder.coin(coins.bigInteger).build)
+        .address(output.address.bech32)
+        .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
         .build
+
+//def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
+//    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
+//    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
+//    TransactionOutput.builder
+//        .address(
+//          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
+//        ) // FIXME: network
+//        .value(Value.builder.coin(coins.bigInteger).build)
+//        .build
 
 def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
     TransactionInput
@@ -226,10 +238,3 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
-
-//def augmentWithVirtualInputs[L <: AnyLevel](tx: Tx[L], virtualInputs: Set[OutputRefInt]): Tx[L] =
-//    val tx_ = Transaction.deserialize(tx.bytes)
-//    tx_.getBody.getInputs.addAll(
-//      virtualInputs.map(v => toBloxBeanTransactionInput(unwrapTxIn(v))).toList.asJava
-//    )
-//    Tx[L](tx_.serialize())

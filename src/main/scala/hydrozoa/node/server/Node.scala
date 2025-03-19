@@ -18,25 +18,25 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff}
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis}
+import hydrozoa.l2.ledger.state.{UtxosSetOpaque, UtxosSetOpaqueMutable}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosDiff}
 import hydrozoa.node.api.SubmitRequestL2
 import hydrozoa.node.api.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import scalus.prelude.Maybe
 
 class Node(
-              state: NodeStateManager,
-              ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
-              network: HeadPeerNetwork,
-              cardano: Cardano,
-              wallet: Wallet,
-              initTxBuilder: InitTxBuilder,
-              depositTxBuilder: DepositTxBuilder,
-              refundTxBuilder: RefundTxBuilder,
-              settlementTxBuilder: SettlementTxBuilder,
-              finalizationTxBuilder: FinalizationTxBuilder,
-              log: Logger
+    state: NodeStateManager,
+    ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
+    network: HeadPeerNetwork,
+    cardano: Cardano,
+    wallet: Wallet,
+    initTxBuilder: InitTxBuilder,
+    depositTxBuilder: DepositTxBuilder,
+    refundTxBuilder: RefundTxBuilder,
+    settlementTxBuilder: SettlementTxBuilder,
+    finalizationTxBuilder: FinalizationTxBuilder,
+    log: Logger
 ):
 
     // FIXME: find the proper place for it
@@ -243,7 +243,7 @@ class Node(
       * @param nextBlockFinal
       * @return
       */
-    def handleNextBlock(nextBlockFinal: Boolean): Either[String, String] =
+    def handleNextBlock(nextBlockFinal: Boolean): Either[String, (Block, UtxosDiff, UtxosDiff)] =
         state.asOpen { s =>
 
             println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock")
@@ -287,7 +287,9 @@ class Node(
                             val acksMinor = network.reqMinor(block)
                             // Immediate L2 effect
                             applyAnyBlockL2Effect(block, utxosActive, mbGenesis)
-                        // No L1 effects so fat in multisig mode
+                            // No L1 effects so far in multisig mode for Minor blocks
+                            dumpState()
+
                         case Major =>
                             // Create settlement tx draft
                             val txRecipe = SettlementRecipe(
@@ -334,6 +336,8 @@ class Node(
                               _.handleSettlementTx(MultisigTx.toL1Tx(settlementTx), settlementTxId)
                             )
 
+                            dumpState()
+
                         case Final =>
                             // Create finalization tx draft
                             val recipe =
@@ -375,46 +379,41 @@ class Node(
                               )
                             )
 
-                    val ret = (block, utxosAdded, utxosWithdrawn).toString()
+                    Right((block, utxosAdded, utxosWithdrawn))
 
-                    println(
-                      "-----------------------   BLOCK/added/withdrawn--------------------------"
-                    )
-                    println(ret)
-                    println
-                    println(
-                      "-----------------------   L1 State --------------------------------------"
-                    )
-                    println(state.asOpen(_.stateL1))
-                    println
-                    println(
-                      "-----------------------   POOL    ---------------------------------------"
-                    )
-                    println(state.asOpen(_.immutablePoolEventsL2))
-                    println
-                    println(
-                      "-----------------------   L2 State   ------------------------------------"
-                    )
-                    println(state.asOpen(_.stateL2.activeState))
-                    println
-                    println(
-                      "------------------------  BLOCKS   --------------------------------------"
-                    )
-                    println(state.asOpen(_.immutableBlocksConfirmedL2))
-                    println
-                    println(
-                      "------------------------  EVENTS   --------------------------------------"
-                    )
-                    println(state.asOpen(_.immutableEventsConfirmedL2))
-
-                    Right(ret)
-
-                case None => Right("Block can't be produced at the moment.")
+                case None => Left("Block can't be produced at the moment.")
         }
+
+    private def dumpState(): Unit = {
+        println(
+          "-----------------------   L1 State --------------------------------------"
+        )
+        println(state.asOpen(_.stateL1))
+        println
+        println(
+          "-----------------------   POOL    ---------------------------------------"
+        )
+        println(state.asOpen(_.immutablePoolEventsL2))
+        println
+        println(
+          "-----------------------   L2 State   ------------------------------------"
+        )
+        println(state.asOpen(_.stateL2.activeState))
+        println
+        println(
+          "------------------------  BLOCKS   --------------------------------------"
+        )
+        println(state.asOpen(_.immutableBlocksConfirmedL2))
+        println
+        println(
+          "------------------------  EVENTS   --------------------------------------"
+        )
+        println(state.asOpen(_.immutableEventsConfirmedL2))
+    }
 
     private def applyAnyBlockL2Effect(
         block: Block,
-        utxosActive: Utxos,
+        utxosActive: UtxosSetOpaque,
         mbGenesis: Option[(TxId, SimpleGenesis)]
     ): Unit =
         state.asOpen { s =>

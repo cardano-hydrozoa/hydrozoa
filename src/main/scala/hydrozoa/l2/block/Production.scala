@@ -8,7 +8,7 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
     TransactionL2EventLabel,
     WithdrawalL2EventLabel
 }
-import hydrozoa.l2.ledger.state.{Utxos, UtxosDiff, UtxosDiffMutable}
+import hydrozoa.l2.ledger.state.UtxosSetOpaque
 
 import scala.collection.mutable
 
@@ -17,7 +17,7 @@ import scala.collection.mutable
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
   * @param stateL2
-  *   clone of the L2 ledger FIXME: what's the best way to do that?
+  *   cloned L2 ledger for block building
   * @param poolEvents
   *   pooled events
   * @param depositsPending
@@ -40,7 +40,7 @@ def createBlock(
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
-): Option[(Block, Utxos, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
+): Option[(Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
 
     // 1. Initialize the variables and arguments.
     // (a) Let block be a mutable variable initialized to an empty BlockL2
@@ -53,6 +53,7 @@ def createBlock(
     // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
     // val previousMajorBlock = state.asOpen(_.l2LastMajor)
 
+    // FIXME: seems we can remove `utxosAdded` if we have `Option[(TxId, SimpleGenesis)]`
     // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
     // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
     val utxosAdded, utxosWithdrawn: UtxosDiffMutable = mutable.Set()
@@ -134,4 +135,4 @@ def createBlock(
                 .versionMinor(prevHeader.versionMinor + 1)
                 .build
 
-    Some(block, stateL2.activeState, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
+    Some(block, stateL2.activeState.toMap, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
