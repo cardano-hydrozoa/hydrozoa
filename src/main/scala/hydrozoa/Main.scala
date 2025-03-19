@@ -12,7 +12,7 @@ import hydrozoa.l1.wallet.{MockWallet, Wallet}
 import hydrozoa.l1.{Cardano, YaciDevKitCardano}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkMock}
 import hydrozoa.node.api.NodeApi
-import hydrozoa.node.server.{HeadStateReader, Node, NodeStateManager}
+import hydrozoa.node.server.{OpenHeadReader, Node, NodeStateManager}
 
 def mkDefaultHydrozoaNode = {
     val ownKeys = genNodeKey()
@@ -25,7 +25,7 @@ def mkDefaultHydrozoaNode = {
 
     // Global head manager (for mocked head during Milestone 2)
     val nodeStateManager: NodeStateManager = NodeStateManager(log)
-    val nodeStateReader: HeadStateReader = HeadStateReader(nodeStateManager)
+    val nodeStateReader: OpenHeadReader = OpenHeadReader(nodeStateManager)
 
     // Tx Builders
     val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(ctx)

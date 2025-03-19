@@ -12,7 +12,7 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
-import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, MultisigTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.{DepositTx, FinalizationTx, MultisigTx, SettlementTx, toL1Tx}
 import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -54,7 +54,7 @@ class Node(
             // Native script, head address, and token
             val seedOutput = OutputRefL1(txId, txIx)
             val (headNativeScript, headAddress) =
-                mkHeadNativeScriptAndAddress(vKeys, cardano.network())
+                mkHeadNativeScriptAndAddress(vKeys, cardano.network)
             val beaconTokenName = mkBeaconTokenName(seedOutput)
             val treasuryCoins = ada * 1_000_000
             val initTxRecipe = InitTxRecipe(
@@ -85,7 +85,7 @@ class Node(
             val serializedTx = serializeTxHex(initTx)
             log.info("Init tx: " + serializedTx)
 
-            cardano.submit(MultisigTx.toL1Tx(initTx)) match
+            cardano.submit(initTx.toL1Tx) match
                 case Right(txHash) =>
                     // Put the head into multisig regime state
                     log.info(
@@ -105,7 +105,7 @@ class Node(
 
                     // Emulate L1 init event
                     multisigL1EventManager.foreach(
-                      _.handleInitTx(MultisigTx.toL1Tx(initTx), seedAddress)
+                      _.handleInitTx(initTx.toL1Tx, seedAddress)
                     )
 
                     TxDump.dumpInitTx(initTx)
@@ -204,15 +204,13 @@ class Node(
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
             cardano.submit(
-              MultisigTx.toL1Tx(
-                addWitness(depositTxDraft, wallet.createTxKeyWitness(depositTxDraft))
-              )
+              addWitness(depositTxDraft, wallet.createTxKeyWitness(depositTxDraft)).toL1Tx
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
         // Emulate L1 deposit event
         multisigL1EventManager.map(
-          _.handleDepositTx(MultisigTx.toL1Tx(depositTxDraft), depositTxHash)
+          _.handleDepositTx(toL1Tx(depositTxDraft), depositTxHash)
         )
 
         // TODO: store the post-dated refund in the store along with the deposit id
@@ -244,6 +242,8 @@ class Node(
       * @return
       */
     def handleNextBlock(nextBlockFinal: Boolean): Either[String, (Block, UtxosDiff, UtxosDiff)] =
+        
+            
         state.asOpen { s =>
 
             println(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock")
@@ -319,7 +319,7 @@ class Node(
 
                             // Submit settlement tx
                             val Right(settlementTxId) =
-                                cardano.submit(MultisigTx.toL1Tx(settlementTx))
+                                cardano.submit(toL1Tx(settlementTx))
                             log.info(s"Settlement tx submitted: $settlementTxId")
 
                             // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
@@ -333,7 +333,7 @@ class Node(
                             //  may use the old treasury.
 
                             multisigL1EventManager.map(
-                              _.handleSettlementTx(MultisigTx.toL1Tx(settlementTx), settlementTxId)
+                              _.handleSettlementTx(toL1Tx(settlementTx), settlementTxId)
                             )
 
                             dumpState()
@@ -364,7 +364,7 @@ class Node(
                             TxDump.dumpMultisigTx(finalizationTx)
 
                             val Right(finalizationTxId) =
-                                cardano.submit(MultisigTx.toL1Tx(finalizationTx))
+                                cardano.submit(toL1Tx(finalizationTx))
                             log.info(s"Finalization tx submitted: $finalizationTxId")
 
                             // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
@@ -374,7 +374,7 @@ class Node(
                             // TODO: temporary: handle the event, again, we don't want to wait
                             multisigL1EventManager.map(
                               _.handleFinalizationTx(
-                                MultisigTx.toL1Tx(finalizationTx),
+                                toL1Tx(finalizationTx),
                                 finalizationTxId
                               )
                             )

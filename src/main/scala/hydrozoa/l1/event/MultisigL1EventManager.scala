@@ -27,9 +27,9 @@ case class MultisigL1EventManager(
     log: Logger
 ):
 
-    def handleInitTx(initTx: TxAny, seedAddress: AddressBechL1) =
+    def handleInitTx(initTx: TxAny, seedAddress: AddressBechL1): Unit =
         val txId = txHash(initTx)
-        log.info(s"Handling init tx $txId") // TODO: perf
+        log.info(s"Handling init tx $txId")
         onlyOutputToAddress(initTx, headAddress) match
             case Right(ix, coins, _) =>
                 log.info(s"Treasury output index is: $ix");
@@ -49,7 +49,7 @@ case class MultisigL1EventManager(
                     case _: TooManyMatches =>
                         log.error("Initialization tx contains more than one multisig outputs!")
 
-    def handleDepositTx(depositTx: TxAny, txId: TxId) =
+    def handleDepositTx(depositTx: TxAny, txId: TxId): Unit =
         log.info(s"Handling deposit tx ${txId}")
         // TODO: check the datum
         // FIXME: don't use onlyOutputToAddress
@@ -58,7 +58,7 @@ case class MultisigL1EventManager(
                 log.info(s"Deposit output index is: $ix")
                 val datum: DepositDatum = fromData(
                   datumAsData
-                ) // FIXME how to check soundness of data?
+                ) // FIXME how to check soundness of data? // Try(fromData(...))
                 state.asOpen(
                   _.enqueueDeposit(
                     mkUtxo[L1, DepositTag]( // FIXME: pass the whole datum
@@ -75,7 +75,7 @@ case class MultisigL1EventManager(
                     case _: TooManyMatches =>
                         log.error("Deposit tx contains more than one multisig outputs!")
 
-    def handleSettlementTx(tx: TxAny, txHash: TxId) =
+    def handleSettlementTx(tx: TxAny, txHash: TxId): Unit =
         log.info(s"Handling settlement tx $txHash")
 
         /** TODO: Outputs of settlement might be
@@ -86,10 +86,10 @@ case class MultisigL1EventManager(
 
         // TODO: handle datum
         // val newTreasuryDatum: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
-
+            
         val Right(treasury) = onlyOutputToAddress(tx, headAddress)
         state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
 
-    def handleFinalizationTx(tx: TxAny, txHash: TxId) =
+    def handleFinalizationTx(tx: TxAny, txHash: TxId): Unit =
         log.info(s"Handling finalization tx: $txHash")
         state.asOpen(_.finalizeHead())

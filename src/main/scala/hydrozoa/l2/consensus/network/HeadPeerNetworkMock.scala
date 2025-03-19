@@ -9,17 +9,17 @@ import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.ledger.UtxosDiff
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.node.server.OpenHeadReader
 import hydrozoa.{ParticipantVerificationKey, TxKeyWitness}
 
 class HeadPeerNetworkMock(
-    headStateReader: HeadStateReader,
-    initTxBuilder: InitTxBuilder,
-    refundTxBuilder: RefundTxBuilder,
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    cardano: Cardano,
-    theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
+                             headStateReader: OpenHeadReader,
+                             initTxBuilder: InitTxBuilder,
+                             refundTxBuilder: RefundTxBuilder,
+                             settlementTxBuilder: SettlementTxBuilder,
+                             finalizationTxBuilder: FinalizationTxBuilder,
+                             cardano: Cardano,
+                             theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HeadPeerNetwork {
 
     private val keys1 = genNodeKey()
@@ -33,7 +33,7 @@ class HeadPeerNetworkMock(
         val vKeys = Set(keys1, keys2).map(_._2) + theLastVerificationKey
 
         // Native script, head address, and token
-        val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network())
+        val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(req.seedOutputRef)
 
         // Recipe to build init tx

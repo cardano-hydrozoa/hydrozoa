@@ -29,7 +29,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       L2EventHash,
       Verifier[L2Event]
     ]:
-
+    
+    // FIXME: make it private
     val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
 
     /** Makes a copy of the current ledger for block production purposes.
@@ -38,8 +39,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       * @return
       *   cloned ledger
       */
-    def blockProduction(implicit
-        ev: InstancePurpose =:= THydrozoaHead
+    def blockProduction(using ev: InstancePurpose =:= THydrozoaHead
     ): AdaSimpleLedger[TBlockProduction] =
         val ledgerForBlockProduction: AdaSimpleLedger[TBlockProduction] = copy()
         ledgerForBlockProduction.updateUtxosActive(activeState.clone().toMap)

@@ -88,7 +88,7 @@ class HappyPathSuite extends FunSuite {
             major1 <- node.handleNextBlock(true)
             _ = Thread.sleep(3000)
 
-            major1 <- node.handleNextBlock(false)
+            major2 <- node.handleNextBlock(false)
             _ = Thread.sleep(3000)
 
         yield ()

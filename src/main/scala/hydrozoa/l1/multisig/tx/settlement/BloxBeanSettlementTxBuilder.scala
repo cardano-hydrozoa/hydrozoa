@@ -7,7 +7,7 @@ import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkMultisigTreasuryDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.node.server.OpenHeadReader
 import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
@@ -19,7 +19,7 @@ import scala.language.postfixOps
 
 class BloxBeanSettlementTxBuilder(
     ctx: AppCtx,
-    headStateReader: HeadStateReader
+    headStateReader: OpenHeadReader
 ) extends SettlementTxBuilder {
 
     private val backendService = ctx.backendService
