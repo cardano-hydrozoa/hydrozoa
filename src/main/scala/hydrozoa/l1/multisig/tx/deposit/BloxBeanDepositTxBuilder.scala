@@ -9,7 +9,7 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
-import hydrozoa.node.server.OpenHeadReader
+import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{AppCtx, TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
@@ -18,7 +18,7 @@ import scala.jdk.CollectionConverters.*
 
 class BloxBeanDepositTxBuilder(
     ctx: AppCtx,
-    headStateReader: OpenHeadReader
+    reader: HeadStateReader
 ) extends DepositTxBuilder {
 
     private val backendService = ctx.backendService
@@ -30,9 +30,7 @@ class BloxBeanDepositTxBuilder(
             .getTxOutput(r.deposit._1.hash, r.deposit._2.ix.intValue)
             .toEither
 
-        println(fundUtxo)
-
-        val headAddressBech32 = headStateReader.headBechAddress
+        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
         // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
         val amountList: List[Amount] = List(ada(100))

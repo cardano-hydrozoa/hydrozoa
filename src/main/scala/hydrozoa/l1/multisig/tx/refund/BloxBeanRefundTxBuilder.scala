@@ -10,7 +10,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{addressToBloxbean, mkBuilder, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
-import hydrozoa.node.server.OpenHeadReader
+import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
@@ -21,7 +21,7 @@ import scala.language.postfixOps
 
 class BloxBeanRefundTxBuilder(
     ctx: AppCtx,
-    headStateReader: OpenHeadReader
+    reader: HeadStateReader
 ) extends RefundTxBuilder {
 
     private val backendService = ctx.backendService
@@ -31,7 +31,6 @@ class BloxBeanRefundTxBuilder(
         r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] =
 
-        
         val txBytes = r.depositTx.toL1Tx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
@@ -45,13 +44,13 @@ class BloxBeanRefundTxBuilder(
           )
         )
 
-        val headAddressBech32 = headStateReader.headBechAddress
+        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
         val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
 
         // TODO: Not the best place
         // TODO: can be checked afterwards see https://github.com/cardano-hydrozoa/hydrozoa/issues/62
-        // Deposit is locked at the head's script (maybe not necessary in fact)
+        // Deposit is locked at the head's script (maybe not necessary)
         if (headAddressBech32.bech32 != depositUtxo.getAddress)
             return Left("Deposit utxo should be locked at the head's address.")
 
@@ -84,7 +83,7 @@ class BloxBeanRefundTxBuilder(
 
         txPartial.from(headAddressBech32.bech32)
 
-        val headNativeScript = headStateReader.headNativeScript
+        val headNativeScript = reader.multisigRegime(_.headNativeScript)
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         val postDatedRefundTx = builder

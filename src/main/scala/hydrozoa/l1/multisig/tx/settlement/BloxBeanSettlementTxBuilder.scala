@@ -7,7 +7,7 @@ import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkMultisigTreasuryDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
-import hydrozoa.node.server.OpenHeadReader
+import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
@@ -19,7 +19,7 @@ import scala.language.postfixOps
 
 class BloxBeanSettlementTxBuilder(
     ctx: AppCtx,
-    headStateReader: OpenHeadReader
+    reader: HeadStateReader
 ) extends SettlementTxBuilder {
 
     private val backendService = ctx.backendService
@@ -29,7 +29,7 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val inputsRefs = r.deposits.toSet + headStateReader.currentTreasuryRef
+        val inputsRefs = r.deposits.toSet + reader.multisigRegime(_.currentTreasuryRef)
 
         val inputUtxos: Set[Utxo] =
             inputsRefs.map(r =>
@@ -52,7 +52,7 @@ class BloxBeanSettlementTxBuilder(
                 a.setQuantity((a.getQuantity.subtract(withdrawnAda)))
         )
 
-        val headAddressBech32 = headStateReader.headBechAddress
+        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
         val treasuryDatum = Interop.toPlutusData(
           mkMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
@@ -67,7 +67,7 @@ class BloxBeanSettlementTxBuilder(
             )
             .from(headAddressBech32.bech32)
 
-        val headNativeScript = headStateReader.headNativeScript
+        val headNativeScript = reader.multisigRegime(_.headNativeScript)
         val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         val settlementTx = builder
