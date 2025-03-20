@@ -3,7 +3,7 @@ package hydrozoa.l2.consensus.network
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
-import hydrozoa.l2.ledger.state.UtxosDiff
+import hydrozoa.l2.ledger.UtxosDiff
 
 trait HeadPeerNetwork {
 

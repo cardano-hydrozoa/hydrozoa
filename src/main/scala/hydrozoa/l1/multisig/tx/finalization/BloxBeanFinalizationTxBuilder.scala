@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.node.server.OpenHeadReader
 import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
@@ -16,7 +16,7 @@ import scala.language.postfixOps
 
 class BloxBeanFinalizationTxBuilder(
     ctx: AppCtx,
-    headStateReader: HeadStateReader
+    headStateReader: OpenHeadReader
 ) extends FinalizationTxBuilder {
 
     private lazy val backendService = ctx.backendService
@@ -44,7 +44,7 @@ class BloxBeanFinalizationTxBuilder(
             .build
 
         val outputsWithdrawn =
-            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(unwrapTxOut(w._2)))
+            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
 
         val withdrawnAda =
             outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))

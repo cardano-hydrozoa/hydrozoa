@@ -9,7 +9,7 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.node.server.OpenHeadReader
 import hydrozoa.{AppCtx, TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
@@ -18,7 +18,7 @@ import scala.jdk.CollectionConverters.*
 
 class BloxBeanDepositTxBuilder(
     ctx: AppCtx,
-    headStateReader: HeadStateReader
+    headStateReader: OpenHeadReader
 ) extends DepositTxBuilder {
 
     private val backendService = ctx.backendService

@@ -19,9 +19,7 @@ type FinalizationTx = MultisigTx[FinalizationTxTag]
 
 object MultisigTx:
     def apply[T <: MultisigTxTag](tx: TxL1): MultisigTx[T] = tx
-    def toL1Tx[T <: MultisigTxTag](multisigTx: MultisigTx[T]): TxL1 = multisigTx
 
-// FIXME: can't be used for some reason
-//extension [T <: MultisigTxTag](tx: MultisigTx[T]) {
-//    def toL1Tx(multisigTx: MultisigTx[T]): TxL1 = multisigTx
-//}
+extension [T <: MultisigTxTag](tx: MultisigTx[T]) {
+    def toL1Tx: TxL1 = tx
+}

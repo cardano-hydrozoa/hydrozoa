@@ -9,8 +9,8 @@ import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{addressToBloxbean, mkBuilder, txOutputToUtxo}
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
-import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx}
-import hydrozoa.node.server.HeadStateReader
+import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
+import hydrozoa.node.server.OpenHeadReader
 import hydrozoa.{AppCtx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
@@ -21,7 +21,7 @@ import scala.language.postfixOps
 
 class BloxBeanRefundTxBuilder(
     ctx: AppCtx,
-    headStateReader: HeadStateReader
+    headStateReader: OpenHeadReader
 ) extends RefundTxBuilder {
 
     private val backendService = ctx.backendService
@@ -31,7 +31,8 @@ class BloxBeanRefundTxBuilder(
         r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] =
 
-        val txBytes = MultisigTx.toL1Tx(r.depositTx).bytes
+        
+        val txBytes = r.depositTx.toL1Tx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
         val txIxInt = r.txIx.ix.intValue()

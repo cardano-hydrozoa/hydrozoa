@@ -7,10 +7,6 @@ import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.consensus.{HeadParams, L2ConsensusParams}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
-}
 
 import scala.collection.mutable
 
@@ -23,9 +19,8 @@ sealed trait MultisigRegime
 
 sealed trait RuleBasedRegime
 
-private case class Initializing(nodes: Array[PeerNode]) extends HeadState with MultisigRegime
-
-private case class Open(
+// FIXME: not a case class
+private case class OpenState(
     headParams: HeadParams,
     headNativeScript: NativeScript,
     headBechAddress: AddressBechL1, // FIXME: can be obtained from stateL1.treasuryUtxo
@@ -48,19 +43,20 @@ private case class Open(
     val stateL2: AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger()
 }
 
-private case class Finalizing() extends HeadState with MultisigRegime
+private case class FinalizingState() extends HeadState with MultisigRegime
 
-private case class Closed() extends HeadState with RuleBasedRegime
+private case class ClosedState() extends HeadState with RuleBasedRegime
 
-private case class Disputing() extends HeadState with RuleBasedRegime
+private case class DisputingState() extends HeadState with RuleBasedRegime
 
 /*
  * APIs for every possible state of the head + additional state when the head is absent.
  */
 
-trait StateApi
+trait HeadStateApi
 
-trait HeadAbsentState extends StateApi:
+// FIXME: NodeStateApi, should be always available
+trait HeadAbsentApi extends HeadStateApi:
     def initializeHead(
         headParams: HeadParams,
         headNativeScript: NativeScript,
@@ -70,7 +66,7 @@ trait HeadAbsentState extends StateApi:
         seedAddress: AddressBechL1
     ): Unit
 
-trait OpenNodeState extends StateApi:
+trait OpenHeadState extends HeadStateApi:
     def currentTreasuryRef: OutputRefL1
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
@@ -105,11 +101,11 @@ trait OpenNodeState extends StateApi:
   */
 class NodeStateManager(log: Logger) { self =>
 
-    private var knownPee: mutable.Set[PeerNode] = mutable.Set.empty
+    private var knownPeers: mutable.Set[PeerNode] = mutable.Set.empty
 
     private var headState: Option[HeadState] = None
-
-    private class HeadAbsentStateImpl extends HeadAbsentState:
+    
+    private class HeadAbsentApiImpl extends HeadAbsentApi:
         def initializeHead(
             headParams: HeadParams,
             headNativeScript: NativeScript,
@@ -118,7 +114,7 @@ class NodeStateManager(log: Logger) { self =>
             treasuryUtxo: TreasuryUtxo,
             seedAddress: AddressBechL1
         ): Unit =
-            val newHead = Open(
+            val newHead = OpenState(
               headParams,
               headNativeScript,
               headBechAddress,
@@ -127,7 +123,8 @@ class NodeStateManager(log: Logger) { self =>
             )(treasuryUtxo)
             self.headState = Some(newHead)
 
-    private class OpenNodeStateImpl(openState: Open) extends OpenNodeState:
+    // move out
+    private class OpenHeadStateImpl(openState: OpenState) extends OpenHeadState:
 
         def currentTreasuryRef: OutputRefL1 = openState.stateL1.treasuryUtxo.ref
         def headNativeScript: NativeScript = openState.headNativeScript
@@ -136,7 +133,7 @@ class NodeStateManager(log: Logger) { self =>
         def seedAddress: AddressBechL1 = openState.seedAddress
 
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
-            val Open(
+            val OpenState(
               HeadParams(
                 L2ConsensusParams(depositMarginMaturity, depositMarginExpiry),
                 minimalDepositWindow
@@ -213,22 +210,22 @@ class NodeStateManager(log: Logger) { self =>
         def finalizeHead(): Unit =
             headState = None
 
-    def asAbsent[A](foo: HeadAbsentState => A): A =
+    def asAbsent[A](foo: HeadAbsentApi => A): A =
         headState match
-            case None => foo(HeadAbsentStateImpl())
+            case None => foo(HeadAbsentApiImpl())
             // Should be this: (initializing state is missing now).
-            // case Some(Initializing(_)) => foo(HeadAbsentStateImpl())
+            // case Some(InitializingState(_)) => foo(HeadAbsentStateImpl())
             case _ =>
-                throw IllegalStateException("The head is missing or not in Initializing state.")
+                throw IllegalStateException("The head is missing or not in InitializingState state.")
 
-    def asOpen[A](foo: OpenNodeState => A): A =
+    def asOpen[A](foo: OpenHeadState => A): A =
         headState match
-            case Some(open: Open) => foo(OpenNodeStateImpl(open))
-            case _ => throw IllegalStateException("The head is missing or not in a Open state.")
+            case Some(open: OpenState) => foo(OpenHeadStateImpl(open))
+            case _ => throw IllegalStateException("The head is missing or not in a OpenState state.")
 
 }
 
-class HeadStateReader(manager: NodeStateManager) {
+class OpenHeadReader(manager: NodeStateManager) {
     def headNativeScript: NativeScript = manager.asOpen(_.headNativeScript)
     def beaconTokenName: String = manager.asOpen(_.beaconTokenName)
     def headBechAddress: AddressBechL1 = manager.asOpen(_.headBechAddress)

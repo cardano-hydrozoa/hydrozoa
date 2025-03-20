@@ -5,7 +5,7 @@ import scalus.ledger.api.v1.PosixTime
 
 trait Cardano {
     def submit(tx: TxAny): Either[SubmissionError, TxId]
-    def network(): Network
+    def network: Network
     def lastBlockTime: PosixTime
 }
 

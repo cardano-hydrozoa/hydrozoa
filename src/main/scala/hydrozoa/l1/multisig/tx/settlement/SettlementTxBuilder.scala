@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.settlement
 
 import hydrozoa.l1.multisig.tx.SettlementTx
-import hydrozoa.l2.ledger.state.UtxosDiff
+import hydrozoa.l2.ledger.UtxosDiff
 import hydrozoa.{L1, OutputRef}
 
 trait SettlementTxBuilder {
