@@ -54,7 +54,7 @@ class Node(
         // All nodes' verification keys
         val vKeys = network.participantsKeys() + ownKeys._2
         // Native script, head address, and token
-        val seedOutput = OutputRefL1(txId, txIx)
+        val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
             mkHeadNativeScriptAndAddress(vKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
@@ -175,7 +175,7 @@ class Node(
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe(OutputRefL1(r.txId, r.txIx), depositDatum)
+        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
@@ -226,7 +226,7 @@ class Node(
 
         println(nodeState.head.openPhase(_.stateL1))
 
-        Right(DepositResponse(refundTx, OutputRefL1(depositTxHash, index)))
+        Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
     }
 
     def submitL1(hex: String): Either[String, TxId] =

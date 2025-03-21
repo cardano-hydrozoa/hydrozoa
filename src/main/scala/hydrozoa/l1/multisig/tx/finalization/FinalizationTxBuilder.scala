@@ -11,5 +11,5 @@ trait FinalizationTxBuilder {
 
 case class FinalizationRecipe(
     majorVersion: Int,
-    utxosWithdrawn: UtxosDiff
+    utxosWithdrawn: UtxosDiff // FIXME: add phantom type parameter
 )

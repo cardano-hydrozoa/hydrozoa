@@ -25,11 +25,11 @@ def mkDefaultHydrozoaNode = {
     val wallet = MockWallet(ctx, 0)
 
     // Cardano L1
-//     val cardano: CardanoL1 = CardanoL1YaciDevKit(ctx)
-//     val backendService: BackendService = ctx.backendService
+     val cardano: CardanoL1 = CardanoL1YaciDevKit(ctx)
+     val backendService: BackendService = ctx.backendService
 
-    val cardano = CardanoL1Mock()
-    val backendService = BackendServiceMock(cardano)
+//    val cardano = CardanoL1Mock()
+//    val backendService = BackendServiceMock(cardano)
 
     // Global head manager (for mocked head during Milestone 2)
     val nodeStateManager: NodeState = NodeState()

@@ -34,14 +34,14 @@ enum BlockTypeL2:
 case class BlockBody(
     eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
     eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
-    depositsAbsorbed: Seq[OutputRef[L1]]
+    depositsAbsorbed: Seq[UtxoId[L1]]
 )
 
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
 // FIXME: should come form ledger/node
-type UtxoSetL2 = Map[OutputRefL2, Output[L2]]
+type UtxoSetL2 = Map[UtxoIdL2, Output[L2]]
 
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 
@@ -72,16 +72,16 @@ case class BlockBuilder[
     BlockNum <: TCheck,
     VersionMajor <: TCheck
 ] private (
-    blockType: BlockTypeL2 = Minor,
-    blockNum: Int = 0,
-    timeCreation: PosixTime = timeCurrent,
-    versionMajor: Int = 0,
-    versionMinor: Int = 0,
-    // FIXME: add type tags
-    eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
-    eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
-    depositsAbsorbed: Set[OutputRef[L1]] = Set.empty,
-    utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+                                     blockType: BlockTypeL2 = Minor,
+                                     blockNum: Int = 0,
+                                     timeCreation: PosixTime = timeCurrent,
+                                     versionMajor: Int = 0,
+                                     versionMinor: Int = 0,
+                                     // FIXME: add type tags
+                                     eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
+                                     eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
+                                     depositsAbsorbed: Set[UtxoId[L1]] = Set.empty,
+                                     utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor
@@ -125,8 +125,8 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
-    def withDeposit(d: OutputRef[L1])(using
-        ev: BlockType =:= TBlockMajor
+    def withDeposit(d: UtxoId[L1])(using
+                                   ev: BlockType =:= TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(depositsAbsorbed = depositsAbsorbed.+(d))
 

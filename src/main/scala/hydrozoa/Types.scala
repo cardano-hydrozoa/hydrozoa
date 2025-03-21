@@ -10,7 +10,7 @@ sealed trait AnyLevel
 sealed trait L1 extends AnyLevel
 sealed trait L2 extends AnyLevel
 
-/** Cardano txs in serialized form.
+/** Cardano txs in a serialized form.
   * @param bytes
   *   CBOR bytes FIXME: use IArray
   * @tparam L
@@ -38,29 +38,31 @@ case class AddressBechL2(bech32: String) {
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
-// Transaction ID
+// Transaction hash
 case class TxId(hash: String)
 
 // Transaction output index
 // TODO: use Int, Long is too long
+// transaction_index = uint .size 2
 case class TxIx(ix: Long)
 
-final case class OutputRef[L <: AnyLevel](txId: TxId, outputIx: TxIx)
+final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx)
 
-type OutputRefL1 = OutputRef[L1]
-type OutputRefL2 = OutputRef[L2]
+type UtxoIdL1 = UtxoId[L1]
+type UtxoIdL2 = UtxoId[L2]
 
-object OutputRefL1:
-    def apply(id: TxId, ix: TxIx): OutputRef[L1] = OutputRef[L1](id, ix)
+object UtxoIdL1:
+    def apply(id: TxId, ix: TxIx): UtxoId[L1] = UtxoId(id, ix)
 
-object OutputRefL2:
-    def apply(id: TxId, ix: TxIx): OutputRef[L2] = OutputRef[L2](id, ix)
+object UtxoIdL2:
+    def apply(id: TxId, ix: TxIx): UtxoId[L2] = UtxoId(id, ix)
 
 // FIXME: parameterize AddressBech
 // FIXME: migrate to Value
 case class Output[L <: AnyLevel](address: AddressBechL1, coins: BigInt)
 
-case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: OutputRef[L], output: Output[L])
+// FIXME: We also neew Utxo without MltisigUtxoTag
+case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
 
 def mkUtxo[L <: AnyLevel, T <: MultisigUtxoTag](
     txId: TxId,
@@ -68,11 +70,11 @@ def mkUtxo[L <: AnyLevel, T <: MultisigUtxoTag](
     address: AddressBechL1,
     coins: BigInt
 ) =
-    Utxo[L, T](OutputRef[L](txId, txIx), Output(address, coins))
+    Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins))
 
-case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[OutputRef[L], Output[L]])
+case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L]])
 
-case class UtxoSet[L <: AnyLevel, F](map: Map[OutputRef[L], Output[L]])
+case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
 
 object UtxoSet:
     def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =

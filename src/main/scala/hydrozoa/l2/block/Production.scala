@@ -48,7 +48,7 @@ def createBlock(
     // at the end using the block builder
     val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
     val eventsInvalid: mutable.Set[(TxId, NonGenesisL2EventLabel)] = mutable.Set.empty
-    var depositsAbsorbed: Set[OutputRef[L1]] = Set.empty
+    var depositsAbsorbed: Set[UtxoId[L1]] = Set.empty
 
     // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
     // val previousMajorBlock = state.asOpen(_.l2LastMajor)

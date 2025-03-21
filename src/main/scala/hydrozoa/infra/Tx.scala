@@ -240,16 +240,16 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
 
-def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[OutputRef[L]] =
+def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
-    inputs.map(i => OutputRef(TxId(i.getTransactionId), TxIx(i.getIndex))).toSeq
+    inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex))).toSeq
 
-def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(OutputRef[L], Output[L])] =
+def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
     val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
-            val utxoId = OutputRef[L](TxId(txId.hash), TxIx(ix))
+            val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix))
             val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
             (utxoId, utxo)
         )

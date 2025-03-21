@@ -25,7 +25,7 @@ trait HeadPeerNetwork {
     def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined]
 }
 
-case class ReqInit(seedOutputRef: OutputRefL1, coins: Long)
+case class ReqInit(seedOutputRef: UtxoIdL1, coins: Long)
 
 case class ReqRefundLater(depositTx: DepositTx, index: TxIx)
 

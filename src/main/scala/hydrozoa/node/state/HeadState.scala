@@ -60,7 +60,7 @@ sealed trait MultisigRegimeReader extends HeadStateReaderApi:
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
-    def currentTreasuryRef: OutputRefL1
+    def currentTreasuryRef: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
@@ -103,7 +103,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
         mbGenesis: Option[(TxId, SimpleGenesis)],
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
     ): Unit
-    def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit
+    def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit
     def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -192,7 +192,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
-        def currentTreasuryRef: OutputRefL1 = self.stateL1.get.treasuryUtxo.ref
+        def currentTreasuryRef: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
         def headBechAddress: AddressBechL1 = self.headBechAddress.get
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
@@ -286,7 +286,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
                     case i  => self.poolEventsL2.remove(i)
             )
 
-        def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit =
+        def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
 
         def finalizeHead(): Unit = headPhase = Finalizing

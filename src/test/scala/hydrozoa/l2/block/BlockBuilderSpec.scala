@@ -1,6 +1,6 @@
 package hydrozoa.l2.block
 
-import hydrozoa.{L1, OutputRefL1, TxId, TxIx}
+import hydrozoa.{L1, UtxoIdL1, TxId, TxIx}
 
 class BlockBuilderSpec extends munit.ScalaCheckSuite {
 
@@ -73,7 +73,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
           BlockBuilder().majorBlock
               .blockNum(42)
               .versionMajor(5)
-              .withDeposit(OutputRefL1(TxId("wd1hash"), TxIx(0)))
+              .withDeposit(UtxoIdL1(TxId("wd1hash"), TxIx(0)))
               .build
         );
     }

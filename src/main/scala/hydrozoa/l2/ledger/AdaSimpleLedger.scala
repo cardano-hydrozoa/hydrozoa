@@ -13,8 +13,8 @@ sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
 
-type UtxosDiff = Set[(OutputRefL2, Output[L2])]
-type UtxosDiffMutable = mutable.Set[(OutputRefL2, Output[L2])] // FIXME L2
+type UtxosDiff = Set[(UtxoIdL2, Output[L2])]
+type UtxosDiffMutable = mutable.Set[(UtxoIdL2, Output[L2])] // FIXME L2
 
 // FIXME: move InstancePurpose to L2Ledger
 case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
@@ -59,7 +59,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = OutputRefL2(txId, TxIx(output._2))
+                val txIn = UtxoIdL2(txId, TxIx(output._2))
                 val txOut = Output[L2](output._1.address.asL1, output._1.coins)
                 (txIn, txOut)
             )
@@ -67,7 +67,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiffInt = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
                 val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
@@ -85,7 +85,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case Right(oldUtxos) =>
                 // Outputs
                 val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-                    val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
                     val txOut = liftOutput(output._1.address, output._1.coins)
                     (txIn, txOut)
                 )
@@ -99,7 +99,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                     inputRefs.foreach(activeState.remove)
                     newUtxos.foreach(activeState.put.tupled)
 
-                    Right((txId, Set[(OutputRefL2, Output[L2])]()))
+                    Right((txId, Set[(UtxoIdL2, Output[L2])]()))
 
     private def handleWithdrawal(event: L2Withdrawal) =
         val (_, txId) = AdaSimpleLedger.asTxL2(event.withdrawal)
@@ -121,8 +121,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       *   Left if
       */
     private def resolveInputs(
-        inputs: List[OutputRefL2]
-    ): Either[List[OutputRefL2], List[(OutputRefInt, OutputInt, (OutputRefL2, Output[L2]))]] =
+        inputs: List[UtxoIdL2]
+    ): Either[List[UtxoIdL2], List[(OutputRefInt, OutputInt, (UtxoIdL2, Output[L2]))]] =
         inputs
             .map { e =>
                 val outputRefInt = liftOutputRef(e)
@@ -195,22 +195,22 @@ object SimpleGenesis:
 def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
-    // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[OutputRefL2],
-    outputs: List[SimpleOutput]
+                                // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
+                                inputs: List[UtxoIdL2],
+                                outputs: List[SimpleOutput]
 )
 
 object SimpleTransaction:
-    def apply(input: OutputRefL2, address: AddressBechL2, ada: Int): SimpleTransaction =
+    def apply(input: UtxoIdL2, address: AddressBechL2, ada: Int): SimpleTransaction =
         SimpleTransaction(List(input), List(SimpleOutput(address, ada)))
 
 case class SimpleWithdrawal(
     // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[OutputRefL2]
+    inputs: List[UtxoIdL2]
 )
 
 object SimpleWithdrawal:
-    def apply(utxo: OutputRefL2): SimpleWithdrawal =
+    def apply(utxo: UtxoIdL2): SimpleWithdrawal =
         SimpleWithdrawal(List(utxo))
 
 case class SimpleOutput(

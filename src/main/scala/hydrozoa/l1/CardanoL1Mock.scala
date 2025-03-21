@@ -10,7 +10,7 @@ class CardanoL1Mock() extends CardanoL1:
 
     val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
 
-    val utxosActive: mutable.Map[OutputRefL1, Output[L1]] = mutable.Map() addAll (genesisUtxo)
+    val utxosActive: mutable.Map[UtxoIdL1, Output[L1]] = mutable.Map() addAll (genesisUtxo)
 
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val txId = txHash(tx)
@@ -27,9 +27,9 @@ class CardanoL1Mock() extends CardanoL1:
 
     override def lastBlockTime: PosixTime = 0
 
-val genesisUtxo: Set[(OutputRefL1, Output[L1])] = Set(
+val genesisUtxo: Set[(UtxoIdL1, Output[L1])] = Set(
   (
-    OutputRefL1(TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"), TxIx(0)),
+    UtxoIdL1(TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"), TxIx(0)),
     Output[L1](
       AddressBechL1(
         "addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex"

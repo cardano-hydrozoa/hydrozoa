@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 import hydrozoa.infra.toResult
-import hydrozoa.{OutputRefL1, TxId, TxIx}
+import hydrozoa.{UtxoIdL1, TxId, TxIx}
 
 import java.io.File
 import java.math.BigInteger
@@ -88,7 +88,7 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
     ): Result[util.List[Utxo]] = ???
 
     override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
-        val utxoId = OutputRefL1(TxId(txHash), TxIx(outputIndex))
+        val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex))
         val opt = cardanoL1Mock.utxosActive
             .get(utxoId)
             .map(output =>

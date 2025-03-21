@@ -26,19 +26,19 @@ class BloxBeanDepositTxBuilder(
 
     override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (DepositTx, TxIx)] =
 
-        val Right(fundUtxo) = backendService.getUtxoService
+        val Right(utxoFunding) = backendService.getUtxoService
             .getTxOutput(r.deposit._1.hash, r.deposit._2.ix.intValue)
             .toEither
 
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
-        // TODO: valueToAmountList(fundUtxo.toValue) OR we should ask for a value (might be easier)
+        // TODO: valueToAmountList(utxoFunding.toValue) OR we should ask for a value (might be easier)
         val amountList: List[Amount] = List(ada(100))
         val datum: PlutusData = Interop.toPlutusData(r.datum.toData)
-        val depositorAddress = fundUtxo.getAddress
+        val depositorAddress = utxoFunding.getAddress
 
         val txPartial = Tx()
-            .collectFrom(List(fundUtxo).asJava)
+            .collectFrom(List(utxoFunding).asJava)
             .payToContract(headAddressBech32.bech32, amountList.asJava, datum)
             .from(depositorAddress)
 
@@ -48,9 +48,11 @@ class BloxBeanDepositTxBuilder(
             .feePayer(depositorAddress)
             .build()
 
-        // Deposit output
+        // Find the deposit output index
         val index = depositTx.getBody.getOutputs.asScala
             .indexWhere(output => output.getAddress == headAddressBech32.bech32)
+
+        assert(index >= 0, s"Deposit output was not found in the tx.")
 
         Right(MultisigTx(TxL1(depositTx.serialize)), TxIx(index))
 }

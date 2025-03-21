@@ -4,7 +4,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.infra.encodeHex
 import hydrozoa.node.rest.{SubmitRequestL2, given}
-import hydrozoa.{AddressBechL2, OutputRefL2, TxId, TxIx}
+import hydrozoa.{AddressBechL2, UtxoIdL2, TxId, TxIx}
 
 def mkLedger: AdaSimpleLedger[THydrozoaHead] = {
     AdaSimpleLedger()
@@ -44,7 +44,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val genesis = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val withdrawal = SimpleWithdrawal(OutputRefL2(genesis, ix))
+        val withdrawal = SimpleWithdrawal(UtxoIdL2(genesis, ix))
         println(writeToString(SubmitRequestL2.Withdrawal(withdrawal)))
         ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
         assert(ledger.isEmpty)
@@ -56,7 +56,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = TxId(encodeHex(H32.hash(IArray.empty).bytes))
         val ix = TxIx(0)
 
-        val withdrawal = SimpleWithdrawal(OutputRefL2(txId, ix))
+        val withdrawal = SimpleWithdrawal(UtxoIdL2(txId, ix))
         val Left(_) = ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
     }
 
@@ -66,7 +66,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 100)
+        val transaction = SimpleTransaction(UtxoIdL2(txId, ix), address2, 100)
 
         println(writeToString(SubmitRequestL2.Transaction(transaction)))
 
@@ -80,7 +80,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 101)
+        val transaction = SimpleTransaction(UtxoIdL2(txId, ix), address2, 101)
         val Left(_) = ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
     }
 
