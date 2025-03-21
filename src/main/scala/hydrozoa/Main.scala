@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.AppCtx.yaciDevKit
 import hydrozoa.infra.genNodeKey
@@ -9,7 +10,7 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.wallet.{MockWallet, Wallet}
-import hydrozoa.l1.{Cardano, YaciDevKitCardano}
+import hydrozoa.l1.{BackendServiceMock, CardanoL1, CardanoL1Mock, CardanoL1YaciDevKit}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkMock}
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
@@ -20,22 +21,30 @@ def mkDefaultHydrozoaNode = {
     val ctx: AppCtx = yaciDevKit()
 
     // Components
-    val log: Logger = Logger("Hydrozoa")
-    val wallet: Wallet = MockWallet(ctx, 0)
-    val cardano: Cardano = YaciDevKitCardano(ctx)
+    val log = Logger("Hydrozoa")
+    val wallet = MockWallet(ctx, 0)
+
+    // Cardano L1
+//     val cardano: CardanoL1 = CardanoL1YaciDevKit(ctx)
+//     val backendService: BackendService = ctx.backendService
+
+    val cardano = CardanoL1Mock()
+    val backendService = BackendServiceMock(cardano)
 
     // Global head manager (for mocked head during Milestone 2)
     val nodeStateManager: NodeState = NodeState()
     val nodeStateReader: HeadStateReader = nodeStateManager.reader
 
     // Tx Builders
-    val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(ctx)
-    val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(ctx, nodeStateReader)
-    val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(ctx, nodeStateReader)
+    val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+    val depositTxBuilder: DepositTxBuilder =
+        BloxBeanDepositTxBuilder(backendService, nodeStateReader)
+    val refundTxBuilder: RefundTxBuilder =
+        BloxBeanRefundTxBuilder(cardano, backendService, nodeStateReader)
     val settlementTxBuilder: SettlementTxBuilder =
-        BloxBeanSettlementTxBuilder(ctx, nodeStateReader)
+        BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
-        BloxBeanFinalizationTxBuilder(ctx, nodeStateReader)
+        BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
     val network: HeadPeerNetwork =
         HeadPeerNetworkMock(

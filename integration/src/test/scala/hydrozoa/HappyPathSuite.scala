@@ -2,7 +2,7 @@ package hydrozoa
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
-import hydrozoa.l1.Cardano
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l2.ledger.SimpleWithdrawal
 import hydrozoa.mkDefaultHydrozoaNode
 import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
@@ -13,7 +13,7 @@ import munit.FunSuite
   */
 class HappyPathSuite extends FunSuite {
 
-    private val (log: Logger, node: Node, cardano: Cardano) = mkDefaultHydrozoaNode
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkDefaultHydrozoaNode
 
     override def beforeAll(): Unit = {
 //        val params = Try(node...)

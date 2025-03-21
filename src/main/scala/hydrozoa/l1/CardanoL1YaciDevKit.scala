@@ -1,16 +1,16 @@
 package hydrozoa.l1
 
 import hydrozoa.infra.toEither
-import hydrozoa.{AppCtx, Network, TxAny, TxId}
+import hydrozoa.{AppCtx, Network, TxId, TxL1}
 import scalus.ledger.api.v1.PosixTime
 
 import scala.util.boundary
 
-class YaciDevKitCardano(ctx: AppCtx) extends Cardano:
+class CardanoL1YaciDevKit(ctx: AppCtx) extends CardanoL1:
 
     private val backendService = ctx.backendService
 
-    override def submit(tx: TxAny): Either[SubmissionError, TxId] = {
+    override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val result = backendService.getTransactionService.submitTransaction(tx.bytes)
         Either.cond(result.isSuccessful, TxId(result.getValue), result.getResponse)
     }

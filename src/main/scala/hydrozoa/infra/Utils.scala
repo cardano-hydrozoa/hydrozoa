@@ -20,6 +20,13 @@ extension [A](result: Result[A])
         if result.isSuccessful then result.getValue
         else throw RuntimeException("Unexpected left")
 
+extension [A](option: Option[A])
+    def toResult(err: String): Result[A] = option match
+        case Some(a) =>
+            val result = Result.success("dummy").asInstanceOf[Result[A]]
+            result.withValue(a).asInstanceOf[Result[A]]
+        case None => Result.error(err).asInstanceOf[Result[A]]
+
 // Make an Utxo from an output reference + TransactionOutput
 // For now has some limitations:
 // * no datum hashes
@@ -36,6 +43,7 @@ def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
       null // no scripts
     )
 
-def encodeHex(bytes: IArray[Byte]): String = HexUtil.encodeHexString(IArray.genericWrapArray(bytes).toArray)
+def encodeHex(bytes: IArray[Byte]): String =
+    HexUtil.encodeHexString(IArray.genericWrapArray(bytes).toArray)
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))

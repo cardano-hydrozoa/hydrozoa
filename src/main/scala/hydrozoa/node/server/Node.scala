@@ -3,7 +3,7 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.l1.Cardano
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
@@ -30,7 +30,7 @@ class Node(
     nodeState: NodeState,
     ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
     network: HeadPeerNetwork,
-    cardano: Cardano,
+    cardano: CardanoL1,
     wallet: Wallet,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
@@ -230,7 +230,7 @@ class Node(
     }
 
     def submitL1(hex: String): Either[String, TxId] =
-        cardano.submit(deserializeTxHex(hex))
+        cardano.submit(deserializeTxHex[L1](hex))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         nodeState.head.openPhase { s =>

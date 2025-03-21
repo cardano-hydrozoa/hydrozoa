@@ -1,10 +1,10 @@
 package hydrozoa.l1
 
-import hydrozoa.{TxAny, Network, TxId}
+import hydrozoa.{Network, TxId, TxL1}
 import scalus.ledger.api.v1.PosixTime
 
-trait Cardano {
-    def submit(tx: TxAny): Either[SubmissionError, TxId]
+trait CardanoL1 {
+    def submit(tx: TxL1): Either[SubmissionError, TxId]
     def awaitTx(txId: TxId): Unit
     def network: Network
     def lastBlockTime: PosixTime

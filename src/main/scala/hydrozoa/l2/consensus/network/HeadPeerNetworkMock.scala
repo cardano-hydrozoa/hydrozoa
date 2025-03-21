@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network
 
 import hydrozoa.infra.{createTxKeyWitness, genNodeKey}
-import hydrozoa.l1.Cardano
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -13,13 +13,13 @@ import hydrozoa.node.state.HeadStateReader
 import hydrozoa.{ParticipantVerificationKey, TxKeyWitness}
 
 class HeadPeerNetworkMock(
-    reader: HeadStateReader,
-    initTxBuilder: InitTxBuilder,
-    refundTxBuilder: RefundTxBuilder,
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    cardano: Cardano,
-    theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
+                             reader: HeadStateReader,
+                             initTxBuilder: InitTxBuilder,
+                             refundTxBuilder: RefundTxBuilder,
+                             settlementTxBuilder: SettlementTxBuilder,
+                             finalizationTxBuilder: FinalizationTxBuilder,
+                             cardano: CardanoL1,
+                             theLastVerificationKey: ParticipantVerificationKey // this is the key of the only "real" node
 ) extends HeadPeerNetwork {
 
     private val keys1 = genNodeKey()
