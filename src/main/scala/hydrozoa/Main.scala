@@ -61,14 +61,14 @@ def mkDefaultHydrozoaNode = {
       finalizationTxBuilder,
       log
     )
-    (log, node)
+    (log, node, cardano)
 }
 
 object HydrozoaNodeServer:
 
     @main def main(args: String*): Unit = {
 
-        val (log: Logger, node: Node) = mkDefaultHydrozoaNode
+        val (log: Logger, node: Node, _) = mkDefaultHydrozoaNode
 
         log.warn("Starting Hydrozoa Node API Server...")
         NodeRestApi(node).start()

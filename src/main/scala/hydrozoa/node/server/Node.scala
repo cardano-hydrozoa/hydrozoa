@@ -23,7 +23,7 @@ import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosDiff}
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
-import hydrozoa.node.state.{HeadPhase, NodeState}
+import hydrozoa.node.state.{BlockRecord, HeadPhase, L1BlockEffect, NodeState}
 import scalus.prelude.Maybe
 
 class Node(
@@ -250,7 +250,9 @@ class Node(
       * @param nextBlockFinal
       * @return
       */
-    def handleNextBlock(nextBlockFinal: Boolean): Either[String, (Block, UtxosDiff, UtxosDiff)] =
+    def handleNextBlock(
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, UtxosDiff, UtxosDiff)] =
 
         def nextBlockInOpen(
             nextBlockFinal: Boolean
@@ -305,7 +307,7 @@ class Node(
             utxosActive: UtxosSetOpaque,
             utxosWithdrawn: UtxosDiff,
             mbGenesis: Option[(TxId, SimpleGenesis)]
-        ): Unit =
+        ): L1BlockEffect =
             block.blockHeader.blockType match
                 case Minor =>
                     // TODO: produce and broadcast own signature
@@ -314,6 +316,7 @@ class Node(
                     applyMinorBlockL2Effect(block, utxosActive)
                     // No L1 effects so far in multisig mode for Minor blocks
                     dumpState()
+                    ()
 
                 case Major =>
                     // Create settlement tx draft
@@ -362,6 +365,7 @@ class Node(
                     )
 
                     dumpState()
+                    settlementTx
 
                 case Final =>
                     // Create finalization tx draft
@@ -401,21 +405,26 @@ class Node(
                         finalizationTxId
                       )
                     )
+                    finalizationTx
 
         val (maybeNewBlock, finalizeHead) = nodeState.head.currentState match
             case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
             case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
-            case _ =>
-                log.error(
-                  "The head is not in Open or Finalizing phase. A block can't be produced"
-                )
+            case phase =>
+                log.error(s"A block can't be produced in phase: $phase")
                 (None, false)
 
         maybeNewBlock match
             case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                val l1effect = handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                //
+                val record = BlockRecord(block, l1effect, (), ())
+                nodeState.head.currentState match
+                    case HeadPhase.Open       => nodeState.head.openPhase(_.addBlock(record))
+                    case HeadPhase.Finalizing => nodeState.head.finalizingPhase(_.closeHead(record))
                 if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
-                Right((block, utxosAdded, utxosWithdrawn))
+                // Result
+                Right((record, utxosAdded, utxosWithdrawn))
             case None => Left("Block can't be produced at the moment.")
 
     private def dumpState(): Unit = {
@@ -452,7 +461,6 @@ class Node(
         nodeState.head.openPhase { s =>
             s.stateL2.updateUtxosActive(utxosActive)
             val body = block.blockBody
-            s.addBlock(block)
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
               body.eventsValid,
@@ -469,7 +477,6 @@ class Node(
         nodeState.head.openPhase { s =>
             s.stateL2.updateUtxosActive(utxosActive)
             val body = block.blockBody
-            s.addBlock(block)
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
               body.eventsValid,
@@ -491,7 +498,5 @@ class Node(
     ): Unit =
         nodeState.head.finalizingPhase { s =>
             s.stateL2.updateUtxosActive(utxosActive)
-            val body = block.blockBody
-            s.confirmValidMempoolEvents(block.blockHeader.blockNum, body.eventsValid)
-            s.closeHead(block)
+            s.confirmValidMempoolEvents(block.blockHeader.blockNum, block.blockBody.eventsValid)
         }
