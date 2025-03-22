@@ -46,6 +46,7 @@ object CryptoHash:
 
 // Generating nodes keys
 
+// FIXME: move to another module
 // Generating keys for a node
 def genNodeKey(): (ParticipantSecretKey, ParticipantVerificationKey) = {
     val keys = KeyGenUtil.generateKey

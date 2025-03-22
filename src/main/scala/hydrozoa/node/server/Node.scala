@@ -19,7 +19,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosDiff}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -54,7 +54,7 @@ class Node(
         // All nodes' verification keys
         val vKeys = network.participantsKeys() + ownKeys._2
         // Native script, head address, and token
-        val seedOutput = OutputRefL1(txId, txIx)
+        val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
             mkHeadNativeScriptAndAddress(vKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
@@ -175,7 +175,7 @@ class Node(
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe(OutputRefL1(r.txId, r.txIx), depositDatum)
+        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
@@ -226,7 +226,7 @@ class Node(
 
         println(nodeState.head.openPhase(_.stateL1))
 
-        Right(DepositResponse(refundTx, OutputRefL1(depositTxHash, index)))
+        Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
     }
 
     def submitL1(hex: String): Either[String, TxId] =
@@ -252,11 +252,11 @@ class Node(
       */
     def handleNextBlock(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosDiff, UtxosDiff)] =
+    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
 
         def nextBlockInOpen(
             nextBlockFinal: Boolean
-        ): Option[(Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
+        ): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
             nodeState.head.openPhase { s =>
 
                 println(
@@ -281,7 +281,7 @@ class Node(
             }
 
         def nextBlockInFinal()
-            : (Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)]) =
+            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
             nodeState.head.finalizingPhase { s =>
 
                 println(
@@ -303,10 +303,10 @@ class Node(
             }
 
         def handleNewBlock(
-            block: Block,
-            utxosActive: UtxosSetOpaque,
-            utxosWithdrawn: UtxosDiff,
-            mbGenesis: Option[(TxId, SimpleGenesis)]
+                              block: Block,
+                              utxosActive: UtxosSetOpaque,
+                              utxosWithdrawn: UtxosSet,
+                              mbGenesis: Option[(TxId, SimpleGenesis)]
         ): L1BlockEffect =
             block.blockHeader.blockType match
                 case Minor =>
@@ -441,7 +441,7 @@ class Node(
         println(
           "-----------------------   L2 State   ------------------------------------"
         )
-        println(nodeState.head.openPhase(_.stateL2.activeState))
+        println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
         println
         println(
           "------------------------  BLOCKS   --------------------------------------"
@@ -459,7 +459,7 @@ class Node(
         utxosActive: UtxosSetOpaque
     ): Unit =
         nodeState.head.openPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
+            s.stateL2.replaceUtxosActive(utxosActive)
             val body = block.blockBody
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
@@ -475,7 +475,7 @@ class Node(
         mbGenesis: Option[(TxId, SimpleGenesis)]
     ): Unit =
         nodeState.head.openPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
+            s.stateL2.replaceUtxosActive(utxosActive)
             val body = block.blockBody
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
@@ -497,6 +497,6 @@ class Node(
         utxosActive: UtxosSetOpaque
     ): Unit =
         nodeState.head.finalizingPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
+            s.stateL2.replaceUtxosActive(utxosActive)
             s.confirmValidMempoolEvents(block.blockHeader.blockNum, block.blockBody.eventsValid)
         }

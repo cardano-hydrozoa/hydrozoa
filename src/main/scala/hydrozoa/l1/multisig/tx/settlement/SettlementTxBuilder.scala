@@ -1,8 +1,8 @@
 package hydrozoa.l1.multisig.tx.settlement
 
+import hydrozoa.UtxoIdL1
 import hydrozoa.l1.multisig.tx.SettlementTx
-import hydrozoa.l2.ledger.UtxosDiff
-import hydrozoa.{L1, OutputRef}
+import hydrozoa.l2.ledger.UtxosSet
 
 trait SettlementTxBuilder {
     def mkSettlementTxDraft(
@@ -12,6 +12,6 @@ trait SettlementTxBuilder {
 
 case class SettlementRecipe(
     majorVersion: Int,
-    deposits: Seq[OutputRef[L1]],
-    utxosWithdrawn: UtxosDiff
+    deposits: Seq[UtxoIdL1],
+    utxosWithdrawn: UtxosSet
 )

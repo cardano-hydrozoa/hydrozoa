@@ -1,6 +1,6 @@
 package hydrozoa.l2.ledger.state
 
-import hydrozoa.{L2, Output, OutputRefL2, TxId, TxIx}
+import hydrozoa.{L2, Output, UtxoIdL2, TxId, TxIx}
 import hydrozoa.infra.{decodeBech32AddressL2, extractAddress}
 import scalus.builtin.ByteString
 import scalus.prelude.Maybe.Nothing
@@ -14,13 +14,13 @@ import scalus.ledger.api.v1 as scalus
 opaque type OutputRefInt = scalus.TxOutRef
 opaque type OutputInt = scalus.TxOut
 
-def liftOutputRef(outputRefL2: OutputRefL2): OutputRefInt =
-    val sTxId = scalus.TxId(ByteString.fromHex(outputRefL2.txId.hash))
-    val sTxIx = BigInt(outputRefL2.outputIx.ix)
+def liftOutputRef(UtxoIdL2: UtxoIdL2): OutputRefInt =
+    val sTxId = scalus.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
+    val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
     scalus.TxOutRef(sTxId, sTxIx)
 
-def unliftOutputRef(outputRef: OutputRefInt): OutputRefL2 =
-    OutputRefL2(TxId(outputRef.id.toString), TxIx(outputRef.idx.longValue))
+def unliftOutputRef(outputRef: OutputRefInt): UtxoIdL2 =
+    UtxoIdL2(TxId(outputRef.id.toString), TxIx(outputRef.idx.longValue))
 
 def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
 

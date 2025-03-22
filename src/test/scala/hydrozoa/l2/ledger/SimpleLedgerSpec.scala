@@ -4,7 +4,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.infra.encodeHex
 import hydrozoa.node.rest.{SubmitRequestL2, given}
-import hydrozoa.{AddressBechL2, OutputRefL2, TxId, TxIx}
+import hydrozoa.{AddressBechL2, UtxoIdL2, TxId, TxIx}
 
 def mkLedger: AdaSimpleLedger[THydrozoaHead] = {
     AdaSimpleLedger()
@@ -18,11 +18,11 @@ val address2 = AddressBechL2(
   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
 )
 
-def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): L2EventHash = {
+def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): EventHash = {
     val event = SimpleGenesis(address, 100)
     val Right(hash, _) = ledger.submit(AdaSimpleLedger.mkGenesisEvent(event))
     println(s"Genesis $hash submitted: $event")
-    println(ledger.activeState)
+    println(ledger.getUtxosActive)
     hash
 }
 
@@ -44,7 +44,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val genesis = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val withdrawal = SimpleWithdrawal(OutputRefL2(genesis, ix))
+        val withdrawal = SimpleWithdrawal(UtxoIdL2(genesis, ix))
         println(writeToString(SubmitRequestL2.Withdrawal(withdrawal)))
         ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
         assert(ledger.isEmpty)
@@ -56,7 +56,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = TxId(encodeHex(H32.hash(IArray.empty).bytes))
         val ix = TxIx(0)
 
-        val withdrawal = SimpleWithdrawal(OutputRefL2(txId, ix))
+        val withdrawal = SimpleWithdrawal(UtxoIdL2(txId, ix))
         val Left(_) = ledger.submit(AdaSimpleLedger.mkWithdrawalEvent(withdrawal))
     }
 
@@ -66,12 +66,12 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 100)
+        val transaction = SimpleTransaction(UtxoIdL2(txId, ix), address2, 100)
 
         println(writeToString(SubmitRequestL2.Transaction(transaction)))
 
         ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
-        println(ledger.activeState)
+        println(ledger.getUtxosActive)
     }
 
     test("transaction sum invariant violation") {
@@ -80,7 +80,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         val txId = doSampleGenesis(ledger)
         val ix = TxIx(0)
 
-        val transaction = SimpleTransaction(OutputRefL2(txId, ix), address2, 101)
+        val transaction = SimpleTransaction(UtxoIdL2(txId, ix), address2, 101)
         val Left(_) = ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
     }
 
