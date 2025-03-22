@@ -1,26 +1,26 @@
 package hydrozoa.l2.ledger.event
 
-sealed trait AnyL2Event[+H, +G, +T, +W, U](eventId: H) {
+sealed trait AnyEventL2[+H, +G, +T, +W, U](eventId: H) {
     type UtxosDiff = U
     def getEventId: H = eventId
 }
 
-final case class GenesisL2Event[+H, +G, +T, +W, U](eventId: H, genesis: G)
-    extends AnyL2Event[H, G, T, W, U](eventId) {}
+final case class GenesisEventL2[+H, +G, +T, +W, U](eventId: H, genesis: G)
+    extends AnyEventL2[H, G, T, W, U](eventId) {}
 
-sealed trait NonGenesisL2Event[+H, +G, +T, +W, U] extends AnyL2Event[H, G, T, W, U] {}
+sealed trait NonGenesisEventL2[+H, +G, +T, +W, U] extends AnyEventL2[H, G, T, W, U] {}
 
-final case class TransactionL2Event[+H, +G, +T, +W, U](
+final case class TransactionEventL2[+H, +G, +T, +W, U](
     eventId: H,
     transaction: T
-) extends NonGenesisL2Event[H, G, T, W, U]
-    with AnyL2Event[H, G, T, W, U](eventId) {}
+) extends NonGenesisEventL2[H, G, T, W, U]
+    with AnyEventL2[H, G, T, W, U](eventId) {}
 
-final case class WithdrawalL2Event[+H, +G, +T, +W, U](
+final case class WithdrawalEventL2[+H, +G, +T, +W, U](
     eventId: H,
     withdrawal: W
-) extends NonGenesisL2Event[H, G, T, W, U]
-    with AnyL2Event[H, G, T, W, U](eventId) {}
+) extends NonGenesisEventL2[H, G, T, W, U]
+    with AnyEventL2[H, G, T, W, U](eventId) {}
 
 /** We don't add genesis events to blocks, since they can't be invalid and because they can be
   * calculated from `depositsAbsorbed`.

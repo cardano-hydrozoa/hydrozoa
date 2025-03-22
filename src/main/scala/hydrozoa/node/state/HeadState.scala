@@ -64,9 +64,9 @@ sealed trait MultisigRegimeReader extends HeadStateReaderApi:
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
-    def immutablePoolEventsL2: Seq[L2NonGenesis]
+    def immutablePoolEventsL2: Seq[NonGenesisL2]
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
-    def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
+    def immutableEventsConfirmedL2: Seq[(EventL2, Int)]
     def l2Tip: Block
     def l2LastMajor: Block
     def peekDeposits: DepositUtxos
@@ -93,7 +93,7 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(deposit: DepositUtxo): Unit
-    def poolEventL2(event: L2NonGenesis): Unit
+    def poolEventL2(event: NonGenesisL2): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def addBlock(block: BlockRecord): Unit
@@ -141,8 +141,8 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
     // Currently pending block
     private val blockPending: Option[BlockRecord] = None
 
-    private val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
-    private val poolEventsL2: mutable.Buffer[L2NonGenesis] = mutable.Buffer()
+    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
     private var finalizing: Option[Boolean] = None
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
@@ -200,9 +200,9 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def headPeers: List[Peer] = self.headPeers
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
-        def immutablePoolEventsL2: Seq[L2NonGenesis] = self.poolEventsL2.toSeq
+        def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
-        def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.eventsConfirmedL2.toSeq
+        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.eventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
@@ -252,7 +252,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def enqueueDeposit(d: DepositUtxo): Unit =
             self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
 
-        def poolEventL2(event: L2NonGenesis): Unit = self.poolEventsL2.append(event)
+        def poolEventL2(event: NonGenesisL2): Unit = self.poolEventsL2.append(event)
 
         def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
             self.stateL1.get.treasuryUtxo =
@@ -301,7 +301,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit = eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
 
-    private def markEventAsValid(blockNum: Int, txId: L2EventHash): Unit = {
+    private def markEventAsValid(blockNum: Int, txId: EventHash): Unit = {
         self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
             case -1 => throw IllegalStateException(s"pool event $txId was not found")
             case i =>
@@ -309,9 +309,9 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
                 self.eventsConfirmedL2.append((event, blockNum))
                 // Dump L2 tx
                 TxDump.dumpL2Tx(event match
-                    case L2Transaction(_, transaction) =>
+                    case TransactionL2(_, transaction) =>
                         AdaSimpleLedger.asTxL2(transaction)._1
-                    case L2Withdrawal(_, withdrawal) =>
+                    case WithdrawalL2(_, withdrawal) =>
                         AdaSimpleLedger.asTxL2(withdrawal)._1
                 )
     }

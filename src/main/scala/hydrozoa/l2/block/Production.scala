@@ -4,7 +4,10 @@ import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.merkle.RH32UtxoSetL2
 
@@ -33,12 +36,12 @@ import scala.collection.mutable
   */
 def createBlock(
     stateL2: AdaSimpleLedger[TBlockProduction],
-    poolEvents: Seq[L2NonGenesis],
+    poolEvents: Seq[NonGenesisL2],
     depositsPending: DepositUtxos,
     prevHeader: BlockHeader,
     timeCreation: PosixTime,
     finalizing: Boolean
-): Option[(Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
+): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
 
     // 1. Initialize the variables and arguments.
     // (a) Let block be a mutable variable initialized to an empty BlockL2
@@ -54,15 +57,16 @@ def createBlock(
     // FIXME: seems we can remove `utxosAdded` if we have `Option[(TxId, SimpleGenesis)]`
     // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
     // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
+    type UtxosDiffMutable = mutable.Set[(UtxoIdL2, Output[L2])]
     val utxosAdded, utxosWithdrawn: UtxosDiffMutable = mutable.Set()
 
     // 3. For each non-genesis L2 event...
     poolEvents.foreach {
-        case tx: L2Transaction =>
+        case tx: TransactionL2 =>
             stateL2.submit(tx) match
                 case Right(txId, _)   => txValid.add(txId)
                 case Left(txId, _err) => eventsInvalid.add(txId, TransactionL2EventLabel)
-        case wd: L2Withdrawal =>
+        case wd: WithdrawalL2 =>
             stateL2.submit(wd) match
                 case Right(txId, utxosDiff) =>
                     wdValid.add(txId)
@@ -133,4 +137,4 @@ def createBlock(
                 .versionMinor(prevHeader.versionMinor + 1)
                 .build
 
-    Some(block, stateL2.activeState.toMap, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
+    Some(block, stateL2.getUtxosActive, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)

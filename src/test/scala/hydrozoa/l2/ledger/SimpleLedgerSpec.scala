@@ -18,11 +18,11 @@ val address2 = AddressBechL2(
   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
 )
 
-def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): L2EventHash = {
+def doSampleGenesis(ledger: AdaSimpleLedger[THydrozoaHead]): EventHash = {
     val event = SimpleGenesis(address, 100)
     val Right(hash, _) = ledger.submit(AdaSimpleLedger.mkGenesisEvent(event))
     println(s"Genesis $hash submitted: $event")
-    println(ledger.activeState)
+    println(ledger.getUtxosActive)
     hash
 }
 
@@ -71,7 +71,7 @@ class SimpleLedgerSpec extends munit.ScalaCheckSuite {
         println(writeToString(SubmitRequestL2.Transaction(transaction)))
 
         ledger.submit(AdaSimpleLedger.mkTransactionEvent(transaction))
-        println(ledger.activeState)
+        println(ledger.getUtxosActive)
     }
 
     test("transaction sum invariant violation") {
