@@ -1,4 +1,4 @@
-package hydrozoa.node.api
+package hydrozoa.node.rest
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
@@ -16,7 +16,7 @@ import scala.concurrent.duration.{FiniteDuration, SECONDS}
 
 /** Hydrozoa Node API, currently backed by Tapir HTTP server.
   */
-class NodeApi(node: Node):
+class NodeRestApi(node: Node):
 
     private val initEndpoint = endpoint.put
         .in("init")

@@ -3,7 +3,7 @@ package hydrozoa
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.ledger.SimpleWithdrawal
 import hydrozoa.mkDefaultHydrozoaNode
-import hydrozoa.node.api.SubmitRequestL2.Withdrawal
+import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
 import hydrozoa.node.server.{DepositRequest, Node}
 import munit.FunSuite
 

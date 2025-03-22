@@ -4,7 +4,9 @@ import hydrozoa.{L1, Utxo, UtxoSet, UtxoSetMutable}
 
 import scala.collection.mutable
 
-/** This is L1 state as node's L1 provider sees it.
+/** FIXME: make it immutable!
+  *
+  * This is L1 state as node's L1 provider sees it.
   *
   * @param treasuryUtxo
   * @param depositUtxos
@@ -18,7 +20,7 @@ case class MultisigHeadStateL1(
 )
 
 object MultisigHeadStateL1:
-    def empty(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
+    def apply(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
         MultisigHeadStateL1(
           treasuryUtxo,
           UtxoSetMutable[L1, DepositTag](mutable.Map.empty),

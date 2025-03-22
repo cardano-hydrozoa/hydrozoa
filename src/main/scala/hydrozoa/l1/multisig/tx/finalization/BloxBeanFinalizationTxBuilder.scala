@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.l2.ledger.state.unwrapTxOut
-import hydrozoa.node.server.OpenHeadReader
+import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
@@ -16,7 +16,7 @@ import scala.language.postfixOps
 
 class BloxBeanFinalizationTxBuilder(
     ctx: AppCtx,
-    headStateReader: OpenHeadReader
+    reader: HeadStateReader
 ) extends FinalizationTxBuilder {
 
     private lazy val backendService = ctx.backendService
@@ -26,17 +26,17 @@ class BloxBeanFinalizationTxBuilder(
         r: FinalizationRecipe
     ): Either[String, FinalizationTx] =
 
-        val treasury = headStateReader.currentTreasuryRef
+        val treasury = reader.multisigRegime(_.currentTreasuryRef)
         val treasuryUtxo = backendService.getUtxoService
             .getTxOutput(treasury._1.hash, treasury._2.ix.intValue)
             .force
 
         // Native script
-        val headNativeScript = headStateReader.headNativeScript
+        val headNativeScript = reader.multisigRegime(_.headNativeScript)
         val script = NativeScript.deserializeScriptRef(headNativeScript.bytes)
 
         // Beacon token to burn
-        val beaconTokenName = headStateReader.beaconTokenName
+        val beaconTokenName = reader.multisigRegime(_.beaconTokenName)
         val beaconTokenAsset = AssetUtil.getUnit(script.getPolicyId, beaconTokenName)
         val beaconTokenToBurn = Asset.builder
             .name(beaconTokenName)
@@ -60,8 +60,8 @@ class BloxBeanFinalizationTxBuilder(
         )
 
         // Addresses
-        val headAddressBech32 = headStateReader.headBechAddress
-        val seedAddress = headStateReader.seedAddress
+        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
+        val seedAddress = reader.multisigRegime(_.seedAddress)
 
         val txPartial = Tx()
             .collectFrom(List(treasuryUtxo).asJava)
@@ -80,4 +80,5 @@ class BloxBeanFinalizationTxBuilder(
             .build
 
         Right(MultisigTx(TxL1(finalizationTx.serialize)))
+
 }

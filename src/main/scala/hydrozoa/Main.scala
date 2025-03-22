@@ -11,8 +11,9 @@ import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, Settleme
 import hydrozoa.l1.wallet.{MockWallet, Wallet}
 import hydrozoa.l1.{Cardano, YaciDevKitCardano}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkMock}
-import hydrozoa.node.api.NodeApi
-import hydrozoa.node.server.{OpenHeadReader, Node, NodeStateManager}
+import hydrozoa.node.rest.NodeRestApi
+import hydrozoa.node.server.Node
+import hydrozoa.node.state.{HeadStateReader, NodeState}
 
 def mkDefaultHydrozoaNode = {
     val ownKeys = genNodeKey()
@@ -24,8 +25,8 @@ def mkDefaultHydrozoaNode = {
     val cardano: Cardano = YaciDevKitCardano(ctx)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeStateManager: NodeStateManager = NodeStateManager(log)
-    val nodeStateReader: OpenHeadReader = OpenHeadReader(nodeStateManager)
+    val nodeStateManager: NodeState = NodeState()
+    val nodeStateReader: HeadStateReader = nodeStateManager.reader
 
     // Tx Builders
     val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(ctx)
@@ -38,27 +39,27 @@ def mkDefaultHydrozoaNode = {
 
     val network: HeadPeerNetwork =
         HeadPeerNetworkMock(
-            nodeStateReader,
-            initTxBuilder,
-            refundTxBuilder,
-            settlementTxBuilder,
-            finalizationTxBuilder,
-            cardano,
-            ownKeys._2
+          nodeStateReader,
+          initTxBuilder,
+          refundTxBuilder,
+          settlementTxBuilder,
+          finalizationTxBuilder,
+          cardano,
+          ownKeys._2
         )
 
     val node = Node(
-        nodeStateManager,
-        ownKeys,
-        network,
-        cardano,
-        wallet,
-        initTxBuilder,
-        depositTxBuilder,
-        refundTxBuilder,
-        settlementTxBuilder,
-        finalizationTxBuilder,
-        log
+      nodeStateManager,
+      ownKeys,
+      network,
+      cardano,
+      wallet,
+      initTxBuilder,
+      depositTxBuilder,
+      refundTxBuilder,
+      settlementTxBuilder,
+      finalizationTxBuilder,
+      log
     )
     (log, node)
 }
@@ -70,5 +71,5 @@ object HydrozoaNodeServer:
         val (log: Logger, node: Node) = mkDefaultHydrozoaNode
 
         log.warn("Starting Hydrozoa Node API Server...")
-        NodeApi(node).start()
+        NodeRestApi(node).start()
     }

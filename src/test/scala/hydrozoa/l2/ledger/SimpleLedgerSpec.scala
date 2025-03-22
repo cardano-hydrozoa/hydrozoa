@@ -3,7 +3,7 @@ package hydrozoa.l2.ledger
 import com.github.plokhotnyuk.jsoniter_scala.core.writeToString
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.infra.encodeHex
-import hydrozoa.node.api.{SubmitRequestL2, given}
+import hydrozoa.node.rest.{SubmitRequestL2, given}
 import hydrozoa.{AddressBechL2, OutputRefL2, TxId, TxIx}
 
 def mkLedger: AdaSimpleLedger[THydrozoaHead] = {
