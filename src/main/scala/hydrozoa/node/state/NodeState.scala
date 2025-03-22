@@ -35,7 +35,7 @@ class NodeState():
 
     // Returns read-only API for head state.
     val reader: HeadStateReader = new {
-        override def currentState: HeadPhase = getOrThrow.currentState
+        override def currentPhase: HeadPhase = getOrThrow.currentPhase
         override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
             getOrThrow.multisigRegimeReader(foo)
         override def initializingPhaseReader[A](foo: InitializingPhaseReader => A): A =

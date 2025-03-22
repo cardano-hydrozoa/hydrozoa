@@ -21,7 +21,7 @@ enum HeadPhase:
 
 trait HeadStateReader:
     // All regimes/phases
-    def currentState: HeadPhase
+    def currentPhase: HeadPhase
     // Regime-specific APIs
     def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A
     // Phase-specific APIs
@@ -39,7 +39,7 @@ extension (r: HeadStateReader) {
 
 trait HeadState:
     // All regimes/phases
-    def currentState: HeadPhase
+    def currentPhase: HeadPhase
     // Phase-specific APIs
     def initializingPhase[A](foo: InitializingPhase => A): A
     def openPhase[A](foo: OpenPhase => A): A
@@ -123,7 +123,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
     self =>
 
     //
-    def currentState: HeadPhase = headPhase
+    def currentPhase: HeadPhase = headPhase
 
     //
     private var initialTreasury: Option[TreasuryUtxo] = None
