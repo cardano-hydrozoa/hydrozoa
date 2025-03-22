@@ -1,13 +1,15 @@
 package hydrozoa.l1.multisig.tx.refund
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{addressToBloxbean, mkBuilder, txOutputToUtxo}
+import hydrozoa.infra.{addressToBloxbean, mkBuilder, toBloxbean, txOutputToUtxo}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
@@ -20,12 +22,12 @@ import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
 
 class BloxBeanRefundTxBuilder(
-    ctx: AppCtx,
+    cardanoL1: CardanoL1,
+    backendService: BackendService,
     reader: HeadStateReader
 ) extends RefundTxBuilder {
 
-    private val backendService = ctx.backendService
-    private val builder = mkBuilder[Tx](ctx)
+    private val builder = mkBuilder[Tx](backendService)
 
     override def mkPostDatedRefundTxDraft(
         r: PostDatedRefundRecipe
@@ -46,7 +48,7 @@ class BloxBeanRefundTxBuilder(
 
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
-        val refundAddress = addressToBloxbean(ctx.network, datum.refundAddress)
+        val refundAddress = addressToBloxbean(cardanoL1.network.toBloxbean, datum.refundAddress)
 
         // TODO: Not the best place
         // TODO: can be checked afterwards see https://github.com/cardano-hydrozoa/hydrozoa/issues/62
@@ -62,7 +64,7 @@ class BloxBeanRefundTxBuilder(
         // val beginSlot = ...
 
         // TODO: temporary workaround - add 60 slots to the tip
-        val lastBlockSlot = ctx.backendService.getBlockService.getLatestBlock.getValue.getSlot
+        val lastBlockSlot = backendService.getBlockService.getLatestBlock.getValue.getSlot
         val beginSlot = lastBlockSlot + 60
 
         val txPartial = Tx()

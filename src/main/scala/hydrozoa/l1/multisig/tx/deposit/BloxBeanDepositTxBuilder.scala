@@ -3,6 +3,7 @@ package hydrozoa.l1.multisig.tx.deposit
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.ada
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
@@ -17,12 +18,11 @@ import scalus.builtin.Data.toData
 import scala.jdk.CollectionConverters.*
 
 class BloxBeanDepositTxBuilder(
-    ctx: AppCtx,
+    backendService: BackendService,
     reader: HeadStateReader
 ) extends DepositTxBuilder {
 
-    private val backendService = ctx.backendService
-    private val builder = mkBuilder[Tx](ctx)
+    private val builder = mkBuilder[Tx](backendService)
 
     override def buildDepositTxDraft(r: DepositTxRecipe): Either[String, (DepositTx, TxIx)] =
 

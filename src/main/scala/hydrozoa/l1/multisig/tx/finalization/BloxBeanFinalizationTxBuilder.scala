@@ -1,6 +1,7 @@
 package hydrozoa.l1.multisig.tx.finalization
 
 import com.bloxbean.cardano.client.api.util.AssetUtil
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
@@ -15,12 +16,11 @@ import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
 
 class BloxBeanFinalizationTxBuilder(
-    ctx: AppCtx,
+    backendService: BackendService,
     reader: HeadStateReader
 ) extends FinalizationTxBuilder {
 
-    private lazy val backendService = ctx.backendService
-    private lazy val builder = mkBuilder[Tx](ctx)
+    private lazy val builder = mkBuilder[Tx](backendService)
 
     override def buildFinalizationTxDraft(
         r: FinalizationRecipe

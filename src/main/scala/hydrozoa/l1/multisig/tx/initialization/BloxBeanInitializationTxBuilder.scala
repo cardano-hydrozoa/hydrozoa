@@ -2,6 +2,7 @@ package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount.{ada, asset, lovelace}
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
@@ -15,10 +16,9 @@ import scalus.builtin.Data.toData
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
-class BloxBeanInitializationTxBuilder(ctx: AppCtx) extends InitTxBuilder {
+class BloxBeanInitializationTxBuilder(backendService: BackendService) extends InitTxBuilder {
 
-    private val backendService = ctx.backendService
-    private val builder = mkBuilder[Tx](ctx)
+    private val builder = mkBuilder[Tx](backendService)
 
     /** @param recipe
       *   recipe

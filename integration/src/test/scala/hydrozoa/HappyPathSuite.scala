@@ -1,6 +1,8 @@
 package hydrozoa
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.txHash
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l2.ledger.SimpleWithdrawal
 import hydrozoa.mkDefaultHydrozoaNode
 import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
@@ -8,20 +10,10 @@ import hydrozoa.node.server.{DepositRequest, Node}
 import munit.FunSuite
 
 /** This integration test runs simple Hydrozoa happy-path.
-  *
-  * It requires a Blockfrost API available. Use Yaci Devkit to run this test.
-  *
-  * {{{
-  *  devkit start
-  *  create-node
-  *  start
-  *  ...
-  *  reset
-  * }}}
   */
 class HappyPathSuite extends FunSuite {
 
-    private val (log: Logger, node: Node) = mkDefaultHydrozoaNode
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkDefaultHydrozoaNode
 
     override def beforeAll(): Unit = {
 //        val params = Try(node...)
@@ -40,7 +32,7 @@ class HappyPathSuite extends FunSuite {
               TxIx(0)
             )
 
-            _ = Thread.sleep(3000)
+            _ = cardano.awaitTx(initTxId)
 
             deposit1 <- node.deposit(
               DepositRequest(
@@ -58,7 +50,7 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            _ = Thread.sleep(3000)
+            _ = cardano.awaitTx(deposit1.depositId.txId)
 
             deposit2 <- node.deposit(
               DepositRequest(
@@ -76,20 +68,20 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            _ = Thread.sleep(3000)
+            _ = cardano.awaitTx(deposit2.depositId.txId)
 
             major1 <- node.handleNextBlock(false)
-            _ = Thread.sleep(3000)
+            _ = cardano.awaitTx(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
 
             utxoL2 = major1._2.head
 
-            withdrawal1 <- node.submitL2(Withdrawal(SimpleWithdrawal(utxoL2._1)))
+            _ <- node.submitL2(Withdrawal(SimpleWithdrawal(utxoL2._1)))
 
-            major1 <- node.handleNextBlock(true)
-            _ = Thread.sleep(3000)
+            major2 <- node.handleNextBlock(true)
+            _ = cardano.awaitTx(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
 
-            major2 <- node.handleNextBlock(false)
-            _ = Thread.sleep(3000)
+            finalBlock <- node.handleNextBlock(false)
+            _ = cardano.awaitTx(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
 
         yield ()
 
