@@ -4,11 +4,9 @@ import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
-}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
+import hydrozoa.l2.merkle.RH32UtxoSetL2
 
 import scala.collection.mutable
 

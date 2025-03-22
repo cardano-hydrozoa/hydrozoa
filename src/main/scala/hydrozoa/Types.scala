@@ -61,6 +61,9 @@ object UtxoIdL2:
 // FIXME: migrate to Value
 case class Output[L <: AnyLevel](address: AddressBechL1, coins: BigInt)
 
+type OutputL1 = Output[L1]
+type OutputL2 = Output[L2]
+
 // FIXME: We also neew Utxo without MltisigUtxoTag
 case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
 

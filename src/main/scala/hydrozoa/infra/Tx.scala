@@ -155,24 +155,6 @@ def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOu
         .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
         .build
 
-//def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
-//    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
-//    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
-//    TransactionOutput.builder
-//        .address(
-//          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
-//        ) // FIXME: network
-//        .value(Value.builder.coin(coins.bigInteger).build)
-//        .build
-
-//def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
-//    TransactionInput
-//        .builder()
-//        .transactionId(input.id.hash.toHex)
-//        .index(input.idx.intValue)
-//        .build()
-//}
-
 // ----------------------------------------------------------------------------
 // Cardano L2 transactions for the simplified ledger
 // ----------------------------------------------------------------------------

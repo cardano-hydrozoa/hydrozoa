@@ -4,10 +4,8 @@ import hydrozoa.*
 import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
-}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.merkle.RH32UtxoSetL2
 
 case class Block(
     blockHeader: BlockHeader,
@@ -41,12 +39,8 @@ object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
 // FIXME: should come form ledger/node
-type UtxoSetL2 = Map[UtxoIdL2, Output[L2]]
 
-opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 
-object RH32UtxoSetL2:
-    def dummy: RH32UtxoSetL2 = H32.hash(IArray()) // TODO: implement
 
 /*
 Block builder. Missing checks:
