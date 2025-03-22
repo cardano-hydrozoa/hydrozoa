@@ -1,6 +1,6 @@
 package hydrozoa.l2.block
 
-import hydrozoa.{L1, UtxoIdL1, TxId, TxIx}
+import hydrozoa.{TxId, TxIx, UtxoIdL1}
 
 class BlockBuilderSpec extends munit.ScalaCheckSuite {
 
@@ -85,16 +85,16 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
     }
 
     test("major blocks") {
-        val minorBlock1 = BlockBuilder().blockNum(42).versionMajor(5).majorBlock.build;
-        println(minorBlock1)
+        val majorBlock1 = BlockBuilder().blockNum(42).versionMajor(5).majorBlock.build;
+        println(majorBlock1)
 
-        val minorBlock2 = BlockBuilder().majorBlock.blockNum(42).versionMajor(5).build;
-        println(minorBlock2)
+        val majorBlock2 = BlockBuilder().majorBlock.blockNum(42).versionMajor(5).build;
+        println(majorBlock2)
     }
 
     test("final block") {
-        val minorBlock = BlockBuilder().finalBlock.blockNum(42).versionMajor(5).build;
-        println(minorBlock)
+        val finalBlock = BlockBuilder().finalBlock.blockNum(42).versionMajor(5).build;
+        println(finalBlock)
     }
 
     test("major can't be promoted as final") {
