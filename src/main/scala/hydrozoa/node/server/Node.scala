@@ -407,7 +407,7 @@ class Node(
                     )
                     finalizationTx
 
-        val (maybeNewBlock, finalizeHead) = nodeState.head.currentState match
+        val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
             case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
             case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
             case phase =>
