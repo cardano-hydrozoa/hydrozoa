@@ -419,7 +419,7 @@ class Node(
                 val l1effect = handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
                 //
                 val record = BlockRecord(block, l1effect, (), ())
-                nodeState.head.currentState match
+                nodeState.head.currentPhase match
                     case HeadPhase.Open       => nodeState.head.openPhase(_.addBlock(record))
                     case HeadPhase.Finalizing => nodeState.head.finalizingPhase(_.closeHead(record))
                 if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
