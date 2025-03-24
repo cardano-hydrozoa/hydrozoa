@@ -13,25 +13,31 @@ sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
 
-type UtxosDiff = Set[(OutputRefL2, Output[L2])]
-type UtxosDiffMutable = mutable.Set[(OutputRefL2, Output[L2])] // FIXME L2
+// TODO: Add phantom type to reflect the purpose.
+type UtxosSet = Set[(UtxoIdL2, Output[L2])]
 
 // FIXME: move InstancePurpose to L2Ledger
+// FIXME: don't combine case class and "state"-class
 case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
-    verifier: Verifier[L2Event]
+    verifier: Verifier[EventL2]
 ) extends L2Ledger[
-      UtxosSetOpaqueMutable,
+      UtxosSetOpaque,
+      UtxosSet,
+      EventHash,
       SimpleGenesis,
       SimpleTransaction,
       SimpleWithdrawal,
-      UtxosDiff,
-      L2Event,
-      L2EventHash,
-      Verifier[L2Event]
+      EventL2
     ]:
-    
-    // FIXME: make it private
-    val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
+
+    private val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
+
+    override def getUtxosActive: UtxosSetOpaque = activeState.clone.toMap
+
+    override def replaceUtxosActive(activeState: UtxosSetOpaque): Unit =
+        // TODO: revise
+        this.activeState.clear()
+        this.activeState.addAll(activeState)
 
     /** Makes a copy of the current ledger for block production purposes.
       * @param ev
@@ -39,27 +45,28 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       * @return
       *   cloned ledger
       */
-    def blockProduction(using ev: InstancePurpose =:= THydrozoaHead
+    def blockProduction(using
+        ev: InstancePurpose =:= THydrozoaHead
     ): AdaSimpleLedger[TBlockProduction] =
         val ledgerForBlockProduction: AdaSimpleLedger[TBlockProduction] = copy()
-        ledgerForBlockProduction.updateUtxosActive(activeState.clone().toMap)
+        ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
         ledgerForBlockProduction
 
-    override def submit[E1 <: L2Event](
+    override def submit[E1 <: EventL2](
         event: E1
-    ): Either[(L2EventHash, String), (L2EventHash, event.UtxosDiff)] =
+    ): Either[(EventHash, String), (EventHash, event.UtxosDiff)] =
         require(verifier.isValid(event), true)
         event match
-            case genesis: L2Genesis       => handleGenesis(genesis)
-            case tx: L2Transaction        => handleTransaction(tx)
-            case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
+            case genesis: GenesisL2       => handleGenesis(genesis)
+            case tx: TransactionL2        => handleTransaction(tx)
+            case withdrawal: WithdrawalL2 => handleWithdrawal(withdrawal)
 
-    private def handleGenesis(event: L2Genesis) =
+    private def handleGenesis(event: GenesisL2) =
         val (_, txId) = AdaSimpleLedger.asTxL2(event.genesis)
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = OutputRefL2(txId, TxIx(output._2))
+                val txIn = UtxoIdL2(txId, TxIx(output._2))
                 val txOut = Output[L2](output._1.address.asL1, output._1.coins)
                 (txIn, txOut)
             )
@@ -67,7 +74,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiffInt = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
                 val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
@@ -76,7 +83,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         activeState.addAll(utxoDiffInt)
         Right((txId, utxoDiff))
 
-    private def handleTransaction(event: L2Transaction) =
+    private def handleTransaction(event: TransactionL2) =
         val (_, txId) = AdaSimpleLedger.asTxL2(event.transaction)
 
         resolveInputs(event.transaction.inputs) match
@@ -85,7 +92,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case Right(oldUtxos) =>
                 // Outputs
                 val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-                    val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
+                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
                     val txOut = liftOutput(output._1.address, output._1.coins)
                     (txIn, txOut)
                 )
@@ -99,9 +106,9 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                     inputRefs.foreach(activeState.remove)
                     newUtxos.foreach(activeState.put.tupled)
 
-                    Right((txId, Set[(OutputRefL2, Output[L2])]()))
+                    Right((txId, Set[(UtxoIdL2, Output[L2])]()))
 
-    private def handleWithdrawal(event: L2Withdrawal) =
+    private def handleWithdrawal(event: WithdrawalL2) =
         val (_, txId) = AdaSimpleLedger.asTxL2(event.withdrawal)
 
         resolveInputs(event.withdrawal.inputs) match
@@ -121,8 +128,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       *   Left if
       */
     private def resolveInputs(
-        inputs: List[OutputRefL2]
-    ): Either[List[OutputRefL2], List[(OutputRefInt, OutputInt, (OutputRefL2, Output[L2]))]] =
+        inputs: List[UtxoIdL2]
+    ): Either[List[UtxoIdL2], List[(OutputRefInt, OutputInt, (UtxoIdL2, Output[L2]))]] =
         inputs
             .map { e =>
                 val outputRefInt = liftOutputRef(e)
@@ -136,20 +143,15 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
     override def isEmpty: Boolean = activeState.isEmpty
 
-    override def flush: UtxosDiff =
+    override def flush: UtxosSet =
         val ret = activeState.clone()
         activeState.clear()
         ret.toSet.map((k, v) => (unliftOutputRef(k), unliftOutput(v)))
 
-    override def updateUtxosActive(activeState: UtxosSetOpaque): Unit =
-        // TODO: revise
-        this.activeState.clear()
-        this.activeState.addAll(activeState)
-
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
 
-    def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, L2EventHash) =
+    def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, EventHash) =
         event match
             case genesis: SimpleGenesis =>
                 val cardanoTx = mkCardanoTxForL2Genesis(genesis)
@@ -167,17 +169,17 @@ object AdaSimpleLedger:
                 println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
 
-    def mkGenesisEvent(genesis: SimpleGenesis): L2Genesis =
+    def mkGenesisEvent(genesis: SimpleGenesis): GenesisL2 =
         val (_, txId) = asTxL2(genesis)
-        GenesisL2Event(txId, genesis)
+        GenesisEventL2(txId, genesis)
 
-    def mkTransactionEvent(tx: SimpleTransaction): L2Transaction =
+    def mkTransactionEvent(tx: SimpleTransaction): TransactionL2 =
         val (_, txId) = asTxL2(tx)
-        TransactionL2Event(txId, tx)
+        TransactionEventL2(txId, tx)
 
-    def mkWithdrawalEvent(withdrawal: SimpleWithdrawal): L2Withdrawal =
+    def mkWithdrawalEvent(withdrawal: SimpleWithdrawal): WithdrawalL2 =
         val (_, txId) = asTxL2(withdrawal)
-        WithdrawalL2Event(txId, withdrawal)
+        WithdrawalEventL2(txId, withdrawal)
 
 case class SimpleGenesis(
     outputs: List[SimpleOutput]
@@ -196,21 +198,21 @@ def liftAddress(l: AddressBechL1): AddressBechL2 = AddressBechL2.apply(l.bech32)
 
 case class SimpleTransaction(
     // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[OutputRefL2],
+    inputs: List[UtxoIdL2],
     outputs: List[SimpleOutput]
 )
 
 object SimpleTransaction:
-    def apply(input: OutputRefL2, address: AddressBechL2, ada: Int): SimpleTransaction =
+    def apply(input: UtxoIdL2, address: AddressBechL2, ada: Int): SimpleTransaction =
         SimpleTransaction(List(input), List(SimpleOutput(address, ada)))
 
 case class SimpleWithdrawal(
     // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[OutputRefL2]
+    inputs: List[UtxoIdL2]
 )
 
 object SimpleWithdrawal:
-    def apply(utxo: OutputRefL2): SimpleWithdrawal =
+    def apply(utxo: UtxoIdL2): SimpleWithdrawal =
         SimpleWithdrawal(List(utxo))
 
 case class SimpleOutput(
@@ -218,20 +220,20 @@ case class SimpleOutput(
     coins: BigInt
 )
 
-type L2Event = AnyL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type EventL2 = AnyEventL2[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet]
 
-type L2Genesis = GenesisL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type GenesisL2 = GenesisEventL2[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet]
 
-type L2NonGenesis =
-    NonGenesisL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type NonGenesisL2 =
+    NonGenesisEventL2[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet]
 
-type L2Transaction =
-    TransactionL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type TransactionL2 =
+    TransactionEventL2[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet]
 
-type L2Withdrawal =
-    WithdrawalL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type WithdrawalL2 =
+    WithdrawalEventL2[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet]
 
-type L2EventHash = TxId
+type EventHash = TxId
 
 object NoopVerifier extends Verifier[Any]:
     def isValid(_event: Any) = true

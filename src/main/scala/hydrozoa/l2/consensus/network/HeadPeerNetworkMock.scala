@@ -8,7 +8,7 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.ledger.UtxosDiff
+import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.state.HeadStateReader
 import hydrozoa.{ParticipantVerificationKey, TxKeyWitness}
 
@@ -63,7 +63,7 @@ class HeadPeerNetworkMock(
     override def reqMinor(block: Block): Set[AckMinor] =
         Set(keys1, keys2).map(_ => AckMinor(block.blockHeader, (), false))
 
-    override def reqMajor(block: Block, utxosWithdrawn: UtxosDiff): Set[AckMajorCombined] =
+    override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
         // TODO: check block type
         val recipe =
             SettlementRecipe(
@@ -84,7 +84,7 @@ class HeadPeerNetworkMock(
             )
         )
 
-    override def reqFinal(block: Block, utxosWithdrawn: UtxosDiff): Set[AckFinalCombined] =
+    override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
         // TODO: check block type
         val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
 

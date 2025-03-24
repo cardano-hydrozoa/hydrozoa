@@ -10,7 +10,7 @@ import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 type InitializeError = String
 
 // Simple depositing
-type DepositId = OutputRefL1
+type DepositId = UtxoIdL1
 
 case class DepositRequest(
     txId: TxId,
