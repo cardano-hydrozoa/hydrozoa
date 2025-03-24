@@ -28,7 +28,7 @@ lazy val core = (project in file("."))
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
+        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
 //        "org.scalactic" %% "scalactic" % "3.2.19",
 //        "org.scalatest" %% "scalatest" % "3.2.19" % Test
       )
@@ -51,7 +51,8 @@ lazy val integration = (project in file("integration"))
       publish / skip := true,
       // test dependencies
       libraryDependencies ++= Seq(
-        "org.scalameta" %% "munit" % "1.1.0" % Test
+        "org.scalameta" %% "munit" % "1.1.0" % Test,
+        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
       )
     )
 val scalusVersion = "0.8.5"

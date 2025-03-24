@@ -58,3 +58,10 @@ class NodeState():
 /** Represent a node (Hydrozoa process) run by a peer (a user/operator).
   */
 case class Peer()
+
+object NodeState:
+    def apply(headState: Option[HeadStateGlobal]): NodeState =
+        // TODO: @atlanter: is there a way to make it more concise?
+        val nodeState = new NodeState()
+        nodeState.headState = headState
+        nodeState

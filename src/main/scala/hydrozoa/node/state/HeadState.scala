@@ -118,7 +118,7 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
+class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
     extends HeadStateReader
     with HeadState {
     self =>

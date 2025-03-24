@@ -1,10 +1,10 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l2.ledger.SimpleWithdrawal
-import hydrozoa.mkDefaultHydrozoaNode
 import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
 import hydrozoa.node.server.{DepositRequest, Node}
 import munit.FunSuite
@@ -13,7 +13,9 @@ import munit.FunSuite
   */
 class HappyPathSuite extends FunSuite {
 
-    private val (log: Logger, node: Node, cardano: CardanoL1) = mkDefaultHydrozoaNode
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkSimpleHydrozoaNode(
+      Utils.protocolParams
+    )
 
     override def beforeAll(): Unit = {
 //        val params = Try(node...)
@@ -82,7 +84,6 @@ class HappyPathSuite extends FunSuite {
 
             finalBlock <- node.handleNextBlock(false)
             _ = cardano.awaitTx(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-
         yield ()
 
         result match
