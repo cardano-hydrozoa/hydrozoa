@@ -28,53 +28,53 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val inputsRefs = r.deposits.toSet + reader.multisigRegime(_.currentTreasuryRef)
+        val inputsIds = r.deposits.toSet + reader.multisigRegime(_.currentTreasuryRef)
 
-        val inputUtxos: Set[Utxo] =
-            inputsRefs.map(r =>
+        val utxoInput: Set[Utxo] =
+            inputsIds.map(r =>
                 backendService.getUtxoService.getTxOutput(r.txId.hash, r.outputIx.ix.toInt).force
             )
 
-        val outputsWithdrawn =
+        val outputsToWithdraw =
             r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
 
-        val withdrawnAda =
-            outputsWithdrawn.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
+        val withdrawnCoins =
+            outputsToWithdraw.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
 
         // FIXME: factor out this calculation
         val treasuryValue: List[Amount] =
-            inputUtxos.toList.flatMap(u => u.getAmount.asScala)
+            utxoInput.toList.flatMap(u => u.getAmount.asScala)
 
         // Subtract withdrawn lovelace
         treasuryValue.foreach(a =>
             if a.getUnit.equals("lovelace") then
-                a.setQuantity((a.getQuantity.subtract(withdrawnAda)))
+                a.setQuantity((a.getQuantity.subtract(withdrawnCoins)))
         )
 
-        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
+        val headAddressBech32 = reader.multisigRegime(_.headBechAddress).bech32
 
         val treasuryDatum = Interop.toPlutusData(
           mkMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
         )
 
         val txPartial = Tx()
-            .collectFrom(inputUtxos.asJava)
+            .collectFrom(utxoInput.asJava)
             .payToContract(
-              headAddressBech32.bech32,
+              headAddressBech32,
               treasuryValue.asJava,
               treasuryDatum
             )
-            .from(headAddressBech32.bech32)
+            .from(headAddressBech32)
 
-        val headNativeScript = reader.multisigRegime(_.headNativeScript)
-        val nativeScript = NativeScript.deserializeScriptRef(headNativeScript.bytes)
+        val headNativeScript =
+            NativeScript.deserializeScriptRef(reader.multisigRegime(_.headNativeScript).bytes)
 
         val settlementTx = builder
             .apply(txPartial)
-            // Should be one
+            // .preBalanceTx should be called only once
             .preBalanceTx((_, t) =>
-                t.getWitnessSet.getNativeScripts.add(nativeScript)
-                t.getBody.getOutputs.addAll(outputsWithdrawn.asJava)
+                t.getWitnessSet.getNativeScripts.add(headNativeScript)
+                t.getBody.getOutputs.addAll(outputsToWithdraw.asJava)
             )
             // TODO: magic numbers
             .additionalSignersCount(3)
