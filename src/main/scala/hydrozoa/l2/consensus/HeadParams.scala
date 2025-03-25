@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus
 
-import hydrozoa.{Network, ParticipantVerificationKey, UDiffTimeMilli}
+import hydrozoa.{Network, PeerPublicKeyBytes, UDiffTimeMilli}
 
 /** @param l2NetworkId
   * @param participants
@@ -27,8 +27,8 @@ object HeadParams:
   *   collection won't be run if it's too close to the deadline (seconds)
   */
 case class L2ConsensusParams(
-                                depositMarginMaturity: UDiffTimeMilli,
-                                depositMarginExpiry: UDiffTimeMilli
+    depositMarginMaturity: UDiffTimeMilli,
+    depositMarginExpiry: UDiffTimeMilli
 )
 
 object L2ConsensusParams:

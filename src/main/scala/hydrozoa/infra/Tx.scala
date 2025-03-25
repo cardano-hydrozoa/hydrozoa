@@ -17,7 +17,6 @@ import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
-import scalus.ledger.api.v1
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -37,52 +36,6 @@ def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) 
         case tx: Tx[L]               => tx.bytes
 
 def deserializeTxHex[L <: AnyLevel](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
-
-// Pure function to create a transaction key witness with a HD key.
-// TODO: handle exceptions
-def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T], pair: HdKeyPair): TxKeyWitness = {
-
-    // See TransactionSigner
-
-    val txBytes = TransactionBytes(tx.toL1Tx.bytes)
-    val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
-    val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
-    val signature = signingProvider.signExtended(
-      txnBodyHash,
-      pair.getPrivateKey.getKeyData,
-      pair.getPublicKey.getKeyData
-    )
-    TxKeyWitness(signature, pair.getPublicKey.getKeyData)
-}
-
-// Pure function to create a transaction key witness with a peer node's key.
-// TODO: handle exceptions
-def createTxKeyWitness[T <: MultisigTxTag](
-    tx: MultisigTx[T],
-    participantKey: ParticipantSecretKey
-): TxKeyWitness = {
-
-    // See TransactionSigner
-
-    val secretKey = SecretKey.create(participantKey.bytes)
-    val txBytes = TransactionBytes(tx.toL1Tx.bytes)
-    val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
-    val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
-
-    val (signature, vKey) =
-        if (secretKey.getBytes.length == 64) { // extended pvt key (most prob for regular account)
-            // check for public key
-            val vBytes = HdKeyGenerator.getPublicKey(secretKey.getBytes)
-            val vKey = VerificationKey.create(vBytes)
-            val sig = signingProvider.signExtended(txnBodyHash, secretKey.getBytes, vBytes)
-            (sig, vKey)
-        } else {
-            val sig = signingProvider.sign(txnBodyHash, secretKey.getBytes)
-            val vKey = KeyGenUtil.getPublicKeyFromPrivateKey(secretKey)
-            (sig, vKey)
-        }
-    TxKeyWitness(signature, vKey.getBytes)
-}
 
 // Pure function to add a key witness to a transaction.
 def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] = {
@@ -136,18 +89,11 @@ def onlyOutputToAddress(
 final class NoMatch
 final class TooManyMatches
 
-def outputDatum(tx: TxAny, index: TxIx): Data =
-    val tx_ = Transaction.deserialize(tx.bytes)
-    val output = tx_.getBody.getOutputs.get(index.ix.intValue)
-    val datum = output.getInlineDatum
-    Interop.toScalusData(datum)
-
-// TODO: unused
-//def txInputs[L <: AnyLevel](tx: TxAny): Set[OutputRef[L]] =
+//def outputDatum(tx: TxAny, index: TxIx): Data =
 //    val tx_ = Transaction.deserialize(tx.bytes)
-//    tx_.getBody.getInputs.asScala
-//        .map(ti => OutputRef[L](TxId(ti.getTransactionId), TxIx(ti.getIndex)))
-//        .toSet
+//    val output = tx_.getBody.getOutputs.get(index.ix.intValue)
+//    val datum = output.getInlineDatum
+//    Interop.toScalusData(datum)
 
 def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOutput =
     TransactionOutput.builder

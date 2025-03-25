@@ -13,7 +13,6 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
-import hydrozoa.l1.wallet.Wallet
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
@@ -23,15 +22,14 @@ import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
-import hydrozoa.node.state.{BlockRecord, HeadPhase, L1BlockEffect, NodeState}
+import hydrozoa.node.state.*
 import scalus.prelude.Maybe
 
 class Node(
     nodeState: NodeState,
-    ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
+    ownPeer: Peer,
     network: HeadPeerNetwork,
     cardano: CardanoL1,
-    wallet: Wallet,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
     refundTxBuilder: RefundTxBuilder,
@@ -43,7 +41,12 @@ class Node(
     // FIXME: find the proper place for it
     private var multisigL1EventManager: Option[MultisigL1EventManager] = None
 
-    def initializeHead(ada: Long, txId: TxId, txIx: TxIx): Either[InitializeError, TxId] = {
+    def initializeHead(
+        headPeers: Set[PeerInfo],
+        ada: Long,
+        txId: TxId,
+        txIx: TxIx
+    ): Either[InitializeError, TxId] = {
 
         // FIXME: Check there is no head or it's closed
 
@@ -51,12 +54,11 @@ class Node(
 
         // Make a recipe to build init tx
 
-        // All nodes' verification keys
-        val vKeys = network.participantsKeys() + ownKeys._2
+        val headPublicKeys = network.reqPublicKeys(headPeers) + ownPeer.getPublicKey
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(vKeys, cardano.network)
+            mkHeadNativeScriptAndAddress(headPublicKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
         val treasuryCoins = ada * 1_000_000
         val initTxRecipe = InitTxRecipe(
@@ -67,18 +69,20 @@ class Node(
           beaconTokenName
         )
 
+        log.info(s"initTxRecipe: $initTxRecipe")
+        
         // Builds and balance initialization tx
         val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
             case Right(v, seedAddress) => (v, seedAddress)
             case Left(err)             => return Left(err)
 
-        val ownWit: TxKeyWitness = createTxKeyWitness(txDraft, ownKeys._1)
+        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
 
-        val peersWits: Set[TxKeyWitness] = network.reqInit(ReqInit(seedOutput, treasuryCoins))
+        val peersWits: Set[TxKeyWitness] = network.reqInit(headPeers, ReqInit(seedOutput, treasuryCoins))
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
-        val userWit = wallet.createTxKeyWitness(txDraft)
+        val userWit = ownPeer.createTxKeyWitness(txDraft)
 
         // All wits are here, we can sign and submit
         val wits = peersWits + ownWit + userWit
@@ -92,7 +96,7 @@ class Node(
                 // Put the head into Initializing phase
 
                 // FIXME: Peers
-                nodeState.initializeHead(List.empty)
+                nodeState.initializeHead(headPeers.toList)
 
                 log.info(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
@@ -195,7 +199,7 @@ class Node(
         TxDump.dumpMultisigTx(refundTxDraft)
 
         // Own signature
-        val ownWit: TxKeyWitness = createTxKeyWitness(refundTxDraft, ownKeys._1)
+        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(refundTxDraft)
 
         // ReqRefundLater
         // TODO: Add a comment to explain how it's guaranteed that
@@ -213,7 +217,7 @@ class Node(
         // TODO temporarily we submit the deposit tx here
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(depositTxDraft, wallet.createTxKeyWitness(depositTxDraft)).toL1Tx
+              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft)).toL1Tx
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
@@ -303,10 +307,10 @@ class Node(
             }
 
         def handleNewBlock(
-                              block: Block,
-                              utxosActive: UtxosSetOpaque,
-                              utxosWithdrawn: UtxosSet,
-                              mbGenesis: Option[(TxId, SimpleGenesis)]
+            block: Block,
+            utxosActive: UtxosSetOpaque,
+            utxosWithdrawn: UtxosSet,
+            mbGenesis: Option[(TxId, SimpleGenesis)]
         ): L1BlockEffect =
             block.blockHeader.blockType match
                 case Minor =>
@@ -327,8 +331,7 @@ class Node(
                     )
                     val Right(settlementTxDraft: SettlementTx) =
                         settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-                    val ownWit: TxKeyWitness =
-                        createTxKeyWitness(settlementTxDraft, ownKeys._1)
+                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
                     // TODO: broadcast ownWit
                     // Confirm block
                     val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
@@ -373,8 +376,7 @@ class Node(
                         FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
                     val Right(finalizationTxDraft: FinalizationTx) =
                         finalizationTxBuilder.buildFinalizationTxDraft(recipe)
-                    val ownWit: TxKeyWitness =
-                        createTxKeyWitness(finalizationTxDraft, ownKeys._1)
+                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
                     // TODO: broadcast ownWit
 
                     // Confirm block

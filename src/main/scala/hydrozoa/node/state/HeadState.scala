@@ -1,4 +1,5 @@
 package hydrozoa.node.state
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.{FinalizationTx, InitializationTx, SettlementTx}
@@ -53,9 +54,10 @@ trait HeadState:
 sealed trait HeadStateReaderApi
 
 sealed trait InitializingPhaseReader extends HeadStateReaderApi:
-    def headPeers: List[Peer]
+    def headPeers: List[PeerInfo]
 
 sealed trait MultisigRegimeReader extends HeadStateReaderApi:
+    def headPeers: Set[PeerInfo]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
@@ -118,7 +120,7 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
+class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[PeerInfo])
     extends HeadStateReader
     with HeadState {
     self =>
@@ -189,6 +191,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
     // Subclasses that implements APIs (readers)
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
+        def headPeers: Set[PeerInfo] = self.headPeers.toSet
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
@@ -197,7 +200,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
-        def headPeers: List[Peer] = self.headPeers
+        def headPeers: List[PeerInfo] = self.headPeers
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
@@ -318,7 +321,10 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
 }
 
 object HeadStateGlobal:
-    def apply(peers: List[Peer]): HeadStateGlobal =
+    val log: Logger = Logger(getClass)
+    def apply(peers: List[PeerInfo]): HeadStateGlobal =
+        assert(peers.length >= 2, "The number of peers should be >= 2")
+        log.info(s"Creating head state global with peers: $peers")
         new HeadStateGlobal(headPhase = Initializing, headPeers = peers)
 
 case class BlockRecord(

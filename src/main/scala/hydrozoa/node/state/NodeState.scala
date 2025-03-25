@@ -1,5 +1,6 @@
 package hydrozoa.node.state
 
+import com.bloxbean.cardano.client.crypto.bip32.HdKeyPair
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 
@@ -12,18 +13,18 @@ class NodeState():
     val log: Logger = Logger(getClass)
 
     // All known peers in a peer network (not to confuse with head's pears)
-    private var knownPeers: mutable.Set[Peer] = mutable.Set.empty
+    private var knownPeers: mutable.Set[PeerInfo] = mutable.Set.empty
 
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
     // seedUtxo: ???
-    def initializeHead(peers: List[Peer]): Unit =
+    def initializeHead(peers: List[PeerInfo]): Unit =
         headState match
             case None =>
-                log.info("Initializing a new head.")
+                log.info(s"Initializing a new head for peers: $peers")
                 this.headState = Some(HeadStateGlobal(peers))
-            // FIXME
+            // FIXME:
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>
                 val err = "The head is already initialized."
@@ -57,11 +58,13 @@ class NodeState():
 
 /** Represent a node (Hydrozoa process) run by a peer (a user/operator).
   */
-case class Peer()
+case class PeerInfo(
+    name: String
+)
 
 object NodeState:
-    def apply(headState: Option[HeadStateGlobal]): NodeState =
+    def apply(knownPeers: Seq[PeerInfo]): NodeState =
         // TODO: @atlanter: is there a way to make it more concise?
         val nodeState = new NodeState()
-        nodeState.headState = headState
+        nodeState.knownPeers.addAll(knownPeers)
         nodeState

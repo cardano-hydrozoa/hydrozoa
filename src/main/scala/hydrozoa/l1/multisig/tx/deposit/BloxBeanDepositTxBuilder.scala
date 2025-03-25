@@ -11,7 +11,7 @@ import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.l1.multisig.tx.{DepositTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{AppCtx, TxIx, TxL1}
+import hydrozoa.{TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
 

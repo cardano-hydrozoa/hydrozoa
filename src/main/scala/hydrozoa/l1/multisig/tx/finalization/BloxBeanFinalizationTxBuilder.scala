@@ -5,11 +5,10 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
+import hydrozoa.TxL1
 import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
-import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*

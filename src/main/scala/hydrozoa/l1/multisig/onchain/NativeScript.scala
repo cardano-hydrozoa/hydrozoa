@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
 import hydrozoa.{
     UtxoIdL1,
-    ParticipantVerificationKey,
+    PeerPublicKeyBytes,
     NativeScript as HNativeScript,
     Network as HNetwork
 }
@@ -26,8 +26,8 @@ import hydrozoa.{
   *   pair of serilized native script and corresponding bech32 address
   */
 def mkHeadNativeScriptAndAddress(
-    vKeys: Set[ParticipantVerificationKey],
-    network: HNetwork
+                                    vKeys: Set[PeerPublicKeyBytes],
+                                    network: HNetwork
 ): (HNativeScript, String) = {
     val script = vKeys
         // TODO: compose vs multiple map?

@@ -80,7 +80,7 @@ class NodeRestApi(node: Node):
             .startAndWait()
 
     private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        node.initializeHead(amount, TxId(txId), TxIx(txIx)).map(_.hash)
+        node.initializeHead(???, amount, TxId(txId), TxIx(txIx)).map(_.hash)
 
     private def runDeposit(
         txId: String,

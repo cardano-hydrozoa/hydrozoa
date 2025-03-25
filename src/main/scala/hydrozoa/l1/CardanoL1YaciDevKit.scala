@@ -1,14 +1,13 @@
 package hydrozoa.l1
 
+import com.bloxbean.cardano.client.backend.api.BackendService
+import hydrozoa.*
 import hydrozoa.infra.toEither
-import hydrozoa.{AppCtx, Network, TxId, TxL1}
 import scalus.ledger.api.v1.PosixTime
 
 import scala.util.boundary
 
-class CardanoL1YaciDevKit(ctx: AppCtx) extends CardanoL1:
-
-    private val backendService = ctx.backendService
+class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val result = backendService.getTransactionService.submitTransaction(tx.bytes)
@@ -24,9 +23,7 @@ class CardanoL1YaciDevKit(ctx: AppCtx) extends CardanoL1:
             }
         }
 
-    override def network: Network =
-        val nw = ctx.network
-        Network(nw.getNetworkId, nw.getProtocolMagic)
+    override def network: Network = networkL1static
 
     override def lastBlockTime: PosixTime =
-        ctx.backendService.getBlockService.getLatestBlock.getValue.getTime
+        backendService.getBlockService.getLatestBlock.getValue.getTime

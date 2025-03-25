@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.common.model.Network
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 
 import scala.collection.mutable
@@ -87,10 +88,10 @@ object UtxoSet:
 case class PolicyId(policyId: String)
 
 // A verification key of a participant, used on both L1 and L2
-case class ParticipantVerificationKey(bytes: Array[Byte])
+case class PeerPublicKeyBytes(bytes: Array[Byte])
 
 // A signing key of a participant, used on both L1 and L2
-case class ParticipantSecretKey(bytes: Array[Byte])
+case class PeerPrivateKeyBytes(bytes: Array[Byte])
 
 case class Network(networkId: Int, protocolMagic: Long)
 
@@ -109,3 +110,8 @@ opaque type PosixTime = BigInt
 
 // FIXME: move to another module
 def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
+
+// FIXME: should be parameter
+val networkL1static = Network(0, 42)
+
+val hydrozoaL2Network = Network(0, 42)

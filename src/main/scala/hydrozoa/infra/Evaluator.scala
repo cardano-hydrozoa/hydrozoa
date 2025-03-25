@@ -3,7 +3,6 @@ package hydrozoa.infra
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
 import com.bloxbean.cardano.client.quicktx.{AbstractTx, QuickTxBuilder}
-import com.fasterxml.jackson.databind.ObjectMapper
 import scalus.bloxbean.{EvaluatorMode, NoScriptSupplier, ScalusTransactionEvaluator, SlotConfig}
 
 /** @tparam T
@@ -19,11 +18,10 @@ def mkBuilder[T](backendService: BackendService): AbstractTx[T] => QuickTxBuilde
             if !result.isSuccessful then sys.error(result.getResponse)
             val pp = result.getValue
 
+            // val ow = new ObjectMapper().writer.withDefaultPrettyPrinter
+            // val json = ow.writeValueAsString(pp)
+            // println(json)
 
-            //val ow = new ObjectMapper().writer.withDefaultPrettyPrinter
-            //val json = ow.writeValueAsString(pp)
-            //println(json)
-            
             pp
         }
 

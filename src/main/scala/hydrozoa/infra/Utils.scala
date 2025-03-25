@@ -1,12 +1,9 @@
 package hydrozoa.infra
 
-import com.bloxbean.cardano.client.api.model.Amount.{ada, lovelace}
-import com.bloxbean.cardano.client.api.model.Utxo.UtxoBuilder
+import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.Datum
-import scalus.builtin.ByteString
 
 import scala.jdk.CollectionConverters.*
 
