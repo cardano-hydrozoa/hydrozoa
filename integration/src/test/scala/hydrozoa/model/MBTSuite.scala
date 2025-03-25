@@ -5,11 +5,10 @@ import hydrozoa.*
 import hydrozoa.l1.CardanoL1Mock
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.mkPeerInfo
 import hydrozoa.node.server.InitializeError
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Gen, Prop, Properties}
-import sttp.client4.Response
-import sttp.client4.quick.*
 
 import scala.jdk.CollectionConverters.*
 
@@ -26,9 +25,9 @@ object MBTSuite extends Commands:
 
     override def newSut(state: State): Sut =
         // Reset Yaci DevKit
-        val response: Response[String] = quickRequest
-            .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-            .send()
+//        val response: Response[String] = quickRequest
+//            .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
+//            .send()
         // Create a new SUT
         OneNodeHydrozoaSUT(
           state.networkPeers.head,
@@ -56,14 +55,13 @@ object MBTSuite extends Commands:
     def genInitializeCommand(state: State): Gen[Command] = for
         numberOfHeadPeers <- Gen.chooseNum(1, state.networkPeers.tail.length)
         headPeers <- Gen.pick(numberOfHeadPeers, state.networkPeers.tail)
-        // initializer <- Gen.oneOf(state.networkPeers)
-        initializer = state.networkPeers.head // Already randomly chosen
+        initializer = state.networkPeers.head // FIXME: should be any peer
         account = TestPeer.account(initializer)
         l1 = CardanoL1Mock(state.knownTxs, state.utxosActive)
         utxoIds = l1.utxoIdsByAddress(AddressBechL1(account.toString))
         _ = log.info(s"Initializer: $initializer, account: $account, utxos: $utxoIds")
         seedUtxoId <- Gen.oneOf(utxoIds)
-    yield InitializeCommand(headPeers.toList, initializer, seedUtxoId)
+    yield InitializeCommand(headPeers.toList, seedUtxoId)
 
 //        case Initializing => ???
 //        case Open         => ???
@@ -71,13 +69,13 @@ object MBTSuite extends Commands:
 //        case Finalized    => ???
 
     case class InitializeCommand(
+//        initializer: TestPeer,
         headPeers: List[TestPeer],
-        initializer: TestPeer,
         seedUtxo: UtxoIdL1
     ) extends SuccessCommand:
         override type Result = Either[InitializeError, TxId]
         override def run(sut: HydrozoaSUT): Result =
-            sut.initializeHead(initializer, 100, seedUtxo.txId, seedUtxo.outputIx)
+            sut.initializeHead(headPeers.map(mkPeerInfo).toSet, 100, seedUtxo.txId, seedUtxo.outputIx)
         override def nextState(state: State): State =
             // state.getNode.initializeHead(100, seedUtxo.txId, seedUtxo.outputIx)
             state.copy(peersNetworkPhase = RunningHead)
@@ -92,6 +90,6 @@ object MBTSuite extends Commands:
                 // check other conditions
                 true
 
-object SomeProperty extends Properties("Hydrozoa properties") {
-    property("Some property") = MBTSuite.property()
+object SomeProperty extends Properties("Hydrozoa one node setup:") {
+    property("it just works") = MBTSuite.property()
 }

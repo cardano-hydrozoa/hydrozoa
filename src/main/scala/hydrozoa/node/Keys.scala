@@ -1,6 +1,7 @@
 package hydrozoa
 
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
+import hydrozoa.node.state.PeerInfo
 
 trait PeerKeyVault:
 
@@ -30,3 +31,5 @@ class Peer(
     def getPrivateKey: PeerPrivateKeyBytes = keyVault.peerPrivateKeyBytes(privateKey)
     def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T]): TxKeyWitness =
         keyVault.createTxKeyWitness(tx, publicKey, privateKey)
+
+    def mkPeerInfo: PeerInfo = PeerInfo(getName)

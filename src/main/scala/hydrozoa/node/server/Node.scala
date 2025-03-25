@@ -19,6 +19,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
+import hydrozoa.node.TestPeer.mkPeerInfo
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -42,7 +43,7 @@ class Node(
     private var multisigL1EventManager: Option[MultisigL1EventManager] = None
 
     def initializeHead(
-        headPeers: Set[PeerInfo],
+        otherHeadPeers: Set[PeerInfo],
         ada: Long,
         txId: TxId,
         txIx: TxIx
@@ -54,7 +55,7 @@ class Node(
 
         // Make a recipe to build init tx
 
-        val headPublicKeys = network.reqPublicKeys(headPeers) + ownPeer.getPublicKey
+        val headPublicKeys = network.reqPublicKeys(otherHeadPeers) + ownPeer.getPublicKey
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
@@ -70,7 +71,7 @@ class Node(
         )
 
         log.info(s"initTxRecipe: $initTxRecipe")
-        
+
         // Builds and balance initialization tx
         val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
             case Right(v, seedAddress) => (v, seedAddress)
@@ -78,7 +79,8 @@ class Node(
 
         val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
 
-        val peersWits: Set[TxKeyWitness] = network.reqInit(headPeers, ReqInit(seedOutput, treasuryCoins))
+        val peersWits: Set[TxKeyWitness] =
+            network.reqInit(otherHeadPeers, ReqInit(seedOutput, treasuryCoins))
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
@@ -94,9 +96,8 @@ class Node(
         cardano.submit(initTx.toL1Tx) match
             case Right(txHash) =>
                 // Put the head into Initializing phase
-
-                // FIXME: Peers
-                nodeState.initializeHead(headPeers.toList)
+                
+                nodeState.initializeHead((otherHeadPeers + ownPeer.mkPeerInfo).toList)
 
                 log.info(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
