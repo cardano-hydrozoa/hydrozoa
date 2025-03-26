@@ -11,22 +11,28 @@ import hydrozoa.node.TestPeer
   */
 case class HydrozoaState(
     peersNetworkPhase: PeersNetworkPhase,
-    networkPeers: Seq[TestPeer],
+    networkPeers: Seq[TestPeer], // ALL network peers
+    pp: ProtocolParams,
+
+    // Head
+    initiator: Option[TestPeer] = None,
+    headPeers: Seq[TestPeer] = Seq.empty,
+
     // L1
-    knownTxs: Map[TxId, TxL1],
+    knownTxs: Map[TxId, TxL1] = Map.empty,
     utxosActive: Map[UtxoIdL1, Output[L1]]
 )
 
 object HydrozoaState:
     def apply(
         pp: ProtocolParams,
-        knownPeers: Seq[TestPeer]
+        networkPeers: Seq[TestPeer]
     ): HydrozoaState =
         new HydrozoaState(
-          NewlyCreated,
-          knownPeers,
-          Map.empty,
-          Map.from(genesisUtxos)
+          peersNetworkPhase = NewlyCreated,
+          networkPeers = networkPeers,
+          pp = pp,
+          utxosActive = Map.from(genesisUtxos)
         )
 
 enum PeersNetworkPhase:

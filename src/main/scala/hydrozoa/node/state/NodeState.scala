@@ -1,6 +1,5 @@
 package hydrozoa.node.state
 
-import com.bloxbean.cardano.client.crypto.bip32.HdKeyPair
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 

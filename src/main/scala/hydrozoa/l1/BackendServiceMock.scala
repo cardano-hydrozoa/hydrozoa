@@ -88,7 +88,7 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
 
     override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
         val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex))
-        val opt = cardanoL1Mock.utxosActive
+        val opt = cardanoL1Mock.getUtxosActive
             .get(utxoId)
             .map(output =>
                 Utxo.builder()

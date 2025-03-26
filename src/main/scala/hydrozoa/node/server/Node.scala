@@ -39,6 +39,9 @@ class Node(
     log: Logger
 ):
 
+    // FIXME: protect
+    def nodeStateReader = nodeState
+
     // FIXME: find the proper place for it
     private var multisigL1EventManager: Option[MultisigL1EventManager] = None
 
@@ -48,6 +51,8 @@ class Node(
         txId: TxId,
         txIx: TxIx
     ): Either[InitializeError, TxId] = {
+
+        assert(otherHeadPeers.size >= 1, "Solo node mode is not supported yet.")
 
         // FIXME: Check there is no head or it's closed
 
@@ -77,6 +82,8 @@ class Node(
             case Right(v, seedAddress) => (v, seedAddress)
             case Left(err)             => return Left(err)
 
+        log.info("Init tx draft hash: " + txHash(txDraft))
+
         val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
 
         val peersWits: Set[TxKeyWitness] =
@@ -92,11 +99,12 @@ class Node(
         val initTx = wits.foldLeft(txDraft)(addWitness)
         val serializedTx = serializeTxHex(initTx)
         log.info("Init tx: " + serializedTx)
+        log.info("Init tx hash: " + txHash(initTx))
 
         cardano.submit(initTx.toL1Tx) match
             case Right(txHash) =>
                 // Put the head into Initializing phase
-                
+
                 nodeState.initializeHead((otherHeadPeers + ownPeer.mkPeerInfo).toList)
 
                 log.info(

@@ -10,8 +10,11 @@ class CardanoL1Mock() extends CardanoL1:
 
     private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
 
-    // FIXME: make private
-    val utxosActive: mutable.Map[UtxoIdL1, Output[L1]] = mutable.Map()
+    def getKnownTxs: Map[TxId, TxL1] = Map.from(knownTxs)
+
+    private val utxosActive: mutable.Map[UtxoIdL1, Output[L1]] = mutable.Map()
+
+    def getUtxosActive: Map[UtxoIdL1, Output[L1]] = Map.from(utxosActive)
 
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val txId = txHash(tx)
