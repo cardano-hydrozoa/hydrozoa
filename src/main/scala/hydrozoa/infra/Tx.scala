@@ -3,15 +3,12 @@ package hydrozoa.infra
 import co.nstant.in.cbor.model.{Array, ByteString, Map, UnsignedInteger}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.crypto.*
-import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
-import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.spec.Era
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
+import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScript as BBNativeScript}
 import com.bloxbean.cardano.client.util.HexUtil
-
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
@@ -186,3 +183,18 @@ def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
 extension (n: Network) {
     def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
 }
+
+/**
+ * This is an ad-hoc implementation, it won't be correct fot other cases.
+ * Returns the number of top-level scripts in ScriptAll native script
+ * as if they all were `ScriptPubkey` (i.e. require one signatory).
+ *
+ * @param nativeScript
+ * native script, see the comment above
+ * @return
+ * number of signatories required for a native script
+ */
+def numberOfSignatories(nativeScript: BBNativeScript): Int =
+    nativeScript match
+        case scriptAll: ScriptAll => scriptAll.getScripts.size()
+        case _ => 0

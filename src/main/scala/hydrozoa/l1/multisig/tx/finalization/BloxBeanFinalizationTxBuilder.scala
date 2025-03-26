@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.TxL1
-import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
+import hydrozoa.infra.{force, mkBuilder, numberOfSignatories, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 
@@ -75,8 +75,7 @@ class BloxBeanFinalizationTxBuilder(
             // NB: .preBalanceTx should be called only once
             .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsToWithdraw.asJava))
             .feePayer(seedAddress)
-            // TODOk: magic numbers
-            .additionalSignersCount(3)
+            .additionalSignersCount(numberOfSignatories(headNativeScript))
             .build
 
         Right(MultisigTx(TxL1(finalizationTx.serialize)))

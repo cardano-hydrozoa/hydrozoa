@@ -19,7 +19,6 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
-import hydrozoa.node.TestPeer.mkPeerInfo
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -60,11 +59,12 @@ class Node(
 
         // Make a recipe to build init tx
 
-        val headVerificationKeys = network.reqVerificationKeys(otherHeadPeers) + ownPeer.exportVerificationKeyBytes
+        val headVKeys =
+            network.reqVerificationKeys(otherHeadPeers) + ownPeer.exportVerificationKeyBytes
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(headVerificationKeys, cardano.network)
+            mkHeadNativeScriptAndAddress(headVKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
         val treasuryCoins = ada * 1_000_000
         val initTxRecipe = InitTxRecipe(
@@ -133,7 +133,10 @@ class Node(
                 // FIXME:
                 // println(nodeState.head.asOpen(_.stateL1))
                 Right(txHash)
-            case Left(err) => Left(err)
+
+            case Left(err) =>
+                log.error(s"Can't submit init tx: $err")
+                Left(err)
 
     }
 
