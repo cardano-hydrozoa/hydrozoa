@@ -20,10 +20,7 @@ case class HydrozoaState(
 
     // L1
     knownTxs: Map[TxId, TxL1] = Map.empty,
-    utxosActive: Map[UtxoIdL1, Output[L1]],
-
-    // FIXME: move out: return bits
-    retInitializationTxHash: Option[TxId] = None
+    utxosActive: Map[UtxoIdL1, Output[L1]]
 )
 
 object HydrozoaState:

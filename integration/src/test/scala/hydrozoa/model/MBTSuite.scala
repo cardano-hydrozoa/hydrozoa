@@ -91,8 +91,8 @@ object MBTSuite extends Commands:
 //        case Finalizing   => ???
 //        case Finalized    => ???
 
-    /** State-like Command that returns both result and state like `runState` in Haskell does. TODO:
-      * Inspectable part docs
+    /** State-like Command that uses `runState` instead of `nextState`. Additionally branches on
+      * `result`, providing `SutInspector` for successful path.
       */
     trait StateLikeInspectabeCommand extends Command:
 
@@ -104,28 +104,46 @@ object MBTSuite extends Commands:
 
         final override def nextState(state: State): State = runState(state)._2
 
-        def runState(state: State): (Result, State)
+        def runState(state: State): (RealResult, State)
 
         final override def postCondition(stateBefore: State, result: Try[Result]): Prop =
+            val (expectedResult, stateAfter) = runState(stateBefore)
             result match
-                case Success(realResult: RealResult, inspector: SutInspector) =>
-                    postConditionInspectable(stateBefore, Success(realResult), Some(inspector))
+                case Success(realResult: RealResult, sutInspector: SutInspector) =>
+                    postConditionSuccess(
+                      expectedResult,
+                      stateBefore,
+                      stateAfter,
+                      realResult,
+                      sutInspector
+                    )
                 case Failure(e) =>
-                    postConditionInspectable(stateBefore, Failure(e), None)
+                    postConditionFailure(expectedResult, stateBefore, stateAfter, e)
 
-        def postConditionInspectable(
+        def postConditionSuccess(
+            expectedResult: RealResult,
             stateBefore: State,
-            result: Try[RealResult],
-            inspector: Option[SutInspector]
+            stateAfter: State,
+            result: RealResult,
+            sutInspector: SutInspector
+        ): Prop
+
+        def postConditionFailure(
+            expectedResult: RealResult,
+            stateBefore: State,
+            stateAfter: State,
+            err: Throwable
         ): Prop
 
     case class InitializeCommand(
         initiator: TestPeer,
         otherHeadPeers: Set[TestPeer],
         seedUtxo: UtxoIdL1
-    ) extends Command:
+    ) extends StateLikeInspectabeCommand:
 
-        override type Result = (Either[InitializeError, TxId], NodeStateInspector)
+        override type SutInspector = NodeStateInspector
+
+        override type RealResult = Either[InitializeError, TxId]
 
         override def run(sut: HydrozoaSUT): Result =
             sut.initializeHead(
@@ -135,12 +153,13 @@ object MBTSuite extends Commands:
               seedUtxo.outputIx
             )
 
-        // FIXME: return tuple of State and Return
-        override def nextState(state: State): State =
+        override def runState(state: State): (RealResult, State) =
 
             // Native script, head address, and token
             val pubKeys =
-                (otherHeadPeers.toSet + initiator).map(tp => mkWallet(tp).exportVerificationKeyBytes)
+                (otherHeadPeers.toSet + initiator).map(tp =>
+                    mkWallet(tp).exportVerificationKeyBytes
+                )
             val (headNativeScript, headAddress) =
                 mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
             val beaconTokenName = mkBeaconTokenName(seedUtxo)
@@ -164,14 +183,15 @@ object MBTSuite extends Commands:
 
             l1Mock.submit(tx.toL1Tx)
 
-            state.copy(
+            val newState = state.copy(
               peersNetworkPhase = RunningHead,
               initiator = Some(initiator),
               headPeers = otherHeadPeers,
-              retInitializationTxHash = Some(txId),
               knownTxs = l1Mock.getKnownTxs,
               utxosActive = l1Mock.getUtxosActive
             )
+
+            (Right(txId), newState)
 
         override def preCondition(state: State): Boolean =
             state.peersNetworkPhase match
@@ -179,29 +199,39 @@ object MBTSuite extends Commands:
                 case Freed        => true
                 case _            => false
 
-        override def postCondition(stateBefore: State, result: Try[Result]): Prop =
-            if otherHeadPeers.isEmpty then result.isFailure
-            else
-                val (ret, inspector) = result.get
-                val reader = inspector.reader
-                val headPhase = reader.currentPhase
+        override def postConditionSuccess(
+            expectedResult: RealResult,
+            stateBefore: State,
+            stateAfter: State,
+            sutResult: RealResult,
+            sutInspector: SutInspector
+        ): Prop =
+            sutResult match
+                case Left(err) =>
+                    s"Unexpected negative resposne: $err" |: Prop.falsified
+                case Right(sutTxHash) =>
+                    val reader = sutInspector.reader
+                    val headPhase = reader.currentPhase
+                    val headPeers = stateAfter.headPeers + stateAfter.initiator.get
 
-                val stateAfter = nextState(stateBefore)
-                val headPeers = stateAfter.headPeers.toSet + stateAfter.initiator.get
-                val txHash = stateAfter.retInitializationTxHash.get
+                    (s"headPeers in Initializing phase should be: $headPeers"
+                        |: headPhase == Initializing ==> (reader
+                            .initializingPhaseReader(_.headPeers)
+                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
+                    && (s"headPeers in Open phase should be: $headPeers"
+                        |: headPhase == Open ==> (reader
+                            .openPhaseReader(_.headPeers)
+                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
+                    && (s"result should be the same" |:
+                        sutResult == expectedResult)
 
-                ("headPeers should match command in Initializing phase"
-                    |: headPhase == Initializing ==> (reader
-                        .initializingPhaseReader(_.headPeers)
-                        .map(w => TestPeer.valueOf(w.name)) == headPeers))
-                && (s"headPeers in Open phase: ${reader.openPhaseReader(_.headPeers).map(w => TestPeer.valueOf(w.name))}," +
-                    s" should be: $headPeers"
-                    |: headPhase == Open ==> (reader
-                        .openPhaseReader(_.headPeers)
-                        .map(w => TestPeer.valueOf(w.name)) == headPeers))
-                && ("initialize response should be Right" |: ret.isRight)
-                && (s"initialization tx hash is: ${ret.right.get} should be $txHash" |:
-                    ret.right.get == txHash)
+        // TODO: this is more for demonstration purposes
+        override def postConditionFailure(
+            _expectedResult: RealResult,
+            _stateBefore: State,
+            _stateAfter: State,
+            _err: Throwable
+        ) = "Should not crash unless number of peers is too small" |: otherHeadPeers.isEmpty
 
 object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock") {
     property("Just_works") = MBTSuite.property()
