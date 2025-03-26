@@ -8,8 +8,8 @@ import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.ledger.UtxosSet
-import hydrozoa.node.state.{HeadStateReader, PeerInfo}
-import hydrozoa.{Peer, PeerPublicKeyBytes, TxKeyWitness}
+import hydrozoa.node.state.{HeadStateReader, WalletId}
+import hydrozoa.{TxKeyWitness, VerificationKeyBytes, Wallet}
 
 class HeadPeerNetworkOneNode(
     reader: HeadStateReader,
@@ -18,31 +18,31 @@ class HeadPeerNetworkOneNode(
     settlementTxBuilder: SettlementTxBuilder,
     finalizationTxBuilder: FinalizationTxBuilder,
     cardano: CardanoL1,
-    theNode: Peer,
-    knownPeers: Set[Peer]
+    ownNode: Wallet,
+    otherNodes: Set[Wallet]
 ) extends HeadPeerNetwork:
 
-    override def reqPublicKeys(headPeers: Set[PeerInfo]): Set[PeerPublicKeyBytes] =
-        requireHeadPeersAreKnown(headPeers)
-        val headPeersNames = headPeers.map(_.name)
-        knownPeers
+    override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
+        requireHeadPeersAreKnown(peers.toSet)
+        val headPeersNames = peers.map(_.name)
+        otherNodes
             .filter(p => headPeersNames.contains(p.getName))
-            .map(p => p.getPublicKey)
+            .map(p => p.exportVerificationKeyBytes)
 
-    private def requireHeadPeersAreKnown(headPeers: Set[PeerInfo]): Unit = {
+    private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
         val headPeersNames = headPeers.map(_.name)
-        val knownPeersNames = knownPeers.map(_.getName)
+        val knownPeersNames = otherNodes.map(_.getName)
         require(headPeersNames.forall(knownPeersNames.contains))
     }
 
-    override def reqInit(headPeers: Set[PeerInfo], req: ReqInit): Set[TxKeyWitness] = {
+    override def reqInit(headPeers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
         requireHeadPeersAreKnown(headPeers)
 
         val headPeersNames = headPeers.map(_.name)
-        val headOtherPeers = knownPeers.filter(p => headPeersNames.contains(p.getName))
-        
+        val headOtherPeers = otherNodes.filter(p => headPeersNames.contains(p.getName))
+
         // All head's verification keys
-        val vKeys = (headOtherPeers + theNode).map(_.getPublicKey)
+        val vKeys = (headOtherPeers + ownNode).map(_.exportVerificationKeyBytes)
 
         // Native script, head address, and token
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
@@ -58,7 +58,7 @@ class HeadPeerNetworkOneNode(
         )
 
         val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-        
+
         headOtherPeers.map(_.createTxKeyWitness(tx))
     }
 
@@ -66,24 +66,24 @@ class HeadPeerNetworkOneNode(
         val headPeers = reader.multisigRegimeReader(_.headPeers)
         requireHeadPeersAreKnown(headPeers)
         val headPeersNames = headPeers.map(_.name)
-        val headOtherPeers = knownPeers.filter(p => headPeersNames.contains(p.getName))
+        val headOtherPeers = otherNodes.filter(p => headPeersNames.contains(p.getName))
         headOtherPeers
     }
-    
+
     override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
-        val headOtherPeers: Set[Peer] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getHeadPeers
 
         val recipe = PostDatedRefundRecipe(req.depositTx, req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
         headOtherPeers.map(_.createTxKeyWitness(tx))
 
     override def reqMinor(block: Block): Set[AckMinor] =
-        val headOtherPeers: Set[Peer] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getHeadPeers
         headOtherPeers.map(_ => AckMinor(block.blockHeader, (), false))
 
     override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
-        val headOtherPeers: Set[Peer] = getHeadPeers
-        
+        val headOtherPeers: Set[Wallet] = getHeadPeers
+
         // TODO: check block type
         val recipe =
             SettlementRecipe(
@@ -105,8 +105,8 @@ class HeadPeerNetworkOneNode(
             )
 
     override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
-        val headOtherPeers: Set[Peer] = getHeadPeers
-        
+        val headOtherPeers: Set[Wallet] = getHeadPeers
+
         // TODO: check block type
         val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
 

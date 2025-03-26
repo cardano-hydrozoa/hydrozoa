@@ -10,17 +10,17 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkOneNode}
-import hydrozoa.node.TestPeer.{Alice, Bob, Carol, mkPeer}
+import hydrozoa.node.TestPeer.{Alice, Bob, Carol, mkWallet}
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
-import hydrozoa.node.state.{HeadStateReader, NodeState, PeerInfo}
+import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 
 def mkHydrozoaNode(
-    ownPeer: Peer,
-    knownPeers: Seq[Peer],
-    useL1Mock: Boolean = false,
-    pp: Option[ProtocolParams] = None,
-    yaciBFApiUri: String = "http://localhost:8080/api/v1/"
+                      ownPeerWallet: Wallet,
+                      knownPeers: Set[Wallet],
+                      useL1Mock: Boolean = false,
+                      pp: Option[ProtocolParams] = None,
+                      yaciBFApiUri: String = "http://localhost:8080/api/v1/"
 ) = {
 
     // Components
@@ -36,7 +36,7 @@ def mkHydrozoaNode(
         (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeStateManager: NodeState = NodeState(knownPeers.map(p => PeerInfo(p.getName)))
+    val nodeStateManager: NodeState = NodeState(knownPeers.map(p => WalletId(p.getName)))
     val nodeStateReader: HeadStateReader = nodeStateManager.reader
 
     // Tx Builders
@@ -58,13 +58,13 @@ def mkHydrozoaNode(
           settlementTxBuilder,
           finalizationTxBuilder,
           cardano,
-          ownPeer,
-          knownPeers.toSet // FIXME: should be only head peers!
+          ownPeerWallet,
+          knownPeers.toSet
         )
 
     val node = Node(
       nodeStateManager,
-      ownPeer,
+      ownPeerWallet,
       network,
       cardano,
       initTxBuilder,
@@ -82,7 +82,7 @@ object HydrozoaNodeServer:
     @main def main(args: String*): Unit = {
 
         val (log: Logger, node: Node, _) = {
-            mkHydrozoaNode(mkPeer(Alice), Seq(Bob, Carol).map(mkPeer))
+            mkHydrozoaNode(mkWallet(Alice), Set(Bob, Carol).map(mkWallet))
         }
 
         log.warn("Starting Hydrozoa Node API Server...")

@@ -14,13 +14,12 @@ import munit.FunSuite
   */
 class HappyPathSuite extends FunSuite {
 
-    private val knownPeers = Seq(Bob, Carol, Daniella)
+    private val knownPeers = Set(Bob, Carol, Daniella)
     private val headPeers = knownPeers.take(0)
 
     private val (log: Logger, node: Node, cardano: CardanoL1) = mkHydrozoaNode(
-      ownPeer = mkPeer(Alice),
-      knownPeers = knownPeers.map(mkPeer),
-      useL1Mock = false,
+      ownPeerWallet = mkWallet(Alice),
+      knownPeers = knownPeers.map(mkWallet),
       pp = Some(Utils.protocolParams)
     )
 

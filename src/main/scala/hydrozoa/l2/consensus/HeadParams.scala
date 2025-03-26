@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus
 
-import hydrozoa.{Network, PeerPublicKeyBytes, UDiffTimeMilli}
+import hydrozoa.{Network, VerificationKeyBytes, UDiffTimeMilli}
 
 /** @param l2NetworkId
   * @param participants

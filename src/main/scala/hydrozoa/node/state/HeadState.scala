@@ -54,10 +54,10 @@ trait HeadState:
 sealed trait HeadStateReaderApi
 
 sealed trait InitializingPhaseReader extends HeadStateReaderApi:
-    def headPeers: List[PeerInfo]
+    def headPeers: Set[WalletId]
 
 sealed trait MultisigRegimeReader extends HeadStateReaderApi:
-    def headPeers: Set[PeerInfo]
+    def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
@@ -120,7 +120,7 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[PeerInfo])
+class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
     extends HeadStateReader
     with HeadState {
     self =>
@@ -191,7 +191,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[PeerInfo])
     // Subclasses that implements APIs (readers)
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
-        def headPeers: Set[PeerInfo] = self.headPeers.toSet
+        def headPeers: Set[WalletId] = self.headPeers.toSet
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
@@ -200,7 +200,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[PeerInfo])
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
-        def headPeers: List[PeerInfo] = self.headPeers
+        def headPeers: Set[WalletId] = self.headPeers.toSet
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
@@ -322,7 +322,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[PeerInfo])
 
 object HeadStateGlobal:
     val log: Logger = Logger(getClass)
-    def apply(peers: List[PeerInfo]): HeadStateGlobal =
+    def apply(peers: List[WalletId]): HeadStateGlobal =
         assert(peers.length >= 2, "The number of peers should be >= 2")
         log.info(s"Creating head state global with peers: $peers")
         new HeadStateGlobal(headPhase = Initializing, headPeers = peers)

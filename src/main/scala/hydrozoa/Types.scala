@@ -87,11 +87,11 @@ object UtxoSet:
 // Policy ID
 case class PolicyId(policyId: String)
 
-// A verification key of a participant, used on both L1 and L2
-case class PeerPublicKeyBytes(bytes: Array[Byte])
+// A verification key of a peer, used on both L1 and L2
+case class VerificationKeyBytes(bytes: Array[Byte])
 
-// A signing key of a participant, used on both L1 and L2
-case class PeerPrivateKeyBytes(bytes: Array[Byte])
+// A signing key of a peer, used on both L1 and L2
+case class SigningKeyBytes(bytes: Array[Byte])
 
 case class Network(networkId: Int, protocolMagic: Long)
 

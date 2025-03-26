@@ -28,7 +28,7 @@ import scalus.prelude.Maybe
 
 class Node(
     nodeState: NodeState,
-    ownPeer: Peer,
+    ownPeer: Wallet,
     network: HeadPeerNetwork,
     cardano: CardanoL1,
     initTxBuilder: InitTxBuilder,
@@ -46,13 +46,13 @@ class Node(
     private var multisigL1EventManager: Option[MultisigL1EventManager] = None
 
     def initializeHead(
-        otherHeadPeers: Set[PeerInfo],
+        otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TxId,
         txIx: TxIx
     ): Either[InitializeError, TxId] = {
 
-        assert(otherHeadPeers.size >= 1, "Solo node mode is not supported yet.")
+        assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
 
         // FIXME: Check there is no head or it's closed
 
@@ -60,11 +60,11 @@ class Node(
 
         // Make a recipe to build init tx
 
-        val headPublicKeys = network.reqPublicKeys(otherHeadPeers) + ownPeer.getPublicKey
+        val headVerificationKeys = network.reqVerificationKeys(otherHeadPeers) + ownPeer.exportVerificationKeyBytes
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(headPublicKeys, cardano.network)
+            mkHeadNativeScriptAndAddress(headVerificationKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
         val treasuryCoins = ada * 1_000_000
         val initTxRecipe = InitTxRecipe(
@@ -105,7 +105,7 @@ class Node(
             case Right(txHash) =>
                 // Put the head into Initializing phase
 
-                nodeState.initializeHead((otherHeadPeers + ownPeer.mkPeerInfo).toList)
+                nodeState.initializeHead((otherHeadPeers + ownPeer.getWalletId).toList)
 
                 log.info(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"

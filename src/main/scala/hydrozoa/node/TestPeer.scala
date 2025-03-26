@@ -3,9 +3,9 @@ package hydrozoa.node
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.infra.{HDPeerKeyVaultBB, toBloxbean}
-import hydrozoa.node.state.PeerInfo
-import hydrozoa.{Peer, networkL1static}
+import hydrozoa.infra.{WalletModuleBloxbean, toBloxbean}
+import hydrozoa.node.state.WalletId
+import hydrozoa.{Wallet, networkL1static}
 
 enum TestPeer(ix: Int):
     case Alice extends TestPeer(0)
@@ -22,11 +22,12 @@ enum TestPeer(ix: Int):
 object TestPeer:
     val mnemonic: String =
         "test test test test " +
-            "test test test test" +
-            " test test test test " +
-            "test test test test" +
-            " test test test test" +
-            " test test test sauce"
+            "test test test test " +
+            "test test test test " +
+            "test test test test " +
+            "test test test test " +
+            "test test test sauce"
+
     def account(peer: TestPeer) =
         new Account(
           networkL1static.toBloxbean,
@@ -34,13 +35,13 @@ object TestPeer:
           createExternalAddressDerivationPathForAccount(peer.ordinal)
         )
 
-    def mkPeer(peer: TestPeer): Peer =
-        Peer(
+    def mkWallet(peer: TestPeer): Wallet =
+        Wallet(
           peer.toString,
-          HDPeerKeyVaultBB,
+          WalletModuleBloxbean,
           account(peer).hdKeyPair().getPublicKey,
           account(peer).hdKeyPair().getPrivateKey
         )
 
-    def mkPeerInfo(peer: TestPeer): PeerInfo =
-        PeerInfo(peer.toString)
+    def mkPeerInfo(peer: TestPeer): WalletId =
+        WalletId(peer.toString)
