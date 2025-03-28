@@ -34,6 +34,8 @@ class CardanoL1Mock() extends CardanoL1:
     def utxoIdsByAddress(address: AddressBechL1): Set[UtxoIdL1] =
         utxosActive.filter((_, utxo) => utxo.address == address).keySet.toSet
 
+    def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
+
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock

@@ -23,7 +23,7 @@ type TxAny = Tx[AnyLevel]
 type TxL1 = Tx[L1]
 
 object TxL1:
-    def apply(bytes: Array[Byte]): TxL1 = Tx[L1](bytes)
+    inline def apply(bytes: Array[Byte]): TxL1 = Tx[L1](bytes)
 
 type TxL2 = Tx[L2]
 
@@ -81,6 +81,7 @@ case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L
 case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
 
 object UtxoSet:
+    def apply[L <: AnyLevel, F](): UtxoSet[L, F] = UtxoSet(Map.empty)
     def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
         UtxoSet(mutableUtxoSet.map.toMap)
 

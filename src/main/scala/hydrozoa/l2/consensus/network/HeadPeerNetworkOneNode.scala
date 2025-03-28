@@ -32,7 +32,7 @@ class HeadPeerNetworkOneNode(
     private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
         val headPeersNames = headPeers.map(_.name)
         val knownPeersNames = otherNodes.map(_.getName)
-        require(headPeersNames.forall(knownPeersNames.contains))
+        require(headPeersNames.forall(knownPeersNames.contains), "All peers should be known")
     }
 
     override def reqInit(headPeers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
@@ -62,27 +62,27 @@ class HeadPeerNetworkOneNode(
         headOtherPeers.map(_.createTxKeyWitness(tx))
     }
 
-    private def getHeadPeers = {
-        val headPeers = reader.multisigRegimeReader(_.headPeers)
-        requireHeadPeersAreKnown(headPeers)
-        val headPeersNames = headPeers.map(_.name)
-        val headOtherPeers = otherNodes.filter(p => headPeersNames.contains(p.getName))
-        headOtherPeers
+    private def getOtherPeersWallets: Set[Wallet] = {
+        val otherPeers = reader.multisigRegimeReader(_.headPeers).filterNot(_.name == ownNode.getName)
+        requireHeadPeersAreKnown(otherPeers)
+        val otherPeersNames = otherPeers.map(_.name)
+        val otherPeersWallets = otherNodes.filter(p => otherPeersNames.contains(p.getName))
+        otherPeersWallets
     }
 
     override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
-        val headOtherPeers: Set[Wallet] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
         val recipe = PostDatedRefundRecipe(req.depositTx, req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
         headOtherPeers.map(_.createTxKeyWitness(tx))
 
     override def reqMinor(block: Block): Set[AckMinor] =
-        val headOtherPeers: Set[Wallet] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getOtherPeersWallets
         headOtherPeers.map(_ => AckMinor(block.blockHeader, (), false))
 
     override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
-        val headOtherPeers: Set[Wallet] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
         // TODO: check block type
         val recipe =
@@ -105,7 +105,7 @@ class HeadPeerNetworkOneNode(
             )
 
     override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
-        val headOtherPeers: Set[Wallet] = getHeadPeers
+        val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
         // TODO: check block type
         val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)

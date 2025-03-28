@@ -8,6 +8,7 @@ import hydrozoa.l2.block.{Block, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 
@@ -56,7 +57,7 @@ sealed trait HeadStateReaderApi
 sealed trait InitializingPhaseReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
 
-sealed trait MultisigRegimeReader extends HeadStateReaderApi:
+trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
@@ -337,4 +338,7 @@ case class BlockRecord(
 type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
 type MinorBlockL1Effect = Unit
 type L1PostDatedBlockEffect = Unit
-type L2BlockEffect = Unit
+
+type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect
+type MinorBlockL2Effect = UtxosSetOpaque
+type MajorBlockL2Effect = UtxosSetOpaque

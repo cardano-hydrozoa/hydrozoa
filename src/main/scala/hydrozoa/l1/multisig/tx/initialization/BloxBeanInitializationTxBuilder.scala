@@ -12,6 +12,7 @@ import hydrozoa.l1.multisig.tx.{InitializationTx, MultisigTx}
 import hydrozoa.{AddressBechL1, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
+import scalus.|>
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -65,5 +66,6 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .additionalSignersCount(signatories)
             .build()
 
-        Right(MultisigTx(TxL1(initializationTx.serialize)), AddressBechL1(seederAddress))
+        //Right(MultisigTx(TxL1(initializationTx.serialize)), AddressBechL1(seederAddress))
+        Right((initializationTx.serialize |> TxL1.apply |> MultisigTx.apply ), AddressBechL1(seederAddress))
 }

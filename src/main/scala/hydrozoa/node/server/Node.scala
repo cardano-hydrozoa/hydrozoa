@@ -111,7 +111,6 @@ class Node(
                   s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
                 )
 
-                // TODO: it dosnt' need to store all params
                 // initialize new multisig event manager
                 multisigL1EventManager = Some(
                   MultisigL1EventManager(
@@ -168,25 +167,25 @@ class Node(
 
          */
 
-        // Check deadline
-        val (maturity, window, expiry) = nodeState.head.openPhase(_.depositTimingParams)
-        val latestBlockTime = cardano.lastBlockTime
-        val minimalDeadline = latestBlockTime + maturity + window + expiry
-
-        val deadline = r.deadline.getOrElse(minimalDeadline)
-        if (deadline < minimalDeadline)
-            return Left(
-              s"Deadline ($deadline) should be later than $minimalDeadline = latestBlockTime ($latestBlockTime) +" +
-                  s" depositMarginMaturity ($maturity) +" +
-                  s" minimalDepositWindow ($window) + depositMarginExpiry ($expiry)"
-            )
+        // TODO: Check deadline
+//        val (maturity, window, expiry) = nodeState.head.openPhase(_.depositTimingParams)
+//        val latestBlockTime = cardano.lastBlockTime
+//        val minimalDeadline = latestBlockTime + maturity + window + expiry
+//
+//        val deadline = r.deadline.getOrElse(minimalDeadline)
+//        if (deadline < minimalDeadline)
+//            return Left(
+//              s"Deadline ($deadline) should be later than $minimalDeadline = latestBlockTime ($latestBlockTime) +" +
+//                  s" depositMarginMaturity ($maturity) +" +
+//                  s" minimalDepositWindow ($window) + depositMarginExpiry ($expiry)"
+//            )
 
         // Make the datum and the recipe
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
           decodeBech32AddressL2(r.address),
           Maybe.fromOption(r.datum.map(datumByteString)),
-          deadline,
+          BigInt.apply(0), // deadline,
           decodeBech32AddressL1(r.refundAddress),
           Maybe.fromOption(r.datum.map(datumByteString))
         )
@@ -318,109 +317,6 @@ class Node(
                 finalBlock.get
             }
 
-        def handleNewBlock(
-            block: Block,
-            utxosActive: UtxosSetOpaque,
-            utxosWithdrawn: UtxosSet,
-            mbGenesis: Option[(TxId, SimpleGenesis)]
-        ): L1BlockEffect =
-            block.blockHeader.blockType match
-                case Minor =>
-                    // TODO: produce and broadcast own signature
-                    val acksMinor = network.reqMinor(block)
-                    // Immediate L2 effect
-                    applyMinorBlockL2Effect(block, utxosActive)
-                    // No L1 effects so far in multisig mode for Minor blocks
-                    dumpState()
-                    ()
-
-                case Major =>
-                    // Create settlement tx draft
-                    val txRecipe = SettlementRecipe(
-                      block.blockHeader.versionMajor,
-                      block.blockBody.depositsAbsorbed,
-                      utxosWithdrawn
-                    )
-                    val Right(settlementTxDraft: SettlementTx) =
-                        settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
-                    // TODO: broadcast ownWit
-                    // Confirm block
-                    val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
-
-                    TxDump.dumpMultisigTx(settlementTxDraft)
-
-                    // Immediate L2 effect
-                    applyMajorBlockL2Effect(block, utxosActive, mbGenesis)
-
-                    // L1 effect
-                    val wits: Set[TxKeyWitness] =
-                        acksMajorCombined.map(_.settlement) + ownWit
-                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
-                    val serializedTx = serializeTxHex(settlementTx)
-                    log.info(s"Settlement tx: $serializedTx")
-
-                    // Submit settlement tx
-                    val Right(settlementTxId) =
-                        cardano.submit(toL1Tx(settlementTx))
-                    log.info(s"Settlement tx submitted: $settlementTxId")
-
-                    // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
-                    // TxDump.dumpTx(augmentWithVirtualInputs(settlementTx, utxosWithdrawn.map(_._1)).asL2)
-
-                    // Emulate L1 event
-                    // TODO: I don't think we have to wait L1 event in reality
-                    //  instead we need to update the treasury right upon submitting.
-                    //  Another concern - probably we have to do it in one atomic change
-                    //  along with the L2 effect. Otherwise the next settlement transaction
-                    //  may use the old treasury.
-
-                    multisigL1EventManager.map(
-                      _.handleSettlementTx(toL1Tx(settlementTx), settlementTxId)
-                    )
-
-                    dumpState()
-                    settlementTx
-
-                case Final =>
-                    // Create finalization tx draft
-                    val recipe =
-                        FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
-                    val Right(finalizationTxDraft: FinalizationTx) =
-                        finalizationTxBuilder.buildFinalizationTxDraft(recipe)
-                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
-                    // TODO: broadcast ownWit
-
-                    // Confirm block
-                    val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
-
-                    // Immediate L2 effect
-                    applyFinalBlockL2Effect(block, utxosActive)
-
-                    // L1 effect
-                    val wits: Set[TxKeyWitness] = acksFinalCombined.map(_.finalization) + ownWit
-                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
-                    val serializedTx = serializeTxHex(finalizationTx)
-
-                    log.info(s"Finalization tx: $serializedTx")
-                    TxDump.dumpMultisigTx(finalizationTx)
-
-                    val Right(finalizationTxId) = cardano.submit(toL1Tx(finalizationTx))
-                    log.info(s"Finalization tx submitted: $finalizationTxId")
-
-                    // FIXME: Dump augmented virtual tx to combined L1/L2 diagram
-                    // TxDump.dumpTx(augmentWithVirtualInputs(settlementTx, utxosWithdrawn.map(_._1)).asL2)
-
-                    // Emulate L1 event
-                    // TODO: temporary: handle the event, again, we don't want to wait
-                    multisigL1EventManager.foreach(
-                      _.handleFinalizationTx(
-                        toL1Tx(finalizationTx),
-                        finalizationTxId
-                      )
-                    )
-                    finalizationTx
-
         val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
             case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
             case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
@@ -430,13 +326,26 @@ class Node(
 
         maybeNewBlock match
             case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                val l1effect = handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
-                //
-                val record = BlockRecord(block, l1effect, (), ())
+                // Create effects
+                val (l1effect, l2effect) =
+                    mkBlockEffects(
+                      settlementTxBuilder,
+                      finalizationTxBuilder,
+                      ownPeer,
+                      network,
+                      block,
+                      utxosActive,
+                      utxosWithdrawn,
+                      mbGenesis
+                    )
+                val record = BlockRecord(block, l1effect, (), l2effect)
                 nodeState.head.currentPhase match
                     case HeadPhase.Open       => nodeState.head.openPhase(_.addBlock(record))
                     case HeadPhase.Finalizing => nodeState.head.finalizingPhase(_.closeHead(record))
+                    case _                    => assert(true, "Unreachable")
                 if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
+                // Dump state
+                dumpState()
                 // Result
                 Right((record, utxosAdded, utxosWithdrawn))
             case None => Left("Block can't be produced at the moment.")
@@ -468,9 +377,55 @@ class Node(
         println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
     }
 
+    def applyBlockEffects(
+        block: Block,
+        l1BlockEffect: L1BlockEffect,
+        l2BlockEffect: L2BlockEffect,
+        mbGenesis: Option[(TxId, SimpleGenesis)] // Bake into effects
+    ): Unit =
+        block.blockHeader.blockType match
+            case Minor =>
+                applyMinorBlockL2Effect(block, l2BlockEffect)
+            // No L1 effects so far in multisig mode for Minor blocks
+            case Major =>
+                // Immediate L2 effect
+                applyMajorBlockL2Effect(block, l2BlockEffect, mbGenesis)
+                val settlementTx = toL1Tx(l1BlockEffect.asInstanceOf[SettlementTx]) // FIXME: casting
+                // L1 effect
+                val Right(settlementTxId) =
+                    cardano.submit(settlementTx) 
+                log.info(s"Settlement tx submitted: $settlementTxId")
+
+                // Emulate L1 event
+                // TODO: I don't think we have to wait L1 event in reality
+                //  instead we need to update the treasury right upon submitting.
+                //  Another concern - probably we have to do it in one atomic change
+                //  along with the L2 effect. Otherwise the next settlement transaction
+                //  may use the old treasury.
+                multisigL1EventManager.map(
+                  _.handleSettlementTx(settlementTx, settlementTxId)
+                )
+            case Final =>
+                // L2 effect
+                applyFinalBlockL2Effect(block, l2BlockEffect)
+                val finalizationTx = toL1Tx(l1BlockEffect.asInstanceOf[FinalizationTx]) // FIXME: casting
+                // L1 effect
+                val Right(finalizationTxId) =
+                    cardano.submit(finalizationTx) 
+                log.info(s"Settlement tx submitted: $finalizationTxId")
+
+                // Emulate L1 event
+                // TODO: temporarily handle the event, again, we don't want to wait
+                multisigL1EventManager.foreach(
+                  _.handleFinalizationTx(
+                    finalizationTx,
+                    finalizationTxId
+                  )
+                )
+
     private def applyMinorBlockL2Effect(
         block: Block,
-        utxosActive: UtxosSetOpaque
+        utxosActive: L2BlockEffect
     ): Unit =
         nodeState.head.openPhase { s =>
             s.stateL2.replaceUtxosActive(utxosActive)
@@ -514,3 +469,59 @@ class Node(
             s.stateL2.replaceUtxosActive(utxosActive)
             s.confirmValidMempoolEvents(block.blockHeader.blockNum, block.blockBody.eventsValid)
         }
+
+def mkBlockEffects(
+    settlementTxBuilder: SettlementTxBuilder,
+    finalizationTxBuilder: FinalizationTxBuilder,
+    ownPeer: Wallet,
+    network: HeadPeerNetwork,
+    block: Block,
+    utxosActive: UtxosSetOpaque,
+    utxosWithdrawn: UtxosSet,
+    mbGenesis: Option[(TxId, SimpleGenesis)]
+): (L1BlockEffect, L2BlockEffect) =
+    block.blockHeader.blockType match
+        case Minor => () /\ utxosActive
+        case Major =>
+            // Create settlement tx draft
+            val txRecipe = SettlementRecipe(
+              block.blockHeader.versionMajor,
+              block.blockBody.depositsAbsorbed,
+              utxosWithdrawn
+            )
+            val Right(settlementTxDraft: SettlementTx) =
+                settlementTxBuilder.mkSettlementTxDraft(txRecipe)
+            val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
+            // TODO: broadcast ownWit
+
+            // Confirm block
+            val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
+
+            TxDump.dumpMultisigTx(settlementTxDraft)
+
+            // L1 effect
+            val wits: Set[TxKeyWitness] =
+                acksMajorCombined.map(_.settlement) + ownWit
+            val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
+            val serializedTx = serializeTxHex(settlementTx)
+
+            settlementTx /\ utxosActive
+
+        case Final =>
+            // Create finalization tx draft
+            val recipe =
+                FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
+            val Right(finalizationTxDraft: FinalizationTx) =
+                finalizationTxBuilder.buildFinalizationTxDraft(recipe)
+            val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
+            // TODO: broadcast ownWit
+
+            // Confirm block
+            val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
+
+            // L1 effect
+            val wits: Set[TxKeyWitness] = acksFinalCombined.map(_.finalization) + ownWit
+            val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
+            val serializedTx = serializeTxHex(finalizationTx)
+
+            finalizationTx /\ utxosActive

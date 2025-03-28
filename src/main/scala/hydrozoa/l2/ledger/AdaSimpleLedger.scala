@@ -12,6 +12,7 @@ import scala.jdk.CollectionConverters.*
 sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
+sealed trait TMBTSuite extends TInstancePurpose
 
 // TODO: Add phantom type to reflect the purpose.
 type UtxosSet = Set[(UtxoIdL2, Output[L2])]
@@ -141,6 +142,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case (Nil, resolved) => Right(resolved)
             case (extraneous, _) => Left(extraneous)
 
+    def getOutput(utxoId: UtxoIdL2): OutputL2 = activeState(utxoId |> liftOutputRef) |> unliftOutput
+
     override def isEmpty: Boolean = activeState.isEmpty
 
     override def flush: UtxosSet =
@@ -150,6 +153,11 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
+
+    def apply[P <: TInstancePurpose](utxoSet: Map[UtxoIdL2, OutputL2]): AdaSimpleLedger[P] =
+        val ledger = AdaSimpleLedger[P](NoopVerifier)
+        ledger.replaceUtxosActive(utxoSet |> liftUtxoSet)
+        ledger
 
     def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, EventHash) =
         event match

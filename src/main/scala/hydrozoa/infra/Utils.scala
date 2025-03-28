@@ -44,3 +44,13 @@ def encodeHex(bytes: IArray[Byte]): String =
     HexUtil.encodeHexString(IArray.genericWrapArray(bytes).toArray)
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))
+
+// Piper!
+implicit class Piper[A](val x: A) extends AnyVal {
+    def |>[B](f: A => B): B = f(x)
+}
+
+// PS-style pair constructor
+implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
+    @inline def /\[B](y: B): (A, B) = (self, y)
+}
