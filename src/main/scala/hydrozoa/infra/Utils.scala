@@ -15,7 +15,9 @@ extension [A](result: Result[A])
     // TODO: we don't handle errors properly so far
     def force: A =
         if result.isSuccessful then result.getValue
-        else throw RuntimeException("Unexpected left")
+        else
+            println
+            throw RuntimeException(s"Unexpected: ${result.getResponse}")
 
 extension [A](option: Option[A])
     def toResult(err: String): Result[A] = option match
@@ -54,3 +56,5 @@ implicit class Piper[A](val x: A) extends AnyVal {
 implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
     @inline def /\[B](y: B): (A, B) = (self, y)
 }
+
+extension [A](a: A) infix inline def ===(b: A): Boolean = a == b

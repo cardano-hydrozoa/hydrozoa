@@ -24,7 +24,7 @@ def liftOutputRef(UtxoIdL2: UtxoIdL2): OutputRefInt =
     scalus.TxOutRef(sTxId, sTxIx)
 
 def unliftOutputRef(outputRef: OutputRefInt): UtxoIdL2 =
-    UtxoIdL2(TxId(outputRef.id.toString), TxIx(outputRef.idx.longValue))
+    UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.longValue))
 
 def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
 
@@ -41,6 +41,9 @@ def unliftOutput(output: OutputInt): Output[L2] =
     val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
     val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
     Output[L2](extractAddress(output.address).asL1, coins)
+
+def unliftUtxoSet(utxosSetOpaque: UtxosSetOpaque): Map[UtxoIdL2, OutputL2] =
+    utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
 def unwrapTxOut(output: OutputInt): scalus.TxOut = output
 

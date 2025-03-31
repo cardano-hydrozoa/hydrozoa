@@ -53,7 +53,7 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
         val txPartial = Tx()
             .mintAssets(headNativeScript, beaconToken)
             .collectFrom(List(seedUtxo).asJava)
-            .payToContract(recipe.headAddressBech32, treasuryValue.asJava, treasuryDatum)
+            .payToContract(recipe.headAddressBech32.bech32, treasuryValue.asJava, treasuryDatum)
             .from(seederAddress)
 
         // native multisig + one required signer to spend seed utxo

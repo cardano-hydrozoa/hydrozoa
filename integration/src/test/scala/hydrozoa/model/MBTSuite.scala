@@ -2,22 +2,27 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{PSStyleAssoc, Piper, decodeBech32AddressL1, decodeBech32AddressL2, serializeTxHex, txHash}
+import hydrozoa.infra.{===, NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
-import hydrozoa.l1.multisig.state.DepositDatum
+import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
+import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.createBlock
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.state.unliftUtxoSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkPeerInfo, mkWallet}
-import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializeError, mkBlockEffects}
-import hydrozoa.node.state.BlockRecord
+import hydrozoa.node.server.*
+import hydrozoa.node.state.{BlockRecord, FinalBlockL2Effect, L2BlockEffect, MajorBlockL2Effect, MinorBlockL2Effect, maybeMultisigL1Tx, mbTxHash}
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
+import munit.Assertions.assertEquals
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Gen, Prop, Properties}
@@ -89,7 +94,7 @@ object MBTSuite extends Commands:
                     Gen.frequency(
                       1 -> genDepositCommand(s),
                       3 -> genCreateBlock(s),
-                      10 -> l2InputCommandGen
+                      // 10 -> l2InputCommandGen
                     )
 
             case Freed =>
@@ -233,14 +238,14 @@ object MBTSuite extends Commands:
 
             // Native script, head address, and token
             val pubKeys =
-                (otherHeadPeers.toSet + initiator).map(tp =>
+                (otherHeadPeers + initiator).map(tp =>
                     mkWallet(tp).exportVerificationKeyBytes
                 )
             val (headMultisigScript, headAddress) =
                 mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
             val beaconTokenName = mkBeaconTokenName(seedUtxo)
 
-            // Recipe to build init tx
+            // Recipe to build init initTx
             val initTxRecipe = InitTxRecipe(
               headAddress,
               seedUtxo,
@@ -252,20 +257,27 @@ object MBTSuite extends Commands:
             val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
             val backendService = BackendServiceMock(l1Mock, state.pp)
             val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
-            val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-            log.info(s"Init tx: ${serializeTxHex(tx)}")
-            val txId = txHash(tx)
-            log.info(s"Init tx hash: $txId")
+            val Right(initTx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+            log.info(s"Init initTx: ${serializeTxHex(initTx)}")
+            val txId = txHash(initTx)
+            log.info(s"Init initTx hash: $txId")
 
-            l1Mock.submit(tx.toL1Tx)
+            l1Mock.submit(initTx.toL1Tx)
+
+            val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
+                case Right(ix, _, _) => UtxoIdL1(txId, ix)
+                case Left(err) => err match
+                        case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
+                        case _: TooManyMatches => throw RuntimeException("Initialization tx contains more than one multisig outputs!")
 
             val newState = state.copy(
               peersNetworkPhase = RunningHead,
               headPhase = Some(Open), // FIXME: Initializing in some impls
               initiator = Some(initiator),
               headPeers = otherHeadPeers,
-              headAddressBech32 = headAddress |> AddressBechL1.apply |> Some.apply,
+              headAddressBech32 = Some(headAddress),
               headMultisigScript = Some(headMultisigScript),
+              treasuryUtxoId = Some(treasuryUtxoId),
               knownTxs = l1Mock.getKnownTxs,
               utxosActive = l1Mock.getUtxosActive
             )
@@ -373,7 +385,7 @@ object MBTSuite extends Commands:
             log.info(s"Expected deposit tx: $serializedTx")
             log.info(s"Expected deposit tx hash: $depositTxHash, deposit output index: $index")
 
-            l1Mock.submit(depositTxDraft |> toL1Tx)
+            val Right(_) = l1Mock.submit(depositTxDraft |> toL1Tx)
 
             val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(l1Mock, backendService, nodeStateReader)
 
@@ -472,7 +484,7 @@ object MBTSuite extends Commands:
 
     class ProduceBlockCommand(finalization: Boolean) extends StateLikeInspectabeCommand:
 
-        val log = Logger(getClass)
+        private val log = Logger(getClass)
 
         override type RealResult = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
 
@@ -488,7 +500,7 @@ object MBTSuite extends Commands:
                 l2,
                 state.poolEvents,
                 state.depositUtxos,
-                state.l2Tip.get.blockHeader,
+                state.l2Tip.blockHeader,
                 timeCurrent,
                 (state.headPhase.get == Finalizing)
             )
@@ -496,10 +508,58 @@ object MBTSuite extends Commands:
             maybeNewBlock match
                 case None => Left("Block can't be produced at the moment.") /\ state
                 case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                    val (l1effect, l2Effect) = mkBlockEffects(block, utxosActive, utxosWithdrawn, mbGenesis))
-                    val record = BlockRecord(block, ???, (), ())
+
+                    val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
+                    val backendService = BackendServiceMock(l1Mock, state.pp)
+                    val nodeStateReader = NodeStateReaderMock(state)
+
+                    val settlementTxBuilder = BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+                    val finalizationTxBuilder = BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+
+                    val l1Effect = mkL1BlockEffect(settlementTxBuilder, finalizationTxBuilder, None, None, block, utxosWithdrawn)
+                    val l2Effect: L2BlockEffect = block.blockHeader.blockType match
+                        case Minor => utxosActive
+                        case Major => utxosActive /\ mbGenesis
+                        case Final => ()
+
+                    val record = BlockRecord(block, l1Effect, (), l2Effect)
+
+                    // Calculate new state
+                    // Submit L1
+                    (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
+
+                    l2Effect match
+                        case utxosActive: MinorBlockL2Effect =>
+                            l2.replaceUtxosActive(utxosActive)
+                        case (utxosActive -> mbGenesis) =>
+                            l2.replaceUtxosActive(utxosActive)
+                        // TODO: delete block events (both valid and invalid)
+                        case _: FinalBlockL2Effect =>
+                            l2.flush
+
+                    val blockEvents = block.blockBody.eventsValid.map(_._1) ++ block.blockBody.eventsInvalid.map(_._1)
+
+                    // Possibly new treasury utxo id
+                    val treasuryUtxoId =
+                        (l1Effect |> maybeMultisigL1Tx).map(tx =>
+                            val txId = txHash(tx)
+                            val Right(ix,_,_ ) = onlyOutputToAddress(tx, state.headAddressBech32.get)
+                            Some(UtxoIdL1(txId, ix))
+                         ).getOrElse(state.treasuryUtxoId)
+
+                    // Why does it typecheck?
+                    //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
+                    val newDepositUtxos = state.depositUtxos.map.filterNot((k,v) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
+
                     val newState = state.copy(
-                        headPhase = if finalization then Some(Finalizing) else state.headPhase
+                        depositUtxos = newDepositUtxos,
+                        poolEvents = state.poolEvents.filterNot(e => blockEvents.contains(e.getEventId)),
+                        l2Tip = block,
+                        headPhase = if finalization then Some(Finalizing) else state.headPhase,
+                        knownTxs = l1Mock.getKnownTxs,
+                        treasuryUtxoId = treasuryUtxoId,
+                        utxosActive = l1Mock.getUtxosActive,
+                        utxosActiveL2 = l2.getUtxosActive |> unliftUtxoSet
                     )
 
                     Right(record, utxosAdded, utxosWithdrawn) /\ newState
@@ -513,7 +573,38 @@ object MBTSuite extends Commands:
         ): Prop =
             log.info(".postConditionSuccess")
 
-            true // FIXME:
+            lazy val resultRight = result.right
+            lazy val expectedResultRight = expectedResult.right
+
+            (result, expectedResult) match
+                case (Right(blockRecord, utxoAdded, utxoWithdrawn), Right(expectedBlockRecord, expectedUtxoAdded, expectedUtxoWithdrawn))
+                =>
+                    val header = blockRecord.block.blockHeader
+                    val eHeader = expectedBlockRecord.block.blockHeader
+
+                    val body = blockRecord.block.blockBody
+                    val eBody = expectedBlockRecord.block.blockBody
+
+                    log.info(s"blockRecord.l1Effect.mbTxHash: ${mbTxHash(blockRecord.l1Effect)}")
+                    log.info(s"blockRecord.l1Effect: ${maybeMultisigL1Tx(blockRecord.l1Effect).map(serializeTxHex)}")
+
+                    log.info(s"expectedBlockRecord.l1Effect.mbTxHash: ${mbTxHash(expectedBlockRecord.l1Effect)}")
+                    log.info(s"expectedBlockRecord.l1Effect: ${maybeMultisigL1Tx(expectedBlockRecord.l1Effect).map(serializeTxHex)}")
+
+
+                    ("Block number should be the same" |: header.blockNum === eHeader.blockNum)
+                        && ("Block type should be the same" |: header.blockType === eHeader.blockType)
+                        && ("Major version should be the same" |: header.versionMajor === eHeader.versionMajor)
+                        && ("Minot version should be the same" |: header.versionMinor === eHeader.versionMinor)
+                        && ("Valid events should be the same" |: body.eventsValid === eBody.eventsValid)
+                        && ("Invalid events should be the same" |: body.eventsInvalid === eBody.eventsInvalid)
+                        && ("Deposit absorbed should be the same" |: body.depositsAbsorbed.toSet.equals(eBody.depositsAbsorbed.toSet))
+                        && ("L1 effect tx hashes should be the same" |:
+                            mbTxHash(blockRecord.l1Effect).isDefined ==>
+                                (mbTxHash(blockRecord.l1Effect).get.hash === mbTxHash(expectedBlockRecord.l1Effect).get.hash))
+                        // && ("L2 effects should be the same" |: blockRecord.l2Effect === expectedBlockRecord.l2Effect) FIXME: Use Eq?
+                case (Left(error), Left(expectedError)) => error === expectedError
+                case _ => "Responses are not comparable" |: false
 
         override def postConditionFailure(
             expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],

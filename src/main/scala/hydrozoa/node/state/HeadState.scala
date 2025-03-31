@@ -1,8 +1,10 @@
 package hydrozoa.node.state
+
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.{Piper, txHash}
 import hydrozoa.l1.multisig.state.*
-import hydrozoa.l1.multisig.tx.{FinalizationTx, InitializationTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
@@ -63,7 +65,7 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
-    def currentTreasuryRef: UtxoIdL1
+    def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
@@ -99,7 +101,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def poolEventL2(event: NonGenesisL2): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def addBlock(block: BlockRecord): Unit
+    def addBlock(block: BlockRecord): Unit // FIXME: name
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
@@ -196,7 +198,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
-        def currentTreasuryRef: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
+        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
         def headBechAddress: AddressBechL1 = self.headBechAddress.get
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
@@ -339,6 +341,24 @@ type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlo
 type MinorBlockL1Effect = Unit
 type L1PostDatedBlockEffect = Unit
 
-type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect
+type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect | FinalBlockL2Effect
 type MinorBlockL2Effect = UtxosSetOpaque
-type MajorBlockL2Effect = UtxosSetOpaque
+type MajorBlockL2Effect = (UtxosSetOpaque, Option[(TxId, SimpleGenesis)])
+type FinalBlockL2Effect = Unit
+
+def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
+    case _: MinorBlockL1Effect             => None
+    case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
+
+//extension (l1BlockEffect: L1BlockEffect)
+//    def mbTxHash: Option[TxId] = l1BlockEffect match
+//        case _: MinorBlockL1Effect => None
+//        case tx: InitializationTx => tx |> txHash |> Some.apply
+//        case tx: SettlementTx => tx |> txHash |> Some.apply
+//        case tx: FinalizationTx => tx  |> txHash |> Some.apply
+
+def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
+    case _: MinorBlockL1Effect => None
+    case tx: InitializationTx  => tx |> txHash |> Some.apply
+    case tx: SettlementTx      => tx |> txHash |> Some.apply
+    case tx: FinalizationTx    => tx |> txHash |> Some.apply

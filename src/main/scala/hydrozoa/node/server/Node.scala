@@ -117,7 +117,7 @@ class Node(
                     HeadParams.default,
                     headNativeScript,
                     beaconTokenName,
-                    AddressBechL1(headAddress),
+                    headAddress,
                     nodeState,
                     log
                   )
@@ -327,22 +327,24 @@ class Node(
         maybeNewBlock match
             case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
                 // Create effects
-                val (l1effect, l2effect) =
-                    mkBlockEffects(
+                val l1Effect =
+                    mkL1BlockEffect(
                       settlementTxBuilder,
                       finalizationTxBuilder,
-                      ownPeer,
-                      network,
+                      Some(ownPeer),
+                      Some(network),
                       block,
-                      utxosActive,
-                      utxosWithdrawn,
-                      mbGenesis
+                      utxosWithdrawn
                     )
-                val record = BlockRecord(block, l1effect, (), l2effect)
-                nodeState.head.currentPhase match
-                    case HeadPhase.Open       => nodeState.head.openPhase(_.addBlock(record))
-                    case HeadPhase.Finalizing => nodeState.head.finalizingPhase(_.closeHead(record))
-                    case _                    => assert(true, "Unreachable")
+                val l2Effect = block.blockHeader.blockType match
+                    case Minor => utxosActive
+                    case Major => utxosActive /\ mbGenesis
+                    case Final => ()
+
+                // Record and block application
+                val record = BlockRecord(block, l1Effect, (), l2Effect)
+                applyBlock(record)
+                // Move head into finalization phase if finalizeHead flag is received
                 if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
                 // Dump state
                 dumpState()
@@ -377,23 +379,33 @@ class Node(
         println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
     }
 
-    def applyBlockEffects(
-        block: Block,
-        l1BlockEffect: L1BlockEffect,
-        l2BlockEffect: L2BlockEffect,
-        mbGenesis: Option[(TxId, SimpleGenesis)] // Bake into effects
+    private def applyBlock(
+        blockRecord: BlockRecord
     ): Unit =
+        val block = blockRecord.block
         block.blockHeader.blockType match
             case Minor =>
-                applyMinorBlockL2Effect(block, l2BlockEffect)
-            // No L1 effects so far in multisig mode for Minor blocks
+                // No L1 effects so far in multisig mode for Minor blocks
+                // L2 effect
+                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MinorBlockL2Effect]
+                nodeState.head.openPhase { s =>
+                    s.addBlock(blockRecord)
+                    s.stateL2.replaceUtxosActive(l2BlockEffect_)
+                    val body = block.blockBody
+                    s.confirmMempoolEvents(
+                      block.blockHeader.blockNum,
+                      body.eventsValid,
+                      None,
+                      body.eventsInvalid
+                    )
+                }
+
             case Major =>
-                // Immediate L2 effect
-                applyMajorBlockL2Effect(block, l2BlockEffect, mbGenesis)
-                val settlementTx = toL1Tx(l1BlockEffect.asInstanceOf[SettlementTx]) // FIXME: casting
                 // L1 effect
-                val Right(settlementTxId) =
-                    cardano.submit(settlementTx) 
+                val settlementTx = toL1Tx(
+                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
+                ) // FIXME: casting
+                val Right(settlementTxId) = cardano.submit(settlementTx)
                 log.info(s"Settlement tx submitted: $settlementTxId")
 
                 // Emulate L1 event
@@ -405,14 +417,33 @@ class Node(
                 multisigL1EventManager.map(
                   _.handleSettlementTx(settlementTx, settlementTxId)
                 )
-            case Final =>
+
                 // L2 effect
-                applyFinalBlockL2Effect(block, l2BlockEffect)
-                val finalizationTx = toL1Tx(l1BlockEffect.asInstanceOf[FinalizationTx]) // FIXME: casting
+                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MajorBlockL2Effect]
+                nodeState.head.openPhase { s =>
+                    s.addBlock(blockRecord)
+                    s.stateL2.replaceUtxosActive(l2BlockEffect_._1)
+                    val body = block.blockBody
+                    s.confirmMempoolEvents(
+                      block.blockHeader.blockNum,
+                      body.eventsValid,
+                      l2BlockEffect_._2,
+                      body.eventsInvalid
+                    )
+
+                    // FIXME: we should it clean up immediately, so the next block won't pick it up again
+                    //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
+                    //  They can be known from L1 major block effects (currently not implemented).
+                    s.removeAbsorbedDeposits(body.depositsAbsorbed)
+                }
+
+            case Final =>
                 // L1 effect
-                val Right(finalizationTxId) =
-                    cardano.submit(finalizationTx) 
-                log.info(s"Settlement tx submitted: $finalizationTxId")
+                val finalizationTx = toL1Tx(
+                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
+                ) // FIXME: casting
+                val Right(finalizationTxId) = cardano.submit(finalizationTx)
+                log.info(s"Finalizationtx submitted: $finalizationTxId")
 
                 // Emulate L1 event
                 // TODO: temporarily handle the event, again, we don't want to wait
@@ -423,65 +454,26 @@ class Node(
                   )
                 )
 
-    private def applyMinorBlockL2Effect(
-        block: Block,
-        utxosActive: L2BlockEffect
-    ): Unit =
-        nodeState.head.openPhase { s =>
-            s.stateL2.replaceUtxosActive(utxosActive)
-            val body = block.blockBody
-            s.confirmMempoolEvents(
-              block.blockHeader.blockNum,
-              body.eventsValid,
-              None,
-              body.eventsInvalid
-            )
-        }
+                // L2 effect
+                nodeState.head.finalizingPhase { s =>
+                    s.stateL2.flush
+                    s.confirmValidMempoolEvents(
+                      block.blockHeader.blockNum,
+                      block.blockBody.eventsValid
+                    )
+                    s.closeHead(blockRecord)
+                }
 
-    private def applyMajorBlockL2Effect(
-        block: Block,
-        utxosActive: UtxosSetOpaque,
-        mbGenesis: Option[(TxId, SimpleGenesis)]
-    ): Unit =
-        nodeState.head.openPhase { s =>
-            s.stateL2.replaceUtxosActive(utxosActive)
-            val body = block.blockBody
-            s.confirmMempoolEvents(
-              block.blockHeader.blockNum,
-              body.eventsValid,
-              mbGenesis,
-              body.eventsInvalid
-            )
-
-            val depositsAbsorbed = body.depositsAbsorbed
-
-            // FIXME: we should it clean up immediately, so the next block won't pick it up again
-            //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
-            //  They can be known from L1 major block effects (currently not implemented).
-            s.removeAbsorbedDeposits(depositsAbsorbed)
-
-        }
-    private def applyFinalBlockL2Effect(
-        block: Block,
-        utxosActive: UtxosSetOpaque
-    ): Unit =
-        nodeState.head.finalizingPhase { s =>
-            s.stateL2.replaceUtxosActive(utxosActive)
-            s.confirmValidMempoolEvents(block.blockHeader.blockNum, block.blockBody.eventsValid)
-        }
-
-def mkBlockEffects(
+def mkL1BlockEffect(
     settlementTxBuilder: SettlementTxBuilder,
     finalizationTxBuilder: FinalizationTxBuilder,
-    ownPeer: Wallet,
-    network: HeadPeerNetwork,
+    mbOwnPeer: Option[Wallet],
+    mbNetwork: Option[HeadPeerNetwork],
     block: Block,
-    utxosActive: UtxosSetOpaque,
-    utxosWithdrawn: UtxosSet,
-    mbGenesis: Option[(TxId, SimpleGenesis)]
-): (L1BlockEffect, L2BlockEffect) =
+    utxosWithdrawn: UtxosSet
+): L1BlockEffect =
     block.blockHeader.blockType match
-        case Minor => () /\ utxosActive
+        case Minor => ()
         case Major =>
             // Create settlement tx draft
             val txRecipe = SettlementRecipe(
@@ -491,37 +483,44 @@ def mkBlockEffects(
             )
             val Right(settlementTxDraft: SettlementTx) =
                 settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-            val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
-            // TODO: broadcast ownWit
+            mbOwnPeer /\ mbNetwork match
+                case Some(ownPeer) -> Some(network) =>
+                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
+                    // TODO: broadcast ownWit
 
-            // Confirm block
-            val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
+                    // Confirm block
+                    val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
 
-            TxDump.dumpMultisigTx(settlementTxDraft)
+                    TxDump.dumpMultisigTx(settlementTxDraft)
 
-            // L1 effect
-            val wits: Set[TxKeyWitness] =
-                acksMajorCombined.map(_.settlement) + ownWit
-            val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
-            val serializedTx = serializeTxHex(settlementTx)
+                    // L1 effect
+                    val wits = acksMajorCombined.map(_.settlement) + ownWit
+                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
+                    // val serializedTx = serializeTxHex(settlementTx)
 
-            settlementTx /\ utxosActive
-
+                    settlementTx
+                case _ => // used in MBT
+                    settlementTxDraft
         case Final =>
             // Create finalization tx draft
             val recipe =
                 FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
             val Right(finalizationTxDraft: FinalizationTx) =
                 finalizationTxBuilder.buildFinalizationTxDraft(recipe)
-            val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
-            // TODO: broadcast ownWit
 
-            // Confirm block
-            val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
+            mbOwnPeer /\ mbNetwork match
+                case Some(ownPeer) -> Some(network) =>
+                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
+                    // TODO: broadcast ownWit
 
-            // L1 effect
-            val wits: Set[TxKeyWitness] = acksFinalCombined.map(_.finalization) + ownWit
-            val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
-            val serializedTx = serializeTxHex(finalizationTx)
+                    // Confirm block
+                    val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
 
-            finalizationTx /\ utxosActive
+                    // L1 effect
+                    val wits = acksFinalCombined.map(_.finalization) + ownWit
+                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
+                    // val serializedTx = serializeTxHex(finalizationTx)
+
+                    finalizationTx
+                case _ => // used in MBT
+                    finalizationTxDraft

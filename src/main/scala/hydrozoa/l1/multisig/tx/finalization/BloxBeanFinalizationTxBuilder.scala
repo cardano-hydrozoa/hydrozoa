@@ -25,7 +25,7 @@ class BloxBeanFinalizationTxBuilder(
         r: FinalizationRecipe
     ): Either[String, FinalizationTx] =
 
-        val treasuryUtxoId = reader.multisigRegime(_.currentTreasuryRef)
+        val treasuryUtxoId = reader.multisigRegime(_.treasuryUtxoId)
         val treasuryUtxo = backendService.getUtxoService
             .getTxOutput(treasuryUtxoId._1.hash, treasuryUtxoId._2.ix.intValue)
             .force

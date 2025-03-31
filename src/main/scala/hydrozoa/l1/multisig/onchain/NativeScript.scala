@@ -7,7 +7,9 @@ import com.bloxbean.cardano.client.crypto.VerificationKey
 import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPubkey}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
-import hydrozoa.{UtxoIdL1, VerificationKeyBytes, NativeScript as HNativeScript, Network as HNetwork}
+import hydrozoa.infra.Piper
+import hydrozoa.infra.PSStyleAssoc
+import hydrozoa.{AddressBechL1, UtxoIdL1, VerificationKeyBytes, NativeScript as HNativeScript, Network as HNetwork}
 
 /** Creates `AllOf` native script from peer nodes' keys.
   *
@@ -26,7 +28,7 @@ import hydrozoa.{UtxoIdL1, VerificationKeyBytes, NativeScript as HNativeScript, 
 def mkHeadNativeScriptAndAddress(
     vKeys: Set[VerificationKeyBytes],
     network: HNetwork
-): (HNativeScript, String) = {
+): (HNativeScript, AddressBechL1) = 
     val script = vKeys.toList
         .map(vkb => (getKeyHash(vkb.bytes), VerificationKey.create(vkb.bytes)))
         .sortWith((a, b) => a._1.compareTo(b._1) < 0)
@@ -34,8 +36,8 @@ def mkHeadNativeScriptAndAddress(
         .foldLeft(ScriptAll())((s: ScriptAll, k: ScriptPubkey) => s.addScript(k))
     val nw = Network(network.networkId, network.protocolMagic)
     val address = getEntAddress(script, nw).toBech32
-    (HNativeScript(script.scriptRefBytes), address)
-}
+    HNativeScript(script.scriptRefBytes) /\ AddressBechL1(address)
+
 
 /** @return
   *   treasury beacon token name

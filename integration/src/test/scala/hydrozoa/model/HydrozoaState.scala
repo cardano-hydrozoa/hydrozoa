@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.infra.Piper
 import hydrozoa.l1.genesisUtxos
 import hydrozoa.l1.multisig.state.{DepositUtxos, MultisigHeadStateL1}
-import hydrozoa.l2.block.Block
+import hydrozoa.l2.block.{Block, zeroBlock}
 import hydrozoa.l2.ledger.NonGenesisL2
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
@@ -26,6 +26,7 @@ case class HydrozoaState(
     headAddressBech32: Option[AddressBechL1] = None,
     headMultisigScript: Option[NativeScript] = None,
     depositUtxos: DepositUtxos = UtxoSet.apply(),
+    treasuryUtxoId: Option[UtxoIdL1] = None,
 
     // Node
     poolEvents: Seq[NonGenesisL2] = Seq.empty,
@@ -36,7 +37,7 @@ case class HydrozoaState(
 
     // L2
     utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
-    l2Tip: Option[Block] = None
+    l2Tip: Block = zeroBlock
 )
 
 object HydrozoaState:
@@ -73,7 +74,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
             override def seedAddress: AddressBechL1 = ???
 
-            override def currentTreasuryRef: UtxoIdL1 = ???
+            override def treasuryUtxoId: UtxoIdL1 = s.treasuryUtxoId.get
 
             override def stateL1: MultisigHeadStateL1 = ???
         ) |> foo

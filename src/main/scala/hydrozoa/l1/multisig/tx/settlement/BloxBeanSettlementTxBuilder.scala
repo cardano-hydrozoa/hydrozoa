@@ -28,12 +28,18 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val inputsIds = r.deposits.toSet + reader.multisigRegime(_.currentTreasuryRef)
+        // We use a buffer here since despite the fact inputs are a set,
+        // the order matters - different orders produce different txIds.
+        val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
 
-        val utxoInput: Set[Utxo] =
-            inputsIds.map(r =>
-                backendService.getUtxoService.getTxOutput(r.txId.hash, r.outputIx.ix.toInt).force
-            )
+        val utxoInput: Seq[Utxo] =
+            utxoIds
+                .map(r =>
+                    backendService.getUtxoService
+                        .getTxOutput(r.txId.hash, r.outputIx.ix.toInt)
+                        .force
+                )
+                .toSeq
 
         val outputsToWithdraw =
             r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
