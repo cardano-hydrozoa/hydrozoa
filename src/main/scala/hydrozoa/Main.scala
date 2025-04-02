@@ -16,11 +16,11 @@ import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 
 def mkHydrozoaNode(
-                      ownPeerWallet: Wallet,
-                      knownPeers: Set[Wallet],
-                      useL1Mock: Boolean = false,
-                      pp: Option[ProtocolParams] = None,
-                      yaciBFApiUri: String = "http://localhost:8080/api/v1/"
+    ownPeerWallet: Wallet,
+    knownPeers: Set[Wallet],
+    useL1Mock: Boolean = false,
+    pp: Option[ProtocolParams] = None,
+    yaciBFApiUri: String = "http://localhost:8080/api/v1/"
 ) = {
 
     // Components
@@ -82,7 +82,10 @@ object HydrozoaNodeServer:
     @main def main(args: String*): Unit = {
 
         val (log: Logger, node: Node, _) = {
-            mkHydrozoaNode(mkWallet(Alice), Set(Bob, Carol).map(mkWallet))
+            mkHydrozoaNode(
+                mkWallet(Alice),
+                Set(Bob, Carol).map(mkWallet)
+            )
         }
 
         log.warn("Starting Hydrozoa Node API Server...")

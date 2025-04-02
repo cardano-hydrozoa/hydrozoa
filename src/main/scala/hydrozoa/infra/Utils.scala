@@ -19,12 +19,15 @@ extension [A](result: Result[A])
             println
             throw RuntimeException(s"Unexpected: ${result.getResponse}")
 
+object ResultUtils:
+    def mkResultOfType[A](value: A): Result[A] =
+        val result = Result.success("dummy").asInstanceOf[Result[A]]
+        result.withValue(value).asInstanceOf[Result[A]]
+
 extension [A](option: Option[A])
     def toResult(err: String): Result[A] = option match
-        case Some(a) =>
-            val result = Result.success("dummy").asInstanceOf[Result[A]]
-            result.withValue(a).asInstanceOf[Result[A]]
-        case None => Result.error(err).asInstanceOf[Result[A]]
+        case Some(a) => ResultUtils.mkResultOfType[A](a)
+        case None    => Result.error(err).asInstanceOf[Result[A]]
 
 // Make an Utxo from an output reference + TransactionOutput
 // For now has some limitations:

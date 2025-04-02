@@ -274,7 +274,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit =
             // 1. Add valid events
             eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
@@ -287,11 +287,8 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
                 TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
             )
             // 3. Remove invalid events
-            eventsInvalid.foreach((txId, _) =>
-                self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
-                    case -1 => throw IllegalStateException(s"pool event $txId was not found")
-                    case i  => self.poolEventsL2.remove(i)
-            )
+            self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
+                |> self.poolEventsL2.subtractAll
 
         def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
@@ -314,6 +311,9 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
             case i =>
                 val event = self.poolEventsL2.remove(i)
                 self.eventsConfirmedL2.append((event, blockNum))
+                // Remove possible duplicates form the pool
+                self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
+                    |> self.poolEventsL2.subtractAll
                 // Dump L2 tx
                 TxDump.dumpL2Tx(event match
                     case TransactionL2(_, transaction) =>

@@ -5,8 +5,8 @@ import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result, Ut
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
 import com.fasterxml.jackson.databind.JsonNode
-import hydrozoa.infra.toResult
-import hydrozoa.{TxId, TxIx, UtxoIdL1}
+import hydrozoa.infra.{ResultUtils, toResult}
+import hydrozoa.{AddressBechL1, OutputL1, TxId, TxIx, UtxoIdL1}
 
 import java.math.BigInteger
 import java.util
@@ -66,10 +66,14 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
 
     override def getUtxos(
         address: String,
-        count: Int,
-        page: Int,
-        order: OrderEnum
-    ): Result[util.List[Utxo]] = ???
+        _count: Int,
+        _page: Int,
+        _order: OrderEnum
+    ): Result[util.List[Utxo]] =
+        val addressUtxos = cardanoL1Mock.getUtxosActive
+            .filter((_, output) => output.address == AddressBechL1(address))
+            .map((id, output) => mkUtxo(id.txId.hash, id.outputIx.ix)(output))
+        ResultUtils.mkResultOfType(addressUtxos.toList.asJava)
 
     override def getUtxos(
         address: String,
@@ -90,17 +94,18 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex.toChar))
         val opt = cardanoL1Mock.getUtxosActive
             .get(utxoId)
-            .map(output =>
-                Utxo.builder()
-                    .txHash(txHash)
-                    .outputIndex(outputIndex)
-                    .address(output.address.bech32)
-                    .amount(
-                      List(Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).asJava
-                    )
-                    .build()
-            )
+            .map(mkUtxo(txHash, outputIndex))
         opt.toResult(s"utxo not found: $txHash#$outputIndex")
+
+    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo = Utxo
+        .builder()
+        .txHash(txHash)
+        .outputIndex(outputIndex)
+        .address(output.address.bech32)
+        .amount(
+          List(Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).asJava
+        )
+        .build()
 
 class EpochServiceMock(pp: ProtocolParams) extends EpochService:
     override def getLatestEpoch: Result[EpochContent] = ???

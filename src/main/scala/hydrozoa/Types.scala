@@ -31,12 +31,11 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBechL1(bech32: String):
+case class AddressBechL1(bech32: String) derives CanEqual:
     def asL2: AddressBechL2 = AddressBechL2(bech32)
 
-case class AddressBechL2(bech32: String) {
+case class AddressBechL2(bech32: String) derives CanEqual:
     def asL1: AddressBechL1 = AddressBechL1(bech32)
-}
 
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])

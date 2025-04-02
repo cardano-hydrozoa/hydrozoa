@@ -43,5 +43,5 @@ object TestPeer:
           account(peer).hdKeyPair().getPrivateKey
         )
 
-    def mkPeerInfo(peer: TestPeer): WalletId =
+    def mkWalletId(peer: TestPeer): WalletId =
         WalletId(peer.toString)

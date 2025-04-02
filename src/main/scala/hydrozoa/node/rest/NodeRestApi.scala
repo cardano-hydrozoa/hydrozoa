@@ -5,6 +5,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.node.TestPeer.{Bob, Carol, mkWalletId}
 import hydrozoa.node.server.{DepositRequest, Node}
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -80,7 +81,8 @@ class NodeRestApi(node: Node):
             .startAndWait()
 
     private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        node.initializeHead(???, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash)
+        val defPeers = Set(Bob, Carol).map(mkWalletId)
+        node.initializeHead(defPeers, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash)
 
     private def runDeposit(
         txId: String,
