@@ -7,7 +7,7 @@ import hydrozoa.infra.{WalletModuleBloxbean, toBloxbean}
 import hydrozoa.node.state.WalletId
 import hydrozoa.{Wallet, networkL1static}
 
-enum TestPeer(ix: Int):
+enum TestPeer(ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
     case Bob extends TestPeer(1)
     case Carol extends TestPeer(2)

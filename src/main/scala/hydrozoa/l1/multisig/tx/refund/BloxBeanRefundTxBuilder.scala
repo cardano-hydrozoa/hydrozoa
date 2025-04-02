@@ -36,7 +36,7 @@ class BloxBeanRefundTxBuilder(
         val txBytes = r.depositTx.toL1Tx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
-        val txIxInt = r.txIx.ix.intValue()
+        val txIxInt = r.txIx.ix.toInt
         val depositOutput = tb.getBody.getOutputs.get(txIxInt) // TODO: may throw
         val depositUtxo = txOutputToUtxo(txHash, txIxInt, depositOutput)
 

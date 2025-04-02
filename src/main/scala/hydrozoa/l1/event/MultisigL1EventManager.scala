@@ -58,10 +58,12 @@ case class MultisigL1EventManager(
                 log.info(s"Deposit output index is: $ix")
                 val datum: DepositDatum = fromData(
                   datumAsData
-                ) // FIXME how to check soundness of data? // Try(fromData(...))
+                ) 
+                // FIXME: This is totally not correct: use deposit datum properly
+                // FIXME how to check soundness of data? // Try(fromData(...))
                 nodeState.head.openPhase(
                   _.enqueueDeposit(
-                    mkUtxo[L1, DepositTag]( // FIXME: pass the whole datum
+                    mkUtxo[L1, DepositTag]( // FIXME
                       txId,
                       ix,
                       extractAddress(datum.address).asL1,

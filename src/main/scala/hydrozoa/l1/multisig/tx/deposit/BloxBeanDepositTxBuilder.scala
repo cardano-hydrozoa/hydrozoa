@@ -54,5 +54,5 @@ class BloxBeanDepositTxBuilder(
 
         assert(index >= 0, s"Deposit output was not found in the tx.")
 
-        Right(MultisigTx(TxL1(depositTx.serialize)), TxIx(index))
+        Right(MultisigTx(TxL1(depositTx.serialize)), TxIx(index.toChar))
 }

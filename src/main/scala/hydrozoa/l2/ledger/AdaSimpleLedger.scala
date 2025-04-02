@@ -67,7 +67,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = UtxoIdL2(txId, TxIx(output._2))
+                val txIn = UtxoIdL2(txId, TxIx(output._2.toChar))
                 val txOut = Output[L2](output._1.address.asL1, output._1.coins)
                 (txIn, txOut)
             )
@@ -75,7 +75,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiffInt = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
+                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
                 val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
@@ -93,7 +93,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case Right(oldUtxos) =>
                 // Outputs
                 val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
+                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
                     val txOut = liftOutput(output._1.address, output._1.coins)
                     (txIn, txOut)
                 )
@@ -189,9 +189,9 @@ object AdaSimpleLedger:
         val (_, txId) = asTxL2(withdrawal)
         WithdrawalEventL2(txId, withdrawal)
 
-case class SimpleGenesis(
+case class SimpleGenesis (
     outputs: List[SimpleOutput]
-)
+) derives CanEqual
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =

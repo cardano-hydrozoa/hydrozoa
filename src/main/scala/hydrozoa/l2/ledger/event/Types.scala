@@ -25,6 +25,6 @@ final case class WithdrawalEventL2[+H, +G, +T, +W, U](
 /** We don't add genesis events to blocks, since they can't be invalid and because they can be
   * calculated from `depositsAbsorbed`.
   */
-enum NonGenesisL2EventLabel:
+enum NonGenesisL2EventLabel derives CanEqual:
     case TransactionL2EventLabel
     case WithdrawalL2EventLabel

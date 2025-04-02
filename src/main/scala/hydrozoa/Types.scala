@@ -31,7 +31,9 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBechL1(bech32: String)
+case class AddressBechL1(bech32: String):
+    def asL2: AddressBechL2 = AddressBechL2(bech32)
+
 case class AddressBechL2(bech32: String) {
     def asL1: AddressBechL1 = AddressBechL1(bech32)
 }
@@ -40,12 +42,14 @@ case class AddressBechL2(bech32: String) {
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
 // Transaction hash
-case class TxId(hash: String)
+case class TxId(hash: String) derives CanEqual
 
 // Transaction output index
-// TODO: use Int, Long is too long
-// transaction_index = uint .size 2
-case class TxIx(ix: Long)
+
+// transaction_index = uint .size 2, so Int, which is 32 signed is just on the mark.
+// TODO: we can also use Char probably, it's unsigned and it's 16-bit long
+//  Currently, the absence of Schema for Char prevents us from doing so.
+case class TxIx(ix: Int) derives CanEqual
 
 final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx)
 

@@ -2,13 +2,31 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{===, NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
+import hydrozoa.infra.{
+    NoMatch,
+    PSStyleAssoc,
+    Piper,
+    TooManyMatches,
+    decodeBech32AddressL1,
+    decodeBech32AddressL2,
+    onlyOutputToAddress,
+    serializeTxHex,
+    txHash
+}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{
+    BloxBeanInitializationTxBuilder,
+    InitTxBuilder,
+    InitTxRecipe
+}
+import hydrozoa.l1.multisig.tx.refund.{
+    BloxBeanRefundTxBuilder,
+    PostDatedRefundRecipe,
+    RefundTxBuilder
+}
 import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
@@ -20,9 +38,8 @@ import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutd
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkPeerInfo, mkWallet}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.{BlockRecord, FinalBlockL2Effect, L2BlockEffect, MajorBlockL2Effect, MinorBlockL2Effect, maybeMultisigL1Tx, mbTxHash}
+import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
-import munit.Assertions.assertEquals
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Gen, Prop, Properties}
@@ -32,6 +49,9 @@ import sttp.client4.quick.*
 
 import scala.jdk.CollectionConverters.*
 import scala.util.{Failure, Success, Try}
+import scala.language.strictEquality
+
+import hydrozoa.node.state.given
 
 object MBTSuite extends Commands:
 
@@ -64,7 +84,7 @@ object MBTSuite extends Commands:
 
     // TODO: shall we do something here?
     override def destroySut(_sut: Sut): Unit =
-        print("<-------------------- destroy SUT...")
+        println("<-------------------- destroy SUT")
         // Thread.sleep(2_000)
         // println(" Done!")
 
@@ -219,9 +239,12 @@ object MBTSuite extends Commands:
         seedUtxo: UtxoIdL1
     ) extends StateLikeInspectabeCommand:
 
-        val log = Logger(getClass)
+        private val log = Logger(getClass)
 
         override type RealResult = Either[InitializeError, TxId]
+
+        override def toString: String =
+            s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 
         override def run(sut: HydrozoaSUT): Result =
             log.info(".run")
@@ -352,9 +375,12 @@ object MBTSuite extends Commands:
         refundAddress: AddressBechL1
     ) extends StateLikeInspectabeCommand:
 
-        val log = Logger(getClass)
+        private val log = Logger(getClass)
 
         override type RealResult = Either[DepositError, DepositResponse]
+
+        override def toString: String =
+            s"Deposit command { depositor = $depositor, fund utxo = $fundUtxo, address = $address, refund address = $refundAddress}"
 
         override def runState(
             state: HydrozoaState
@@ -397,7 +423,9 @@ object MBTSuite extends Commands:
             val depositUtxoId = UtxoIdL1(depositTxHash, index)
             val ret = Right(DepositResponse(refundTxDraft, depositUtxoId))
 
-            val depositUtxo = l1Mock.utxoById(depositUtxoId).get
+            val depositUtxo: OutputL1 = l1Mock.utxoById(depositUtxoId).get
+                // FIXME: temporarily, use the whole deposit datum
+                .copy(address = this.address.asL1)
 
             val newState = state.copy(
                 depositUtxos = UtxoSet(state.depositUtxos.map ++ Map.apply((depositUtxoId, depositUtxo))),
@@ -488,6 +516,8 @@ object MBTSuite extends Commands:
 
         override type RealResult = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
 
+        override def toString: String = s"Produce block command {finalization = $finalization}"
+
         override def runState(
             state: HydrozoaState
         ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], HydrozoaState) =
@@ -549,7 +579,8 @@ object MBTSuite extends Commands:
 
                     // Why does it typecheck?
                     //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
-                    val newDepositUtxos = state.depositUtxos.map.filterNot((k,v) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
+                    val newDepositUtxos = state.depositUtxos.map
+                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
 
                     val newState = state.copy(
                         depositUtxos = newDepositUtxos,
@@ -573,12 +604,9 @@ object MBTSuite extends Commands:
         ): Prop =
             log.info(".postConditionSuccess")
 
-            lazy val resultRight = result.right
-            lazy val expectedResultRight = expectedResult.right
-
             (result, expectedResult) match
-                case (Right(blockRecord, utxoAdded, utxoWithdrawn), Right(expectedBlockRecord, expectedUtxoAdded, expectedUtxoWithdrawn))
-                =>
+                case (Right(blockRecord, utxoAdded, utxoWithdrawn),
+                        Right(expectedBlockRecord, expectedUtxoAdded, expectedUtxoWithdrawn)) =>
                     val header = blockRecord.block.blockHeader
                     val eHeader = expectedBlockRecord.block.blockHeader
 
@@ -591,19 +619,22 @@ object MBTSuite extends Commands:
                     log.info(s"expectedBlockRecord.l1Effect.mbTxHash: ${mbTxHash(expectedBlockRecord.l1Effect)}")
                     log.info(s"expectedBlockRecord.l1Effect: ${maybeMultisigL1Tx(expectedBlockRecord.l1Effect).map(serializeTxHex)}")
 
+                    val ret =
+                        ("Block number should be the same" |: header.blockNum == eHeader.blockNum)
+                            && ("Block type should be the same" |: header.blockType == eHeader.blockType)
+                            && ("Major version should be the same" |: header.versionMajor == eHeader.versionMajor)
+                            && ("Minor version should be the same" |: header.versionMinor == eHeader.versionMinor)
+                            && ("Valid events should be the same" |: body.eventsValid == eBody.eventsValid)
+                            && ("Invalid events should be the same" |: body.eventsInvalid == eBody.eventsInvalid)
+                            && ("Deposit absorbed should be the same" |: body.depositsAbsorbed.toSet.equals(eBody.depositsAbsorbed.toSet))
+                            && ("L1 effect tx hashes should be the same" |:
+                                mbTxHash(blockRecord.l1Effect).isDefined ==>
+                                    (mbTxHash(blockRecord.l1Effect).get.hash == mbTxHash(expectedBlockRecord.l1Effect).get.hash))
+                            && (s"L2 effects should be the same:\n got: ${blockRecord.l2Effect},\n expected: ${expectedBlockRecord.l2Effect}" |:
+                                blockRecord.l2Effect == expectedBlockRecord.l2Effect)
 
-                    ("Block number should be the same" |: header.blockNum === eHeader.blockNum)
-                        && ("Block type should be the same" |: header.blockType === eHeader.blockType)
-                        && ("Major version should be the same" |: header.versionMajor === eHeader.versionMajor)
-                        && ("Minot version should be the same" |: header.versionMinor === eHeader.versionMinor)
-                        && ("Valid events should be the same" |: body.eventsValid === eBody.eventsValid)
-                        && ("Invalid events should be the same" |: body.eventsInvalid === eBody.eventsInvalid)
-                        && ("Deposit absorbed should be the same" |: body.depositsAbsorbed.toSet.equals(eBody.depositsAbsorbed.toSet))
-                        && ("L1 effect tx hashes should be the same" |:
-                            mbTxHash(blockRecord.l1Effect).isDefined ==>
-                                (mbTxHash(blockRecord.l1Effect).get.hash === mbTxHash(expectedBlockRecord.l1Effect).get.hash))
-                        // && ("L2 effects should be the same" |: blockRecord.l2Effect === expectedBlockRecord.l2Effect) FIXME: Use Eq?
-                case (Left(error), Left(expectedError)) => error === expectedError
+                    ret
+                case (Left(error), Left(expectedError)) => error == expectedError
                 case _ => "Responses are not comparable" |: false
 
         override def postConditionFailure(
@@ -612,24 +643,23 @@ object MBTSuite extends Commands:
             stateAfter: HydrozoaState,
             err: Throwable
         ): Prop =
-            log.info(".postConditionFailure")
-
-            true // FIXME:
+            log.error(".postConditionFailure shoul never happen")
+            false
 
         override def run(sut: HydrozoaSUT): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], SutInspector) =
             log.info(".run")
-
             sut.produceBlock(finalization)
 
         override def preCondition(state: HydrozoaState): Boolean =
             log.info(".preCondition")
-
             state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
 
     object ShutdownCommand extends UnitCommand:
 
-        val log = Logger(getClass)
+        private val log = Logger(getClass)
+
+        override def toString: String = "Shutdown command"
 
         override def postCondition(state: HydrozoaState, success: Boolean): Prop =
             log.info(".postCondition")
@@ -640,12 +670,10 @@ object MBTSuite extends Commands:
 
         override def run(sut: HydrozoaSUT): Unit =
             log.info(".run")
-
             sut.shutdownSut()
 
         override def nextState(state: HydrozoaState): HydrozoaState =
             log.info(".nextState")
-
             state.copy(
               peersNetworkPhase = Shutdown,
               knownPeers = Set.empty,
@@ -662,10 +690,10 @@ object MBTSuite extends Commands:
             case _            => false
 
 object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock") {
-    property("Just_works") = MBTSuite.property()
+    property("Just works, nothing bad happens") = MBTSuite.property()
 }
 
-object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci") {
-    MBTSuite.useYaci = true
-    property("Just_works") = MBTSuite.property()
-}
+//object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci") {
+//    MBTSuite.useYaci = true
+//    property("Just works, nothing bad happens") = MBTSuite.property()
+//}

@@ -26,7 +26,7 @@ case class BlockHeader(
     utxosActive: RH32UtxoSetL2
 )
 
-enum BlockTypeL2:
+enum BlockTypeL2 derives CanEqual:
     case Minor
     case Major
     case Final

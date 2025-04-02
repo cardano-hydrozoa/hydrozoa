@@ -36,7 +36,7 @@ class BloxBeanSettlementTxBuilder(
             utxoIds
                 .map(r =>
                     backendService.getUtxoService
-                        .getTxOutput(r.txId.hash, r.outputIx.ix.toInt)
+                        .getTxOutput(r.txId.hash, r.outputIx.ix)
                         .force
                 )
                 .toSeq

@@ -38,7 +38,22 @@ case class HydrozoaState(
     // L2
     utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
     l2Tip: Block = zeroBlock
-)
+):
+    override def toString: String =
+        "Hydrozoa state:" +
+            s"\tNetwork phase: ${peersNetworkPhase.toString}\n" +
+            s"\tKnown peers: ${knownPeers.toString()}\n" +
+            s"\tPrtotocol parameters: [SKIPPED]\n" +
+            s"\tHead phase: ${headPhase.toString}\n" +
+            s"\tInitiator: ${initiator.toString}\n" +
+            s"\tHead peers: ${headPeers.toString()}\n" +
+            s"\tHead address ${headAddressBech32.toString}\n" +
+            s"\tHead multisig script: [SKIPPED]\n" +
+            s"\tDeposits utxo: ${depositUtxos.toString}\n" +
+            s"\tTreasury UTxO id: ${treasuryUtxoId.toString}\n" +
+            s"\tPool events: ${poolEvents.toString()}\n" +
+            s"\tL1: [SKIPPED]\n" +
+            s"\tL2: [SKIPPED]\n"
 
 object HydrozoaState:
     def apply(
@@ -52,7 +67,7 @@ object HydrozoaState:
           utxosActive = Map.from(genesisUtxos)
         )
 
-enum PeersNetworkPhase:
+enum PeersNetworkPhase derives CanEqual:
     case NewlyCreated
     case RunningHead
     case Freed

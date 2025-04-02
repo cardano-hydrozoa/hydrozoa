@@ -73,7 +73,7 @@ def onlyOutputToAddress(
         case List(elem) =>
             Right(
               (
-                TxIx(outputs.indexOf(elem)),
+                TxIx(outputs.indexOf(elem).toChar),
                 elem.getValue.getCoin.longValue(),
                 Interop.toScalusData(
                   elem.getInlineDatum
@@ -167,14 +167,14 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
 def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
-    inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex))).toSeq
+    inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex.toChar))).toSeq
 
 def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
     val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
-            val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix))
+            val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
             val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
             (utxoId, utxo)
         )

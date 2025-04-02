@@ -24,7 +24,7 @@ def liftOutputRef(UtxoIdL2: UtxoIdL2): OutputRefInt =
     scalus.TxOutRef(sTxId, sTxIx)
 
 def unliftOutputRef(outputRef: OutputRefInt): UtxoIdL2 =
-    UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.longValue))
+    UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
 
 def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
 
@@ -48,6 +48,9 @@ def unliftUtxoSet(utxosSetOpaque: UtxosSetOpaque): Map[UtxoIdL2, OutputL2] =
 def unwrapTxOut(output: OutputInt): scalus.TxOut = output
 
 type UtxosSetOpaque = Map[OutputRefInt, OutputInt]
+
+given CanEqual[UtxosSetOpaque, UtxosSetOpaque] = CanEqual.derived
+
 type UtxosSetOpaqueMutable = mutable.Map[OutputRefInt, OutputInt]
 
 def checkSumInvariant(inputs: List[OutputInt], outputs: List[OutputInt]): Boolean =

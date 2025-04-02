@@ -14,9 +14,10 @@ import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 
+import scala.CanEqual.derived
 import scala.collection.mutable
 
-enum HeadPhase:
+enum HeadPhase derives CanEqual:
     case Initializing
     case Open
     case Finalizing
@@ -345,6 +346,8 @@ type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect | FinalBlockL2Effec
 type MinorBlockL2Effect = UtxosSetOpaque
 type MajorBlockL2Effect = (UtxosSetOpaque, Option[(TxId, SimpleGenesis)])
 type FinalBlockL2Effect = Unit
+
+given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
 
 def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
     case _: MinorBlockL1Effect             => None

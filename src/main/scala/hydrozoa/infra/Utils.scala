@@ -57,4 +57,5 @@ implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
     @inline def /\[B](y: B): (A, B) = (self, y)
 }
 
-extension [A](a: A) infix inline def ===(b: A): Boolean = a == b
+// Type-safe equality operator that requires a reflexive CanEqual instance for A.
+// extension [A](a: A) infix inline def ===(using ev: CanEqual[A, A])(b: A): Boolean = a == b
