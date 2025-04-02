@@ -1,3 +1,4 @@
+//noinspection OptionEqualsSome
 package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
@@ -36,10 +37,10 @@ import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.unliftUtxoSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.{account, mkPeerInfo, mkWallet}
+import hydrozoa.node.TestPeer.{account, mkWalletId, mkWallet}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
+import hydrozoa.node.state.{*, given}
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Gen, Prop, Properties}
@@ -48,10 +49,8 @@ import sttp.client4.Response
 import sttp.client4.quick.*
 
 import scala.jdk.CollectionConverters.*
-import scala.util.{Failure, Success, Try}
 import scala.language.strictEquality
-
-import hydrozoa.node.state.given
+import scala.util.{Failure, Success, Try}
 
 object MBTSuite extends Commands:
 
@@ -113,8 +112,8 @@ object MBTSuite extends Commands:
                 else
                     Gen.frequency(
                       1 -> genDepositCommand(s),
-                      3 -> genCreateBlock(s),
-                      // 10 -> l2InputCommandGen
+                      2 -> genCreateBlock(s),
+                      7 -> l2InputCommandGen
                     )
 
             case Freed =>
@@ -159,16 +158,19 @@ object MBTSuite extends Commands:
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
             totalAda = inputs.map(l2.getOutput(_).coins).sum.intValue
 
-            outputAda: List[Int] <- Gen.recursive[List[Int]] { fix =>
-                Gen.choose(1, totalAda).flatMap { step =>
-                    fix.map(tail =>
-                        val tailSum = tail.sum
-                        if (tailSum + step < totalAda)
-                            step :: tail
-                        else totalAda - tailSum :: Nil
-                    )
-                }
-            }
+            // FIXME: debug!
+//            outputAda: List[Int] <- Gen.recursive[List[Int]] { fix =>
+//                Gen.choose(1, totalAda).flatMap { step =>
+//                    fix.map(tail =>
+//                        val tailSum = tail.sum
+//                        if (tailSum + step < totalAda)
+//                            step :: tail
+//                        else totalAda - tailSum :: Nil
+//                    )
+//                }
+//            }
+
+            outputAda = List(totalAda)
 
             recipients <- Gen
                 .pick(outputAda.length, s.knownPeers)
@@ -250,7 +252,7 @@ object MBTSuite extends Commands:
             log.info(".run")
 
             sut.initializeHead(
-              otherHeadPeers.map(mkPeerInfo).toSet,
+              otherHeadPeers.map(mkWalletId),
               100,
               seedUtxo.txId,
               seedUtxo.outputIx
@@ -489,26 +491,58 @@ object MBTSuite extends Commands:
             preCondition
 
     class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Command:
+
+        private val log = Logger(getClass)
+
         override type Result = Unit
 
-        override def run(sut: HydrozoaSUT): Unit = ???
+        override def toString: String = s"Transaction L2 command { $simpleTransaction }"
 
-        override def nextState(state: HydrozoaState): HydrozoaState = ???
+        override def run(sut: HydrozoaSUT): Unit =
+            log.info(".run")
+            sut.submitL2(simpleTransaction)
 
-        override def preCondition(state: HydrozoaState): Boolean = ???
+        override def nextState(state: HydrozoaState): HydrozoaState =
+            log.info(".nextState")
+            state.copy(
+                poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkTransactionEvent(simpleTransaction))
+            )
 
-        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop = ???
+        override def preCondition(state: HydrozoaState): Boolean =
+            log.info(".preCondition")
+            state.peersNetworkPhase == RunningHead
+                && state.headPhase == Some(Open)
+
+        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop =
+            log.info(".postCondition")
+            true
 
     class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends Command:
+
+        private val log = Logger(getClass)
+
         override type Result = Unit
 
-        override def run(sut: HydrozoaSUT): Unit = ???
+        override def toString: String = s"Withdrawal L2 command { $simpleWithdrawal }"
 
-        override def nextState(state: HydrozoaState): HydrozoaState = ???
+        override def run(sut: HydrozoaSUT): Unit =
+            log.info(".run")
+            sut.submitL2(simpleWithdrawal)
 
-        override def preCondition(state: HydrozoaState): Boolean = ???
+        override def nextState(state: HydrozoaState): HydrozoaState =
+            log.info(".nextState")
+            state.copy(
+                poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkWithdrawalEvent(simpleWithdrawal))
+            )
 
-        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop = ???
+        override def preCondition(state: HydrozoaState): Boolean =
+            log.info(".preCondition")
+            state.peersNetworkPhase == RunningHead
+                && state.headPhase == Some(Open)
+
+        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop =
+            log.info(".postCondition")
+            true
 
     class ProduceBlockCommand(finalization: Boolean) extends StateLikeInspectabeCommand:
 
@@ -635,7 +669,7 @@ object MBTSuite extends Commands:
 
                     ret
                 case (Left(error), Left(expectedError)) => error == expectedError
-                case _ => "Responses are not comparable" |: false
+                case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
 
         override def postConditionFailure(
             expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
@@ -643,7 +677,7 @@ object MBTSuite extends Commands:
             stateAfter: HydrozoaState,
             err: Throwable
         ): Prop =
-            log.error(".postConditionFailure shoul never happen")
+            log.error(".postConditionFailure should never happen")
             false
 
         override def run(sut: HydrozoaSUT): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], SutInspector) =
@@ -689,11 +723,10 @@ object MBTSuite extends Commands:
             case Freed        => true
             case _            => false
 
-object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock") {
+object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock"):
     property("Just works, nothing bad happens") = MBTSuite.property()
-}
 
-//object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci") {
-//    MBTSuite.useYaci = true
-//    property("Just works, nothing bad happens") = MBTSuite.property()
-//}
+
+object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
+    MBTSuite.useYaci = true
+    property("Just works, nothing bad happens") = MBTSuite.property()

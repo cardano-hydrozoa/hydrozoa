@@ -1,9 +1,10 @@
 package hydrozoa.model
 
 import com.bloxbean.cardano.client.api.model.ProtocolParams
-import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.mkWallet
+import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.{BlockRecord, NodeState, WalletId}
 import hydrozoa.{TxId, TxIx, mkHydrozoaNode}
@@ -25,6 +26,10 @@ trait HydrozoaSUT:
     def produceBlock(
         nextBlockFinal: Boolean
     ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector)
+
+    def submitL2(
+        event: SimpleTransaction | SimpleWithdrawal
+    ): (Either[String, TxId], NodeStateInspector)
 
     def shutdownSut(): Unit
 
@@ -50,6 +55,15 @@ class OneNodeHydrozoaSUT(
         nextBlockFinal: Boolean
     ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector) =
         val ret = node.handleNextBlock(nextBlockFinal)
+        (ret, node.nodeStateReader)
+
+    override def submitL2(
+        event: SimpleTransaction | SimpleWithdrawal
+    ): (Either[InitializeError, TxId], NodeStateInspector) =
+        val request = event match
+            case tx: SimpleTransaction => Transaction(tx)
+            case wd: SimpleWithdrawal  => Withdrawal(wd)
+        val ret = node.submitL2(request)
         (ret, node.nodeStateReader)
 
     override def shutdownSut(): Unit = ()
