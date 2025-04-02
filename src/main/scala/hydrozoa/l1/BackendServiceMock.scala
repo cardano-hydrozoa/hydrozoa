@@ -1,6 +1,7 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.common.OrderEnum
+import com.bloxbean.cardano.client.api.exception.ApiException
 import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
@@ -66,14 +67,17 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
 
     override def getUtxos(
         address: String,
-        _count: Int,
-        _page: Int,
+        count: Int,
+        page: Int,
         _order: OrderEnum
     ): Result[util.List[Utxo]] =
         val addressUtxos = cardanoL1Mock.getUtxosActive
             .filter((_, output) => output.address == AddressBechL1(address))
             .map((id, output) => mkUtxo(id.txId.hash, id.outputIx.ix)(output))
-        ResultUtils.mkResultOfType(addressUtxos.toList.asJava)
+
+        addressUtxos.drop(count*(page-1)).take(count) match
+            case Nil => ResultUtils.mkResultError
+            case pageElems => ResultUtils.mkResult(pageElems.toList.asJava)
 
     override def getUtxos(
         address: String,

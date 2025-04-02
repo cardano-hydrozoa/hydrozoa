@@ -37,7 +37,7 @@ import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.unliftUtxoSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.{account, mkWalletId, mkWallet}
+import hydrozoa.node.TestPeer.{account, mkWallet, mkWalletId}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
 import hydrozoa.node.state.{*, given}
@@ -81,11 +81,8 @@ object MBTSuite extends Commands:
           useYaci
         )
 
-    // TODO: shall we do something here?
     override def destroySut(_sut: Sut): Unit =
         println("<-------------------- destroy SUT")
-        // Thread.sleep(2_000)
-        // println(" Done!")
 
     override def initialPreCondition(state: State): Boolean =
         state.peersNetworkPhase == NewlyCreated
@@ -107,6 +104,7 @@ object MBTSuite extends Commands:
                   5 -> genTransactionL2(s),
                   1 -> genL2Withdrawal(s)
                 )
+
                 if s.utxosActiveL2.isEmpty then
                     Gen.oneOf(genDepositCommand(s), genCreateBlock(s))
                 else
@@ -156,28 +154,23 @@ object MBTSuite extends Commands:
         for
             numberOfInputs <- Gen.choose(1, 5.min(s.utxosActiveL2.size))
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-            totalAda = inputs.map(l2.getOutput(_).coins).sum.intValue
+            totalCoins = inputs.map(l2.getOutput(_).coins).sum.intValue
 
-            // FIXME: debug!
-//            outputAda: List[Int] <- Gen.recursive[List[Int]] { fix =>
-//                Gen.choose(1, totalAda).flatMap { step =>
-//                    fix.map(tail =>
-//                        val tailSum = tail.sum
-//                        if (tailSum + step < totalAda)
-//                            step :: tail
-//                        else totalAda - tailSum :: Nil
-//                    )
-//                }
-//            }
+            outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty){
+                tails =>
+                    val residual = totalCoins - tails.sum
+                    if residual < 15_000_000
+                        then Gen.const(Right(residual :: tails))
+                        else
+                            for
+                                next <- Gen.choose(5_000_000, residual)
+                            yield Left(next :: tails)
+            }
 
-            outputAda = List(totalAda)
+            recipients <- Gen.containerOfN[List, TestPeer](outputCoins.length, Gen.oneOf(s.headPeers))
 
-            recipients <- Gen
-                .pick(outputAda.length, s.knownPeers)
-                .map(_.map(account(_).toString |> AddressBechL2.apply))
-
-            outputs = outputAda
-                .zip(recipients)
+            outputs = outputCoins
+                .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
                 .map((coins, address) => SimpleOutput(address, coins))
         yield TransactionL2Command(SimpleTransaction(inputs.toList, outputs))
 

@@ -129,6 +129,8 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
     with HeadState {
     self =>
 
+    private val log = Logger(getClass)
+
     //
     def currentPhase: HeadPhase = headPhase
 
@@ -287,6 +289,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
                 TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
             )
             // 3. Remove invalid events
+            log.info(s"Removing invalid events: $blockEventsInvalid")
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
@@ -306,6 +309,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
         ): Unit = eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
 
     private def markEventAsValid(blockNum: Int, txId: EventHash): Unit = {
+        log.info(s"Marking event $txId as validated by block $blockNum")
         self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
             case -1 => throw IllegalStateException(s"pool event $txId was not found")
             case i =>

@@ -20,13 +20,16 @@ extension [A](result: Result[A])
             throw RuntimeException(s"Unexpected: ${result.getResponse}")
 
 object ResultUtils:
-    def mkResultOfType[A](value: A): Result[A] =
+    def mkResult[A](value: A): Result[A] =
         val result = Result.success("dummy").asInstanceOf[Result[A]]
         result.withValue(value).asInstanceOf[Result[A]]
 
+    def mkResultError[A]: Result[A] =
+        Result.error().asInstanceOf[Result[A]]
+
 extension [A](option: Option[A])
     def toResult(err: String): Result[A] = option match
-        case Some(a) => ResultUtils.mkResultOfType[A](a)
+        case Some(a) => ResultUtils.mkResult[A](a)
         case None    => Result.error(err).asInstanceOf[Result[A]]
 
 // Make an Utxo from an output reference + TransactionOutput
