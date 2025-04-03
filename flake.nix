@@ -26,6 +26,7 @@
             scala-cli
             sbt
             jetbrains.idea-community-bin
+            async-profiler
           ];
         };
       })
