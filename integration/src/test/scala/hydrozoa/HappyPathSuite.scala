@@ -15,20 +15,16 @@ import munit.FunSuite
 class HappyPathSuite extends FunSuite {
 
     private val knownPeers = Set(Bob, Carol, Daniella)
-    private val headPeers = knownPeers.take(0)
+    private val headPeers = knownPeers.take(2)
 
     private val (log: Logger, node: Node, cardano: CardanoL1) = mkHydrozoaNode(
       ownPeerWallet = mkWallet(Alice),
       knownPeers = knownPeers.map(mkWallet),
+      useL1Mock = true,
       pp = Some(Utils.protocolParams)
     )
 
     override def beforeAll(): Unit = {
-//        val params = Try(node...)
-//        assume(
-//            params.isSuccess,
-//            "This test requires a Blockfrost API available. Start Yaci Devkit before running this test."
-//        )
         assume(true, "Env is presumably set up and reset.")
     }
 

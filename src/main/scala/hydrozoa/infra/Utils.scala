@@ -62,6 +62,3 @@ implicit class Piper[A](val x: A) extends AnyVal {
 implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
     @inline def /\[B](y: B): (A, B) = (self, y)
 }
-
-// Type-safe equality operator that requires a reflexive CanEqual instance for A.
-// extension [A](a: A) infix inline def ===(using ev: CanEqual[A, A])(b: A): Boolean = a == b
