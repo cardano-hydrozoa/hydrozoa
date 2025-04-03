@@ -3,31 +3,13 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{
-    NoMatch,
-    PSStyleAssoc,
-    Piper,
-    TooManyMatches,
-    decodeBech32AddressL1,
-    decodeBech32AddressL2,
-    onlyOutputToAddress,
-    serializeTxHex,
-    txHash
-}
+import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{
-    BloxBeanInitializationTxBuilder,
-    InitTxBuilder,
-    InitTxRecipe
-}
-import hydrozoa.l1.multisig.tx.refund.{
-    BloxBeanRefundTxBuilder,
-    PostDatedRefundRecipe,
-    RefundTxBuilder
-}
+import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
@@ -43,6 +25,7 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
 import hydrozoa.node.state.{*, given}
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
+import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, Properties}
 import scalus.prelude.Maybe
 import sttp.client4.Response
@@ -246,7 +229,7 @@ object MBTSuite extends Commands:
 
             sut.initializeHead(
               otherHeadPeers.map(mkWalletId),
-              100,
+              1000,
               seedUtxo.txId,
               seedUtxo.outputIx
             )
@@ -267,7 +250,7 @@ object MBTSuite extends Commands:
             val initTxRecipe = InitTxRecipe(
               headAddress,
               seedUtxo,
-              100_000_000,
+              1000_000_000,
               headMultisigScript,
               beaconTokenName
             )
@@ -718,8 +701,10 @@ object MBTSuite extends Commands:
 
 object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock"):
     property("Just works, nothing bad happens") = MBTSuite.property()
+//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
 
 
 object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
     property("Just works, nothing bad happens") = MBTSuite.property()
+//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)

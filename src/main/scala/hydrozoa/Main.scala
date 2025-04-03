@@ -59,7 +59,7 @@ def mkHydrozoaNode(
           finalizationTxBuilder,
           cardano,
           ownPeerWallet,
-          knownPeers.toSet
+          knownPeers
         )
 
     val node = Node(

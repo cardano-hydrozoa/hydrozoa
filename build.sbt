@@ -13,12 +13,12 @@ lazy val core = (project in file("."))
         "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
         // Argument parsing
         "com.monovore" %% "decline" % "2.5.0",
-        "org.slf4j" % "slf4j-simple" % "2.0.16",
         // Concurrency
         "com.softwaremill.ox" %% "core" % "0.5.11",
         // Logging
+        "ch.qos.logback" % "logback-classic" % "1.4.14",
         "com.typesafe.scala-logging" %% "scala-logging" % "3.9.4",
-        "ch.qos.logback" % "logback-classic" % "1.2.10",
+        // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // JSON
         "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
@@ -29,8 +29,6 @@ lazy val core = (project in file("."))
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-//        "org.scalactic" %% "scalactic" % "3.2.19",
-//        "org.scalatest" %% "scalatest" % "3.2.19" % Test
       )
     )
 
@@ -52,6 +50,7 @@ lazy val integration = (project in file("integration"))
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
+        "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
       )
     )

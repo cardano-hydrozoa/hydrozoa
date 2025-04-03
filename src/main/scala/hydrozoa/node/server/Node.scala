@@ -352,32 +352,49 @@ class Node(
                 Right((record, utxosAdded, utxosWithdrawn))
             case None => Left("Block can't be produced at the moment.")
 
-    private def dumpState(): Unit = {
-        println(
-          "-----------------------   L1 State --------------------------------------"
-        )
-        println(nodeState.head.openPhase(_.stateL1))
-        println
-        println(
-          "-----------------------   POOL    ---------------------------------------"
-        )
-        println(nodeState.head.openPhase(_.immutablePoolEventsL2))
-        println
-        println(
-          "-----------------------   L2 State   ------------------------------------"
-        )
-        println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
-        println
-        println(
-          "------------------------  BLOCKS   --------------------------------------"
-        )
-        println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
-        println
-        println(
-          "------------------------  EVENTS   --------------------------------------"
-        )
-        println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
-    }
+    private def dumpState(): Unit =
+        nodeState.head.currentPhase match
+            case HeadPhase.Open =>
+                println(
+                  "-----------------------   L1 State --------------------------------------"
+                )
+                println(nodeState.head.openPhase(_.stateL1))
+                println
+                println(
+                  "-----------------------   POOL    ---------------------------------------"
+                )
+                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
+                println
+                println(
+                  "-----------------------   L2 State   ------------------------------------"
+                )
+                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
+                println
+                println(
+                  "------------------------  BLOCKS   --------------------------------------"
+                )
+                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
+                println
+                println(
+                  "------------------------  EVENTS   --------------------------------------"
+                )
+                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
+
+            case HeadPhase.Finalizing =>
+                println(
+                    "-----------------------   L1 State --------------------------------------"
+                )
+                println(nodeState.head.finalizingPhase(_.stateL1))
+                println(
+                    "-----------------------   L2 State   ------------------------------------"
+                )
+                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
+                //println
+                //println(
+                //    "------------------------  BLOCKS   --------------------------------------"
+                //)
+                //println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
+            case HeadPhase.Finalized => println("Node is finalized.")
 
     private def applyBlock(
         blockRecord: BlockRecord

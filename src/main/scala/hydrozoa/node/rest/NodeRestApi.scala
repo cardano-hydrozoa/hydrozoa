@@ -76,7 +76,7 @@ class NodeRestApi(node: Node):
     def start(): Unit =
         NettySyncServer()
             .port(8088)
-            .modifyConfig(c => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
+            //.modifyConfigc => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
             .startAndWait()
 
