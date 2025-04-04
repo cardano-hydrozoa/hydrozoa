@@ -50,9 +50,9 @@ class Node(
         txId: TxId,
         txIx: TxIx
     ): Either[InitializeError, TxId] = {
-
+        
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
-
+        
         // FIXME: Check there is no head or it's closed
 
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $ada ADA")

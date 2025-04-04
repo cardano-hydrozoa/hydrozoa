@@ -14,6 +14,10 @@ import hydrozoa.node.TestPeer.{Alice, Bob, Carol, mkWallet}
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import ox.channels.Actor
+import ox.logback.InheritableMDC
+import ox.{ExitCode, Ox, OxApp, forkUser, never, supervised, useInScope}
+import sttp.tapir.server.netty.sync.NettySyncServer
 
 def mkHydrozoaNode(
     ownPeerWallet: Wallet,
@@ -77,17 +81,31 @@ def mkHydrozoaNode(
     (log, node, cardano)
 }
 
-object HydrozoaNodeServer:
+object HydrozoaNode extends OxApp:
 
-    @main def main(args: String*): Unit = {
+    override def run(args: Vector[String])(using Ox): ExitCode =
+        InheritableMDC.init
 
-        val (log: Logger, node: Node, _) = {
-            mkHydrozoaNode(
-                mkWallet(Alice),
-                Set(Bob, Carol).map(mkWallet)
-            )
+        forkUser {
+
+            val (log: Logger, node: Node, _) = {
+                mkHydrozoaNode(
+                    mkWallet(Alice),
+                    Set(Bob, Carol).map(mkWallet)
+                )
+            }
+
+            //InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
+            supervised {
+                val nodeActorRef = Actor.create(node)
+                val serverBinding = useInScope(NodeRestApi(nodeActorRef).mkServer().start())(_.stop())
+                never
+            }
         }
+//}
 
-        log.warn("Starting Hydrozoa Node API Server...")
-        NodeRestApi(node).start()
-    }
+//        log.warn("Starting Hydrozoa Node API Server...")
+//        NodeRestApi(node).start()
+
+        println(s"Started app with args: ${args.mkString(", ")}!")
+        ExitCode.Success

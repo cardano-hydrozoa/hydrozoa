@@ -7,6 +7,7 @@ import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer.{Bob, Carol, mkWalletId}
 import hydrozoa.node.server.{DepositRequest, Node}
+import ox.channels.ActorRef
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
 import sttp.tapir.json.jsoniter.*
@@ -17,7 +18,7 @@ import scala.concurrent.duration.{FiniteDuration, SECONDS}
 
 /** Hydrozoa Node API, currently backed by Tapir HTTP server.
   */
-class NodeRestApi(node: Node):
+class NodeRestApi(node: ActorRef[Node]):
 
     private val initEndpoint = endpoint.put
         .in("init")
@@ -73,16 +74,14 @@ class NodeRestApi(node: Node):
     private val swaggerEndpoints = SwaggerInterpreter()
         .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Hydrozoa Head API", "0.1")
 
-    def start(): Unit =
+    def mkServer(): NettySyncServer =
         NettySyncServer()
-            .port(8088)
-            //.modifyConfigc => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
+            .port(8082)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
-            .startAndWait()
 
     private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
         val defPeers = Set(Bob, Carol).map(mkWalletId)
-        node.initializeHead(defPeers, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash)
+        node.ask(_.initializeHead(defPeers, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash))
 
     private def runDeposit(
         txId: String,
@@ -93,35 +92,37 @@ class NodeRestApi(node: Node):
         refundAddress: String,
         refundDatum: Option[String]
     ): Either[String, String] =
-        node.deposit(
-          DepositRequest(
-            TxId(txId),
-            TxIx(txIx.toChar),
-            deadline,
-            AddressBechL2(address),
-            (datum match
-                case None    => None
-                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
-            ),
-            AddressBechL1(refundAddress),
-            (refundDatum match
-                case None    => None
-                case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+        node.ask(
+          _.deposit(
+            DepositRequest(
+              TxId(txId),
+              TxIx(txIx.toChar),
+              deadline,
+              AddressBechL2(address),
+              (datum match
+                  case None    => None
+                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+              ),
+              AddressBechL1(refundAddress),
+              (refundDatum match
+                  case None    => None
+                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+              )
             )
           )
         ).map(_.toString)
 
     private def submitL1(tx: String): Either[String, String] =
-        node.submitL1(tx).map(_.toString)
+        node.ask(_.submitL1(tx).map(_.toString))
 
     private def submitL2(req: SubmitRequestL2): Either[String, String] =
-        node.submitL2(req).map(_.toString)
+        node.ask(_.submitL2(req).map(_.toString))
 
     private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
         val b = nextBlockFinal match
             case Some(_) => true
             case None    => false
-        node.handleNextBlock(b).map(_.toString)
+        node.ask(_.handleNextBlock(b).map(_.toString))
 
 // JSON/Schema instances
 enum SubmitRequestL2:
