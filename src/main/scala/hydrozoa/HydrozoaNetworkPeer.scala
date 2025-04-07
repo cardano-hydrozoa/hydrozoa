@@ -11,17 +11,20 @@ import sttp.client4.*
 import sttp.client4.impl.ox.ws.*
 import sttp.client4.ws.SyncWebSocket
 import sttp.client4.ws.sync.*
+import sttp.shared.Identity
 import sttp.tapir.*
+import sttp.tapir.server.ServerEndpoint.Full
 import sttp.tapir.server.netty.sync.OxStreams.Pipe
 import sttp.tapir.server.netty.sync.{NettySyncServer, OxStreams}
 import sttp.ws.WebSocketFrame
 
+import scala.collection.mutable
 import scala.concurrent.duration.*
 
 /** Three nodes will set up all WS connections in a deterministic order:
   *   - every node exposes a WS server endpoint for duplex communication
   *   - every node connects to all other nodes which precede it being sorted lexicographically
-  *   - reties are missing, so the order currently matters
+  *   - retries are missing, so the order of running currently matters
   */
 
 val peers = Map.from(
@@ -36,53 +39,64 @@ object HydrozoaNetworkPeer:
 
     private val log = Logger(getClass)
 
-    // "server" component
+    // Global channel for incoming messages
+    private val incoming: Channel[String] = Channel.unlimited
 
-    // requests and responses can be treated separately
-    // despite the Pipe representation
-    // not nice, but works
-    def wsPipe(peer: TestPeer): Pipe[String, String] = in =>
-        // emit periodic messages with peer's timestamp
-        val responseFlow: Flow[String] = Flow
-            .tick(1.second)
-            .map(_ =>
-                val time = System.currentTimeMillis()
-                s"$peer time is $time (S)"
-            )
+    // Global channel for outgoing messages
+    private val outgoing: Channel[String] = Channel.unlimited
 
-        // tap to log whatever is sent by the client,
-        // but complete the stream once the client closes
-        in.tap(log.info).drain().merge(responseFlow, propagateDoneLeft = true)
+    // A list of private channels for every peer we are talking to
+    private val outgoingChannels: mutable.Buffer[Channel[String]] = mutable.Buffer.empty
 
-    // Web socket endpoint
-    val wsEndpoint =
+    // Creates a new channel and returns a flow from it
+    private def mkOutgoingFlowCopy(): Flow[String] =
+        val newChannel: Channel[String] = Channel.unlimited
+        outgoingChannels.append(newChannel)
+        Flow.fromSource(newChannel)
+
+    // "Server" component
+
+    // Requests and responses can be treated separately despite the Pipe representation which is Flow[A] => Flow[B]
+    // This is called for every new incoming connection
+    def mkPipe(outgoingFlow: Flow[String]): Pipe[String, String] =
+        in =>
+            in.tap(incoming.send)
+                .drain()
+                .merge(outgoingFlow)
+
+    type FullWs = Full[
+      Unit,
+      Unit,
+      Unit,
+      Unit,
+      Flow[String] => Flow[String],
+      OxStreams & WebSockets,
+      Identity
+    ]
+
+    // The WebSocket endpoint
+    def wsConsensusEndpoint(): FullWs =
         endpoint.get
             .in("ws")
             .out(
               webSocketBody[String, CodecFormat.TextPlain, String, CodecFormat.TextPlain](OxStreams)
             )
+            .handleSuccess(_ => mkPipe(mkOutgoingFlowCopy()))
 
-    // The WebSocket endpoint, builds the pipeline in serverLogicSuccess
-    def wsConsensusEndpoint(peer: TestPeer) = wsEndpoint.handleSuccess(i => wsPipe(peer))
+    // "Client" component
 
-    // "client" component
-    def useWebSocket(peer: TestPeer)(ws: SyncWebSocket): Unit =
+    def wsConsensusClient()(ws: SyncWebSocket): Unit =
         supervised:
             val (wsSource, wsSink) = asSourceAndSink(ws)
 
-            val inputs = Flow
-                .tick(1.second, ())
-                .runToChannel()
-                .map(_ =>
-                    val time = System.currentTimeMillis()
-                    WebSocketFrame.text(s"$peer time is $time (C)")
-                )
-
             forkDiscard:
-                inputs.pipeTo(wsSink, propagateDone = true)
+                mkOutgoingFlowCopy()
+                    .runToChannel()
+                    .map(WebSocketFrame.text)
+                    .pipeTo(wsSink, propagateDone = true)
 
             wsSource.foreach: frame =>
-                log.info(s"RECEIVED: $frame")
+                incoming.send(frame.toString)
 
     extension (peer: TestPeer)
         def compareTo(another: TestPeer): Int = peer.toString.compareTo(another.toString)
@@ -90,7 +104,7 @@ object HydrozoaNetworkPeer:
     def main(args: Array[String]): Unit = {
 
         val ownPeer = TestPeer.valueOf(args.apply(0))
-        val ownPort = peers.get(ownPeer).get.port.get
+        val ownPort = peers(ownPeer).port.get
 
         log.info(s"own peer: $ownPeer, own port: $ownPort")
 
@@ -99,21 +113,49 @@ object HydrozoaNetworkPeer:
         log.info(s"peers to connect: $serverPeers")
 
         supervised {
+
+            // Produces messages
+            forkDiscard {
+                var cnt = 0
+                Flow
+                    .tick(1.second, ())
+                    .map(_ =>
+                        val time = System.currentTimeMillis()
+                        cnt = cnt + 1
+                        s"Msg #$cnt $ownPeer time is $time"
+                    )
+                    .runForeach(outgoing.send)
+            }
+
+            // Outgoing multiplexer
+            forkDiscard {
+                Flow.fromSource(outgoing)
+                    .runForeach(msg => outgoingChannels.foreach(ch => ch.send(msg)))
+            }
+
+            // Incoming reader
+            forkDiscard {
+                Flow.fromSource(incoming)
+                    .runForeach(log.info)
+            }
+
+            // Server
             val _ = useInScope(
               NettySyncServer()
                   .host("0.0.0.0")
                   .port(ownPort)
-                  .addEndpoints(List(wsConsensusEndpoint(ownPeer)))
+                  .addEndpoint(wsConsensusEndpoint())
                   .start()
-            )(_.stop)
+            )(_.stop())
 
+            // Connections to peers
             serverPeers.toList.foreachPar(serverPeers.size) { (peer, uri) =>
                 log.info(s"connecting to $peer")
                 val backend = DefaultSyncBackend()
                 try
                     basicRequest
                         .get(uri)
-                        .response(asWebSocket(useWebSocket(ownPeer)))
+                        .response(asWebSocket(wsConsensusClient()))
                         .send(backend)
                         .discard
                 finally
