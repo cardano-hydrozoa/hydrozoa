@@ -74,9 +74,9 @@ class NodeRestApi(node: ActorRef[Node]):
     private val swaggerEndpoints = SwaggerInterpreter()
         .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Hydrozoa Head API", "0.1")
 
-    def mkServer(): NettySyncServer =
+    def mkServer(port: Int): NettySyncServer =
         NettySyncServer()
-            .port(8082)
+            .port(port)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
 
     private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =

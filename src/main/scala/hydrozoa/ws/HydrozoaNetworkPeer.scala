@@ -1,4 +1,4 @@
-package hydrozoa
+package hydrozoa.ws
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.node.TestPeer
@@ -114,18 +114,18 @@ object HydrozoaNetworkPeer:
 
         supervised {
 
-            // Produces messages
-            forkDiscard {
-                var cnt = 0
-                Flow
-                    .tick(1.second, ())
-                    .map(_ =>
-                        val time = System.currentTimeMillis()
-                        cnt = cnt + 1
-                        s"Msg #$cnt $ownPeer time is $time"
-                    )
-                    .runForeach(outgoing.send)
-            }
+//            // Produces messages
+//            forkDiscard {
+//                var cnt = 0
+//                Flow
+//                    .tick(1.second, ())
+//                    .map(_ =>
+//                        val time = System.currentTimeMillis()
+//                        cnt = cnt + 1
+//                        s"Msg #$cnt $ownPeer time is $time"
+//                    )
+//                    .runForeach(outgoing.send)
+//            }
 
             // Outgoing multiplexer
             forkDiscard {
@@ -142,7 +142,6 @@ object HydrozoaNetworkPeer:
             // Server
             val _ = useInScope(
               NettySyncServer()
-                  .host("0.0.0.0")
                   .port(ownPort)
                   .addEndpoint(wsConsensusEndpoint())
                   .start()

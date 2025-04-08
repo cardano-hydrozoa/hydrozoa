@@ -9,15 +9,17 @@ import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, Fina
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
-import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkOneNode}
-import hydrozoa.node.TestPeer.{Alice, Bob, Carol, mkWallet}
+import hydrozoa.l2.consensus.network.*
+import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import ox.*
 import ox.channels.Actor
 import ox.logback.InheritableMDC
-import ox.{ExitCode, Ox, OxApp, forkUser, never, supervised, useInScope}
-import sttp.tapir.server.netty.sync.NettySyncServer
+import sttp.client4.UriContext
+import sttp.model.Uri
 
 def mkHydrozoaNode(
     ownPeerWallet: Wallet,
@@ -81,31 +83,116 @@ def mkHydrozoaNode(
     (log, node, cardano)
 }
 
+def mkHydrozoaNode2(
+    ownPeer: TestPeer,
+    ownPort: Int,
+    serverPeers: Map[TestPeer, Uri],
+    ownPeerWallet: Wallet,
+    knownPeers: Set[Wallet],
+    useL1Mock: Boolean = false,
+    pp: Option[ProtocolParams] = None,
+    yaciBFApiUri: String = "http://localhost:8080/api/v1/"
+) = {
+
+    // Components
+    val log = Logger("Hydrozoa")
+
+    // Cardano L1
+    val (cardano, backendService) = if useL1Mock then
+        val cardano = CardanoL1Mock()
+        (cardano, BackendServiceMock(cardano, pp.get))
+    else
+        val backendService = BFBackendService(yaciBFApiUri, "")
+        val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService)
+        (cardano, backendService)
+
+    // Global head manager (for mocked head during Milestone 2)
+    val nodeStateManager: NodeState = NodeState(knownPeers.map(p => WalletId(p.getName)))
+    val nodeStateReader: HeadStateReader = nodeStateManager.reader
+
+    // Tx Builders
+    val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+    val depositTxBuilder: DepositTxBuilder =
+        BloxBeanDepositTxBuilder(backendService, nodeStateReader)
+    val refundTxBuilder: RefundTxBuilder =
+        BloxBeanRefundTxBuilder(cardano, backendService, nodeStateReader)
+    val settlementTxBuilder: SettlementTxBuilder =
+        BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+    val finalizationTxBuilder: FinalizationTxBuilder =
+        BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+
+    val logDispatcher = new IncomingDispatcher[String]:
+        def dispatchMessage(msg: String): Unit = log.info(s"Received: $msg")
+
+    val networkTransport =
+        HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, logDispatcher)
+
+    val network: HeadPeerNetwork = HeadPeerNetworkWS(networkTransport)
+
+    val node = Node(
+      nodeStateManager,
+      ownPeerWallet,
+      network,
+      cardano,
+      initTxBuilder,
+      depositTxBuilder,
+      refundTxBuilder,
+      settlementTxBuilder,
+      finalizationTxBuilder,
+      log
+    )
+    (log, node, cardano, networkTransport)
+}
+
+val peers = Map.from(
+  List(
+    Alice -> uri"ws://localhost:4937/ws",
+    Bob -> uri"ws://localhost:4938/ws",
+    Carol -> uri"ws://localhost:4939/ws"
+  )
+)
+
 object HydrozoaNode extends OxApp:
+
+    private val log = Logger("main")
 
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
 
         forkUser {
 
-            val (log: Logger, node: Node, _) = {
-                mkHydrozoaNode(
-                    mkWallet(Alice),
-                    Set(Bob, Carol).map(mkWallet)
+            val ownPeer = TestPeer.valueOf(args.apply(0))
+            val ownPort = peers(ownPeer).port.get
+
+            log.info(s"Node own peer: $ownPeer, node own port: $ownPort")
+
+            val serverPeers = peers.filter((k, _) => ownPeer.compareTo(k) > 0)
+
+            val (_, node: Node, _, transport) = {
+                mkHydrozoaNode2(
+                  ownPeer,
+                  ownPort,
+                  serverPeers,
+                  mkWallet(ownPeer),
+                  peers.keySet.-(ownPeer).map(mkWallet)
                 )
             }
 
-            //InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
+            val apiPort = args.apply(1).toInt
+            
+            // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
+                
+                fork{
+                    transport.run()
+                }
+                
                 val nodeActorRef = Actor.create(node)
-                val serverBinding = useInScope(NodeRestApi(nodeActorRef).mkServer().start())(_.stop())
+                val serverBinding =
+                    useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
                 never
             }
         }
-//}
-
-//        log.warn("Starting Hydrozoa Node API Server...")
-//        NodeRestApi(node).start()
 
         println(s"Started app with args: ${args.mkString(", ")}!")
         ExitCode.Success

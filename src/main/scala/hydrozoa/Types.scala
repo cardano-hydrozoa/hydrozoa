@@ -94,6 +94,10 @@ case class PolicyId(policyId: String)
 // A verification key of a peer, used on both L1 and L2
 case class VerificationKeyBytes(bytes: Array[Byte])
 
+object VerificationKeyBytes:
+    def applyI(bytes: IArray[Byte]): VerificationKeyBytes =
+        new VerificationKeyBytes(IArray.genericWrapArray(bytes).toArray)
+
 // A signing key of a peer, used on both L1 and L2
 case class SigningKeyBytes(bytes: Array[Byte])
 

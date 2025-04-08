@@ -21,6 +21,8 @@ enum TestPeer(ix: Int) derives CanEqual:
     case Isabel extends TestPeer(8)
     case Julia extends TestPeer(9)
 
+    def compareTo(another: TestPeer): Int = this.toString.compareTo(another.toString)
+
 object TestPeer:
     private val mnemonic: String =
         "test test test test " +
@@ -55,9 +57,9 @@ object TestPeer:
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
 
-extension [K,V](map: mutable.Map[K,V])
+extension [K, V](map: mutable.Map[K, V])
     def cache(key: K): V = map.get(key) match {
-        case None => 
+        case None =>
             val missing = map.default(key)
             map.put(key, missing)
             missing
