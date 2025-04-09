@@ -35,10 +35,10 @@ class HeadPeerNetworkOneNode(
         require(headPeersNames.forall(knownPeersNames.contains), "All peers should be known")
     }
 
-    override def reqInit(headPeers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
-        requireHeadPeersAreKnown(headPeers)
+    override def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
+        requireHeadPeersAreKnown(peers)
 
-        val headPeersNames = headPeers.map(_.name)
+        val headPeersNames = peers.map(_.name)
         val headOtherPeers = otherNodes.filter(p => headPeersNames.contains(p.getName))
 
         // All head's verification keys

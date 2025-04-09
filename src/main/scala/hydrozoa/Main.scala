@@ -15,6 +15,8 @@ import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import hydrozoa.infra.{Piper, encodeHex}
+import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
 import ox.*
 import ox.channels.Actor
 import ox.logback.InheritableMDC
@@ -121,13 +123,19 @@ def mkHydrozoaNode2(
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
-    val logDispatcher = new IncomingDispatcher[String]:
-        def dispatchMessage(msg: String): Unit = log.info(s"Received: $msg")
+    val logDispatcher = new IncomingDispatcher:
+        def dispatchMessage(payload: Msg, reply: Ack => Long): Unit =
+            payload match
+                case _: ReqVerKey =>
+                    val verKey = ownPeerWallet.exportVerificationKeyBytes
+                    val ack = AckVerKey(ownPeer, verKey)
+                    reply(ack)
+                case _ => log.info(s"unknown/unsupported message: $payload")
 
     val networkTransport =
         HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, logDispatcher)
 
-    val network: HeadPeerNetwork = HeadPeerNetworkWS(networkTransport)
+    val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, networkTransport)
 
     val node = Node(
       nodeStateManager,
@@ -179,14 +187,14 @@ object HydrozoaNode extends OxApp:
             }
 
             val apiPort = args.apply(1).toInt
-            
+
             // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
-                
-                fork{
+
+                fork {
                     transport.run()
                 }
-                
+
                 val nodeActorRef = Actor.create(node)
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
@@ -194,5 +202,5 @@ object HydrozoaNode extends OxApp:
             }
         }
 
-        println(s"Started app with args: ${args.mkString(", ")}!")
+        log.info(s"Started Hydrozoa node with args: ${args.mkString(", ")}!")
         ExitCode.Success

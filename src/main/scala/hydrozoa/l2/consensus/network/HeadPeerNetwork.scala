@@ -15,7 +15,7 @@ trait HeadPeerNetwork {
       */
     def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes]
 
-    def reqInit(headPeers: Set[WalletId], req: ReqInit): Set[TxKeyWitness]
+    def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness]
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 
@@ -50,3 +50,4 @@ case class AckFinalCombined(
     rollouts: Set[TxKeyWitness],
     finalization: TxKeyWitness
 )
+
