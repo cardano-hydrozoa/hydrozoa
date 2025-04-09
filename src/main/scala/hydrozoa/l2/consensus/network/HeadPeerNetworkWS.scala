@@ -53,7 +53,7 @@ class HeadPeerNetworkWS(
         // TODO: this is why announcing is unwieldy
         //  * include into Req
         //  * introudce additional type Ann(ounce) (like Req but don't need an Ack)
-        transport.broadcastMessage(0)(
+        transport.broadcastMessage(ownPeer, 0)(
           AckVerKey(ownPeer, key)
         )
 

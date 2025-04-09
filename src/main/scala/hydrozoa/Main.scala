@@ -16,12 +16,15 @@ import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import hydrozoa.infra.{Piper, encodeHex}
-import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
+import hydrozoa.l2.consensus.network.actor.ConsensusActor
+import hydrozoa.l2.consensus.network.transport.{AnyMsg, HeadPeerNetworkTransportWS, IncomingDispatcher}
 import ox.*
 import ox.channels.{Actor, ActorRef}
 import ox.logback.InheritableMDC
 import sttp.client4.UriContext
 import sttp.model.Uri
+
+import scala.collection.mutable
 
 def mkHydrozoaNode(
     ownPeerWallet: Wallet,
@@ -127,11 +130,25 @@ def mkHydrozoaNode2(
 
         private var nodeRef: ActorRef[Node] = _
 
+        private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] = mutable.Map.empty
+        
+        
         override def setNodeActorRef(nodeRef: ActorRef[Node]): Unit = this.nodeRef = nodeRef
 
-        def dispatchMessage(msg: Msg, reply: Ack => Long): Unit =
+        def dispatchMessage(msg: AnyMsg, reply: Ack => Long): Unit =
             log.info(s"Dispatching incoming message: $msg")
-            msg match
+            
+//            val origin = msg.origin
+//            actors.get(origin) match
+//                case Some(actor) => actor.tell(_.deliver())
+//                case None =>
+//                    val newActor = ConsensusActor.spawn(origin, msg.asMsg)
+//                    val newActorRef = Actor.create(newActor)
+//                    actors.put(origin, newActor)
+                    
+
+            // Old code
+            msg.asMsg match
                 case _: ReqVerKey =>
                     val verKey = ownPeerWallet.exportVerificationKeyBytes
                     val ack = AckVerKey(ownPeer, verKey)

@@ -11,6 +11,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.TestPeer
+import hydrozoa.node.server.Node
 import ox.*
 import ox.channels.*
 import ox.flow.Flow
@@ -21,8 +22,8 @@ import sttp.client4.ws.SyncWebSocket
 import sttp.client4.ws.sync.*
 import sttp.model.Uri
 import sttp.shared.Identity
-import sttp.tapir.DecodeResult.Value
 import sttp.tapir.*
+import sttp.tapir.DecodeResult.Value
 import sttp.tapir.server.ServerEndpoint.Full
 import sttp.tapir.server.netty.sync.OxStreams.Pipe
 import sttp.tapir.server.netty.sync.{NettySyncServer, OxStreams}
@@ -48,7 +49,7 @@ trait HeadPeerNetworkTransport:
       */
     def broadcastMessage(req: Req): Long
 
-    def broadcastMessage(replyTo: Long)(ack: Ack): Long
+    def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long
 
     /** Sends a message to all peers, and get back a source channel with replies that may get back.
       * @param req
@@ -66,16 +67,16 @@ end HeadPeerNetworkTransport
   */
 trait IncomingDispatcher:
     def setNodeActorRef(nodeRef: ActorRef[Node]): Unit // FIXME
-    def dispatchMessage(payload: Msg, reply: Ack => Long): Unit
+    def dispatchMessage(anyMsg: AnyMsg, reply: Ack => Long): Unit
 
 sealed trait Aux
 
-case class ReqAux(sender: TestPeer, seq: Long) extends Aux
+case class ReqAux(from: TestPeer, seq: Long) extends Aux
 
 given reqAuxSchema: Schema[ReqAux] =
     Schema.derived[ReqAux]
 
-case class AckAux(sender: TestPeer, seq: Long, replyTo: Long) extends Aux
+case class AckAux(from: TestPeer, seq: Long, replyTo: TestPeer, replyToSeq: Long) extends Aux
 
 given ackAuxSchema: Schema[AckAux] =
     Schema.derived[AckAux]
@@ -89,16 +90,20 @@ enum AnyMsg:
     case ReqInitMsg(content: ReqInit, aux: ReqAux)
     case AckInitMsg(content: AckInit, aux: AckAux)
 
-    def msgId: Long = this match
-        case ReqVerKeyMsg(_, aux) => aux.seq
-        case AckVerKeyMsg(_, aux) => aux.seq
-        case ReqInitMsg(_, aux)   => aux.seq
-        case AckInitMsg(_, aux)   => aux.seq
+    def getFromSeq: (TestPeer, Long) = this match
+        case ReqVerKeyMsg(_, aux) => aux.from -> aux.seq
+        case AckVerKeyMsg(_, aux) => aux.from -> aux.seq
+        case ReqInitMsg(_, aux)   => aux.from -> aux.seq
+        case AckInitMsg(_, aux)   => aux.from -> aux.seq
 
-    def asAck: Option[(Long, Ack)] = this match
-        case AckVerKeyMsg(content, aux) => Some(aux.replyTo, content)
-        case AckInitMsg(content, aux)   => Some(aux.replyTo, content)
+    def asAck: Option[(TestPeer, Long, Ack)] = this match
+        case AckVerKeyMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckInitMsg(content, aux)   => Some(aux.replyTo, aux.replyToSeq, content)
         case _                          => None
+
+    def origin: (TestPeer, Long) = this.asAck match
+        case Some(from, seq, _) => (from, seq)
+        case None               => this.getFromSeq
 
     def asMsg: Msg = this match
         case ReqVerKeyMsg(content, _) => content
@@ -228,14 +233,14 @@ class HeadPeerNetworkTransportWS(
                 Flow.fromSource(incoming)
                     .runForeach(anyMsg =>
                         log.info(s"Handling incoming msg: $anyMsg")
-                        val msgId =
-                            anyMsg.msgId // If an ack -- pass to possible subscription channel
+                        val (from, seq) = anyMsg.getFromSeq
+                        // If an ack -- pass to possible subscription channel
                         anyMsg.asAck match
-                            case Some(replyTo -> ack) =>
-                                subscriptions.get(replyTo).foreach(_.send(ack))
+                            case Some(replyTo, replyToSeq, ack) =>
+                                subscriptions.get(replyToSeq).foreach(_.send(ack))
                             case _ => ()
                         // Always pass to the common dispatcher
-                        handler.dispatchMessage(anyMsg.asMsg, broadcastMessage(msgId))
+                        handler.dispatchMessage(anyMsg, broadcastMessage(from, seq))
                     )
             }
 
@@ -274,9 +279,9 @@ class HeadPeerNetworkTransportWS(
         outgoing.send(anyMsg)
         next
 
-    def broadcastMessage(replyTo: Long)(ack: Ack): Long =
+    def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
         val next = nextMsgNumber()
-        val aux = AckAux(ownPeer, next, replyTo)
+        val aux = AckAux(ownPeer, next, replyTo, replyToSeq)
         val anyMsg = AnyMsg(ack, aux)
         log.info(s"Sending an ack: $anyMsg")
         outgoing.send(anyMsg)
