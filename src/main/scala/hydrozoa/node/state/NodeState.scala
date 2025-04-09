@@ -1,6 +1,8 @@
 package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.VerificationKeyBytes
+import hydrozoa.node.TestPeer
 
 import scala.collection.mutable
 
@@ -11,8 +13,8 @@ class NodeState():
     val log: Logger = Logger(getClass)
 
     // All known peers in a peer network (not to confuse with head's pears)
-    private var knownPeers: mutable.Set[WalletId] = mutable.Set.empty
-
+    private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
+    
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
@@ -53,6 +55,9 @@ class NodeState():
                 log.warn(err)
                 throw IllegalStateException(err)
     }
+
+    val knownVerificationKeys: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
+
 
 // FIXME: add pub key
 case class WalletId(

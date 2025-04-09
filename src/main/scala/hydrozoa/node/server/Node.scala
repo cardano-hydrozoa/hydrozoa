@@ -19,6 +19,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
+import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -50,17 +51,23 @@ class Node(
         txId: TxId,
         txIx: TxIx
     ): Either[InitializeError, TxId] = {
-        
+
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
-        
+
         // FIXME: Check there is no head or it's closed
 
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $ada ADA")
 
         // Make a recipe to build init tx
 
+        // Request verification keys
+        val verificationKeyBytes = ownPeer.exportVerificationKeyBytes
         val headVKeys =
-            network.reqVerificationKeys(otherHeadPeers) + ownPeer.exportVerificationKeyBytes
+            network.reqVerificationKeys(otherHeadPeers) + verificationKeyBytes
+
+        // Announce our own verification key
+        network.announceOwnVerificationKey(verificationKeyBytes)
+
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
@@ -86,8 +93,10 @@ class Node(
 
         val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
 
+        // Collect all witnesses
         val peersWits: Set[TxKeyWitness] =
             network.reqInit(otherHeadPeers, ReqInit(seedOutput, treasuryCoins))
+
         // TODO: broadcast ownWit
 
         // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
@@ -382,18 +391,18 @@ class Node(
 
             case HeadPhase.Finalizing =>
                 println(
-                    "-----------------------   L1 State --------------------------------------"
+                  "-----------------------   L1 State --------------------------------------"
                 )
                 println(nodeState.head.finalizingPhase(_.stateL1))
                 println(
-                    "-----------------------   L2 State   ------------------------------------"
+                  "-----------------------   L2 State   ------------------------------------"
                 )
                 println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
-                //println
-                //println(
-                //    "------------------------  BLOCKS   --------------------------------------"
-                //)
-                //println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
+            // println
+            // println(
+            //    "------------------------  BLOCKS   --------------------------------------"
+            // )
+            // println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
             case HeadPhase.Finalized => println("Node is finalized.")
 
     private def applyBlock(
@@ -480,6 +489,44 @@ class Node(
                     )
                     s.closeHead(blockRecord)
                 }
+
+    def saveVerificationKey(peer: TestPeer, key: VerificationKeyBytes): Unit =
+        log.info(s"Saving verification key for peer: $peer")
+        nodeState.knownVerificationKeys.put(peer, key)
+
+    def handleReqInit(req: ReqInit): (TxId, TxKeyWitness) =
+        // FIXME: this is not entirely correct
+        val verificationKeyBytes = ownPeer.exportVerificationKeyBytes
+        val headVKeys = nodeState.knownVerificationKeys.values.toSet + verificationKeyBytes
+
+        // Native script, head address, and token
+        val seedOutput = req.seedUtxoId
+        val (headNativeScript, headAddress) =
+            mkHeadNativeScriptAndAddress(headVKeys, cardano.network)
+        val beaconTokenName = mkBeaconTokenName(seedOutput)
+        val treasuryCoins = 100 * 1_000_000 // FIXME:
+        val initTxRecipe = InitTxRecipe(
+          headAddress,
+          seedOutput,
+          treasuryCoins,
+          headNativeScript,
+          beaconTokenName
+        )
+
+        log.info(s"initTxRecipe: $initTxRecipe")
+
+        // Builds and balance initialization tx
+        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
+            case Right(v, seedAddress) => (v, seedAddress)
+            case Left(err)             => throw RuntimeException(err)
+
+        log.info("Init tx draft hash: " + txHash(txDraft))
+
+        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
+
+        (txHash(txDraft), ownWit)
+
+end Node
 
 def mkL1BlockEffect(
     settlementTxBuilder: SettlementTxBuilder,

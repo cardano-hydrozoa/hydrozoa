@@ -18,7 +18,7 @@ import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import hydrozoa.infra.{Piper, encodeHex}
 import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
 import ox.*
-import ox.channels.Actor
+import ox.channels.{Actor, ActorRef}
 import ox.logback.InheritableMDC
 import sttp.client4.UriContext
 import sttp.model.Uri
@@ -90,7 +90,7 @@ def mkHydrozoaNode2(
     ownPort: Int,
     serverPeers: Map[TestPeer, Uri],
     ownPeerWallet: Wallet,
-    knownPeers: Set[Wallet],
+    knownPeers: Set[WalletId],
     useL1Mock: Boolean = false,
     pp: Option[ProtocolParams] = None,
     yaciBFApiUri: String = "http://localhost:8080/api/v1/"
@@ -109,7 +109,7 @@ def mkHydrozoaNode2(
         (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeStateManager: NodeState = NodeState(knownPeers.map(p => WalletId(p.getName)))
+    val nodeStateManager: NodeState = NodeState(knownPeers)
     val nodeStateReader: HeadStateReader = nodeStateManager.reader
 
     // Tx Builders
@@ -123,19 +123,31 @@ def mkHydrozoaNode2(
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
-    val logDispatcher = new IncomingDispatcher:
-        def dispatchMessage(payload: Msg, reply: Ack => Long): Unit =
-            payload match
+    val incomingMsgDispatcher = new IncomingDispatcher:
+
+        private var nodeRef: ActorRef[Node] = _
+
+        override def setNodeActorRef(nodeRef: ActorRef[Node]): Unit = this.nodeRef = nodeRef
+
+        def dispatchMessage(msg: Msg, reply: Ack => Long): Unit =
+            log.info(s"Dispatching incoming message: $msg")
+            msg match
                 case _: ReqVerKey =>
                     val verKey = ownPeerWallet.exportVerificationKeyBytes
                     val ack = AckVerKey(ownPeer, verKey)
                     reply(ack)
-                case _ => log.info(s"unknown/unsupported message: $payload")
+                case ackVerKey: AckVerKey =>
+                    nodeRef.tell(_.saveVerificationKey(ackVerKey.peer, ackVerKey.verKey))
+                case reqInit: ReqInit =>
+                    val (txId, witness) = nodeRef.ask(_.handleReqInit(reqInit))
+                    val ack = AckInit(ownPeer, txId, witness)
+                    reply(ack)
+                case _ => log.info(s"unknown/unsupported message: $msg")
 
     val networkTransport =
-        HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, logDispatcher)
+        HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, incomingMsgDispatcher)
 
-    val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, networkTransport)
+    val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, networkTransport)
 
     val node = Node(
       nodeStateManager,
@@ -149,7 +161,7 @@ def mkHydrozoaNode2(
       finalizationTxBuilder,
       log
     )
-    (log, node, cardano, networkTransport)
+    (log, node, cardano, networkTransport, incomingMsgDispatcher)
 }
 
 val peers = Map.from(
@@ -176,13 +188,13 @@ object HydrozoaNode extends OxApp:
 
             val serverPeers = peers.filter((k, _) => ownPeer.compareTo(k) > 0)
 
-            val (_, node: Node, _, transport) = {
+            val (_, node: Node, _, transport, dispatcher) = {
                 mkHydrozoaNode2(
                   ownPeer,
                   ownPort,
                   serverPeers,
                   mkWallet(ownPeer),
-                  peers.keySet.-(ownPeer).map(mkWallet)
+                  peers.keySet.-(ownPeer).map(mkWalletId)
                 )
             }
 
@@ -191,11 +203,16 @@ object HydrozoaNode extends OxApp:
             // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
 
+                val nodeActorRef = Actor.create(node)
+
+                dispatcher.setNodeActorRef(nodeActorRef)
+
                 fork {
                     transport.run()
                 }
 
-                val nodeActorRef = Actor.create(node)
+
+
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
                 never

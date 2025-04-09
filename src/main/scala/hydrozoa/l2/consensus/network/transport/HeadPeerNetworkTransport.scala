@@ -30,10 +30,16 @@ import sttp.ws.WebSocketFrame
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-
-import hydrozoa.l2.consensus.network.ReqVerKey.given
-import hydrozoa.l2.consensus.network.AckVerKey.given
-import hydrozoa.l2.consensus.network.{reqVerKeySchema, ackVerKeySchema, testPeerSchema}
+import hydrozoa.l2.consensus.network.{
+    ackInitCodec,
+    ackInitSchema,
+    ackVerKeySchema,
+    reqInitCodec,
+    reqInitSchema,
+    reqVerKeySchema,
+    testPeerSchema
+}
+import hydrozoa.node.server.Node
 
 trait HeadPeerNetworkTransport:
 
@@ -59,6 +65,7 @@ end HeadPeerNetworkTransport
 /** An interface to handle incoming messages that the node should provide.
   */
 trait IncomingDispatcher:
+    def setNodeActorRef(nodeRef: ActorRef[Node]): Unit // FIXME
     def dispatchMessage(payload: Msg, reply: Ack => Long): Unit
 
 sealed trait Aux
@@ -79,25 +86,34 @@ trait HasMsgId:
 enum AnyMsg:
     case ReqVerKeyMsg(content: ReqVerKey, aux: ReqAux)
     case AckVerKeyMsg(content: AckVerKey, aux: AckAux)
+    case ReqInitMsg(content: ReqInit, aux: ReqAux)
+    case AckInitMsg(content: AckInit, aux: AckAux)
 
     def msgId: Long = this match
         case ReqVerKeyMsg(_, aux) => aux.seq
         case AckVerKeyMsg(_, aux) => aux.seq
+        case ReqInitMsg(_, aux)   => aux.seq
+        case AckInitMsg(_, aux)   => aux.seq
 
     def asAck: Option[(Long, Ack)] = this match
         case AckVerKeyMsg(content, aux) => Some(aux.replyTo, content)
+        case AckInitMsg(content, aux)   => Some(aux.replyTo, content)
         case _                          => None
 
     def asMsg: Msg = this match
         case ReqVerKeyMsg(content, _) => content
         case AckVerKeyMsg(content, _) => content
+        case ReqInitMsg(content, _)   => content
+        case AckInitMsg(content, _)   => content
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
         case content: ReqVerKey => ReqVerKeyMsg(content, aux)
+        case content: ReqInit   => ReqInitMsg(content, aux)
 
     def apply[A <: Aux](msg: Ack, aux: AckAux): AnyMsg = msg match
         case content: AckVerKey => AckVerKeyMsg(content, aux)
+        case content: AckInit   => AckInitMsg(content, aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make
@@ -253,22 +269,27 @@ class HeadPeerNetworkTransportWS(
     def broadcastMessage(req: Req): Long =
         val next = nextMsgNumber()
         val aux = ReqAux(ownPeer, next)
-        outgoing.send(AnyMsg(req, aux))
+        val anyMsg = AnyMsg(req, aux)
+        log.info(s"Sending a req: $anyMsg")
+        outgoing.send(anyMsg)
         next
 
     def broadcastMessage(replyTo: Long)(ack: Ack): Long =
         val next = nextMsgNumber()
         val aux = AckAux(ownPeer, next, replyTo)
-        outgoing.send(AnyMsg(ack, aux))
+        val anyMsg = AnyMsg(ack, aux)
+        log.info(s"Sending an ack: $anyMsg")
+        outgoing.send(anyMsg)
         next
 
     def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
         val next = nextMsgNumber()
         val aux = ReqAux(ownPeer, next)
-        val msg = AnyMsg(req, aux)
+        val anyMsg = AnyMsg(req, aux)
+        log.info(s"Sending a req for sync acks: $anyMsg")
         val ch: Channel[Ack] = Channel.bufferedDefault
         subscriptions.put(next, ch)
-        outgoing.send(msg)
+        outgoing.send(anyMsg)
         ch.asInstanceOf[Source[req.ackType]]
 
 end HeadPeerNetworkTransportWS

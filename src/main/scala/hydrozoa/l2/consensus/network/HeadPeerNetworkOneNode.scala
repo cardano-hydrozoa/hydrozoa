@@ -22,18 +22,20 @@ class HeadPeerNetworkOneNode(
     otherNodes: Set[Wallet]
 ) extends HeadPeerNetwork:
 
-    override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
-        requireHeadPeersAreKnown(peers.toSet)
-        val headPeersNames = peers.map(_.name)
-        otherNodes
-            .filter(p => headPeersNames.contains(p.getName))
-            .map(p => p.exportVerificationKeyBytes)
-
     private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
         val headPeersNames = headPeers.map(_.name)
         val knownPeersNames = otherNodes.map(_.getName)
         require(headPeersNames.forall(knownPeersNames.contains), "All peers should be known")
     }
+
+    override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
+        requireHeadPeersAreKnown(peers)
+        val headPeersNames = peers.map(_.name)
+        otherNodes
+            .filter(p => headPeersNames.contains(p.getName))
+            .map(p => p.exportVerificationKeyBytes)
+
+    override def announceOwnVerificationKey(key: VerificationKeyBytes): Unit = ()
 
     override def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
         requireHeadPeersAreKnown(peers)
@@ -46,12 +48,12 @@ class HeadPeerNetworkOneNode(
 
         // Native script, head address, and token
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
-        val beaconTokenName = mkBeaconTokenName(req.seedOutputRef)
+        val beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
 
         // Recipe to build init tx
         val initTxRecipe = InitTxRecipe(
           headAddress,
-          req.seedOutputRef,
+          req.seedUtxoId,
           req.coins,
           headNativeScript,
           beaconTokenName
@@ -63,7 +65,8 @@ class HeadPeerNetworkOneNode(
     }
 
     private def getOtherPeersWallets: Set[Wallet] = {
-        val otherPeers = reader.multisigRegimeReader(_.headPeers).filterNot(_.name == ownNode.getName)
+        val otherPeers =
+            reader.multisigRegimeReader(_.headPeers).filterNot(_.name == ownNode.getName)
         requireHeadPeersAreKnown(otherPeers)
         val otherPeersNames = otherPeers.map(_.name)
         val otherPeersWallets = otherNodes.filter(p => otherPeersNames.contains(p.getName))
