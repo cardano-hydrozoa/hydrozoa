@@ -17,6 +17,7 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
+import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
 import hydrozoa.node.TestPeer
@@ -24,6 +25,7 @@ import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
+import ox.channels.ActorRef
 import scalus.prelude.Maybe
 
 class Node(
@@ -50,9 +52,9 @@ class Node(
         ada: Long,
         txId: TxId,
         txIx: TxIx
-    ): Either[InitializeError, TxId] = {
-
+    ): Either[InitializeError, TxId] =
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
+
 
         // FIXME: Check there is no head or it's closed
 
@@ -65,8 +67,11 @@ class Node(
         val headVKeys =
             network.reqVerificationKeys(otherHeadPeers) + verificationKeyBytes
 
-        // Announce our own verification key
-        network.announceOwnVerificationKey(verificationKeyBytes)
+//        // Announce our own verification key
+//        network.announceOwnVerificationKey(verificationKeyBytes)
+
+        log.error(s"headVKeys: $headVKeys")
+        ???
 
         // Native script, head address, and token
         val seedOutput = UtxoIdL1(txId, txIx)
@@ -145,8 +150,7 @@ class Node(
             case Left(err) =>
                 log.error(s"Can't submit init tx: $err")
                 Left(err)
-
-    }
+    end initializeHead
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {
 

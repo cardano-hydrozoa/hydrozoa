@@ -1,14 +1,20 @@
 package hydrozoa.l2.consensus.network.actor
 
-import hydrozoa.VerificationKeyBytes
-import hydrozoa.l2.consensus.network.{AckVerKey, ReqVerKey}
+import com.typesafe.scalalogging.Logger
+import hydrozoa.l2.consensus.network.{Ack, AckVerKey, Req, ReqVerKey}
 import hydrozoa.node.TestPeer
-import ox.channels.{Channel, Source}
+import hydrozoa.node.state.{NodeState, WalletId}
+import hydrozoa.{VerificationKeyBytes, Wallet}
+import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
-import scala.concurrent.Future
 
-class VerificationKeyActor extends ConsensusActor:
+class VerificationKeyActor(
+    stateActor: ActorRef[NodeState],
+    walletActor: ActorRef[Wallet]
+) extends ConsensusActor:
+
+    private val log = Logger(getClass)
 
     type ReqType = ReqVerKey
     type AckType = AckVerKey
@@ -17,18 +23,32 @@ class VerificationKeyActor extends ConsensusActor:
     val acks: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
 
     def tryMakeResult(): Unit =
-        val headPeers: Set[TestPeer] = ???
-        if acks.keySet == headPeers
-            // make and return the resultChannel
-        then resultChannel.send(acks.values.toSet)
+        log.info("tryMakeResult")
+        val expectedPeers: Set[WalletId] =
+            stateActor.ask(_.getKnownPeers) + walletActor.ask(_.getWalletId)
+        log.info(s"expectedPeers: ${expectedPeers.map(_.name)}")
+        log.info(s"acks.keySet: ${acks.keySet.map(_.toString)}")
+        log.info(s"acks.keySet: ${acks.keySet.map(_.toString) ==  expectedPeers.map(_.name)}")
 
-    def deliver(ack: AckType): Unit =
-        acks.put(ack.peer, ack.verKey)
+        if acks.keySet.map(_.toString) ==  expectedPeers.map(_.name)
+        then
+            // make and return the resultChannel
+            log.warn("make and return the resultChannel!")
+            resultChannel.send(acks.values.toSet)
+        log.info("leaving tryMakeResult")
+
+    def deliver(ack: Ack): Unit =
+        log.info(s"deliver ack: $ack")
+        val ackVerKey = ack.asInstanceOf[AckType]
+        acks.put(ackVerKey.peer, ackVerKey.verKey)
         tryMakeResult()
 
-    def init(req: ReqType): AckVerKey =
-        // here actual work to build won ack happens
-        val ownAck: AckType = ???
+    def init(req: Req): AckVerKey =
+        log.info(s"init req: $req")
+        val (me, key) =
+            walletActor.ask(w => (TestPeer.valueOf(w.getName), w.exportVerificationKeyBytes))
+        val ownAck: AckType = AckVerKey(me, key)
+        log.info(s"me: $me, key: $key")
         deliver(ownAck)
         ownAck
 
@@ -37,9 +57,3 @@ class VerificationKeyActor extends ConsensusActor:
     val result: Source[Result] = resultChannel
 
 end VerificationKeyActor
-
-type ActorId = (TestPeer, Long)
-
-object VerificationKeyActor:
-    def createProactively(actorId: ActorId, reqVerKey: ReqVerKey) = ???
-    def createReactively(actorId: ActorId, msg: ReqVerKey | AckVerKey) = ???

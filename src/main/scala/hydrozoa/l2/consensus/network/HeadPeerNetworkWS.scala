@@ -2,11 +2,12 @@ package hydrozoa.l2.consensus.network
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransportWS
+import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import hydrozoa.{TxKeyWitness, VerificationKeyBytes}
+import ox.channels.ActorRef
 import ox.{either, timeout}
 
 import scala.collection.mutable
@@ -19,6 +20,11 @@ class HeadPeerNetworkWS(
     transport: HeadPeerNetworkTransportWS
 ) extends HeadPeerNetwork:
 
+    private var dispatcherRef: ActorRef[IncomingDispatcher] = _
+
+    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit =
+        this.dispatcherRef = dispatcherRef
+
     private val log = Logger(getClass)
 
     private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
@@ -28,26 +34,33 @@ class HeadPeerNetworkWS(
     }
 
     override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
-
         requireHeadPeersAreKnown(peers)
+        val req = ReqVerKey()
+        val seq = transport.broadcastMessage(req)
+        dispatcherRef.ask(
+          _.spawnActorProactively(ownPeer, seq, req, transport.broadcastMessage(ownPeer, seq))
+              .asInstanceOf[Set[VerificationKeyBytes]]
+        )
 
-        val source = transport.broadcastAndCollect(ReqVerKey())
-
-        def handleResponses: Set[VerificationKeyBytes] = {
-            val responses: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
-
-            while responses.size < peers.size do
-                val next = source.receive()
-                responses.put(next.peer, next.verKey)
-
-            responses.values.toSet
-        }
-
-        either.catching(timeout(10.second)(handleResponses)) match
-            case Left(throwable) =>
-                log.error(s"Timeout while collecting verification keys: $throwable")
-                throw IllegalStateException(throwable)
-            case Right(responses) => responses
+//        requireHeadPeersAreKnown(peers)
+//
+//        val source = transport.broadcastAndCollect(ReqVerKey())
+//
+//        def handleResponses: Set[VerificationKeyBytes] = {
+//            val responses: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
+//
+//            while responses.size < peers.size do
+//                val next = source.receive()
+//                responses.put(next.peer, next.verKey)
+//
+//            responses.values.toSet
+//        }
+//
+//        either.catching(timeout(10.second)(handleResponses)) match
+//            case Left(throwable) =>
+//                log.error(s"Timeout while collecting verification keys: $throwable")
+//                throw IllegalStateException(throwable)
+//            case Right(responses) => responses
 
     override def announceOwnVerificationKey(key: VerificationKeyBytes): Unit =
         // TODO: this is why announcing is unwieldy

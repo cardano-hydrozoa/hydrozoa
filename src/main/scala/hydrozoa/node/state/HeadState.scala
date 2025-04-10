@@ -132,7 +132,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
     private val log = Logger(getClass)
 
     //
-    def currentPhase: HeadPhase = headPhase
+    override def currentPhase: HeadPhase = headPhase
 
     //
     private var initialTreasury: Option[TreasuryUtxo] = None

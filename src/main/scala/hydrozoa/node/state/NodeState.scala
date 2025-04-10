@@ -12,8 +12,12 @@ class NodeState():
 
     val log: Logger = Logger(getClass)
 
-    // All known peers in a peer network (not to confuse with head's pears)
+    private var ownPeer: TestPeer = _
+
+    // All known peers in a peer network (not to confuse with head's peers)
     private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
+
+    def getKnownPeers: Set[WalletId] = knownPeers.toSet
     
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
@@ -45,6 +49,7 @@ class NodeState():
             getOrThrow.openPhaseReader(foo)
         override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
             getOrThrow.finalizingPhaseReader(foo)
+        
     }
 
     private def getOrThrow = {
@@ -57,7 +62,6 @@ class NodeState():
     }
 
     val knownVerificationKeys: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
-
 
 // FIXME: add pub key
 case class WalletId(

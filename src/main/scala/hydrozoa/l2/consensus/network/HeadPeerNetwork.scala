@@ -5,16 +5,20 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
+import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.state.WalletId
+import ox.channels.ActorRef
 import sttp.tapir.Schema
 
 import scala.collection.mutable
 
 // FIXME: revise return types?
 trait HeadPeerNetwork {
+
+    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit
 
     /** @param peers
       *   peers we are looking for

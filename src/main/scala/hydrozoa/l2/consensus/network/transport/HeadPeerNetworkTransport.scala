@@ -10,6 +10,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.*
+import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.Node
 import ox.*
@@ -67,7 +68,14 @@ end HeadPeerNetworkTransport
   */
 trait IncomingDispatcher:
     def setNodeActorRef(nodeRef: ActorRef[Node]): Unit // FIXME
-    def dispatchMessage(anyMsg: AnyMsg, reply: Ack => Long): Unit
+    def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit // FIXME
+    def dispatchMessage(anyMsg: AnyMsg, reply: Ack => Long)(using Ox): Unit
+    def spawnActorProactively(
+        from: TestPeer,
+        seq: Long,
+        req: Req,
+        reply: Ack => Long
+    ): Any
 
 sealed trait Aux
 
@@ -100,6 +108,15 @@ enum AnyMsg:
         case AckVerKeyMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
         case AckInitMsg(content, aux)   => Some(aux.replyTo, aux.replyToSeq, content)
         case _                          => None
+
+    def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
+        this match
+            case ReqVerKeyMsg(content, aux) => Left(aux.from, aux.seq, content)
+            case AckVerKeyMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqInitMsg(content, aux) => Left(aux.from, aux.seq, content)
+            case AckInitMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
 
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
@@ -280,6 +297,7 @@ class HeadPeerNetworkTransportWS(
         next
 
     def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
+        log.info(s"broadcastMessage")
         val next = nextMsgNumber()
         val aux = AckAux(ownPeer, next, replyTo, replyToSeq)
         val anyMsg = AnyMsg(ack, aux)
