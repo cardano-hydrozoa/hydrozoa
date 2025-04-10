@@ -7,7 +7,7 @@ import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 // Types for NODE API
 
 // Head initialization
-type InitializeError = String
+type InitializationError = String
 
 // Simple depositing
 type DepositId = UtxoIdL1

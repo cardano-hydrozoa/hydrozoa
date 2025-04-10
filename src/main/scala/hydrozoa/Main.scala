@@ -22,7 +22,7 @@ import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import ox.*
-import ox.channels.{Actor, ActorRef}
+import ox.channels.{Actor, ActorRef, Source}
 import ox.logback.InheritableMDC
 import sttp.client4.UriContext
 import sttp.model.Uri
@@ -147,67 +147,46 @@ def mkHydrozoaNode2(
             log.info(s"Dispatching incoming message: $msg")
 
             val origin = msg.origin
-            log.info(s"origin: $origin")
             actors.get(origin) match
                 case Some(actor) =>
-                    log.info("actor found")
+                    log.info(s"Actor was found for origin: $origin")
                     msg.asReqOrAck match
                         case Left(_, _, req) =>
                             // FIXME: add check whether init has not been called
-                            val ack = actor.ask(act => act.init(req))
+                            val ack = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
                             reply(ack)
                         case Right(_, _, _, _, ack) =>
-                            log.info(s"telling: $ack")
-                            actor.tell(_.deliver(ack))
-                            log.info("telling is done")
+                            actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
                 case None =>
-                    log.info("actor NOT found")
+                    log.info(s"Actor was NOT found for origin: $origin")
                     val newActor = msg.asReqOrAck match
                         case Left(_, _, req) =>
                             val (newActor, ack) = consensusActorFactory.spawnByReq(req)
-                            log.info("calling reply")
                             reply(ack)
                             newActor
                         case Right(_, _, _, _, ack) =>
                             consensusActorFactory.spawnByAck(ack)
-                        val newActorRef = Actor.create(newActor)
-                        actors.put(origin, newActorRef)
-
-//            log.warn("old code")
-//
-//            // Old code
-//            msg.asMsg match
-//                case _: ReqVerKey =>
-//                    val verKey = ownPeerWallet.exportVerificationKeyBytes
-//                    val ack = AckVerKey(ownPeer, verKey)
-//                    reply(ack)
-//                case ackVerKey: AckVerKey =>
-//                    nodeRef.tell(_.saveVerificationKey(ackVerKey.peer, ackVerKey.verKey))
-//                case reqInit: ReqInit =>
-//                    val (txId, witness) = nodeRef.ask(_.handleReqInit(reqInit))
-//                    val ack = AckInit(ownPeer, txId, witness)
-//                    reply(ack)
-//                case _ => log.info(s"unknown/unsupported message: $msg")
+                    val newActorRef = Actor.create(newActor)
+                    actors.put(origin, newActorRef)
 
         override def spawnActorProactively(
             from: TestPeer,
             seq: Long,
             req: Req,
+            send: Req => Long,
             reply: Ack => Long
-        ): Any =
-            val origin = (from, seq)
-            
-            val ret = supervised {
+        ): req.resultType =
+            supervised {
+                val origin = (from, seq)
                 val (newActor, ack) = consensusActorFactory.spawnByReq(req)
-                reply(ack)
                 val newActorRef = Actor.create(newActor)
                 actors.put(origin, newActorRef)
-                val source = newActorRef.ask(_.result)
-                val ret = source.receive()
-                ret
+                send(req)
+                reply(ack)
+                val source: Source[req.resultType] = newActorRef.ask(act =>
+                    act.result(using req))
+                source.receive()
             }
-
-            ret
 
     val networkTransport =
         HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, incomingMsgDispatcher)
@@ -227,14 +206,14 @@ def mkHydrozoaNode2(
       log
     )
     (
-      log,
       node,
       cardano,
       network,
       networkTransport,
       incomingMsgDispatcher,
       nodeStateManager,
-      ownPeerWallet
+      ownPeerWallet, 
+      initTxBuilder
     )
 }
 
@@ -263,14 +242,14 @@ object HydrozoaNode extends OxApp:
             val serverPeers = peers.filter((k, _) => ownPeer.compareTo(k) > 0)
 
             val (
-              _,
               node: Node,
-              _,
+              cardano,
               network,
               transport,
               dispatcher,
               nodeStateManager,
-              ownPeerWallet
+              ownPeerWallet,
+              initTxBuilder
             ) = {
                 mkHydrozoaNode2(
                   ownPeer,
@@ -292,8 +271,9 @@ object HydrozoaNode extends OxApp:
 
                 val stateActor = Actor.create(nodeStateManager)
                 val walletActor = Actor.create(ownPeerWallet)
+                val cardanoActor = Actor.create(cardano)
 
-                val factory = new ConsensusActorFactory(stateActor, walletActor)
+                val factory = new ConsensusActorFactory(stateActor, walletActor, cardanoActor, initTxBuilder)
                 dispatcher.setConsensusActorFactory(factory)
 
                 val dispatcherActor = Actor.create(dispatcher)
@@ -306,7 +286,7 @@ object HydrozoaNode extends OxApp:
 
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
-                
+
                 never
             }
         }

@@ -219,7 +219,7 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[InitializeError, TxId]
+        override type RealResult = Either[InitializationError, TxId]
 
         override def toString: String =
             s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"

@@ -21,29 +21,23 @@ class HeadPeerNetworkOneNode(
     finalizationTxBuilder: FinalizationTxBuilder,
     cardano: CardanoL1,
     ownNode: Wallet,
-    otherNodes: Set[Wallet]
+    knownPeers: Set[Wallet]
 ) extends HeadPeerNetwork:
 
     private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
         val headPeersNames = headPeers.map(_.name)
-        val knownPeersNames = otherNodes.map(_.getName)
+        val knownPeersNames = knownPeers.map(_.getName)
         require(headPeersNames.forall(knownPeersNames.contains), "All peers should be known")
     }
 
-    override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
-        requireHeadPeersAreKnown(peers)
-        val headPeersNames = peers.map(_.name)
-        otherNodes
-            .filter(p => headPeersNames.contains(p.getName))
-            .map(p => p.exportVerificationKeyBytes)
+    override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
+        (knownPeers + ownNode).map(p => (p.getWalletId, p.exportVerificationKeyBytes)).toMap
 
-    override def announceOwnVerificationKey(key: VerificationKeyBytes): Unit = ()
+    override def reqInit(req: ReqInit): Unit = {
+        requireHeadPeersAreKnown(req.otherHeadPeers)
 
-    override def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] = {
-        requireHeadPeersAreKnown(peers)
-
-        val headPeersNames = peers.map(_.name)
-        val headOtherPeers = otherNodes.filter(p => headPeersNames.contains(p.getName))
+        val headPeersNames = (req.otherHeadPeers + req.initiator).map(_.name)
+        val headOtherPeers = knownPeers.filter(p => headPeersNames.contains(p.getName))
 
         // All head's verification keys
         val vKeys = (headOtherPeers + ownNode).map(_.exportVerificationKeyBytes)
@@ -56,7 +50,7 @@ class HeadPeerNetworkOneNode(
         val initTxRecipe = InitTxRecipe(
           headAddress,
           req.seedUtxoId,
-          req.coins,
+          req.treasuryCoins,
           headNativeScript,
           beaconTokenName
         )
@@ -64,6 +58,7 @@ class HeadPeerNetworkOneNode(
         val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         headOtherPeers.map(_.createTxKeyWitness(tx))
+        ()
     }
 
     private def getOtherPeersWallets: Set[Wallet] = {
@@ -71,7 +66,7 @@ class HeadPeerNetworkOneNode(
             reader.multisigRegimeReader(_.headPeers).filterNot(_.name == ownNode.getName)
         requireHeadPeersAreKnown(otherPeers)
         val otherPeersNames = otherPeers.map(_.name)
-        val otherPeersWallets = otherNodes.filter(p => otherPeersNames.contains(p.getName))
+        val otherPeersWallets = knownPeers.filter(p => otherPeersNames.contains(p.getName))
         otherPeersWallets
     }
 

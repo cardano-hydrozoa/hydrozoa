@@ -33,63 +33,22 @@ class HeadPeerNetworkWS(
         require(headPeersNames.subsetOf(knownPeersNames), "All peers should be known")
     }
 
-    override def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes] =
-        requireHeadPeersAreKnown(peers)
+    override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
+        val seq = transport.nextSeq
         val req = ReqVerKey()
-        val seq = transport.broadcastMessage(req)
-        dispatcherRef.ask(
-          _.spawnActorProactively(ownPeer, seq, req, transport.broadcastMessage(ownPeer, seq))
-              .asInstanceOf[Set[VerificationKeyBytes]]
-        )
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
 
-//        requireHeadPeersAreKnown(peers)
-//
-//        val source = transport.broadcastAndCollect(ReqVerKey())
-//
-//        def handleResponses: Set[VerificationKeyBytes] = {
-//            val responses: mutable.Map[TestPeer, VerificationKeyBytes] = mutable.Map.empty
-//
-//            while responses.size < peers.size do
-//                val next = source.receive()
-//                responses.put(next.peer, next.verKey)
-//
-//            responses.values.toSet
-//        }
-//
-//        either.catching(timeout(10.second)(handleResponses)) match
-//            case Left(throwable) =>
-//                log.error(s"Timeout while collecting verification keys: $throwable")
-//                throw IllegalStateException(throwable)
-//            case Right(responses) => responses
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
-    override def announceOwnVerificationKey(key: VerificationKeyBytes): Unit =
-        // TODO: this is why announcing is unwieldy
-        //  * include into Req
-        //  * introudce additional type Ann(ounce) (like Req but don't need an Ack)
-        transport.broadcastMessage(ownPeer, 0)(
-          AckVerKey(ownPeer, key)
-        )
+    override def reqInit(req: ReqInit): Unit =
+        requireHeadPeersAreKnown(req.otherHeadPeers)
 
-    override def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness] =
-        requireHeadPeersAreKnown(peers)
+        val seq = transport.nextSeq
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
 
-        val source = transport.broadcastAndCollect(req)
-
-        def handleResponses: Set[TxKeyWitness] = {
-            val responses: mutable.Map[TestPeer, TxKeyWitness] = mutable.Map.empty
-
-            while responses.size < peers.size do
-                val next = source.receive()
-                responses.put(next.peer, next.signature)
-
-            responses.values.toSet
-        }
-
-        either.catching(timeout(10.second)(handleResponses)) match
-            case Left(throwable) =>
-                log.error(s"Timeout while collecting initialization acknowledges: $throwable")
-                throw IllegalStateException(throwable)
-            case Right(responses) => responses
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
     override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] = ???
     override def reqMinor(block: Block): Set[AckMinor] = ???

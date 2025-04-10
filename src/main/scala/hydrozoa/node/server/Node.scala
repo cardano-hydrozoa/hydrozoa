@@ -17,7 +17,6 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
 import hydrozoa.node.TestPeer
@@ -25,7 +24,6 @@ import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
-import ox.channels.ActorRef
 import scalus.prelude.Maybe
 
 class Node(
@@ -49,107 +47,29 @@ class Node(
 
     def initializeHead(
         otherHeadPeers: Set[WalletId],
-        ada: Long,
+        treasuryAda: Long,
         txId: TxId,
         txIx: TxIx
-    ): Either[InitializeError, TxId] =
+    ): Either[InitializationError, TxId] =
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
 
+        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
-        // FIXME: Check there is no head or it's closed
+        // FIXME: Check there is no head or it's been closed
 
-        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $ada ADA")
+        // Request verification keys from known peers
+        val knownVKeys = network.reqVerificationKeys()
+        log.info(s"knownVKeys: $knownVKeys")
 
-        // Make a recipe to build init tx
-
-        // Request verification keys
-        val verificationKeyBytes = ownPeer.exportVerificationKeyBytes
-        val headVKeys =
-            network.reqVerificationKeys(otherHeadPeers) + verificationKeyBytes
-
-//        // Announce our own verification key
-//        network.announceOwnVerificationKey(verificationKeyBytes)
-
-        log.error(s"headVKeys: $headVKeys")
-        ???
-
-        // Native script, head address, and token
+        // ReqInit
         val seedOutput = UtxoIdL1(txId, txIx)
-        val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(headVKeys, cardano.network)
-        val beaconTokenName = mkBeaconTokenName(seedOutput)
-        val treasuryCoins = ada * 1_000_000
-        val initTxRecipe = InitTxRecipe(
-          headAddress,
-          seedOutput,
-          treasuryCoins,
-          headNativeScript,
-          beaconTokenName
-        )
+        val treasuryCoins = treasuryAda * 1_000_000
+        val reqInit = ReqInit(ownPeer.getWalletId, otherHeadPeers, seedOutput, treasuryCoins)
 
-        log.info(s"initTxRecipe: $initTxRecipe")
+        network.reqInit(reqInit)
 
-        // Builds and balance initialization tx
-        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
-            case Right(v, seedAddress) => (v, seedAddress)
-            case Left(err)             => return Left(err)
+        Left("all is good (supposedly)")
 
-        log.info("Init tx draft hash: " + txHash(txDraft))
-
-        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
-
-        // Collect all witnesses
-        val peersWits: Set[TxKeyWitness] =
-            network.reqInit(otherHeadPeers, ReqInit(seedOutput, treasuryCoins))
-
-        // TODO: broadcast ownWit
-
-        // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
-        val userWit = ownPeer.createTxKeyWitness(txDraft)
-
-        // All wits are here, we can sign and submit
-        val wits = peersWits + ownWit + userWit
-
-        val initTx = wits.foldLeft(txDraft)(addWitness)
-        val serializedTx = serializeTxHex(initTx)
-        log.info("Init tx: " + serializedTx)
-        log.info("Init tx hash: " + txHash(initTx))
-
-        cardano.submit(initTx.toL1Tx) match
-            case Right(txHash) =>
-                // Put the head into Initializing phase
-
-                nodeState.initializeHead((otherHeadPeers + ownPeer.getWalletId).toList)
-
-                log.info(
-                  s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
-                )
-
-                // initialize new multisig event manager
-                multisigL1EventManager = Some(
-                  MultisigL1EventManager(
-                    HeadParams.default,
-                    headNativeScript,
-                    beaconTokenName,
-                    headAddress,
-                    nodeState,
-                    log
-                  )
-                )
-
-                // Emulate L1 init event
-                multisigL1EventManager.foreach(
-                  _.handleInitTx(initTx.toL1Tx, seedAddress)
-                )
-
-                TxDump.dumpInitTx(initTx)
-                // FIXME:
-                // println(nodeState.head.asOpen(_.stateL1))
-                Right(txHash)
-
-            case Left(err) =>
-                log.error(s"Can't submit init tx: $err")
-                Left(err)
     end initializeHead
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {

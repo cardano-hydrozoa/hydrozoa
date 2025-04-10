@@ -39,16 +39,23 @@ import hydrozoa.l2.consensus.network.{
     reqInitCodec,
     reqInitSchema,
     reqVerKeySchema,
+    walletIdSchema,
     testPeerSchema
 }
 import hydrozoa.node.server.Node
 
 trait HeadPeerNetworkTransport:
 
+    /** Get the next number for a message, increases the counter.
+      * @return
+      *   the next number for a message
+      */
+    def nextSeq: Long
+
     /** Sends a message to all peers, and don't wait for a response.
       * @param msg
       */
-    def broadcastMessage(req: Req): Long
+    def broadcastMessage(seq: Option[Long] = None)(req: Req): Long
 
     def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long
 
@@ -74,8 +81,9 @@ trait IncomingDispatcher:
         from: TestPeer,
         seq: Long,
         req: Req,
+        send: Req => Long,
         reply: Ack => Long
-    ): Any
+    ): req.resultType
 
 sealed trait Aux
 
@@ -165,7 +173,7 @@ class HeadPeerNetworkTransportWS(
 
     private var counter: Long = 0 // FIXME: make thread-safe?
 
-    def nextMsgNumber(): Long =
+    override def nextSeq: Long =
         val ret = counter + 1
         counter = ret
         ret
@@ -288,25 +296,25 @@ class HeadPeerNetworkTransportWS(
             never
         }
 
-    def broadcastMessage(req: Req): Long =
-        val next = nextMsgNumber()
+    override def broadcastMessage(seq: Option[Long])(req: Req): Long =
+        val next: Long = seq.getOrElse(nextSeq)
         val aux = ReqAux(ownPeer, next)
         val anyMsg = AnyMsg(req, aux)
-        log.info(s"Sending a req: $anyMsg")
+        log.info(s"Sending req: $anyMsg")
         outgoing.send(anyMsg)
         next
 
-    def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
+    override def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
         log.info(s"broadcastMessage")
-        val next = nextMsgNumber()
+        val next = nextSeq
         val aux = AckAux(ownPeer, next, replyTo, replyToSeq)
         val anyMsg = AnyMsg(ack, aux)
         log.info(s"Sending an ack: $anyMsg")
         outgoing.send(anyMsg)
         next
 
-    def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
-        val next = nextMsgNumber()
+    override def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
+        val next = nextSeq
         val aux = ReqAux(ownPeer, next)
         val anyMsg = AnyMsg(req, aux)
         log.info(s"Sending a req for sync acks: $anyMsg")

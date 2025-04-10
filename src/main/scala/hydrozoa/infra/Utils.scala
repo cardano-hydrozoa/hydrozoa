@@ -62,3 +62,14 @@ implicit class Piper[A](val x: A) extends AnyVal {
 implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
     @inline def /\[B](y: B): (A, B) = (self, y)
 }
+
+def sequence[A](l: List[Option[A]]): Option[List[A]] = l match {
+    case Nil => Some(Nil)
+    case h :: t => h match {
+        case None => None
+        case Some(head) => sequence(t) match {
+            case None => None
+            case Some(list) => Some(head :: list)
+        }
+    }
+}

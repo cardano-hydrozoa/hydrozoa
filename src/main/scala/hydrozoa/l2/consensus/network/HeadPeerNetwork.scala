@@ -20,16 +20,12 @@ trait HeadPeerNetwork {
 
     def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit
 
-    /** @param peers
-      *   peers we are looking for
-      * @return
-      *   verification keys for peers provided
+    /** @return
+      *   set iof verification keys for all known peers
       */
-    def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes]
+    def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes]
 
-    def announceOwnVerificationKey(key: VerificationKeyBytes): Unit
-
-    def reqInit(peers: Set[WalletId], req: ReqInit): Set[TxKeyWitness]
+    def reqInit(req: ReqInit): Unit
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 
@@ -46,11 +42,13 @@ sealed trait Msg
 
 sealed trait Req extends Msg:
     type ackType <: Ack
+    type resultType
 
 trait Ack extends Msg
 
 case class ReqVerKey() extends Req:
     type ackType = AckVerKey
+    type resultType = Map[WalletId, VerificationKeyBytes]
 
 given reqVerKeyCodec: JsonValueCodec[ReqVerKey] =
     JsonCodecMaker.make
@@ -58,8 +56,14 @@ given reqVerKeyCodec: JsonValueCodec[ReqVerKey] =
 given reqVerKeySchema: Schema[ReqVerKey] =
     Schema.derived[ReqVerKey]
 
-case class ReqInit(seedUtxoId: UtxoIdL1, coins: Long) extends Req:
+case class ReqInit(
+    initiator: WalletId,
+    otherHeadPeers: Set[WalletId],
+    seedUtxoId: UtxoIdL1,
+    treasuryCoins: Long
+) extends Req:
     type ackType = AckInit
+    type resultType = Unit
 
 given reqInitCodec: JsonValueCodec[ReqInit] =
     JsonCodecMaker.make
@@ -68,7 +72,7 @@ given reqInitSchema: Schema[ReqInit] =
     Schema.derived[ReqInit]
 
 case class AckVerKey(
-    peer: TestPeer,
+    peer: WalletId,
     verKey: VerificationKeyBytes
 ) extends Ack
 
@@ -81,7 +85,7 @@ given verificationKeyBytesSchema: Schema[VerificationKeyBytes] =
 given ackVerKeySchema: Schema[AckVerKey] =
     Schema.derived[AckVerKey]
 
-case class AckInit(peer: TestPeer, initTxId: TxId, signature: TxKeyWitness) extends Ack
+case class AckInit(peer: WalletId, signature: TxKeyWitness) extends Ack
 
 given ackInitCodec: JsonValueCodec[AckInit] =
     JsonCodecMaker.make
@@ -90,6 +94,10 @@ given ackInitSchema: Schema[AckInit] =
     Schema.derived[AckInit]
 
 // additional schemas
+given walletIdSchema: Schema[WalletId] =
+    Schema.derived[WalletId]
+
+// FIXME: remove
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
 

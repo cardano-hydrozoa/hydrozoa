@@ -2,24 +2,22 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
-import hydrozoa.l2.consensus.network.{Ack, AckInit, AckVerKey, Req, ReqInit, ReqVerKey}
-import hydrozoa.node.TestPeer
+import hydrozoa.l1.CardanoL1
+import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
+import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Source}
 
 trait ConsensusActor:
 
-    /** Type for requests that run an actor.
+    /** Type for requests that run an actor. Through this type we learn the result type of the actor
+      * as well.
       */
     type ReqType <: Req
 
     /** Type for acknowledges that an actor produces.
       */
     type AckType <: Ack
-
-    /** Type for final result an actor can produce once it has acks from all peers.
-      */
-    type Result
 
     /** Non-reentrant method that handles a Req*, producing own Ack*. For proactive spawning should
       * be called immediately after instantiating. The method should call deliver to deliver the own
@@ -29,7 +27,7 @@ trait ConsensusActor:
       * @return
       *   own Ack*
       */
-    def init(req: Req): AckType
+    def init(req: ReqType): AckType
 
     /** Handles an incoming ack, including own ack. Mostly is supposed to store the ack and to
       * attempt to produce the final result. Can be called multiple times. The semantics of
@@ -38,17 +36,22 @@ trait ConsensusActor:
       * @param ack
       *   own or someone else's ack
       */
-    def deliver(ack: Ack): Unit
+    def deliver(ack: AckType): Unit
 
     /** Rendezvous channel to get the final result.
       * @return
       *   the channel to receive the result from
       */
-    def result: Source[Result]
+    def result(using req: Req): Source[req.resultType]
 
-type ActorId = (TestPeer, Long)
+end ConsensusActor
 
-class ConsensusActorFactory(val stateActor: ActorRef[NodeState], val walletActor: ActorRef[Wallet]):
+class ConsensusActorFactory(
+    val stateActor: ActorRef[NodeState],
+    val walletActor: ActorRef[Wallet],
+    val cardanoActor: ActorRef[CardanoL1],
+    val initTxBuilder: InitTxBuilder
+):
 
     private val log = Logger(getClass)
 
@@ -59,13 +62,29 @@ class ConsensusActorFactory(val stateActor: ActorRef[NodeState], val walletActor
                 val actor = new VerificationKeyActor(stateActor, walletActor)
                 val ack = actor.init(reqVerKey)
                 actor -> ack
-            case reqInit: ReqInit => ???
+            case reqInit: ReqInit =>
+                val actor = new InitHeadActor(
+                  stateActor,
+                  walletActor,
+                  cardanoActor,
+                  initTxBuilder
+                )
+                val ack = actor.init(reqInit)
+                actor -> ack
 
     def spawnByAck(ack: Ack): ConsensusActor =
         log.info("spawnByAck")
         ack match
             case ackVerKey: AckVerKey =>
                 val actor = new VerificationKeyActor(stateActor, walletActor)
-                actor.deliver(ack)
+                actor.deliver(ackVerKey)
                 actor
-            case ackInit: AckInit => ???
+            case ackInit: AckInit =>
+                val actor = new InitHeadActor(
+                    stateActor,
+                    walletActor,
+                    cardanoActor,
+                    initTxBuilder
+                )
+                actor.deliver(ackInit)
+                actor

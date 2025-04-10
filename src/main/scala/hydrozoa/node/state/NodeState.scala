@@ -3,7 +3,7 @@ package hydrozoa.node.state
 import com.typesafe.scalalogging.Logger
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.node.TestPeer
-
+import hydrozoa.infra.{Piper, sequence}
 import scala.collection.mutable
 
 /** The class that provides read-write and read-only access to the state of the node.
@@ -17,12 +17,23 @@ class NodeState():
     // All known peers in a peer network (not to confuse with head's peers)
     private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
 
+    private val knownPeersVKeys: mutable.Map[WalletId, VerificationKeyBytes] = mutable.Map.empty
+
     def getKnownPeers: Set[WalletId] = knownPeers.toSet
-    
+
+    def saveKnownPeersVKeys(keys: Map[WalletId, VerificationKeyBytes]): Unit =
+        log.info(s"Saving learned verification keys for known peers: $keys")
+        knownPeersVKeys.addAll(keys)
+
+    def getVerificationKeys(peers: Set[WalletId]): Option[Set[VerificationKeyBytes]] =
+        val mbList = peers.toList.map(knownPeersVKeys.get) |> sequence
+        mbList.map(_.toSet)
+
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
-    // seedUtxo: ???
+    // FIXME: seedUtxo: ???
+    // FIXME: why list, should be set?
     def initializeHead(peers: List[WalletId]): Unit =
         headState match
             case None =>
@@ -49,7 +60,7 @@ class NodeState():
             getOrThrow.openPhaseReader(foo)
         override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
             getOrThrow.finalizingPhaseReader(foo)
-        
+
     }
 
     private def getOrThrow = {
