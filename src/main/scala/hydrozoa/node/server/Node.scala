@@ -4,7 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.event.MultisigL1EventManager
+import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
@@ -35,15 +35,16 @@ class Node(
     depositTxBuilder: DepositTxBuilder,
     refundTxBuilder: RefundTxBuilder,
     settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    log: Logger
+    finalizationTxBuilder: FinalizationTxBuilder
 ):
+
+    private val log = Logger(getClass)
 
     // FIXME: protect
     def nodeStateReader = nodeState
 
     // FIXME: find the proper place for it
-    private var multisigL1EventManager: Option[MultisigL1EventManager] = None
+    private var multisigL1EventManager: Option[MultisigL1EventSource] = None
 
     def initializeHead(
         otherHeadPeers: Set[WalletId],
@@ -52,10 +53,7 @@ class Node(
         txIx: TxIx
     ): Either[InitializationError, TxId] =
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
-
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
-
-        // FIXME: Check there is no head or it's been closed
 
         // Request verification keys from known peers
         val knownVKeys = network.reqVerificationKeys()
@@ -165,10 +163,10 @@ class Node(
             ) // TODO: add the combined function
         log.info(s"Deposit tx submitted: $depositTxId")
 
-        // Emulate L1 deposit event
-        multisigL1EventManager.map(
-          _.handleDepositTx(toL1Tx(depositTxDraft), depositTxHash)
-        )
+//        // Emulate L1 deposit event
+//        multisigL1EventManager.map(
+//          _.handleDepositTx(toL1Tx(depositTxDraft), depositTxHash)
+//        )
 
         // TODO: store the post-dated refund in the store along with the deposit id
 
@@ -358,15 +356,15 @@ class Node(
                 val Right(settlementTxId) = cardano.submit(settlementTx)
                 log.info(s"Settlement tx submitted: $settlementTxId")
 
-                // Emulate L1 event
-                // TODO: I don't think we have to wait L1 event in reality
-                //  instead we need to update the treasury right upon submitting.
-                //  Another concern - probably we have to do it in one atomic change
-                //  along with the L2 effect. Otherwise the next settlement transaction
-                //  may use the old treasury.
-                multisigL1EventManager.map(
-                  _.handleSettlementTx(settlementTx, settlementTxId)
-                )
+//                // Emulate L1 event
+//                // TODO: I don't think we have to wait L1 event in reality
+//                //  instead we need to update the treasury right upon submitting.
+//                //  Another concern - probably we have to do it in one atomic change
+//                //  along with the L2 effect. Otherwise the next settlement transaction
+//                //  may use the old treasury.
+//                multisigL1EventManager.map(
+//                  _.handleSettlementTx(settlementTx, settlementTxId)
+//                )
 
                 // L2 effect
                 val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MajorBlockL2Effect]
@@ -395,14 +393,14 @@ class Node(
                 val Right(finalizationTxId) = cardano.submit(finalizationTx)
                 log.info(s"Finalizationtx submitted: $finalizationTxId")
 
-                // Emulate L1 event
-                // TODO: temporarily handle the event, again, we don't want to wait
-                multisigL1EventManager.foreach(
-                  _.handleFinalizationTx(
-                    finalizationTx,
-                    finalizationTxId
-                  )
-                )
+//                // Emulate L1 event
+//                // TODO: temporarily handle the event, again, we don't want to wait
+//                multisigL1EventManager.foreach(
+//                  _.handleFinalizationTx(
+//                    finalizationTx,
+//                    finalizationTxId
+//                  )
+//                )
 
                 // L2 effect
                 nodeState.head.finalizingPhase { s =>
@@ -413,42 +411,6 @@ class Node(
                     )
                     s.closeHead(blockRecord)
                 }
-
-    def saveVerificationKey(peer: TestPeer, key: VerificationKeyBytes): Unit =
-        log.info(s"Saving verification key for peer: $peer")
-        nodeState.knownVerificationKeys.put(peer, key)
-
-    def handleReqInit(req: ReqInit): (TxId, TxKeyWitness) =
-        // FIXME: this is not entirely correct
-        val verificationKeyBytes = ownPeer.exportVerificationKeyBytes
-        val headVKeys = nodeState.knownVerificationKeys.values.toSet + verificationKeyBytes
-
-        // Native script, head address, and token
-        val seedOutput = req.seedUtxoId
-        val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(headVKeys, cardano.network)
-        val beaconTokenName = mkBeaconTokenName(seedOutput)
-        val treasuryCoins = 100 * 1_000_000 // FIXME:
-        val initTxRecipe = InitTxRecipe(
-          headAddress,
-          seedOutput,
-          treasuryCoins,
-          headNativeScript,
-          beaconTokenName
-        )
-
-        log.info(s"initTxRecipe: $initTxRecipe")
-
-        // Builds and balance initialization tx
-        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
-            case Right(v, seedAddress) => (v, seedAddress)
-            case Left(err)             => throw RuntimeException(err)
-
-        log.info("Init tx draft hash: " + txHash(txDraft))
-
-        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
-
-        (txHash(txDraft), ownWit)
 
 end Node
 

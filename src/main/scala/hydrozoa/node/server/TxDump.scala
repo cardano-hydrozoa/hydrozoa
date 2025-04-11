@@ -2,13 +2,13 @@ package hydrozoa.node.server
 
 import hydrozoa.TxL2
 import hydrozoa.infra.serializeTxHex
-import hydrozoa.l1.multisig.tx.{InitializationTx, MultisigTx, MultisigTxTag}
+import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx, MultisigTxTag}
 
 object TxDump:
     private val txDumpL1: os.Path = os.pwd / "txsl1.out"
     private val txDumpL2: os.Path = os.pwd / "txsl2.out"
 
-    def dumpInitTx(initTx: InitializationTx): Unit =
+    def dumpInitTx(initTx: InitTx): Unit =
 //        TxDump.resetLogs()
 //        dumpMultisigTx(initTx)
         ()

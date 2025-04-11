@@ -8,6 +8,7 @@ import ox.resilience.{RetryConfig, retry}
 import ox.scheduling.Jitter
 import scalus.ledger.api.v1.PosixTime
 
+import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.util.{Try, boundary}
 
@@ -15,24 +16,30 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     private val log = Logger(getClass)
 
-    /** Submit for Yaci (and real networks for that matter) should take into account
-     * that Ogmios seems to fail if a tx has been already submitted before.
-     * @param tx
-     * @return
-     */
+    // TODO: temporarily: Yaci cannot return serialized tx so far
+    private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
+
+    /** Submit for Yaci (and real networks for that matter) should take into account that Ogmios
+      * seems to fail if a tx has been already submitted before.
+      * @param tx
+      * @return
+      */
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val hash = txHash(tx)
 
         def smartSubmit =
             backendService.getTransactionService.getTransaction(hash.hash).toEither match
-                case Right(_) =>
-                    log.info(s"Tx already on the chain: $hash")
-                    hash
                 case Left(_) =>
                     val result = backendService.getTransactionService.submitTransaction(tx.bytes)
                     if result.isSuccessful
-                    then TxId(result.getValue)
+                    then
+                        knownTxs.put(hash, tx)
+                        TxId(result.getValue)
                     else throw RuntimeException(result.getResponse)
+                case Right(_) =>
+                    log.info(s"Tx already on the chain: $hash")
+                    knownTxs.put(hash, tx)
+                    hash
 
         Try(
           retry(RetryConfig.backoff(10, 100.millis, 1.seconds, Jitter.Equal))(smartSubmit)
@@ -40,14 +47,16 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     }
 
-    override def awaitTx(txId: TxId): Unit =
-        boundary {
-            1 to 42 foreach { _ =>
-                backendService.getTransactionService.getTransaction(txId.hash).toEither match
-                    case Left(_)  => Thread.sleep(100)
-                    case Right(_) => boundary.break()
-            }
-        }
+    override def awaitTx(
+        txId: TxId,
+        retryConfig: RetryConfig[Throwable, Option[TxL1]]
+    ): Option[TxL1] =
+        def tryAwait =
+            backendService.getTransactionService.getTransaction(txId.hash).toEither match
+                case Left(_)  => throw RuntimeException(s"Tx: $txId hasn't appeared.")
+                case Right(_) => knownTxs.get(txId)
+
+        Try(retry(retryConfig)(tryAwait)).get
 
     override def network: Network = networkL1static
 

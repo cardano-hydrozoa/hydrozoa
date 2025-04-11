@@ -11,7 +11,7 @@ sealed trait FinalizationTxTag extends MultisigTxTag
 
 opaque type MultisigTx[+T <: MultisigTxTag] = TxL1
 
-type InitializationTx = MultisigTx[InitializationTxTag]
+type InitTx = MultisigTx[InitializationTxTag]
 type DepositTx = MultisigTx[DepositTxTag] // it's not a multisig tx
 type PostDatedRefundTx = MultisigTx[PostDatedRefundTxTag]
 type SettlementTx = MultisigTx[SettlementTxTag]

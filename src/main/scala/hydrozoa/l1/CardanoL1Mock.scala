@@ -2,9 +2,12 @@ package hydrozoa.l1
 
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
+import ox.resilience.RetryConfig
+import ox.scheduling.Jitter
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 class CardanoL1Mock() extends CardanoL1:
 
@@ -31,8 +34,10 @@ class CardanoL1Mock() extends CardanoL1:
         Right(txId)
     }
 
-    // TODO: Add Either
-    override def awaitTx(txId: TxId): Unit = ()
+    override def awaitTx(
+        txId: TxId,
+        retryConfig: RetryConfig[Throwable, Option[TxL1]]
+    ): Option[TxL1] = knownTxs.get(txId)
 
     override def network: Network = Network(0, 42)
 

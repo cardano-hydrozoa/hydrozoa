@@ -107,6 +107,8 @@ case class NativeScript(bytes: Array[Byte])
 
 case class Datum(bytes: Array[Byte])
 
+case class TokenName(tokenName: String)
+
 // UDiffTime
 opaque type UDiffTimeMilli = BigInt
 

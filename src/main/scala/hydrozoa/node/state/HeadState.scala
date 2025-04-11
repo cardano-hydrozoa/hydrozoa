@@ -3,6 +3,7 @@ package hydrozoa.node.state
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{Piper, txHash}
+import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
@@ -13,6 +14,7 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
+import ox.supervised
 
 import scala.CanEqual.derived
 import scala.collection.mutable
@@ -64,7 +66,7 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
-    def beaconTokenName: String // TODO: use more concrete type
+    def beaconTokenName: TokenName
     def seedAddress: AddressBechL1
     def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
@@ -88,14 +90,7 @@ sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
 sealed trait HeadStateApi
 
 sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader:
-    def openHead(
-        headParams: HeadParams,
-        headNativeScript: NativeScript,
-        headBechAddress: AddressBechL1,
-        beaconTokenName: String,
-        treasuryUtxo: TreasuryUtxo,
-        seedAddress: AddressBechL1
-    ): Unit
+    def openHead(treasuryUtxo: TreasuryUtxo): Unit
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(deposit: DepositUtxo): Unit
@@ -124,34 +119,34 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
-    extends HeadStateReader
+class HeadStateGlobal(
+    var headPhase: HeadPhase,
+    val headPeers: Set[WalletId],
+    val headParams: HeadParams,
+    val headNativeScript: NativeScript,
+    val headAddress: AddressBechL1,
+    val beaconTokenName: TokenName,
+    val seedAddress: AddressBechL1,
+    val initTx: InitTx // Block #0 L1-effect
+) extends HeadStateReader
     with HeadState {
     self =>
 
     private val log = Logger(getClass)
 
-    //
     override def currentPhase: HeadPhase = headPhase
 
-    //
-    private var initialTreasury: Option[TreasuryUtxo] = None
-    private var headParams: Option[HeadParams] = None
-    private var headNativeScript: Option[NativeScript] = None
-    private var headBechAddress: Option[AddressBechL1] =
-        None // FIXME: can be obtained from stateL1.treasuryUtxo
-    private var beaconTokenName: Option[String] = None // FIXME: use more sHeadStateApipecific type
-    private var seedAddress: Option[AddressBechL1] = None
-
     // Hydrozoa blocks
-    private val genesisBlock: Unit = () // FIXME: use instead zeroBlock
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
+
     // Currently pending block
     private val blockPending: Option[BlockRecord] = None
 
     private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
     private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
+
     private var finalizing: Option[Boolean] = None
+
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
 
@@ -198,11 +193,11 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
         def headPeers: Set[WalletId] = self.headPeers.toSet
-        def headNativeScript: NativeScript = self.headNativeScript.get
-        def beaconTokenName: String = self.beaconTokenName.get
-        def seedAddress: AddressBechL1 = self.seedAddress.get
+        def headNativeScript: NativeScript = self.headNativeScript
+        def beaconTokenName: TokenName = self.beaconTokenName
+        def seedAddress: AddressBechL1 = self.seedAddress
         def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
-        def headBechAddress: AddressBechL1 = self.headBechAddress.get
+        def headBechAddress: AddressBechL1 = self.headAddress
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
@@ -219,7 +214,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
             .getOrElse(zeroBlock)
         def peekDeposits: DepositUtxos = UtxoSet(self.stateL1.get.depositUtxos)
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
-            val headParams = self.headParams.get
+            val headParams = self.headParams
             val consensusParams = headParams.l2ConsensusParams
             (
               consensusParams.depositMarginMaturity,
@@ -239,20 +234,10 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
         extends InitializingPhaseReaderImpl
         with InitializingPhase:
         def openHead(
-            headParams: HeadParams,
-            headNativeScript: NativeScript,
-            headBechAddress: AddressBechL1,
-            beaconTokenName: String,
-            treasuryUtxo: TreasuryUtxo,
-            seedAddress: AddressBechL1
+            treasuryUtxo: TreasuryUtxo
         ): Unit =
+            log.info("Opening head")
             self.headPhase = Open
-            self.headParams = Some(headParams)
-            self.headNativeScript = Some(headNativeScript)
-            self.headBechAddress = Some(headBechAddress)
-            self.beaconTokenName = Some(beaconTokenName)
-            self.initialTreasury = Some(treasuryUtxo)
-            self.seedAddress = Some(seedAddress)
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
 
@@ -265,7 +250,7 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
 
         def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
             self.stateL1.get.treasuryUtxo =
-                mkUtxo[L1, TreasuryTag](txId, txIx, self.headBechAddress.get, coins)
+                mkUtxo[L1, TreasuryTag](txId, txIx, self.headAddress, coins)
 
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
@@ -329,11 +314,20 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
 }
 
 object HeadStateGlobal:
-    val log: Logger = Logger(getClass)
-    def apply(peers: List[WalletId]): HeadStateGlobal =
-        assert(peers.length >= 2, "The number of peers should be >= 2")
-        log.info(s"Creating head state global with peers: $peers")
-        new HeadStateGlobal(headPhase = Initializing, headPeers = peers)
+    private val log = Logger(getClass)
+    def apply(params: InitializingHeadParams): HeadStateGlobal =
+        log.info(s"Creating head state with parameters: $params")
+        assert(params.headPeers.size >= 2, "The number of peers should be >= 2")
+        new HeadStateGlobal(
+          headPhase = Initializing,
+          headPeers = params.headPeers,
+          headParams = params.headParams,
+          headNativeScript = params.headNativeScript,
+          headAddress = params.headAddress,
+          beaconTokenName = params.beaconTokenName,
+          seedAddress = params.seedAddress,
+          initTx = params.initTx
+        )
 
 case class BlockRecord(
     block: Block,
@@ -342,7 +336,7 @@ case class BlockRecord(
     l2Effect: L2BlockEffect
 )
 
-type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
+type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
 type MinorBlockL1Effect = Unit
 type L1PostDatedBlockEffect = Unit
 
@@ -357,15 +351,9 @@ def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
     case _: MinorBlockL1Effect             => None
     case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
 
-//extension (l1BlockEffect: L1BlockEffect)
-//    def mbTxHash: Option[TxId] = l1BlockEffect match
-//        case _: MinorBlockL1Effect => None
-//        case tx: InitializationTx => tx |> txHash |> Some.apply
-//        case tx: SettlementTx => tx |> txHash |> Some.apply
-//        case tx: FinalizationTx => tx  |> txHash |> Some.apply
-
+// NB: this won't work as an extension method on union type L1BlockEffect
 def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
     case _: MinorBlockL1Effect => None
-    case tx: InitializationTx  => tx |> txHash |> Some.apply
+    case tx: InitTx            => tx |> txHash |> Some.apply
     case tx: SettlementTx      => tx |> txHash |> Some.apply
     case tx: FinalizationTx    => tx |> txHash |> Some.apply

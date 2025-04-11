@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.*
+import hydrozoa.l1.event.{MultisigL1EventSource}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
@@ -86,7 +87,6 @@ def mkHydrozoaNode(
       refundTxBuilder,
       settlementTxBuilder,
       finalizationTxBuilder,
-      log
     )
     (log, node, cardano)
 }
@@ -115,8 +115,8 @@ def mkHydrozoaNode2(
         (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeStateManager: NodeState = NodeState(knownPeers)
-    val nodeStateReader: HeadStateReader = nodeStateManager.reader
+    val nodeState: NodeState = NodeState(knownPeers)
+    val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders
     val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
@@ -129,7 +129,7 @@ def mkHydrozoaNode2(
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
-    val incomingMsgDispatcher = new IncomingDispatcher:
+    val incomingMsgDispatcher: IncomingDispatcher = new IncomingDispatcher:
 
         private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] =
             mutable.Map.empty
@@ -183,8 +183,7 @@ def mkHydrozoaNode2(
                 actors.put(origin, newActorRef)
                 send(req)
                 reply(ack)
-                val source: Source[req.resultType] = newActorRef.ask(act =>
-                    act.result(using req))
+                val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
                 source.receive()
             }
 
@@ -194,7 +193,7 @@ def mkHydrozoaNode2(
     val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, networkTransport)
 
     val node = Node(
-      nodeStateManager,
+      nodeState,
       ownPeerWallet,
       network,
       cardano,
@@ -203,16 +202,17 @@ def mkHydrozoaNode2(
       refundTxBuilder,
       settlementTxBuilder,
       finalizationTxBuilder,
-      log
     )
+    
+    // return a bunch of things
     (
       node,
       cardano,
       network,
       networkTransport,
       incomingMsgDispatcher,
-      nodeStateManager,
-      ownPeerWallet, 
+      nodeState,
+      ownPeerWallet,
       initTxBuilder
     )
 }
@@ -247,7 +247,7 @@ object HydrozoaNode extends OxApp:
               network,
               transport,
               dispatcher,
-              nodeStateManager,
+              nodeState,
               ownPeerWallet,
               initTxBuilder
             ) = {
@@ -269,20 +269,28 @@ object HydrozoaNode extends OxApp:
 
                 dispatcher.setNodeActorRef(nodeActorRef)
 
-                val stateActor = Actor.create(nodeStateManager)
+                val nodeStateActor = Actor.create(nodeState)
                 val walletActor = Actor.create(ownPeerWallet)
                 val cardanoActor = Actor.create(cardano)
 
-                val factory = new ConsensusActorFactory(stateActor, walletActor, cardanoActor, initTxBuilder)
+                // Multisig L1 event source
+                val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
+                nodeState.multisigL1EventSource = Actor.create(multisigL1EventSource)
+
+                val factory =
+                    new ConsensusActorFactory(
+                      nodeStateActor,
+                      walletActor,
+                      cardanoActor,
+                      initTxBuilder
+                    )
                 dispatcher.setConsensusActorFactory(factory)
 
                 val dispatcherActor = Actor.create(dispatcher)
 
                 network.setDispatcherActorRef(dispatcherActor)
 
-                fork {
-                    transport.run()
-                }
+                forkDiscard { transport.run() }
 
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())

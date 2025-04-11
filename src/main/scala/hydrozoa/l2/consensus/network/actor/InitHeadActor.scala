@@ -5,11 +5,20 @@ import hydrozoa.infra.{Piper, addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.{InitializationTx, toL1Tx}
+import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
+import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
-import hydrozoa.node.state.{NodeState, WalletId}
-import hydrozoa.{TxKeyWitness, UtxoIdL1, VerificationKeyBytes, Wallet}
+import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
+import hydrozoa.{
+    AddressBechL1,
+    NativeScript,
+    TokenName,
+    TxKeyWitness,
+    UtxoIdL1,
+    VerificationKeyBytes,
+    Wallet
+}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -27,7 +36,11 @@ class InitHeadActor(
     override type AckType = AckInit
 
     private var req: ReqType = _
-    private var txDraft: InitializationTx = _
+    private var txDraft: InitTx = _
+    private var headNativeScript: NativeScript = _
+    private var headAddress: AddressBechL1 = _
+    private var beaconTokenName: TokenName = _
+    private var seedAddress: AddressBechL1 = _
     private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqInit): AckInit =
@@ -61,6 +74,10 @@ class InitHeadActor(
 
         this.req = req
         this.txDraft = txDraft
+        this.headNativeScript = headNativeScript
+        this.headAddress = headAddress
+        this.beaconTokenName = beaconTokenName
+        this.seedAddress = seedAddress
         deliver(ownAck)
         ownAck
 
@@ -82,31 +99,22 @@ class InitHeadActor(
             cardanoActor.ask(_.submit(toL1Tx(initTx))) match
                 case Right(txHash) =>
                     // Put the head into Initializing phase
-                    stateActor.tell(_.initializeHead(headPeers.toList))
-
-//                    // initialize new multisig event manager
-//                    multisigL1EventManager = Some(
-//                      MultisigL1EventManager(
-//                        HeadParams.default,
-//                        headNativeScript,
-//                        beaconTokenName,
-//                        headAddress,
-//                        nodeState,
-//                        log
-//                      )
-//                    )
-//
-//                    // Emulate L1 init event
-//                    multisigL1EventManager.foreach(
-//                      _.handleInitTx(initTx.toL1Tx, seedAddress)
-//                    )
-
+                    val params = InitializingHeadParams(
+                      headPeers,
+                      HeadParams.default,
+                      headNativeScript,
+                      headAddress,
+                      beaconTokenName,
+                      seedAddress,
+                      initTx
+                    )
+                    stateActor.tell(_.initializeHead(params))
                     TxDump.dumpInitTx(initTx)
 
                 case Left(err) =>
                     val msg = s"Can't submit init tx: $err"
                     log.error(msg)
-                    // FIXME: what should go next here?
+                // FIXME: what should go next here?
 
             resultChannel.send(())
 
