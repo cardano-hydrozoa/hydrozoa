@@ -4,6 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
+import hydrozoa.l1.multisig.tx.refund.RefundTxBuilder
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Source}
@@ -14,6 +15,8 @@ trait ConsensusActor:
       * as well.
       */
     type ReqType <: Req
+
+    protected var req: ReqType = _
 
     /** Type for acknowledges that an actor produces.
       */
@@ -50,7 +53,8 @@ class ConsensusActorFactory(
     val stateActor: ActorRef[NodeState],
     val walletActor: ActorRef[Wallet],
     val cardanoActor: ActorRef[CardanoL1],
-    val initTxBuilder: InitTxBuilder
+    val initTxBuilder: InitTxBuilder,
+    val refundTxBuilder: RefundTxBuilder
 ):
 
     private val log = Logger(getClass)
@@ -58,33 +62,50 @@ class ConsensusActorFactory(
     def spawnByReq(req: Req): (ConsensusActor, Ack) =
         log.info("spawnByReq")
         req match
-            case reqVerKey: ReqVerKey =>
-                val actor = new VerificationKeyActor(stateActor, walletActor)
-                val ack = actor.init(reqVerKey)
-                actor -> ack
-            case reqInit: ReqInit =>
-                val actor = new InitHeadActor(
-                  stateActor,
-                  walletActor,
-                  cardanoActor,
-                  initTxBuilder
-                )
-                val ack = actor.init(reqInit)
-                actor -> ack
-
+            case req: ReqVerKey =>
+                val actor = mkVerificationKeyActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+            case req: ReqInit =>
+                val actor = mkInitHeadActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+            case req: ReqRefundLater =>
+                val actor = mkRefundLaterActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+    
     def spawnByAck(ack: Ack): ConsensusActor =
         log.info("spawnByAck")
         ack match
-            case ackVerKey: AckVerKey =>
-                val actor = new VerificationKeyActor(stateActor, walletActor)
-                actor.deliver(ackVerKey)
+            case ack: AckVerKey =>
+                val actor = mkVerificationKeyActor
+                actor.deliver(ack)
                 actor
-            case ackInit: AckInit =>
-                val actor = new InitHeadActor(
-                    stateActor,
-                    walletActor,
-                    cardanoActor,
-                    initTxBuilder
-                )
-                actor.deliver(ackInit)
+            case ack: AckInit =>
+                val actor = mkInitHeadActor
+                actor.deliver(ack)
                 actor
+            case ack: AckRefundLater =>
+                val actor = mkRefundLaterActor
+                actor.deliver(ack)
+                actor
+
+    private def mkVerificationKeyActor =
+        new VerificationKeyActor(stateActor, walletActor)
+    
+    private def mkRefundLaterActor = 
+        new RefundLaterActor(
+            stateActor,
+            walletActor,
+            refundTxBuilder
+        )
+    
+    private def mkInitHeadActor =
+        new InitHeadActor(
+            stateActor,
+            walletActor,
+            cardanoActor,
+            initTxBuilder
+        )
+end ConsensusActorFactory

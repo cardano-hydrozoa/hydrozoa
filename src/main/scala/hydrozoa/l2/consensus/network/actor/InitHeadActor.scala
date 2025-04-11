@@ -14,8 +14,8 @@ import hydrozoa.{
     AddressBechL1,
     NativeScript,
     TokenName,
+    TxId,
     TxKeyWitness,
-    UtxoIdL1,
     VerificationKeyBytes,
     Wallet
 }
@@ -23,7 +23,7 @@ import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
 
-class InitHeadActor(
+private class InitHeadActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
@@ -35,7 +35,6 @@ class InitHeadActor(
     override type ReqType = ReqInit
     override type AckType = AckInit
 
-    private var req: ReqType = _
     private var txDraft: InitTx = _
     private var headNativeScript: NativeScript = _
     private var headAddress: AddressBechL1 = _
@@ -110,15 +109,15 @@ class InitHeadActor(
                     )
                     stateActor.tell(_.initializeHead(params))
                     TxDump.dumpInitTx(initTx)
+                    resultChannel.send(txHash)
 
                 case Left(err) =>
                     val msg = s"Can't submit init tx: $err"
                     log.error(msg)
-                // FIXME: what should go next here?
+                    // FIXME: what should go next here?
+                    throw RuntimeException(msg)
 
-            resultChannel.send(())
-
-    private val resultChannel: Channel[Unit] = Channel.rendezvous
+    private val resultChannel: Channel[TxId] = Channel.rendezvous
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

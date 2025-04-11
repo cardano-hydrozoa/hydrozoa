@@ -1,12 +1,13 @@
 package hydrozoa.l2.consensus.network
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
-import hydrozoa.{TxKeyWitness, VerificationKeyBytes}
+import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes}
 import ox.channels.ActorRef
 import ox.{either, timeout}
 
@@ -41,7 +42,7 @@ class HeadPeerNetworkWS(
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
-    override def reqInit(req: ReqInit): Unit =
+    override def reqInit(req: ReqInit): TxId =
         requireHeadPeersAreKnown(req.otherHeadPeers)
 
         val seq = transport.nextSeq
@@ -50,7 +51,13 @@ class HeadPeerNetworkWS(
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
-    override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] = ???
+    override def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx =
+        val seq = transport.nextSeq
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
+
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        
     override def reqMinor(block: Block): Set[AckMinor] = ???
     override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] = ???
     override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] = ???

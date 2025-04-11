@@ -35,8 +35,8 @@ def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) 
 def deserializeTxHex[L <: AnyLevel](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
 
 // Pure function to add a key witness to a transaction.
-def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] = {
-    val txBytes = TransactionBytes(tx.toL1Tx.bytes)
+def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] =
+    val txBytes = TransactionBytes(tx.bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
 
@@ -56,8 +56,12 @@ def addWitness[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): Multis
     vkWitnessArray.add(vkeyWitness)
 
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    MultisigTx(TxL1(txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes))
-}
+    txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes |> Tx.apply
+end addWitness
+
+// A variant for multisig functions.
+def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] =
+    MultisigTx(addWitness(tx.toL1Tx, wit))
 
 /** @param tx
   * @param address

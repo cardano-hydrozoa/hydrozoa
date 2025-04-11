@@ -8,7 +8,7 @@ import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
 
-class VerificationKeyActor(
+private class VerificationKeyActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet]
 ) extends ConsensusActor:

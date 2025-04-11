@@ -3,7 +3,7 @@ package hydrozoa.l2.consensus.network
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.DepositTx
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, PostDatedRefundTx}
 import hydrozoa.l2.block.{Block, BlockHeader}
 import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.UtxosSet
@@ -25,9 +25,9 @@ trait HeadPeerNetwork {
       */
     def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes]
 
-    def reqInit(req: ReqInit): Unit
+    def reqInit(req: ReqInit): TxId
 
-    def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
+    def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx
 
     def reqMinor(block: Block): Set[AckMinor]
 
@@ -44,7 +44,7 @@ sealed trait Req extends Msg:
     type ackType <: Ack
     type resultType
 
-trait Ack extends Msg
+sealed trait Ack extends Msg
 
 case class ReqVerKey() extends Req:
     type ackType = AckVerKey
@@ -63,13 +63,26 @@ case class ReqInit(
     treasuryCoins: Long
 ) extends Req:
     type ackType = AckInit
-    type resultType = Unit
+    type resultType = TxId
 
 given reqInitCodec: JsonValueCodec[ReqInit] =
     JsonCodecMaker.make
 
 given reqInitSchema: Schema[ReqInit] =
     Schema.derived[ReqInit]
+
+case class ReqRefundLater(depositTx: TxL1, index: TxIx) extends Req:
+    type ackType = AckRefundLater
+    type resultType = PostDatedRefundTx
+
+given reqRefundLaterCodec: JsonValueCodec[ReqRefundLater] =
+    JsonCodecMaker.make
+
+given reqRefundLaterSchema: Schema[ReqRefundLater] =
+    Schema.derived[ReqRefundLater]
+
+given txL1Schema: Schema[TxL1] =
+    Schema.derived[TxL1]    
 
 case class AckVerKey(
     peer: WalletId,
@@ -93,6 +106,14 @@ given ackInitCodec: JsonValueCodec[AckInit] =
 given ackInitSchema: Schema[AckInit] =
     Schema.derived[AckInit]
 
+case class AckRefundLater(peer: WalletId, signature: TxKeyWitness) extends Ack
+
+given ackRefundLaterCodec: JsonValueCodec[AckRefundLater] =
+    JsonCodecMaker.make
+
+given ackRefundLaterSchema: Schema[AckRefundLater] =
+    Schema.derived[AckRefundLater]
+
 // additional schemas
 given walletIdSchema: Schema[WalletId] =
     Schema.derived[WalletId]
@@ -114,7 +135,6 @@ given txKeyWitnessSchema: Schema[TxKeyWitness] =
     Schema.derived[TxKeyWitness]
 
 // old types to be upgraded
-case class ReqRefundLater(depositTx: DepositTx, index: TxIx)
 
 case class AckMinor(
     blockHeader: BlockHeader,

@@ -4,22 +4,18 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.event.MultisigL1EventSource
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
-import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
@@ -40,11 +36,8 @@ class Node(
 
     private val log = Logger(getClass)
 
-    // FIXME: protect
+    // FIXME: protect, currently used in tests
     def nodeStateReader = nodeState
-
-    // FIXME: find the proper place for it
-    private var multisigL1EventManager: Option[MultisigL1EventSource] = None
 
     def initializeHead(
         otherHeadPeers: Set[WalletId],
@@ -63,14 +56,12 @@ class Node(
         val seedOutput = UtxoIdL1(txId, txIx)
         val treasuryCoins = treasuryAda * 1_000_000
         val reqInit = ReqInit(ownPeer.getWalletId, otherHeadPeers, seedOutput, treasuryCoins)
+        val initTxId = network.reqInit(reqInit)
 
-        network.reqInit(reqInit)
-
-        Left("all is good (supposedly)")
-
+        Right(initTxId)
     end initializeHead
 
-    def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {
+    def deposit(r: DepositRequest): Either[DepositError, DepositResponse] =
 
         log.info(s"Deposit request: $r")
 
@@ -131,49 +122,31 @@ class Node(
         log.info(s"Deposit tx: $serializedTx")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        TxDump.dumpMultisigTx(depositTxDraft)
+        // FIXME: now it's not multisig
+        // TxDump.dumpMultisigTx(depositTxDraft)
 
-        val Right(refundTxDraft) =
-            refundTxBuilder.mkPostDatedRefundTxDraft(
-              PostDatedRefundRecipe(depositTxDraft, index)
-            )
-
-        TxDump.dumpMultisigTx(refundTxDraft)
-
-        // Own signature
-        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(refundTxDraft)
-
-        // ReqRefundLater
-        // TODO: Add a comment to explain how it's guaranteed that
-        //  a deposit cannot be stolen by malicious peers
-        val peersWits: Set[TxKeyWitness] =
-            network.reqRefundLater(ReqRefundLater(depositTxDraft, index))
-        // TODO: broadcast ownWit
-
-        val wits = peersWits + ownWit
-
-        val refundTx = wits.foldLeft(refundTxDraft)(addWitness)
+        val req = ReqRefundLater(depositTxDraft, index)
+        val refundTx = network.reqRefundLater(req)
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
 
-        // TODO temporarily we submit the deposit tx here
+        // TODO: temporarily we submit the deposit tx here on the node that handles the request
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft)).toL1Tx
-            ) // TODO: add the combined function
+              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft))
+            ) // TODO: add the combined function for signing
+
         log.info(s"Deposit tx submitted: $depositTxId")
 
+//        TODO: watch deposits on L1
 //        // Emulate L1 deposit event
 //        multisigL1EventManager.map(
 //          _.handleDepositTx(toL1Tx(depositTxDraft), depositTxHash)
 //        )
 
-        // TODO: store the post-dated refund in the store along with the deposit id
-
-        println(nodeState.head.openPhase(_.stateL1))
-
+        log.trace(s"Node L1 state is:\n${nodeState.head.openPhase(_.stateL1)}")
         Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
-    }
+    end deposit
 
     def submitL1(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex[L1](hex))
@@ -445,7 +418,7 @@ def mkL1BlockEffect(
 
                     // L1 effect
                     val wits = acksMajorCombined.map(_.settlement) + ownWit
-                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
+                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
                     // val serializedTx = serializeTxHex(settlementTx)
 
                     settlementTx
@@ -468,7 +441,7 @@ def mkL1BlockEffect(
 
                     // L1 effect
                     val wits = acksFinalCombined.map(_.finalization) + ownWit
-                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
+                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitnessMultisig)
                     // val serializedTx = serializeTxHex(finalizationTx)
 
                     finalizationTx

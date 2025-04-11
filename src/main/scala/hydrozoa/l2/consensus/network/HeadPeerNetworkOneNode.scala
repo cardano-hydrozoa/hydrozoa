@@ -1,7 +1,9 @@
 package hydrozoa.l2.consensus.network
 
+import hydrozoa.infra.txHash
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
@@ -10,7 +12,7 @@ import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.state.{HeadStateReader, WalletId}
-import hydrozoa.{TxKeyWitness, VerificationKeyBytes, Wallet}
+import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes, Wallet}
 import ox.channels.ActorRef
 
 class HeadPeerNetworkOneNode(
@@ -33,7 +35,7 @@ class HeadPeerNetworkOneNode(
     override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
         (knownPeers + ownNode).map(p => (p.getWalletId, p.exportVerificationKeyBytes)).toMap
 
-    override def reqInit(req: ReqInit): Unit = {
+    override def reqInit(req: ReqInit): TxId = {
         requireHeadPeersAreKnown(req.otherHeadPeers)
 
         val headPeersNames = (req.otherHeadPeers + req.initiator).map(_.name)
@@ -58,7 +60,7 @@ class HeadPeerNetworkOneNode(
         val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         headOtherPeers.map(_.createTxKeyWitness(tx))
-        ()
+        txHash(tx)
     }
 
     private def getOtherPeersWallets: Set[Wallet] = {
@@ -70,12 +72,13 @@ class HeadPeerNetworkOneNode(
         otherPeersWallets
     }
 
-    override def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness] =
+    override def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
         val recipe = PostDatedRefundRecipe(req.depositTx, req.index)
         val Right(tx) = refundTxBuilder.mkPostDatedRefundTxDraft(recipe)
-        headOtherPeers.map(_.createTxKeyWitness(tx))
+        val wits = headOtherPeers.map(_.createTxKeyWitness(tx))
+        ???
 
     override def reqMinor(block: Block): Set[AckMinor] =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets

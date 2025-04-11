@@ -1,6 +1,6 @@
 package hydrozoa
 
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.node.state.WalletId
 
 trait WalletModule:
@@ -10,8 +10,8 @@ trait WalletModule:
 
     def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes
 
-    def createTxKeyWitness[T <: MultisigTxTag](
-        tx: MultisigTx[T],
+    def createTxKeyWitness[L <: AnyLevel](
+        tx: Tx[L],
         verificationKey: VerificationKey,
         signingKey: SigningKey
     ): TxKeyWitness
@@ -25,7 +25,6 @@ class Wallet(
     private lazy val verificationKeysBytes = walletModule.exportVerificationKeyBytes(verificationKey)
     def getName: String = name
     def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
-    def createTxKeyWitness[T <: MultisigTxTag](tx: MultisigTx[T]): TxKeyWitness =
+    def createTxKeyWitness[L <: AnyLevel](tx: Tx[L]): TxKeyWitness =
         walletModule.createTxKeyWitness(tx, verificationKey, signingKey)
-
     def getWalletId: WalletId = WalletId(getName)

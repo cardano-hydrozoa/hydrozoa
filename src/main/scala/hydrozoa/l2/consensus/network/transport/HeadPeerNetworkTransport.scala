@@ -10,7 +10,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
+import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.Node
 import ox.*
@@ -36,9 +36,13 @@ import hydrozoa.l2.consensus.network.{
     ackInitCodec,
     ackInitSchema,
     ackVerKeySchema,
+    ackRefundLaterCodec,
+    ackRefundLaterSchema,
     reqInitCodec,
     reqInitSchema,
     reqVerKeySchema,
+    reqRefundLaterCodec,
+    reqRefundLaterSchema,
     walletIdSchema,
     testPeerSchema
 }
@@ -105,25 +109,36 @@ enum AnyMsg:
     case AckVerKeyMsg(content: AckVerKey, aux: AckAux)
     case ReqInitMsg(content: ReqInit, aux: ReqAux)
     case AckInitMsg(content: AckInit, aux: AckAux)
+    case ReqRefundLaterMsg(content: ReqRefundLater, aux: ReqAux)
+    case AckRefundLaterMsg(content: AckRefundLater, aux: AckAux)
 
     def getFromSeq: (TestPeer, Long) = this match
-        case ReqVerKeyMsg(_, aux) => aux.from -> aux.seq
-        case AckVerKeyMsg(_, aux) => aux.from -> aux.seq
-        case ReqInitMsg(_, aux)   => aux.from -> aux.seq
-        case AckInitMsg(_, aux)   => aux.from -> aux.seq
+        case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
+        case AckVerKeyMsg(_, aux)      => aux.from -> aux.seq
+        case ReqInitMsg(_, aux)        => aux.from -> aux.seq
+        case AckInitMsg(_, aux)        => aux.from -> aux.seq
+        case ReqRefundLaterMsg(_, aux) => aux.from -> aux.seq
+        case AckRefundLaterMsg(_, aux) => aux.from -> aux.seq
 
     def asAck: Option[(TestPeer, Long, Ack)] = this match
-        case AckVerKeyMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckInitMsg(content, aux)   => Some(aux.replyTo, aux.replyToSeq, content)
-        case _                          => None
+        case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckInitMsg(content, aux)        => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckRefundLaterMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
+        case _                               => None
 
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
         this match
-            case ReqVerKeyMsg(content, aux) => Left(aux.from, aux.seq, content)
+            case ReqVerKeyMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
             case AckVerKeyMsg(content, aux) =>
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
-            case ReqInitMsg(content, aux) => Left(aux.from, aux.seq, content)
+            case ReqInitMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
             case AckInitMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqRefundLaterMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckRefundLaterMsg(content, aux) =>
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
 
     def origin: (TestPeer, Long) = this.asAck match
@@ -131,19 +146,23 @@ enum AnyMsg:
         case None               => this.getFromSeq
 
     def asMsg: Msg = this match
-        case ReqVerKeyMsg(content, _) => content
-        case AckVerKeyMsg(content, _) => content
-        case ReqInitMsg(content, _)   => content
-        case AckInitMsg(content, _)   => content
+        case ReqVerKeyMsg(content, _)      => content
+        case AckVerKeyMsg(content, _)      => content
+        case ReqInitMsg(content, _)        => content
+        case AckInitMsg(content, _)        => content
+        case ReqRefundLaterMsg(content, _) => content
+        case AckRefundLaterMsg(content, _) => content
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
-        case content: ReqVerKey => ReqVerKeyMsg(content, aux)
-        case content: ReqInit   => ReqInitMsg(content, aux)
+        case content: ReqVerKey      => ReqVerKeyMsg(content, aux)
+        case content: ReqInit        => ReqInitMsg(content, aux)
+        case content: ReqRefundLater => ReqRefundLaterMsg(content, aux)
 
     def apply[A <: Aux](msg: Ack, aux: AckAux): AnyMsg = msg match
-        case content: AckVerKey => AckVerKeyMsg(content, aux)
-        case content: AckInit   => AckInitMsg(content, aux)
+        case content: AckVerKey      => AckVerKeyMsg(content, aux)
+        case content: AckInit        => AckInitMsg(content, aux)
+        case content: AckRefundLater => AckRefundLaterMsg(content, aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make

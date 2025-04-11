@@ -3,7 +3,6 @@ package hydrozoa.node.state
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{Piper, txHash}
-import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
@@ -14,7 +13,6 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
-import ox.supervised
 
 import scala.CanEqual.derived
 import scala.collection.mutable
@@ -93,7 +91,7 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
     def openHead(treasuryUtxo: TreasuryUtxo): Unit
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
-    def enqueueDeposit(deposit: DepositUtxo): Unit
+    def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
     def poolEventL2(event: NonGenesisL2): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
@@ -136,14 +134,18 @@ class HeadStateGlobal(
 
     override def currentPhase: HeadPhase = headPhase
 
-    // Hydrozoa blocks
-    private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
+    // Pool: L2 events + pending deposits
+    private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
+    private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
 
-    // Currently pending block
+    // Currently pending block, may be absent
+    // FIXME: BlockRecord won't work here
     private val blockPending: Option[BlockRecord] = None
 
+    // Hydrozoa L2 blocks, confirmed events, and deposits handled
+    private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
     private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
-    private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
+    private val depositsHandled: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
     private var finalizing: Option[Boolean] = None
 
@@ -243,8 +245,10 @@ class HeadStateGlobal(
 
     private class OpenPhaseImpl extends OpenPhaseReaderImpl with OpenPhase:
 
-        def enqueueDeposit(d: DepositUtxo): Unit =
-            self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
+        def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit =
+            log.info(s"Enqueueing deposit: $depositId")
+            self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
+            // self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
 
         def poolEventL2(event: NonGenesisL2): Unit = self.poolEventsL2.append(event)
 
@@ -334,6 +338,25 @@ case class BlockRecord(
     l1Effect: L1BlockEffect,
     l1PostDatedEffect: L1PostDatedBlockEffect,
     l2Effect: L2BlockEffect
+)
+
+case class PendingDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: PostDatedRefundTx
+)
+
+type DepositRecord = AbsorbedDeposit | RefundedDeposit
+
+case class AbsorbedDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: PostDatedRefundTx,
+    blockNum: Int
+)
+
+case class RefundedDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: Option[PostDatedRefundTx],
+    immediateRefundTx: Option[TxL1]
 )
 
 type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect

@@ -2,7 +2,7 @@ package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{Piper, sequence, txHash}
-import hydrozoa.l1.event.{MultisigL1EventSource}
+import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.TestPeer

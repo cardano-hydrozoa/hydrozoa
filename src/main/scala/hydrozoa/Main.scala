@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.*
-import hydrozoa.l1.event.{MultisigL1EventSource}
+import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
@@ -213,7 +213,8 @@ def mkHydrozoaNode2(
       incomingMsgDispatcher,
       nodeState,
       ownPeerWallet,
-      initTxBuilder
+      initTxBuilder,
+      refundTxBuilder  
     )
 }
 
@@ -249,7 +250,8 @@ object HydrozoaNode extends OxApp:
               dispatcher,
               nodeState,
               ownPeerWallet,
-              initTxBuilder
+              initTxBuilder,
+              refundTxBuilder
             ) = {
                 mkHydrozoaNode2(
                   ownPeer,
@@ -282,7 +284,8 @@ object HydrozoaNode extends OxApp:
                       nodeStateActor,
                       walletActor,
                       cardanoActor,
-                      initTxBuilder
+                      initTxBuilder,
+                      refundTxBuilder
                     )
                 dispatcher.setConsensusActorFactory(factory)
 
