@@ -86,7 +86,7 @@ def mkHydrozoaNode(
       depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,
-      finalizationTxBuilder,
+      finalizationTxBuilder
     )
     (log, node, cardano)
 }
@@ -159,15 +159,18 @@ def mkHydrozoaNode2(
                             actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
                 case None =>
                     log.info(s"Actor was NOT found for origin: $origin")
-                    val newActor = msg.asReqOrAck match
+                    val mbNewActor = msg.asReqOrAck match
                         case Left(_, _, req) =>
                             val (newActor, ack) = consensusActorFactory.spawnByReq(req)
                             reply(ack)
-                            newActor
+                            Some(newActor)
                         case Right(_, _, _, _, ack) =>
                             consensusActorFactory.spawnByAck(ack)
-                    val newActorRef = Actor.create(newActor)
-                    actors.put(origin, newActorRef)
+                    mbNewActor match
+                        case Some(newActor) =>
+                            val newActorRef = Actor.create(newActor)
+                            actors.put(origin, newActorRef)
+                        case None => ()
 
         override def spawnActorProactively(
             from: TestPeer,
@@ -201,9 +204,9 @@ def mkHydrozoaNode2(
       depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,
-      finalizationTxBuilder,
+      finalizationTxBuilder
     )
-    
+
     // return a bunch of things
     (
       node,
@@ -214,7 +217,7 @@ def mkHydrozoaNode2(
       nodeState,
       ownPeerWallet,
       initTxBuilder,
-      refundTxBuilder  
+      refundTxBuilder
     )
 }
 

@@ -6,7 +6,13 @@ import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, PostDatedRefundTx}
 import hydrozoa.l2.block.{Block, BlockHeader}
 import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
-import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.l2.ledger.{
+    NonGenesisL2,
+    SimpleOutput,
+    SimpleTransaction,
+    SimpleWithdrawal,
+    UtxosSet
+}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.state.WalletId
@@ -28,6 +34,8 @@ trait HeadPeerNetwork {
     def reqInit(req: ReqInit): TxId
 
     def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx
+
+    def reqEventL2(req: ReqEventL2): Unit
 
     def reqMinor(block: Block): Set[AckMinor]
 
@@ -82,7 +90,39 @@ given reqRefundLaterSchema: Schema[ReqRefundLater] =
     Schema.derived[ReqRefundLater]
 
 given txL1Schema: Schema[TxL1] =
-    Schema.derived[TxL1]    
+    Schema.derived[TxL1]
+
+case class ReqEventL2(eventL2: NonGenesisL2) extends Req:
+    type ackType = AckUnit
+    type resultType = Int
+
+private class AckUnit extends Ack
+
+object AckUnit extends AckUnit
+
+given reqEventL2Codec: JsonValueCodec[NonGenesisL2] =
+    JsonCodecMaker.make
+
+given reqEventL2Schema: Schema[ReqEventL2] =
+    Schema.derived[ReqEventL2]
+
+given nonGenesisL2Schema: Schema[NonGenesisL2] =
+    Schema.derived[NonGenesisL2]
+
+given simpleTransactionSchema: Schema[SimpleTransaction] =
+    Schema.derived[SimpleTransaction]
+
+given utxoIdL2Schema: Schema[UtxoIdL2] =
+    Schema.derived[UtxoIdL2]
+
+given simpleOutputSchema: Schema[SimpleOutput] =
+    Schema.derived[SimpleOutput]
+
+given addressBechL2Schema: Schema[AddressBechL2] =
+    Schema.derived[AddressBechL2]
+
+given simpleWithdrawalSchema: Schema[SimpleWithdrawal] =
+    Schema.derived[SimpleWithdrawal]
 
 case class AckVerKey(
     peer: WalletId,

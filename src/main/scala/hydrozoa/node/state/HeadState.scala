@@ -250,7 +250,9 @@ class HeadStateGlobal(
             self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
             // self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
 
-        def poolEventL2(event: NonGenesisL2): Unit = self.poolEventsL2.append(event)
+        def poolEventL2(event: NonGenesisL2): Unit =
+            log.info(s"Pooling event: $event")
+            self.poolEventsL2.append(event)
 
         def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
             self.stateL1.get.treasuryUtxo =

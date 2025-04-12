@@ -43,6 +43,7 @@ import hydrozoa.l2.consensus.network.{
     reqVerKeySchema,
     reqRefundLaterCodec,
     reqRefundLaterSchema,
+    reqEventL2Schema,
     walletIdSchema,
     testPeerSchema
 }
@@ -111,6 +112,8 @@ enum AnyMsg:
     case AckInitMsg(content: AckInit, aux: AckAux)
     case ReqRefundLaterMsg(content: ReqRefundLater, aux: ReqAux)
     case AckRefundLaterMsg(content: AckRefundLater, aux: AckAux)
+    case ReqEventL2Msg(content: ReqEventL2, aux: ReqAux)
+    case AckUnitMsg(aux: AckAux)
 
     def getFromSeq: (TestPeer, Long) = this match
         case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
@@ -119,11 +122,14 @@ enum AnyMsg:
         case AckInitMsg(_, aux)        => aux.from -> aux.seq
         case ReqRefundLaterMsg(_, aux) => aux.from -> aux.seq
         case AckRefundLaterMsg(_, aux) => aux.from -> aux.seq
+        case ReqEventL2Msg(_, aux)     => aux.from -> aux.seq
+        case AckUnitMsg(aux)           => aux.from -> aux.seq
 
     def asAck: Option[(TestPeer, Long, Ack)] = this match
         case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case AckInitMsg(content, aux)        => Some(aux.replyTo, aux.replyToSeq, content)
         case AckRefundLaterMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckUnitMsg(aux)                 => Some(aux.replyTo, aux.replyToSeq, AckUnit())
         case _                               => None
 
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
@@ -140,6 +146,9 @@ enum AnyMsg:
                 Left(aux.from, aux.seq, content)
             case AckRefundLaterMsg(content, aux) =>
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqEventL2Msg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckUnitMsg(aux) => Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, AckUnit())
 
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
@@ -152,17 +161,21 @@ enum AnyMsg:
         case AckInitMsg(content, _)        => content
         case ReqRefundLaterMsg(content, _) => content
         case AckRefundLaterMsg(content, _) => content
+        case ReqEventL2Msg(content, _)     => content
+        case AckUnitMsg(aux)               => AckUnit()
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
         case content: ReqVerKey      => ReqVerKeyMsg(content, aux)
         case content: ReqInit        => ReqInitMsg(content, aux)
         case content: ReqRefundLater => ReqRefundLaterMsg(content, aux)
+        case content: ReqEventL2     => ReqEventL2Msg(content, aux)
 
     def apply[A <: Aux](msg: Ack, aux: AckAux): AnyMsg = msg match
         case content: AckVerKey      => AckVerKeyMsg(content, aux)
         case content: AckInit        => AckInitMsg(content, aux)
         case content: AckRefundLater => AckRefundLaterMsg(content, aux)
+        case _: AckUnit              => AckUnitMsg(aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make

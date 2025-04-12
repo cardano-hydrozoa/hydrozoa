@@ -152,18 +152,19 @@ class Node(
         cardano.submit(deserializeTxHex[L1](hex))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
-        nodeState.head.openPhase { s =>
-            val ledger = s.stateL2
+        val event = req match
+            case Transaction(tx) =>
+                AdaSimpleLedger.mkTransactionEvent(tx)
+            case Withdrawal(wd) =>
+                AdaSimpleLedger.mkWithdrawalEvent(wd)
 
-            val event = req match
-                case Transaction(tx) =>
-                    AdaSimpleLedger.mkTransactionEvent(tx)
-                case Withdrawal(wd) =>
-                    AdaSimpleLedger.mkWithdrawalEvent(wd)
+        network.reqEventL2(ReqEventL2(event))
 
-            s.poolEventL2(event)
-            Right(event.getEventId)
-        }
+//        nodeState.head.openPhase { s =>
+//            s.poolEventL2(event)
+//        }
+
+        Right(event.getEventId)
 
     /** Manually triggers next block creation procedure.
       * @param nextBlockFinal

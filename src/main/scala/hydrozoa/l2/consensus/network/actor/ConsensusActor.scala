@@ -20,7 +20,7 @@ trait ConsensusActor:
 
     /** Type for acknowledges that an actor produces.
       */
-    type AckType <: Ack
+    type AckType <: Ack // FIXME: this guy is already in the ReqType
 
     /** Non-reentrant method that handles a Req*, producing own Ack*. For proactive spawning should
       * be called immediately after instantiating. The method should call deliver to deliver the own
@@ -74,38 +74,47 @@ class ConsensusActorFactory(
                 val actor = mkRefundLaterActor
                 val ownAck = actor.init(req)
                 actor -> ownAck
-    
-    def spawnByAck(ack: Ack): ConsensusActor =
+            case req: ReqEventL2 =>
+                val actor = mkEventL2Actor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+
+    def spawnByAck(ack: Ack): Option[ConsensusActor] =
         log.info("spawnByAck")
         ack match
             case ack: AckVerKey =>
                 val actor = mkVerificationKeyActor
                 actor.deliver(ack)
-                actor
+                Some(actor)
             case ack: AckInit =>
                 val actor = mkInitHeadActor
                 actor.deliver(ack)
-                actor
+                Some(actor)
             case ack: AckRefundLater =>
                 val actor = mkRefundLaterActor
                 actor.deliver(ack)
-                actor
+                Some(actor)
+            case ack: AckUnit =>
+                None
 
     private def mkVerificationKeyActor =
         new VerificationKeyActor(stateActor, walletActor)
-    
-    private def mkRefundLaterActor = 
+
+    private def mkRefundLaterActor =
         new RefundLaterActor(
-            stateActor,
-            walletActor,
-            refundTxBuilder
+          stateActor,
+          walletActor,
+          refundTxBuilder
         )
-    
+
     private def mkInitHeadActor =
         new InitHeadActor(
-            stateActor,
-            walletActor,
-            cardanoActor,
-            initTxBuilder
+          stateActor,
+          walletActor,
+          cardanoActor,
+          initTxBuilder
         )
+
+    private def mkEventL2Actor = new EventL2Actor(stateActor)
+
 end ConsensusActorFactory
