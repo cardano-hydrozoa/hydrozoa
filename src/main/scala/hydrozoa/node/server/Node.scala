@@ -20,6 +20,7 @@ import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
+import ox.{forkDiscard, supervised}
 import scalus.prelude.Maybe
 
 class Node(
@@ -159,13 +160,9 @@ class Node(
                 AdaSimpleLedger.mkWithdrawalEvent(wd)
 
         network.reqEventL2(ReqEventL2(event))
-
-//        nodeState.head.openPhase { s =>
-//            s.poolEventL2(event)
-//        }
-
         Right(event.getEventId)
-
+    end submitL2
+    
     /** Manually triggers next block creation procedure.
       * @param nextBlockFinal
       * @return
@@ -174,217 +171,221 @@ class Node(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
 
-        def nextBlockInOpen(
-            nextBlockFinal: Boolean
-        ): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
-            nodeState.head.openPhase { s =>
-
-                println(
-                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInOpen"
-                )
-                println("-----------------------   POOL    --------------------------------------")
-                println(s.immutablePoolEventsL2)
-                println("-----------------------   L1 State --------------------------------------")
-                println(s.stateL1)
-                println
-
-                val maybeNewBlock = createBlock(
-                  s.stateL2.blockProduction,
-                  s.immutablePoolEventsL2,
-                  s.peekDeposits,
-                  s.l2Tip.blockHeader,
-                  timeCurrent,
-                  false
-                )
-
-                maybeNewBlock
-            }
-
-        def nextBlockInFinal()
-            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
-            nodeState.head.finalizingPhase { s =>
-
-                println(
-                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInFinal"
-                )
-                println("-----------------------   L1 State --------------------------------------")
-                println(s.stateL1)
-                println
-
-                val finalBlock = createBlock(
-                  s.stateL2.blockProduction,
-                  Seq.empty,
-                  UtxoSet(Map.empty),
-                  s.l2Tip.blockHeader,
-                  timeCurrent,
-                  true
-                )
-                finalBlock.get
-            }
-
-        val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
-            case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
-            case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
-            case phase =>
-                log.error(s"A block can't be produced in phase: $phase")
-                (None, false)
-
-        maybeNewBlock match
-            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                // Create effects
-                val l1Effect =
-                    mkL1BlockEffect(
-                      settlementTxBuilder,
-                      finalizationTxBuilder,
-                      Some(ownPeer),
-                      Some(network),
-                      block,
-                      utxosWithdrawn
-                    )
-                val l2Effect = block.blockHeader.blockType match
-                    case Minor => utxosActive
-                    case Major => utxosActive /\ mbGenesis
-                    case Final => ()
-
-                // Record and block application
-                val record = BlockRecord(block, l1Effect, (), l2Effect)
-                applyBlock(record)
-                // Move head into finalization phase if finalizeHead flag is received
-                if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
-                // Dump state
-                dumpState()
-                // Result
-                Right((record, utxosAdded, utxosWithdrawn))
-            case None => Left("Block can't be produced at the moment.")
-
-    private def dumpState(): Unit =
-        nodeState.head.currentPhase match
-            case HeadPhase.Open =>
-                println(
-                  "-----------------------   L1 State --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.stateL1))
-                println
-                println(
-                  "-----------------------   POOL    ---------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
-                println
-                println(
-                  "-----------------------   L2 State   ------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
-                println
-                println(
-                  "------------------------  BLOCKS   --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
-                println
-                println(
-                  "------------------------  EVENTS   --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
-
-            case HeadPhase.Finalizing =>
-                println(
-                  "-----------------------   L1 State --------------------------------------"
-                )
-                println(nodeState.head.finalizingPhase(_.stateL1))
-                println(
-                  "-----------------------   L2 State   ------------------------------------"
-                )
-                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
-            // println
-            // println(
-            //    "------------------------  BLOCKS   --------------------------------------"
-            // )
-            // println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
-            case HeadPhase.Finalized => println("Node is finalized.")
-
-    private def applyBlock(
-        blockRecord: BlockRecord
-    ): Unit =
-        val block = blockRecord.block
-        block.blockHeader.blockType match
-            case Minor =>
-                // No L1 effects so far in multisig mode for Minor blocks
-                // L2 effect
-                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MinorBlockL2Effect]
-                nodeState.head.openPhase { s =>
-                    s.addBlock(blockRecord)
-                    s.stateL2.replaceUtxosActive(l2BlockEffect_)
-                    val body = block.blockBody
-                    s.confirmMempoolEvents(
-                      block.blockHeader.blockNum,
-                      body.eventsValid,
-                      None,
-                      body.eventsInvalid
-                    )
-                }
-
-            case Major =>
-                // L1 effect
-                val settlementTx = toL1Tx(
-                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
-                ) // FIXME: casting
-                val Right(settlementTxId) = cardano.submit(settlementTx)
-                log.info(s"Settlement tx submitted: $settlementTxId")
-
-//                // Emulate L1 event
-//                // TODO: I don't think we have to wait L1 event in reality
-//                //  instead we need to update the treasury right upon submitting.
-//                //  Another concern - probably we have to do it in one atomic change
-//                //  along with the L2 effect. Otherwise the next settlement transaction
-//                //  may use the old treasury.
-//                multisigL1EventManager.map(
-//                  _.handleSettlementTx(settlementTx, settlementTxId)
+        ???
+    
+//        def nextBlockInOpen(): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
+//            nodeState.head.openPhase { s =>
+//
+//                println(
+//                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInOpen"
 //                )
-
-                // L2 effect
-                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MajorBlockL2Effect]
-                nodeState.head.openPhase { s =>
-                    s.addBlock(blockRecord)
-                    s.stateL2.replaceUtxosActive(l2BlockEffect_._1)
-                    val body = block.blockBody
-                    s.confirmMempoolEvents(
-                      block.blockHeader.blockNum,
-                      body.eventsValid,
-                      l2BlockEffect_._2,
-                      body.eventsInvalid
-                    )
-
-                    // FIXME: we should it clean up immediately, so the next block won't pick it up again
-                    //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
-                    //  They can be known from L1 major block effects (currently not implemented).
-                    s.removeAbsorbedDeposits(body.depositsAbsorbed)
-                }
-
-            case Final =>
-                // L1 effect
-                val finalizationTx = toL1Tx(
-                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
-                ) // FIXME: casting
-                val Right(finalizationTxId) = cardano.submit(finalizationTx)
-                log.info(s"Finalizationtx submitted: $finalizationTxId")
-
-//                // Emulate L1 event
-//                // TODO: temporarily handle the event, again, we don't want to wait
-//                multisigL1EventManager.foreach(
-//                  _.handleFinalizationTx(
-//                    finalizationTx,
-//                    finalizationTxId
-//                  )
+//                println("-----------------------   POOL    --------------------------------------")
+//                println(s.immutablePoolEventsL2)
+//                println("-----------------------   L1 State --------------------------------------")
+//                println(s.stateL1)
+//                println
+//
+//                val maybeNewBlock = createBlock(
+//                  s.stateL2.blockProduction,
+//                  s.immutablePoolEventsL2,
+//                  s.peekDeposits,
+//                  s.l2Tip.blockHeader,
+//                  timeCurrent,
+//                  false
 //                )
+//
+//                maybeNewBlock
+//            }
 
-                // L2 effect
-                nodeState.head.finalizingPhase { s =>
-                    s.stateL2.flush
-                    s.confirmValidMempoolEvents(
-                      block.blockHeader.blockNum,
-                      block.blockBody.eventsValid
-                    )
-                    s.closeHead(blockRecord)
-                }
+//        def nextBlockInFinal()
+//            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
+//            nodeState.head.finalizingPhase { s =>
+//
+//                println(
+//                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInFinal"
+//                )
+//                println("-----------------------   L1 State --------------------------------------")
+//                println(s.stateL1)
+//                println
+//
+//                val finalBlock = createBlock(
+//                  s.stateL2.blockProduction,
+//                  Seq.empty,
+//                  UtxoSet(Map.empty),
+//                  s.l2Tip.blockHeader,
+//                  timeCurrent,
+//                  true
+//                )
+//                finalBlock.get
+//            }
+
+//        val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
+//            case HeadPhase.Open       => (nextBlockInOpen(), nextBlockFinal)
+//            case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
+//            case phase =>
+//                log.error(s"A block can't be produced in phase: $phase")
+//                (None, false)
+
+        
+// ----------------------------------------------------->>
+        
+        
+//        maybeNewBlock match
+//            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
+//                // Create effects
+//                val l1Effect =
+//                    mkL1BlockEffect(
+//                      settlementTxBuilder,
+//                      finalizationTxBuilder,
+//                      Some(ownPeer),
+//                      Some(network),
+//                      block,
+//                      utxosWithdrawn
+//                    )
+//                val l2Effect = block.blockHeader.blockType match
+//                    case Minor => utxosActive
+//                    case Major => utxosActive /\ mbGenesis
+//                    case Final => ()
+//
+//                // Record and block application
+//                val record = BlockRecord(block, l1Effect, (), l2Effect)
+//                applyBlock(record)
+//                // Move head into finalization phase if finalizeHead flag is received
+//                if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
+//                // Dump state
+//                dumpState()
+//                // Result
+//                Right((record, utxosAdded, utxosWithdrawn))
+//            case None => Left("Block can't be produced at the moment.")
+//
+//    private def dumpState(): Unit =
+//        nodeState.head.currentPhase match
+//            case HeadPhase.Open =>
+//                println(
+//                  "-----------------------   L1 State --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.stateL1))
+//                println
+//                println(
+//                  "-----------------------   POOL    ---------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
+//                println
+//                println(
+//                  "-----------------------   L2 State   ------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
+//                println
+//                println(
+//                  "------------------------  BLOCKS   --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
+//                println
+//                println(
+//                  "------------------------  EVENTS   --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
+//
+//            case HeadPhase.Finalizing =>
+//                println(
+//                  "-----------------------   L1 State --------------------------------------"
+//                )
+//                println(nodeState.head.finalizingPhase(_.stateL1))
+//                println(
+//                  "-----------------------   L2 State   ------------------------------------"
+//                )
+//                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
+//            // println
+//            // println(
+//            //    "------------------------  BLOCKS   --------------------------------------"
+//            // )
+//            // println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
+//            case HeadPhase.Finalized => println("Node is finalized.")
+//
+//    private def applyBlock(
+//        blockRecord: BlockRecord
+//    ): Unit =
+//        val block = blockRecord.block
+//        block.blockHeader.blockType match
+//            case Minor =>
+//                // No L1 effects so far in multisig mode for Minor blocks
+//                // L2 effect
+//                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MinorBlockL2Effect]
+//                nodeState.head.openPhase { s =>
+//                    s.addBlock(blockRecord)
+//                    s.stateL2.replaceUtxosActive(l2BlockEffect_)
+//                    val body = block.blockBody
+//                    s.confirmMempoolEvents(
+//                      block.blockHeader.blockNum,
+//                      body.eventsValid,
+//                      None,
+//                      body.eventsInvalid
+//                    )
+//                }
+//
+//            case Major =>
+//                // L1 effect
+//                val settlementTx = toL1Tx(
+//                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
+//                ) // FIXME: casting
+//                val Right(settlementTxId) = cardano.submit(settlementTx)
+//                log.info(s"Settlement tx submitted: $settlementTxId")
+//
+////                // Emulate L1 event
+////                // TODO: I don't think we have to wait L1 event in reality
+////                //  instead we need to update the treasury right upon submitting.
+////                //  Another concern - probably we have to do it in one atomic change
+////                //  along with the L2 effect. Otherwise the next settlement transaction
+////                //  may use the old treasury.
+////                multisigL1EventManager.map(
+////                  _.handleSettlementTx(settlementTx, settlementTxId)
+////                )
+//
+//                // L2 effect
+//                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MajorBlockL2Effect]
+//                nodeState.head.openPhase { s =>
+//                    s.addBlock(blockRecord)
+//                    s.stateL2.replaceUtxosActive(l2BlockEffect_._1)
+//                    val body = block.blockBody
+//                    s.confirmMempoolEvents(
+//                      block.blockHeader.blockNum,
+//                      body.eventsValid,
+//                      l2BlockEffect_._2,
+//                      body.eventsInvalid
+//                    )
+//
+//                    // FIXME: we should it clean up immediately, so the next block won't pick it up again
+//                    //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
+//                    //  They can be known from L1 major block effects (currently not implemented).
+//                    s.removeAbsorbedDeposits(body.depositsAbsorbed)
+//                }
+//
+//            case Final =>
+//                // L1 effect
+//                val finalizationTx = toL1Tx(
+//                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
+//                ) // FIXME: casting
+//                val Right(finalizationTxId) = cardano.submit(finalizationTx)
+//                log.info(s"Finalizationtx submitted: $finalizationTxId")
+//
+////                // Emulate L1 event
+////                // TODO: temporarily handle the event, again, we don't want to wait
+////                multisigL1EventManager.foreach(
+////                  _.handleFinalizationTx(
+////                    finalizationTx,
+////                    finalizationTxId
+////                  )
+////                )
+//
+//                // L2 effect
+//                nodeState.head.finalizingPhase { s =>
+//                    s.stateL2.flush
+//                    s.confirmValidMempoolEvents(
+//                      block.blockHeader.blockNum,
+//                      block.blockBody.eventsValid
+//                    )
+//                    s.closeHead(blockRecord)
+//                }
 
 end Node
 

@@ -34,6 +34,11 @@ class NodeState(
         val mbList = peers.toList.map(knownPeersVKeys.get) |> sequence
         mbList.map(_.toSet)
 
+    def getVerificationKeyMap(peers: Set[WalletId]): Map[WalletId, VerificationKeyBytes] =
+        val ret = knownPeersVKeys.view.filterKeys(peers.contains)
+        assert(peers.size == ret.size, "All VK should present.")
+        ret.toMap
+
     def saveKnownPeersVKeys(keys: Map[WalletId, VerificationKeyBytes]): Unit =
         log.info(s"Saving learned verification keys for known peers: $keys")
         knownPeersVKeys.addAll(keys)
@@ -96,7 +101,8 @@ case class WalletId(
 )
 
 case class InitializingHeadParams(
-    headPeers: Set[WalletId],
+    ownPeer: WalletId,
+    headPeerVKs: Map[WalletId, VerificationKeyBytes],
     headParams: HeadParams,
     headNativeScript: NativeScript,
     headAddress: AddressBechL1,

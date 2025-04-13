@@ -2,8 +2,10 @@ package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
+import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.VerificationKeyBytes
 
 import scala.jdk.CollectionConverters.*
 
@@ -52,6 +54,9 @@ def encodeHex(bytes: IArray[Byte]): String =
     HexUtil.encodeHexString(IArray.genericWrapArray(bytes).toArray)
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))
+
+extension(vkb: VerificationKeyBytes)
+    def verKeyHash: String = getKeyHash(vkb.bytes)
 
 // Piper!
 implicit class Piper[A](val x: A) extends AnyVal {

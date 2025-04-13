@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{Piper, addWitness, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -10,15 +10,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import hydrozoa.{
-    AddressBechL1,
-    NativeScript,
-    TokenName,
-    TxId,
-    TxKeyWitness,
-    VerificationKeyBytes,
-    Wallet
-}
+import hydrozoa.*
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -34,6 +26,8 @@ private class InitHeadActor(
 
     override type ReqType = ReqInit
     override type AckType = AckInit
+
+    private var ownAck: AckInit = _
 
     private var txDraft: InitTx = _
     private var headNativeScript: NativeScript = _
@@ -72,6 +66,7 @@ private class InitHeadActor(
         val ownAck: AckType = AckInit(me, ownWit)
 
         this.req = req
+        this.ownAck = ownAck
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
         this.headAddress = headAddress
@@ -98,8 +93,10 @@ private class InitHeadActor(
             cardanoActor.ask(_.submit(toL1Tx(initTx))) match
                 case Right(txHash) =>
                     // Put the head into Initializing phase
+                    val headPeersVKs = stateActor.ask(_.getVerificationKeyMap(headPeers))
                     val params = InitializingHeadParams(
-                      headPeers,
+                      ownAck.peer,
+                      headPeersVKs,
                       HeadParams.default,
                       headNativeScript,
                       headAddress,

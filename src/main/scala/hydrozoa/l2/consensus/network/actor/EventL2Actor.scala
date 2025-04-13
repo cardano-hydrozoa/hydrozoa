@@ -20,10 +20,10 @@ private class EventL2Actor(
     override def init(req: ReqType): AckType =
         log.info(s"init req: $req")
         stateActor.tell(_.head.openPhase(_.poolEventL2(req.eventL2)))
-        resultChannel.send(42)
+        resultChannel.send(())
         AckUnit
 
-    private val resultChannel: Channel[Int] = Channel.buffered(1)
+    private val resultChannel: Channel[Unit] = Channel.buffered(1)
 //    private def resultChannel(using req: ReqType): Channel[req.resultType] = Channel.rendezvous
 
     override def result(using req: Req): Source[req.resultType] =

@@ -3,16 +3,11 @@ package hydrozoa.l2.consensus.network
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, PostDatedRefundTx}
-import hydrozoa.l2.block.{Block, BlockHeader}
+import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import hydrozoa.l2.block.{Block, BlockBody, BlockHeader, BlockTypeL2}
 import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
-import hydrozoa.l2.ledger.{
-    NonGenesisL2,
-    SimpleOutput,
-    SimpleTransaction,
-    SimpleWithdrawal,
-    UtxosSet
-}
+import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.state.WalletId
@@ -46,6 +41,11 @@ trait HeadPeerNetwork {
     def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined]
 }
 
+/** ------------------------------------------------------------------------------------------
+  * Consensus messages TODO: move out?
+  * ------------------------------------------------------------------------------------------
+  */
+
 sealed trait Msg
 
 sealed trait Req extends Msg:
@@ -54,6 +54,10 @@ sealed trait Req extends Msg:
 
 sealed trait Ack extends Msg
 
+/** ------------------------------------------------------------------------------------------
+  * ReqVerKey
+  * ------------------------------------------------------------------------------------------
+  */
 case class ReqVerKey() extends Req:
     type ackType = AckVerKey
     type resultType = Map[WalletId, VerificationKeyBytes]
@@ -63,6 +67,35 @@ given reqVerKeyCodec: JsonValueCodec[ReqVerKey] =
 
 given reqVerKeySchema: Schema[ReqVerKey] =
     Schema.derived[ReqVerKey]
+
+// ReqVerKey aux schemas
+given walletIdSchema: Schema[WalletId] =
+    Schema.derived[WalletId]
+
+/** ------------------------------------------------------------------------------------------
+  * AckVerKey
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class AckVerKey(
+    peer: WalletId,
+    verKey: VerificationKeyBytes
+) extends Ack
+
+given ackVerKeyCodec: JsonValueCodec[AckVerKey] =
+    JsonCodecMaker.make
+
+given ackVerKeySchema: Schema[AckVerKey] =
+    Schema.derived[AckVerKey]
+
+// AckVerKey aux schemas
+given verificationKeyBytesSchema: Schema[VerificationKeyBytes] =
+    Schema.derived[VerificationKeyBytes]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqInit
+  * ------------------------------------------------------------------------------------------
+  */
 
 case class ReqInit(
     initiator: WalletId,
@@ -79,6 +112,37 @@ given reqInitCodec: JsonValueCodec[ReqInit] =
 given reqInitSchema: Schema[ReqInit] =
     Schema.derived[ReqInit]
 
+// ReqInit aux schemas
+given utxoIdL1Schema: Schema[UtxoIdL1] =
+    Schema.derived[UtxoIdL1]
+
+given txIdSchema: Schema[TxId] =
+    Schema.derived[TxId]
+
+given txIxSchema: Schema[TxIx] =
+    Schema.derived[TxIx]
+
+given txKeyWitnessSchema: Schema[TxKeyWitness] =
+    Schema.derived[TxKeyWitness]
+
+/** ------------------------------------------------------------------------------------------
+  * AckInit
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class AckInit(peer: WalletId, signature: TxKeyWitness) extends Ack
+
+given ackInitCodec: JsonValueCodec[AckInit] =
+    JsonCodecMaker.make
+
+given ackInitSchema: Schema[AckInit] =
+    Schema.derived[AckInit]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqRefundLater
+  * ------------------------------------------------------------------------------------------
+  */
+
 case class ReqRefundLater(depositTx: TxL1, index: TxIx) extends Req:
     type ackType = AckRefundLater
     type resultType = PostDatedRefundTx
@@ -92,19 +156,35 @@ given reqRefundLaterSchema: Schema[ReqRefundLater] =
 given txL1Schema: Schema[TxL1] =
     Schema.derived[TxL1]
 
+/** ------------------------------------------------------------------------------------------
+  * AckRefundLater
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class AckRefundLater(peer: WalletId, signature: TxKeyWitness) extends Ack
+
+given ackRefundLaterCodec: JsonValueCodec[AckRefundLater] =
+    JsonCodecMaker.make
+
+given ackRefundLaterSchema: Schema[AckRefundLater] =
+    Schema.derived[AckRefundLater]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqEventL2
+  * ------------------------------------------------------------------------------------------
+  */
+
 case class ReqEventL2(eventL2: NonGenesisL2) extends Req:
     type ackType = AckUnit
-    type resultType = Int
-
-private class AckUnit extends Ack
-
-object AckUnit extends AckUnit
+    type resultType = Unit
 
 given reqEventL2Codec: JsonValueCodec[NonGenesisL2] =
     JsonCodecMaker.make
 
 given reqEventL2Schema: Schema[ReqEventL2] =
     Schema.derived[ReqEventL2]
+
+/* ReqEventK2 aux schemas */
 
 given nonGenesisL2Schema: Schema[NonGenesisL2] =
     Schema.derived[NonGenesisL2]
@@ -124,64 +204,93 @@ given addressBechL2Schema: Schema[AddressBechL2] =
 given simpleWithdrawalSchema: Schema[SimpleWithdrawal] =
     Schema.derived[SimpleWithdrawal]
 
-case class AckVerKey(
-    peer: WalletId,
-    verKey: VerificationKeyBytes
-) extends Ack
+/** ------------------------------------------------------------------------------------------
+  * AckUnit
+  * ------------------------------------------------------------------------------------------
+  */
 
-given ackVerKeyCodec: JsonValueCodec[AckVerKey] =
+private case class AckUnit() extends Ack
+
+object AckUnit extends AckUnit
+
+/** ------------------------------------------------------------------------------------------
+  * ReqMinor
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class ReqMinor(block: Block) extends Req:
+    type ackType = AckMinor
+    type resultType = Unit
+
+given reqMinorCodec: JsonValueCodec[ReqMinor] =
     JsonCodecMaker.make
 
-given verificationKeyBytesSchema: Schema[VerificationKeyBytes] =
-    Schema.derived[VerificationKeyBytes]
+given reqMinorSchema: Schema[ReqMinor] =
+    Schema.derived[ReqMinor]
 
-given ackVerKeySchema: Schema[AckVerKey] =
-    Schema.derived[AckVerKey]
+/* ReqMinor aux codecs */
 
-case class AckInit(peer: WalletId, signature: TxKeyWitness) extends Ack
-
-given ackInitCodec: JsonValueCodec[AckInit] =
+given blockCodec: JsonValueCodec[Block] =
     JsonCodecMaker.make
 
-given ackInitSchema: Schema[AckInit] =
-    Schema.derived[AckInit]
+/* ReqMinor aux schemas */
 
-case class AckRefundLater(peer: WalletId, signature: TxKeyWitness) extends Ack
+given blockSchema: Schema[Block] =
+    Schema.derived[Block]
 
-given ackRefundLaterCodec: JsonValueCodec[AckRefundLater] =
-    JsonCodecMaker.make
+given blockHeaderSchema: Schema[BlockHeader] =
+    Schema.derived[BlockHeader]
 
-given ackRefundLaterSchema: Schema[AckRefundLater] =
-    Schema.derived[AckRefundLater]
+given blockTypeL2Schema: Schema[BlockTypeL2] =
+    Schema.derived[BlockTypeL2]
 
-// additional schemas
-given walletIdSchema: Schema[WalletId] =
-    Schema.derived[WalletId]
+given blockBodySchema: Schema[BlockBody] =
+    Schema.derived[BlockBody]
 
-// FIXME: remove
-given testPeerSchema: Schema[TestPeer] =
-    Schema.derived[TestPeer]
+given txIdNonGenesisL2EventLabelPairSchema: Schema[(TxId, NonGenesisL2EventLabel)] =
+    Schema.derived[(TxId, NonGenesisL2EventLabel)]
 
-given utxoIdL1Schema: Schema[UtxoIdL1] =
-    Schema.derived[UtxoIdL1]
+given nonGenesisL2EventLabelSchema: Schema[NonGenesisL2EventLabel] =
+    Schema.derived[NonGenesisL2EventLabel]
 
-given txIdSchema: Schema[TxId] =
-    Schema.derived[TxId]
-
-given txIxSchema: Schema[TxIx] =
-    Schema.derived[TxIx]
-
-given txKeyWitnessSchema: Schema[TxKeyWitness] =
-    Schema.derived[TxKeyWitness]
-
-// old types to be upgraded
+/** ------------------------------------------------------------------------------------------
+  * AckMinor
+  * ------------------------------------------------------------------------------------------
+  */
 
 case class AckMinor(
     blockHeader: BlockHeader,
-    signature: Unit,
+    signature: String,
     nextBlockFinal: Boolean
-)
+) extends Ack
 
+given ackMinorCodec: JsonValueCodec[AckMinor] =
+    JsonCodecMaker.make
+
+given ackMinorSchema: Schema[AckMinor] =
+    Schema.derived[AckMinor]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqMajor
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class ReqMajor(block: Block) extends Req:
+    type ackType = AckMajor | AckMajor2
+    type resultType = Unit
+
+given reqMajorCodec: JsonValueCodec[ReqMajor] =
+    JsonCodecMaker.make
+
+given reqMajorSchema: Schema[ReqMajor] =
+    Schema.derived[ReqMajor]
+
+/** ------------------------------------------------------------------------------------------
+  * AckMajor, AckMajor2
+  * ------------------------------------------------------------------------------------------
+  */
+
+// FIXME: remove
 case class AckMajorCombined(
     blockHeader: BlockHeader,
     rollouts: Set[TxKeyWitness],
@@ -189,8 +298,75 @@ case class AckMajorCombined(
     nextBlockFinal: Boolean
 )
 
+case class AckMajor(
+    rollouts: Seq[TxKeyWitness],
+    postDatedTransaction: TxKeyWitness
+) extends Ack
+
+given ackMajorCodec: JsonValueCodec[AckMajor] =
+    JsonCodecMaker.make
+
+given ackMajorSchema: Schema[AckMajor] =
+    Schema.derived[AckMajor]
+
+case class AckMajor2(
+    settlement: TxKeyWitness,
+    nextBlockFinal: Boolean
+) extends Ack
+
+given ackMajor2Codec: JsonValueCodec[AckMajor2] =
+    JsonCodecMaker.make
+
+given ackMajor2Schema: Schema[AckMajor2] =
+    Schema.derived[AckMajor2]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqFinal
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class ReqFinal(block: Block) extends Req:
+    type ackType = AckFinal | AckFinal2
+    type resultType = Unit
+
+given reqFinalCodec: JsonValueCodec[ReqFinal] =
+    JsonCodecMaker.make
+
+given reqFinalSchema: Schema[ReqFinal] =
+    Schema.derived[ReqFinal]
+
+/** ------------------------------------------------------------------------------------------
+  * AckFinal, AckFinal2
+  * ------------------------------------------------------------------------------------------
+  */
+
+// FIXME: remove
 case class AckFinalCombined(
     blockHeader: BlockHeader,
     rollouts: Set[TxKeyWitness],
     finalization: TxKeyWitness
 )
+
+case class AckFinal(
+    rollouts: Seq[TxKeyWitness]
+) extends Ack
+
+given ackFinalCodec: JsonValueCodec[AckFinal] =
+    JsonCodecMaker.make
+
+given ackFinalSchema: Schema[AckFinal] =
+    Schema.derived[AckFinal]
+
+case class AckFinal2(
+    settlement: TxKeyWitness
+) extends Ack
+
+given ackFinal2Codec: JsonValueCodec[AckFinal2] =
+    JsonCodecMaker.make
+
+given ackFinal2Schema: Schema[AckFinal2] =
+    Schema.derived[AckFinal2]
+
+// FIXME: remove, currently used in ReqAux
+given testPeerSchema: Schema[TestPeer] =
+    Schema.derived[TestPeer]

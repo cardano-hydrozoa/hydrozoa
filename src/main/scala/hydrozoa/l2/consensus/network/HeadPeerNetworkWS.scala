@@ -7,13 +7,8 @@ import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, Inco
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
-import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes}
+import hydrozoa.{TxId, VerificationKeyBytes}
 import ox.channels.ActorRef
-import ox.{either, timeout}
-
-import scala.collection.mutable
-import scala.concurrent.duration
-import scala.concurrent.duration.DurationInt
 
 class HeadPeerNetworkWS(
     ownPeer: TestPeer,
@@ -62,10 +57,9 @@ class HeadPeerNetworkWS(
         val seq = transport.nextSeq
         val sendReq = transport.broadcastMessage(Some(seq))
         val sendAck = transport.broadcastMessage(ownPeer, seq)
-    
+
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
         ()
-
 
     override def reqMinor(block: Block): Set[AckMinor] = ???
     override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] = ???

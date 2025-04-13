@@ -80,11 +80,11 @@ class HeadPeerNetworkOneNode(
         val wits = headOtherPeers.map(_.createTxKeyWitness(tx))
         ???
 
-    override def reqEventL2(req: ReqEventL2): Unit = ??? 
+    override def reqEventL2(req: ReqEventL2): Unit = ???
 
     override def reqMinor(block: Block): Set[AckMinor] =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets
-        headOtherPeers.map(_ => AckMinor(block.blockHeader, (), false))
+        headOtherPeers.map(_ => AckMinor(block.blockHeader, "", false))
 
     override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets

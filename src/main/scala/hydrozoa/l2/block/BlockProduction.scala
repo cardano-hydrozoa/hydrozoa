@@ -2,6 +2,7 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
+import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
@@ -10,10 +11,41 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
 }
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.merkle.RH32UtxoSetL2
+import ox.channels.ActorRef
 
 import scala.collection.mutable
 
 // TODO: unify in terms of abstract ledger and types
+
+class BlockProduction:
+
+    private var dispatcherRef: ActorRef[IncomingDispatcher] = _
+
+    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit =
+        this.dispatcherRef = dispatcherRef
+
+    def produceBlock(
+        stateL2: AdaSimpleLedger[TBlockProduction],
+        poolEvents: Seq[NonGenesisL2],
+        depositsPending: DepositUtxos,
+        prevHeader: BlockHeader,
+        timeCreation: PosixTime,
+        finalizing: Boolean
+    ): (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
+        createBlock(
+          stateL2,
+          poolEvents,
+          depositsPending,
+          prevHeader,
+          timeCreation,
+          finalizing
+        ) match
+            case Some(ret) =>
+                val req = ??? // mkBlockReq
+                dispatcherRef.ask(???)
+                ret
+            case None =>
+                throw RuntimeException("Should not happen: was not able to produce a block.")
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
@@ -87,8 +119,9 @@ def createBlock(
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    depositsAbsorbed = eligibleDeposits.map.keySet
-                        .toList.sortWith((a, b) => a._1.hash.compareTo(b._1.hash) < 0)
+                    depositsAbsorbed = eligibleDeposits.map.keySet.toList.sortWith((a, b) =>
+                        a._1.hash.compareTo(b._1.hash) < 0
+                    )
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None
@@ -113,7 +146,8 @@ def createBlock(
     val blockBuilder = BlockBuilder()
         .timeCreation(timeCreation)
         .blockNum(prevHeader.blockNum + 1)
-        .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
+//        .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
+        .utxosActive(42) // TODO: calculate Merkle root hash
         .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
         .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
 
