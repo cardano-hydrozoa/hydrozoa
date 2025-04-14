@@ -2,7 +2,8 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
-import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
+import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
+import hydrozoa.l2.consensus.network.HeadPeerNetwork
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
@@ -10,19 +11,18 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
     WithdrawalL2EventLabel
 }
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.merkle.RH32UtxoSetL2
 import ox.channels.ActorRef
 
 import scala.collection.mutable
 
 // TODO: unify in terms of abstract ledger and types
 
-class BlockProduction:
+class BlockProducer:
 
-    private var dispatcherRef: ActorRef[IncomingDispatcher] = _
+    private var networkRef: ActorRef[HeadPeerNetwork] = _
 
-    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit =
-        this.dispatcherRef = dispatcherRef
+    def setNetworkRef(networkRef: ActorRef[HeadPeerNetwork]): Unit =
+        this.networkRef = networkRef
 
     def produceBlock(
         stateL2: AdaSimpleLedger[TBlockProduction],
@@ -40,10 +40,12 @@ class BlockProduction:
           timeCreation,
           finalizing
         ) match
-            case Some(ret) =>
-                val req = ??? // mkBlockReq
-                dispatcherRef.ask(???)
-                ret
+            case Some(some @ (block, _, utxosWithdrawn, _, _)) =>
+                block.blockHeader.blockType match
+                    case Minor => networkRef.tell(_.reqMinor(block))
+                    case Major => networkRef.tell(_.reqMajor(block, utxosWithdrawn))
+                    case Final => networkRef.tell(_.reqFinal(block, utxosWithdrawn))
+                some
             case None =>
                 throw RuntimeException("Should not happen: was not able to produce a block.")
 

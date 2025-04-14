@@ -4,6 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{Piper, sequence, txHash}
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
+import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.TestPeer
 import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
@@ -19,6 +20,8 @@ class NodeState(
     val log: Logger = Logger(getClass)
 
     var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
+
+    var blockProductionActor: ActorRef[BlockProducer] = _
 
     private var ownPeer: TestPeer = _
 
@@ -51,9 +54,10 @@ class NodeState(
             case None =>
                 log.info(s"Initializing Hydrozoa head...")
                 this.headState = Some(HeadStateGlobal(params))
+                this.headState.get.setBlockProductionActor(blockProductionActor)
                 log.info(s"Setting up L1 event sourcing...")
                 val initTxId = params.initTx |> txHash
-                multisigL1EventSource.ask(_.awaitInitTx(initTxId, params.headAddress))
+                multisigL1EventSource.tell(_.awaitInitTx(initTxId, params.headAddress))
             // TODO: add support for re-opening a head
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>

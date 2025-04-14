@@ -10,13 +10,10 @@ import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, Fina
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
-import hydrozoa.l2.consensus.network.transport.{
-    AnyMsg,
-    HeadPeerNetworkTransportWS,
-    IncomingDispatcher
-}
+import hydrozoa.l2.consensus.network.transport.{AnyMsg, HeadPeerNetworkTransportWS, IncomingDispatcher}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.NodeRestApi
@@ -80,7 +77,7 @@ def mkHydrozoaNode(
     val node = Node(
       nodeStateManager,
       ownPeerWallet,
-      network,
+      // network,
       cardano,
       initTxBuilder,
       depositTxBuilder,
@@ -198,7 +195,6 @@ def mkHydrozoaNode2(
     val node = Node(
       nodeState,
       ownPeerWallet,
-      network,
       cardano,
       initTxBuilder,
       depositTxBuilder,
@@ -281,6 +277,14 @@ object HydrozoaNode extends OxApp:
                 // Multisig L1 event source
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
                 nodeState.multisigL1EventSource = Actor.create(multisigL1EventSource)
+
+                val blockProducer = new BlockProducer()
+
+                nodeState.blockProductionActor = Actor.create(blockProducer)
+
+                val networkRef = Actor.create(network)
+                node.networkRef = networkRef
+                blockProducer.setNetworkRef(networkRef)
 
                 val factory =
                     new ConsensusActorFactory(

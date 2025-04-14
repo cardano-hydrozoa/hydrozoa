@@ -59,8 +59,15 @@ class HeadPeerNetworkWS(
         val sendAck = transport.broadcastMessage(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
-        ()
 
-    override def reqMinor(block: Block): Set[AckMinor] = ???
-    override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] = ???
-    override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] = ???
+    override def reqMinor(block: Block): Set[AckMinor] =
+        log.info(s"reqMinor: $block")
+        ???
+
+    override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
+        log.info(s"reqMajor: $block")
+        ???
+
+    override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
+        log.info(s"reqFinal: $block")
+        ???

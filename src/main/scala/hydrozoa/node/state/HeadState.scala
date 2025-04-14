@@ -6,7 +6,7 @@ import hydrozoa.infra.{Piper, txHash, verKeyHash}
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, BlockProduction, BlockTypeL2, zeroBlock}
+import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
@@ -137,9 +137,9 @@ class HeadStateGlobal(
 
     private val log = Logger(getClass)
 
-    private var blockProductionActor: ActorRef[BlockProduction] = _
+    private var blockProductionActor: ActorRef[BlockProducer] = _
 
-    def setBlockProductionActor(blockProductionActor: ActorRef[BlockProduction]): Unit =
+    def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
         this.blockProductionActor = blockProductionActor
 
     override def currentPhase: HeadPhase = headPhase
@@ -256,7 +256,9 @@ class HeadStateGlobal(
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
-
+            
+            
+    
     def nodeRoundRobinTurn: Int =
         /* Let's say we have three peers: Alice, Bob, and Carol.
            And their VKH happen to give the same order.
@@ -276,7 +278,7 @@ class HeadStateGlobal(
         def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit =
             log.info(s"Enqueueing deposit: $depositId")
             self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
-            // Triggers block production
+            // TODO: Triggers block production (should be done when deposits arrives to L1 state)
             if self.isBlockLeader then
                 log.info("Producing block due to getting new deposit...")
                 produceBlock(false)

@@ -12,7 +12,10 @@ import hydrozoa.l1.multisig.state.{
 }
 import hydrozoa.node.state.NodeState
 import ox.channels.ActorRef
+import ox.scheduling.{RepeatConfig, repeat}
 import scalus.builtin.Data.fromData
+
+import scala.concurrent.duration.DurationInt
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
   */
@@ -35,6 +38,13 @@ class MultisigL1EventSource(
                             _.openHead(utxo)
                           )
                         )
+                        // repeat polling for head address forever
+                        // FIXME: stop once head is closed
+                        // FIXME: repeat config
+                        // TODO: use streaming
+                        repeat(RepeatConfig.fixedRateForever(500.millis))(
+                          pollHeadAddress(headAddress)
+                        )
                     case Left(err) =>
                         err match
                             case _: NoMatch =>
@@ -45,6 +55,10 @@ class MultisigL1EventSource(
                                 )
             case None =>
                 throw RuntimeException("initTx hasn't appeared")
+
+    private def pollHeadAddress(headAddress: AddressBechL1): Unit =
+        log.info("Polling head address...")
+        val _ = cardano.ask(_.utxosAtAddress(headAddress))
 
 //
 //    def handleDepositTx(depositTx: TxAny, txId: TxId): Unit =

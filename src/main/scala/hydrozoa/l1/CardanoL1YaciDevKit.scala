@@ -62,3 +62,12 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     override def lastBlockTime: PosixTime =
         backendService.getBlockService.getLatestBlock.getValue.getTime
+
+    override def utxosAtAddress(headAddress: AddressBechL1): Unit =
+
+        backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
+            case Left(err) => throw RuntimeException(err)
+            case Right(utxos) =>
+                log.info(s"Found ${utxos.size} utxos.")
+
+        ()

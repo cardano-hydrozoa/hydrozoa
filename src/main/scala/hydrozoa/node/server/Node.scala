@@ -20,13 +20,13 @@ import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
+import ox.channels.ActorRef
 import ox.{forkDiscard, supervised}
 import scalus.prelude.Maybe
 
 class Node(
     nodeState: NodeState,
     ownPeer: Wallet,
-    network: HeadPeerNetwork,
     cardano: CardanoL1,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
@@ -36,6 +36,8 @@ class Node(
 ):
 
     private val log = Logger(getClass)
+
+    var networkRef: ActorRef[HeadPeerNetwork] = _
 
     // FIXME: protect, currently used in tests
     def nodeStateReader = nodeState
@@ -50,14 +52,14 @@ class Node(
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
         // Request verification keys from known peers
-        val knownVKeys = network.reqVerificationKeys()
+        val knownVKeys = networkRef.ask(_.reqVerificationKeys())
         log.info(s"knownVKeys: $knownVKeys")
 
         // ReqInit
         val seedOutput = UtxoIdL1(txId, txIx)
         val treasuryCoins = treasuryAda * 1_000_000
         val reqInit = ReqInit(ownPeer.getWalletId, otherHeadPeers, seedOutput, treasuryCoins)
-        val initTxId = network.reqInit(reqInit)
+        val initTxId = networkRef.ask(_.reqInit(reqInit))
 
         Right(initTxId)
     end initializeHead
@@ -127,7 +129,7 @@ class Node(
         // TxDump.dumpMultisigTx(depositTxDraft)
 
         val req = ReqRefundLater(depositTxDraft, index)
-        val refundTx = network.reqRefundLater(req)
+        val refundTx = networkRef.ask(_.reqRefundLater(req))
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
 
@@ -159,10 +161,10 @@ class Node(
             case Withdrawal(wd) =>
                 AdaSimpleLedger.mkWithdrawalEvent(wd)
 
-        network.reqEventL2(ReqEventL2(event))
+        networkRef.tell(_.reqEventL2(ReqEventL2(event)))
         Right(event.getEventId)
     end submitL2
-    
+
     /** Manually triggers next block creation procedure.
       * @param nextBlockFinal
       * @return
@@ -170,9 +172,8 @@ class Node(
     def handleNextBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
-
         ???
-    
+
 //        def nextBlockInOpen(): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
 //            nodeState.head.openPhase { s =>
 //
@@ -226,10 +227,8 @@ class Node(
 //                log.error(s"A block can't be produced in phase: $phase")
 //                (None, false)
 
-        
 // ----------------------------------------------------->>
-        
-        
+
 //        maybeNewBlock match
 //            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
 //                // Create effects

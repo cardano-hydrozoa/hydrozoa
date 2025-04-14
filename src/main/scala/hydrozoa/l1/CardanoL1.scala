@@ -1,6 +1,6 @@
 package hydrozoa.l1
 
-import hydrozoa.{Network, TxId, TxL1}
+import hydrozoa.{AddressBechL1, Network, TxId, TxL1}
 import ox.resilience.RetryConfig
 import ox.scheduling.Jitter
 import scalus.ledger.api.v1.PosixTime
@@ -16,6 +16,7 @@ trait CardanoL1 {
     ): Option[TxL1]
     def network: Network
     def lastBlockTime: PosixTime
+    def utxosAtAddress(headAddress: AddressBechL1): Unit
 }
 
 type SubmissionError = String

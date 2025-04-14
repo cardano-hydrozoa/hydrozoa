@@ -48,6 +48,8 @@ class CardanoL1Mock() extends CardanoL1:
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
+    override def utxosAtAddress(headAddress: AddressBechL1): Unit = ???
+
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock
