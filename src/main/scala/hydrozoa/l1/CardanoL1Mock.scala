@@ -1,5 +1,6 @@
 package hydrozoa.l1
 
+import com.bloxbean.cardano.client.api.model.Utxo
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
 import ox.resilience.RetryConfig
@@ -48,7 +49,7 @@ class CardanoL1Mock() extends CardanoL1:
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
-    override def utxosAtAddress(headAddress: AddressBechL1): Unit = ???
+    override def utxosAtAddress(headAddress: AddressBechL1): List[Utxo] = ???
 
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =

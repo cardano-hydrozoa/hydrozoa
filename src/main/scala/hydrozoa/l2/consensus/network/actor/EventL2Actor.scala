@@ -15,7 +15,7 @@ private class EventL2Actor(
     override type ReqType = ReqEventL2
     override type AckType = AckUnit
 
-    override def deliver(ack: AckType): Unit = ()
+    override def deliver(_ack: AckType): Option[AckUnit] = None
 
     override def init(req: ReqType): AckType =
         log.info(s"init req: $req")

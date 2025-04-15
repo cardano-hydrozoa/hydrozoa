@@ -3,8 +3,10 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
 import hydrozoa.l1.CardanoL1
+import hydrozoa.l1.multisig.tx.finalization.FinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.RefundTxBuilder
+import hydrozoa.l1.multisig.tx.settlement.SettlementTxBuilder
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Source}
@@ -38,8 +40,11 @@ trait ConsensusActor:
       * previous peer's ack was different.
       * @param ack
       *   own or someone else's ack
+      * @return
+      *   for actors that uses two-phase acks (major/final block producers) deliver may reurn a
+      *   phase-two ack.
       */
-    def deliver(ack: AckType): Unit
+    def deliver(ack: AckType): Option[AckType]
 
     /** Rendezvous channel to get the final result.
       * @return
@@ -54,7 +59,9 @@ class ConsensusActorFactory(
     val walletActor: ActorRef[Wallet],
     val cardanoActor: ActorRef[CardanoL1],
     val initTxBuilder: InitTxBuilder,
-    val refundTxBuilder: RefundTxBuilder
+    val refundTxBuilder: RefundTxBuilder,
+    val settlementTxBuilder: SettlementTxBuilder,
+    val finalizationTxBuilder: FinalizationTxBuilder
 ):
 
     private val log = Logger(getClass)
@@ -78,6 +85,18 @@ class ConsensusActorFactory(
                 val actor = mkEventL2Actor
                 val ownAck = actor.init(req)
                 actor -> ownAck
+            case req: ReqMinor =>
+                val actor = mkMinorBlockActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+            case req: ReqMajor =>
+                val actor = mkMajorBlockActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
+            case req: ReqFinal =>
+                val actor = mkFinalBlockActor
+                val ownAck = actor.init(req)
+                actor -> ownAck
 
     def spawnByAck(ack: Ack): Option[ConsensusActor] =
         log.info("spawnByAck")
@@ -96,6 +115,26 @@ class ConsensusActorFactory(
                 Some(actor)
             case ack: AckUnit =>
                 None
+            case ack: AckMinor =>
+                val actor = mkMinorBlockActor
+                actor.deliver(ack)
+                Some(actor)
+            case ack: AckMajor =>
+                val actor = mkMajorBlockActor
+                actor.deliver(ack)
+                Some(actor)
+            case ack: AckMajor2 =>
+                val actor = mkMajorBlockActor
+                actor.deliver(ack)
+                Some(actor)
+            case ack: AckFinal =>
+                val actor = mkFinalBlockActor
+                actor.deliver(ack)
+                Some(actor)
+            case ack: AckFinal2 =>
+                val actor = mkFinalBlockActor
+                actor.deliver(ack)
+                Some(actor)
 
     private def mkVerificationKeyActor =
         new VerificationKeyActor(stateActor, walletActor)
@@ -116,5 +155,13 @@ class ConsensusActorFactory(
         )
 
     private def mkEventL2Actor = new EventL2Actor(stateActor)
+
+    private def mkMinorBlockActor = new MinorBlockConfirmationActor(stateActor, walletActor)
+
+    private def mkMajorBlockActor =
+        new MajorBlockConfirmationActor(stateActor, walletActor, settlementTxBuilder)
+
+    private def mkFinalBlockActor =
+        new FinalBlockConfirmationActor(stateActor, walletActor, finalizationTxBuilder)
 
 end ConsensusActorFactory

@@ -32,13 +32,11 @@ trait HeadPeerNetwork {
 
     def reqEventL2(req: ReqEventL2): Unit
 
-    def reqMinor(block: Block): Set[AckMinor]
+    def reqMinor(req: ReqMinor): Unit
 
-    // FIXME: remove utxosWithdrawn once we have block validation
-    def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined]
+    def reqMajor(req: ReqMajor): Unit
 
-    // FIXME: remove utxosWithdrawn once we have block validation
-    def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined]
+    def reqFinal(req: ReqFinal): Unit
 }
 
 /** ------------------------------------------------------------------------------------------
@@ -259,7 +257,7 @@ given nonGenesisL2EventLabelSchema: Schema[NonGenesisL2EventLabel] =
   */
 
 case class AckMinor(
-    blockHeader: BlockHeader,
+    peer: WalletId,
     signature: String,
     nextBlockFinal: Boolean
 ) extends Ack
@@ -299,6 +297,7 @@ case class AckMajorCombined(
 )
 
 case class AckMajor(
+    peer: WalletId,
     rollouts: Seq[TxKeyWitness],
     postDatedTransaction: TxKeyWitness
 ) extends Ack
@@ -310,6 +309,7 @@ given ackMajorSchema: Schema[AckMajor] =
     Schema.derived[AckMajor]
 
 case class AckMajor2(
+    peer: WalletId,
     settlement: TxKeyWitness,
     nextBlockFinal: Boolean
 ) extends Ack
@@ -348,6 +348,7 @@ case class AckFinalCombined(
 )
 
 case class AckFinal(
+    peer: WalletId,
     rollouts: Seq[TxKeyWitness]
 ) extends Ack
 
@@ -358,6 +359,7 @@ given ackFinalSchema: Schema[AckFinal] =
     Schema.derived[AckFinal]
 
 case class AckFinal2(
+    peer: WalletId,
     settlement: TxKeyWitness
 ) extends Ack
 

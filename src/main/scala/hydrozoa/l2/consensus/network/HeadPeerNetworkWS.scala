@@ -60,14 +60,29 @@ class HeadPeerNetworkWS(
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
-    override def reqMinor(block: Block): Set[AckMinor] =
-        log.info(s"reqMinor: $block")
-        ???
+    override def reqMinor(req: ReqMinor): Unit =
+        log.info(s"ReqMinor for block: $req.block")
 
-    override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
-        log.info(s"reqMajor: $block")
-        ???
+        val seq = transport.nextSeq
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
 
-    override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
-        log.info(s"reqFinal: $block")
-        ???
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+
+    override def reqMajor(req: ReqMajor): Unit =
+        log.info(s"ReqMajor for block: $req.block")
+
+        val seq = transport.nextSeq
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
+
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+
+    override def reqFinal(req: ReqFinal): Unit =
+        log.info(s"ReqFinal for block: $req.block")
+
+        val seq = transport.nextSeq
+        val sendReq = transport.broadcastMessage(Some(seq))
+        val sendAck = transport.broadcastMessage(ownPeer, seq)
+
+        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))

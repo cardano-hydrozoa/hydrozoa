@@ -82,19 +82,20 @@ class HeadPeerNetworkOneNode(
 
     override def reqEventL2(req: ReqEventL2): Unit = ???
 
-    override def reqMinor(block: Block): Set[AckMinor] =
+    override def reqMinor(req: ReqMinor): Unit =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets
-        headOtherPeers.map(_ => AckMinor(block.blockHeader, "", false))
+        headOtherPeers.map(w => AckMinor(w.getWalletId, "", false))
+        ???
 
-    override def reqMajor(block: Block, utxosWithdrawn: UtxosSet): Set[AckMajorCombined] =
+    override def reqMajor(req: ReqMajor): Unit =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
         // TODO: check block type
         val recipe =
             SettlementRecipe(
-              block.blockHeader.versionMajor,
-              block.blockBody.depositsAbsorbed,
-              utxosWithdrawn
+              req.block.blockHeader.versionMajor,
+              req.block.blockBody.depositsAbsorbed,
+              ??? // utxosWithdrawn
             )
         val Right(tx) = settlementTxBuilder.mkSettlementTxDraft(recipe)
 
@@ -102,18 +103,18 @@ class HeadPeerNetworkOneNode(
             .map(_.createTxKeyWitness(tx))
             .map(witness =>
                 AckMajorCombined(
-                  block.blockHeader,
+                  req.block.blockHeader,
                   Set.empty,
                   witness,
                   false
                 )
             )
+        ???
 
-    override def reqFinal(block: Block, utxosWithdrawn: UtxosSet): Set[AckFinalCombined] =
+    override def reqFinal(req: ReqFinal): Unit =
         val headOtherPeers: Set[Wallet] = getOtherPeersWallets
 
-        // TODO: check block type
-        val recipe = FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
+        val recipe = FinalizationRecipe(req.block.blockHeader.versionMajor, ???) // utxosWithdrawn
 
         val Right(tx) = finalizationTxBuilder.buildFinalizationTxDraft(recipe)
 
@@ -121,10 +122,11 @@ class HeadPeerNetworkOneNode(
             .map(_.createTxKeyWitness(tx))
             .map(witness =>
                 AckFinalCombined(
-                  block.blockHeader,
+                  req.block.blockHeader,
                   Set.empty,
                   witness
                 )
             )
+        ???
 
     override def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit = ???

@@ -97,7 +97,9 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
     def poolEventL2(event: NonGenesisL2): Unit
-    def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
+    def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
+    def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
+    def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def addBlock(block: BlockRecord): Unit // FIXME: name
     def confirmMempoolEvents(
@@ -158,7 +160,8 @@ class HeadStateGlobal(
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
     private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
-    private val depositsHandled: mutable.Buffer[DepositRecord] = mutable.Buffer()
+    private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
+    private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
@@ -225,7 +228,14 @@ class HeadStateGlobal(
             .findLast(_.block.blockHeader.blockType == Major)
             .map(_.block)
             .getOrElse(zeroBlock)
-        def peekDeposits: DepositUtxos = UtxoSet(self.stateL1.get.depositUtxos)
+        def peekDeposits: DepositUtxos =
+            // Subtracts deposits that are known to have been handled yet, though their utxo may be still
+            // on stateL1.depositUtxos.
+            self.stateL1.get.depositUtxos.map.view
+                .filterKeys(k => !self.depositHandled.contains(k))
+                .toMap
+                |> UtxoSet.apply[L1, DepositTag]
+
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
             val headParams = self.headParams
             val consensusParams = headParams.l2ConsensusParams
@@ -256,9 +266,7 @@ class HeadStateGlobal(
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
-            
-            
-    
+
     def nodeRoundRobinTurn: Int =
         /* Let's say we have three peers: Alice, Bob, and Carol.
            And their VKH happen to give the same order.
@@ -278,11 +286,6 @@ class HeadStateGlobal(
         def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit =
             log.info(s"Enqueueing deposit: $depositId")
             self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
-            // TODO: Triggers block production (should be done when deposits arrives to L1 state)
-            if self.isBlockLeader then
-                log.info("Producing block due to getting new deposit...")
-                produceBlock(false)
-            // self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
 
         def poolEventL2(event: NonGenesisL2): Unit =
             log.info(s"Pooling event: $event")
@@ -304,16 +307,27 @@ class HeadStateGlobal(
             )
         }
 
-        def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
-            self.stateL1.get.treasuryUtxo =
-                mkUtxo[L1, TreasuryTag](txId, txIx, self.headAddress, coins)
+        override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
+            log.info("Net treasury utxo")
+            self.stateL1.get.treasuryUtxo = treasuryUtxo
 
-        def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
+        def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
+            log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
+            depositIds.foreach(self.stateL1.get.depositUtxos.map.remove)
 
-        def addBlock(block: BlockRecord): Unit = self.blocksConfirmedL2.append(block)
+        def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
+            log.info(s"Adding new deposit utxos: $depositUtxos")
+            self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
+            if self.isBlockLeader then
+                log.info("Producing new block due to observing a new deposit utxo...")
+                produceBlock(false)
+
+        override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
+
+        override def addBlock(block: BlockRecord): Unit = self.blocksConfirmedL2.append(block)
 
         // FIXME: this is too complex for state management, should be a part of effect
-        def confirmMempoolEvents(
+        override def confirmMempoolEvents(
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
@@ -334,10 +348,10 @@ class HeadStateGlobal(
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
-        def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
+        override def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
 
-        def finalizeHead(isBlockLeader: Boolean): Unit =
+        override def finalizeHead(isBlockLeader: Boolean): Unit =
             self.headPhase = Finalizing
             if isBlockLeader
             then produceBlock(true)

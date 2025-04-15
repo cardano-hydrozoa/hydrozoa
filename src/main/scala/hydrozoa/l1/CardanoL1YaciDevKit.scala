@@ -1,5 +1,6 @@
 package hydrozoa.l1
 
+import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
@@ -10,6 +11,8 @@ import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
+import scala.jdk.CollectionConverters.*
+
 import scala.util.{Try, boundary}
 
 class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
@@ -63,11 +66,9 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
     override def lastBlockTime: PosixTime =
         backendService.getBlockService.getLatestBlock.getValue.getTime
 
-    override def utxosAtAddress(headAddress: AddressBechL1): Unit =
-
+    override def utxosAtAddress(headAddress: AddressBechL1): List[Utxo] =
+        // FIXME: can't be more than 100
         backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
-            case Left(err) => throw RuntimeException(err)
-            case Right(utxos) =>
-                log.info(s"Found ${utxos.size} utxos.")
-
-        ()
+            case Left(err) =>
+                throw RuntimeException(err)
+            case Right(utxos) => utxos.asScala.toList

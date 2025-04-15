@@ -57,7 +57,12 @@ class NodeState(
                 this.headState.get.setBlockProductionActor(blockProductionActor)
                 log.info(s"Setting up L1 event sourcing...")
                 val initTxId = params.initTx |> txHash
-                multisigL1EventSource.tell(_.awaitInitTx(initTxId, params.headAddress))
+                multisigL1EventSource.tell(_.awaitInitTx(
+                    initTxId, 
+                    params.headAddress,
+                    params.headNativeScript,
+                    params.beaconTokenName
+                ))
             // TODO: add support for re-opening a head
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>

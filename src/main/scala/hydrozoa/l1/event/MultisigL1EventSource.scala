@@ -1,21 +1,34 @@
 package hydrozoa.l1.event
 
+import com.bloxbean.cardano.client.api.model.Amount.asset
+import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
+import com.bloxbean.cardano.client.transaction.spec.script.NativeScript as BBNativeScript
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.*
+import hydrozoa.*
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.state.{
-    DepositDatum,
-    DepositTag,
-    TreasuryTag,
-    given_FromData_DepositDatum
-}
+import hydrozoa.infra.*
+import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxo, TreasuryTag, TreasuryUtxo}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.node.state.NodeState
+import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxo, TreasuryTag, TreasuryUtxo}
 import ox.channels.ActorRef
+import hydrozoa.node.state.NodeState
 import ox.scheduling.{RepeatConfig, repeat}
-import scalus.builtin.Data.fromData
+import ox.channels.ActorRef
 
+import java.math.BigInteger
+import ox.scheduling.{RepeatConfig, repeat}
+
+import scala.jdk.CollectionConverters.*
+
+import scala.collection.mutable
+import java.math.BigInteger
 import scala.concurrent.duration.DurationInt
+import scala.collection.mutable
+import scala.language.strictEquality
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
   */
@@ -25,7 +38,12 @@ class MultisigL1EventSource(
 ):
     private val log = Logger(getClass)
 
-    def awaitInitTx(txId: TxId, headAddress: AddressBechL1): Unit =
+    def awaitInitTx(
+        txId: TxId,
+        headAddress: AddressBechL1,
+        headNativeScript: NativeScript,
+        beaconTokenName: TokenName
+    ): Unit =
         cardano.ask(_.awaitTx(txId)) match
             case Some(initTx) =>
                 log.info(s"Init tx $txId appeared on-chain.")
@@ -39,11 +57,17 @@ class MultisigL1EventSource(
                           )
                         )
                         // repeat polling for head address forever
+                        val nativeScriptBB = BBNativeScript.deserializeScriptRef(headNativeScript.bytes)
+                        val treasuryTokenAmount = asset(
+                            nativeScriptBB.getPolicyId,
+                            beaconTokenName.tokenName,
+                            BigInteger.valueOf(1)
+                        )
                         // FIXME: stop once head is closed
                         // FIXME: repeat config
                         // TODO: use streaming
                         repeat(RepeatConfig.fixedRateForever(500.millis))(
-                          pollHeadAddress(headAddress)
+                          updateL1State(headAddress, treasuryTokenAmount)
                         )
                     case Left(err) =>
                         err match
@@ -56,9 +80,69 @@ class MultisigL1EventSource(
             case None =>
                 throw RuntimeException("initTx hasn't appeared")
 
-    private def pollHeadAddress(headAddress: AddressBechL1): Unit =
+    private enum MultisigUtxoType:
+        case Treasury(utxo: BBUtxo)
+        case Deposit(utxo: BBUtxo)
+
+    private def utxoType(treasuryTokenAmount: Amount)(utxo: BBUtxo): MultisigUtxoType =
+        if utxo.getAmount.contains(treasuryTokenAmount) 
+        then MultisigUtxoType.Treasury(utxo)
+        else MultisigUtxoType.Deposit(utxo)
+
+    private def mkNewTreasuryUtxo(utxo: BBUtxo): TreasuryUtxo =
+        val utxoId = UtxoId[L1]
+            .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
+        val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
+        mkUtxo[L1, TreasuryTag](utxoId.txId, utxoId.outputIx, utxo.getAddress |> AddressBechL1.apply, coins)
+
+    private def mkDepositUtxo(utxo: BBUtxo): DepositUtxo =
+        val utxoId = UtxoId[L1]
+            .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
+        val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
+        mkUtxo[L1, DepositTag](utxoId.txId, utxoId.outputIx, utxo.getAddress |> AddressBechL1.apply, coins)
+
+    private def updateL1State(
+        headAddress: AddressBechL1,
+        treasuryTokenAmount: Amount
+    ): Unit =
         log.info("Polling head address...")
-        val _ = cardano.ask(_.utxosAtAddress(headAddress))
+        val utxos = cardano.ask(_.utxosAtAddress(headAddress))
+        val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
+        // beacon token -> treasury
+        // rollout token -> rollout
+        // otherwise -> maybe deposit
+        val (mbNewTreasury, depositsNew, depositsGone) =
+            //
+            var mbNewTreasury: Option[TreasuryUtxo] = None
+            val depositsNew: UtxoSetMutable[L1, DepositTag] =
+                UtxoSetMutable[L1, DepositTag](mutable.Map.empty)
+            //
+            val knownDepositIds = currentL1State.depositUtxos.map.keySet
+            val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
+
+            val utxoType_ = utxoType(treasuryTokenAmount)
+            
+            utxos.foreach(utxo =>
+                val utxoId = UtxoId[L1]
+                    .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
+                utxoType_(utxo ) match
+                    case MultisigUtxoType.Treasury(utxo) =>
+                        if currentL1State.treasuryUtxo.ref != utxoId then
+                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
+                    case MultisigUtxoType.Deposit(utxo) =>
+                        existingDeposits.add(utxoId)
+                        if (!knownDepositIds.contains(utxoId)) then
+                            val depositUtxo = mkDepositUtxo(utxo)
+                            depositsNew.map.put(depositUtxo.ref, depositUtxo.output)
+            )
+            val depositsGone: Set[UtxoIdL1] = knownDepositIds.toSet &~ existingDeposits.toSet
+            (mbNewTreasury, depositsNew, depositsGone)
+
+        nodeState.tell(_.head.openPhase(openHead =>
+            mbNewTreasury.foreach(openHead.newTreasuryUtxo)
+            if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
+            if depositsNew.map.nonEmpty then openHead.addDepositUtxos(depositsNew |> UtxoSet.apply)
+        ))
 
 //
 //    def handleDepositTx(depositTx: TxAny, txId: TxId): Unit =

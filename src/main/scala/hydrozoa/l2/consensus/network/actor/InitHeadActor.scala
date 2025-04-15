@@ -75,10 +75,11 @@ private class InitHeadActor(
         deliver(ownAck)
         ownAck
 
-    override def deliver(ack: AckInit): Unit =
+    override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
         acks.put(ack.peer, ack.signature)
         tryMakeResult()
+        None
 
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")

@@ -1,15 +1,13 @@
 package hydrozoa.l2.block
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.consensus.network.HeadPeerNetwork
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
-}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import ox.channels.ActorRef
 
@@ -18,6 +16,8 @@ import scala.collection.mutable
 // TODO: unify in terms of abstract ledger and types
 
 class BlockProducer:
+
+    private val log = Logger(getClass)
 
     private var networkRef: ActorRef[HeadPeerNetwork] = _
 
@@ -41,10 +41,11 @@ class BlockProducer:
           finalizing
         ) match
             case Some(some @ (block, _, utxosWithdrawn, _, _)) =>
+                log.info(s"A new block was produced: $block")
                 block.blockHeader.blockType match
-                    case Minor => networkRef.tell(_.reqMinor(block))
-                    case Major => networkRef.tell(_.reqMajor(block, utxosWithdrawn))
-                    case Final => networkRef.tell(_.reqFinal(block, utxosWithdrawn))
+                    case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))
+                    case Major => networkRef.tell(_.reqMajor(ReqMajor(block)))
+                    case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
                 some
             case None =>
                 throw RuntimeException("Should not happen: was not able to produce a block.")

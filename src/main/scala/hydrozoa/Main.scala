@@ -213,7 +213,9 @@ def mkHydrozoaNode2(
       nodeState,
       ownPeerWallet,
       initTxBuilder,
-      refundTxBuilder
+      refundTxBuilder, 
+      settlementTxBuilder,
+      finalizationTxBuilder
     )
 }
 
@@ -250,7 +252,9 @@ object HydrozoaNode extends OxApp:
               nodeState,
               ownPeerWallet,
               initTxBuilder,
-              refundTxBuilder
+              refundTxBuilder,
+              settlementTxBuilder,
+              finalizationTxBuilder
             ) = {
                 mkHydrozoaNode2(
                   ownPeer,
@@ -292,7 +296,9 @@ object HydrozoaNode extends OxApp:
                       walletActor,
                       cardanoActor,
                       initTxBuilder,
-                      refundTxBuilder
+                      refundTxBuilder,
+                      settlementTxBuilder,
+                      finalizationTxBuilder,
                     )
                 dispatcher.setConsensusActorFactory(factory)
 

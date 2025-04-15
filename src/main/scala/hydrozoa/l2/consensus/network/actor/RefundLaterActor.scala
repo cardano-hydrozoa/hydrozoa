@@ -27,21 +27,21 @@ private class RefundLaterActor(
 
     override type ReqType = ReqRefundLater
     override type AckType = AckRefundLater
-    
+
     private var txDraft: PostDatedRefundTx = _
     private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
-    
+
     override def init(req: ReqType): AckType =
         log.trace(s"Init req: $req")
 
         val Right(txDraft) =
             refundTxBuilder.mkPostDatedRefundTxDraft(
-                PostDatedRefundRecipe(req.depositTx, req.index)
+              PostDatedRefundRecipe(req.depositTx, req.index)
             )
         log.info("Post-dated refund tx hash: " + txHash(txDraft))
-        
-        //TxDump.dumpMultisigTx(refundTxDraft)
-        
+
+        // TxDump.dumpMultisigTx(refundTxDraft)
+
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck = AckRefundLater(me, ownWit)
 
@@ -50,10 +50,11 @@ private class RefundLaterActor(
         deliver(ownAck)
         ownAck
 
-    override def deliver(ack: AckType): Unit =
+    override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
         acks.put(ack.peer, ack.signature)
         tryMakeResult()
+        None
 
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
