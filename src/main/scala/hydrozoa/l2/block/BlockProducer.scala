@@ -7,11 +7,16 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import ox.channels.ActorRef
 
 import scala.collection.mutable
+
+import scala.language.strictEquality
 
 // TODO: unify in terms of abstract ledger and types
 
@@ -40,7 +45,7 @@ class BlockProducer:
           timeCreation,
           finalizing
         ) match
-            case Some(some @ (block, _, utxosWithdrawn, _, _)) =>
+            case Some(some @ (block, _, _, _, _)) =>
                 log.info(s"A new block was produced: $block")
                 block.blockHeader.blockType match
                     case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))
@@ -117,7 +122,7 @@ def createBlock(
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
-            // FIXME: construct genesis properly
+            // FIXME: construct genesis properly - using the datum
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>

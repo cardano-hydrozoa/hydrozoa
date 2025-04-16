@@ -80,7 +80,10 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def l2LastMajor: Block
     def peekDeposits: DepositUtxos
     def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
+    def blockLeadTurn: Int
     def isBlockLeader: Boolean
+    def isBlockPending: Boolean
+    def pendingOwnBlock: OwnBlock
 
 sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
     def l2Tip: Block
@@ -101,7 +104,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def addBlock(block: BlockRecord): Unit // FIXME: name
+    def applyBlockRecord(block: BlockRecord): Unit
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
@@ -109,7 +112,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
     ): Unit
     def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit
-    def finalizeHead(isNodeLeader: Boolean): Unit
+    def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def closeHead(block: BlockRecord): Unit
@@ -146,16 +149,21 @@ class HeadStateGlobal(
 
     override def currentPhase: HeadPhase = headPhase
 
-    private var isBlockLeader: Boolean = _ // TODO: Option vs var + _?
+    // Round-robin peer's turn. Having it we always can decide whether
+    // the node should be a leader of the next block.
+    private var blockLeadTurn: Option[Int] = None
+    // Flag that indicated the node is the leader of the next block.
+    private var isBlockLeader: Option[Boolean] = None
+    // Flag that allows the check whether "no new block awaits the peers’ confirmation"
+    // [If true] it postpones the creation of the next block until
+    // we are done with the previous one.
+    // FIXME: 1. Suspend actors 2. Try to create a block when set back to false
+    private var isBlockPending: Option[Boolean] = None
+    private var pendingOwnBlock: Option[OwnBlock] = None
 
     // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
     private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
-
-    // FIXME: Move to the confirm block actors
-    // Currently pending block, may be absent
-    // FIXME: BlockRecord won't work here
-    private val blockPending: Option[BlockRecord] = None
 
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
@@ -163,6 +171,7 @@ class HeadStateGlobal(
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
+    // L1&L2 states
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
 
@@ -244,7 +253,11 @@ class HeadStateGlobal(
               headParams.minimalDepositWindow,
               consensusParams.depositMarginExpiry
             )
-        def isBlockLeader: Boolean = self.isBlockLeader
+
+        def blockLeadTurn: Int = self.blockLeadTurn.get
+        def isBlockLeader: Boolean = self.isBlockLeader.get
+        def isBlockPending: Boolean = self.isBlockPending.get
+        def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
 
     private class FinalizingPhaseReaderImpl
         extends MultisigRegimeReaderImpl
@@ -260,12 +273,15 @@ class HeadStateGlobal(
         def openHead(
             treasuryUtxo: TreasuryUtxo
         ): Unit =
-            val nodesTurn = nodeRoundRobinTurn
-            self.isBlockLeader = nodeRoundRobinTurn == 1
-            log.info(s"Opening head, is block leader: $isBlockLeader, turn: $nodesTurn")
+            self.blockLeadTurn = Some(nodeRoundRobinTurn)
+            self.isBlockLeader = Some(self.blockLeadTurn.get == 1)
+            self.isBlockPending = Some(false)
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
+            log.info(
+              s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
+            )
 
     def nodeRoundRobinTurn: Int =
         /* Let's say we have three peers: Alice, Bob, and Carol.
@@ -290,21 +306,23 @@ class HeadStateGlobal(
         def poolEventL2(event: NonGenesisL2): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
-            if self.isBlockLeader then
+            if this.isBlockLeader && !this.isBlockPending then
                 log.info("Producing block due to getting new L2 event...")
                 produceBlock(false)
 
         private def produceBlock(finalizing: Boolean): Unit = {
-            blockProductionActor.tell(
-              _.produceBlock(
-                stateL2.blockProduction,
-                if finalizing then Seq.empty else immutablePoolEventsL2,
-                if finalizing then UtxoSet(Map.empty) else peekDeposits,
-                l2Tip.blockHeader,
-                timeCurrent,
-                finalizing
-              )
-            )
+            val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
+                blockProductionActor.ask(
+                  _.produceBlock(
+                    stateL2.blockProduction,
+                    if finalizing then Seq.empty else immutablePoolEventsL2,
+                    if finalizing then UtxoSet(Map.empty) else peekDeposits,
+                    l2Tip.blockHeader,
+                    timeCurrent,
+                    finalizing
+                  )
+                )
+            self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
         }
 
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
@@ -318,13 +336,30 @@ class HeadStateGlobal(
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
             self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
-            if self.isBlockLeader then
+            if this.isBlockLeader && !this.isBlockPending then
                 log.info("Producing new block due to observing a new deposit utxo...")
                 produceBlock(false)
 
         override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
-        override def addBlock(block: BlockRecord): Unit = self.blocksConfirmedL2.append(block)
+        override def applyBlockRecord(record: BlockRecord): Unit =
+            self.blocksConfirmedL2.append(record)
+
+            val l2BlockEffect_ = record.l2Effect.asInstanceOf[MinorBlockL2Effect]
+            stateL2.replaceUtxosActive(l2BlockEffect_)
+
+            val body = record.block.blockBody
+            val blockNum = record.block.blockHeader.blockNum
+            confirmMempoolEvents(
+              blockNum,
+              body.eventsValid,
+              None,
+              body.eventsInvalid
+            )
+
+            val nextBlockNum = record.block.blockHeader.blockNum + 1
+            self.isBlockPending = Some(false)
+            self.isBlockLeader = Some(nextBlockNum % this.blockLeadTurn == 0)
 
         // FIXME: this is too complex for state management, should be a part of effect
         override def confirmMempoolEvents(
@@ -351,10 +386,8 @@ class HeadStateGlobal(
         override def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
 
-        override def finalizeHead(isBlockLeader: Boolean): Unit =
+        override def finalizeHead(): Unit =
             self.headPhase = Finalizing
-            if isBlockLeader
-            then produceBlock(true)
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
@@ -408,6 +441,13 @@ case class BlockRecord(
     l1Effect: L1BlockEffect,
     l1PostDatedEffect: L1PostDatedBlockEffect,
     l2Effect: L2BlockEffect
+)
+
+case class OwnBlock(
+    block: Block,
+    utxosActive: UtxosSetOpaque,
+    utxosWithdrawn: UtxosSet,
+    mbGenesis: Option[(TxId, SimpleGenesis)]
 )
 
 case class PendingDeposit(

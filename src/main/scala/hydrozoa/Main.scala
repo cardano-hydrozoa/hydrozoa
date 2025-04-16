@@ -156,6 +156,14 @@ def mkHydrozoaNode2(
                             actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
                 case None =>
                     log.info(s"Actor was NOT found for origin: $origin")
+                    // TODO: First reaction: here would be nice to check, that if at least one 
+                    //  block-related consensus actor is already here we must indicate an 
+                    //  erroneous condition: under normal operation there should be exactly 
+                    //  one block in work.
+                    //  After some thinking: no, we should not, since if the next leader got all
+                    //  confirmations and start working on the next block theoretically we can 
+                    //  get a message about the next block before we finish with the previous one.
+                    //  This situation should be definitely tested in simulation. 
                     val mbNewActor = msg.asReqOrAck match
                         case Left(_, _, req) =>
                             val (newActor, ack) = consensusActorFactory.spawnByReq(req)

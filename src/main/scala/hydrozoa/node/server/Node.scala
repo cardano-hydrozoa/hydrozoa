@@ -174,59 +174,6 @@ class Node(
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
         ???
 
-//        def nextBlockInOpen(): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
-//            nodeState.head.openPhase { s =>
-//
-//                println(
-//                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInOpen"
-//                )
-//                println("-----------------------   POOL    --------------------------------------")
-//                println(s.immutablePoolEventsL2)
-//                println("-----------------------   L1 State --------------------------------------")
-//                println(s.stateL1)
-//                println
-//
-//                val maybeNewBlock = createBlock(
-//                  s.stateL2.blockProduction,
-//                  s.immutablePoolEventsL2,
-//                  s.peekDeposits,
-//                  s.l2Tip.blockHeader,
-//                  timeCurrent,
-//                  false
-//                )
-//
-//                maybeNewBlock
-//            }
-
-//        def nextBlockInFinal()
-//            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
-//            nodeState.head.finalizingPhase { s =>
-//
-//                println(
-//                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInFinal"
-//                )
-//                println("-----------------------   L1 State --------------------------------------")
-//                println(s.stateL1)
-//                println
-//
-//                val finalBlock = createBlock(
-//                  s.stateL2.blockProduction,
-//                  Seq.empty,
-//                  UtxoSet(Map.empty),
-//                  s.l2Tip.blockHeader,
-//                  timeCurrent,
-//                  true
-//                )
-//                finalBlock.get
-//            }
-
-//        val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
-//            case HeadPhase.Open       => (nextBlockInOpen(), nextBlockFinal)
-//            case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
-//            case phase =>
-//                log.error(s"A block can't be produced in phase: $phase")
-//                (None, false)
-
 // ----------------------------------------------------->>
 
 //        maybeNewBlock match
@@ -307,20 +254,7 @@ class Node(
 //        val block = blockRecord.block
 //        block.blockHeader.blockType match
 //            case Minor =>
-//                // No L1 effects so far in multisig mode for Minor blocks
-//                // L2 effect
-//                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MinorBlockL2Effect]
-//                nodeState.head.openPhase { s =>
-//                    s.addBlock(blockRecord)
-//                    s.stateL2.replaceUtxosActive(l2BlockEffect_)
-//                    val body = block.blockBody
-//                    s.confirmMempoolEvents(
-//                      block.blockHeader.blockNum,
-//                      body.eventsValid,
-//                      None,
-//                      body.eventsInvalid
-//                    )
-//                }
+
 //
 //            case Major =>
 //                // L1 effect
@@ -387,65 +321,3 @@ class Node(
 //                }
 
 end Node
-
-def mkL1BlockEffect(
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    mbOwnPeer: Option[Wallet],
-    mbNetwork: Option[HeadPeerNetwork],
-    block: Block,
-    utxosWithdrawn: UtxosSet
-): L1BlockEffect =
-    ???
-//    block.blockHeader.blockType match
-//        case Minor => ()
-//        case Major =>
-//            // Create settlement tx draft
-//            val txRecipe = SettlementRecipe(
-//              block.blockHeader.versionMajor,
-//              block.blockBody.depositsAbsorbed,
-//              utxosWithdrawn
-//            )
-//            val Right(settlementTxDraft: SettlementTx) =
-//                settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-//            mbOwnPeer /\ mbNetwork match
-//                case Some(ownPeer) -> Some(network) =>
-//                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
-//                    // TODO: broadcast ownWit
-//
-//                    // Confirm block
-//                    val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
-//
-//                    TxDump.dumpMultisigTx(settlementTxDraft)
-//
-//                    // L1 effect
-//                    val wits = acksMajorCombined.map(_.settlement) + ownWit
-//                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
-//                    // val serializedTx = serializeTxHex(settlementTx)
-//
-//                    settlementTx
-//                case _ => // used in MBT
-//                    settlementTxDraft
-//        case Final =>
-//            // Create finalization tx draft
-//            val recipe =
-//                FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
-//            val Right(finalizationTxDraft: FinalizationTx) =
-//                finalizationTxBuilder.buildFinalizationTxDraft(recipe)
-//
-//            mbOwnPeer /\ mbNetwork match
-//                case Some(ownPeer) -> Some(network) =>
-//                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
-//                    // TODO: broadcast ownWit
-//
-//                    // Confirm block
-//                    val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
-//
-//                    // L1 effect
-//                    val wits = acksFinalCombined.map(_.finalization) + ownWit
-//                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitnessMultisig)
-//                    // val serializedTx = serializeTxHex(finalizationTx)
-//
-//                    finalizationTx
-//                case _ => // used in MBT
-//                    finalizationTxDraft
