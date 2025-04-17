@@ -14,10 +14,10 @@ class HeadPeerNetworkWS(
     transport: HeadPeerNetworkTransportWS
 ) extends HeadPeerNetwork:
 
-    private var dispatcherRef: ActorRef[IncomingDispatcher] = _
+    private var dispatcher: ActorRef[IncomingDispatcher] = _
 
-    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit =
-        this.dispatcherRef = dispatcherRef
+    def setDispatcher(dispatcher: ActorRef[IncomingDispatcher]): Unit =
+        this.dispatcher = dispatcher
 
     private val log = Logger(getClass)
 
@@ -28,59 +28,39 @@ class HeadPeerNetworkWS(
     }
 
     override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
+        log.info(s"reqVerificationKeys")
         val seq = transport.nextSeq
         val req = ReqVerKey()
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
     override def reqInit(req: ReqInit): TxId =
+        log.info(s"reqInit: $req")
         requireHeadPeersAreKnown(req.otherHeadPeers)
-
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
     override def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx =
+        log.info(s"reqRefundLater: $req")
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
     override def reqEventL2(req: ReqEventL2): Unit =
+        log.info(s"reqEventL2: $req")
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
     override def reqMinor(req: ReqMinor): Unit =
         log.info(s"ReqMinor for block: $req.block")
-
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
-
+        val ret = dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
+        log.info(s"reqMinor done")
+    
     override def reqMajor(req: ReqMajor): Unit =
         log.info(s"ReqMajor for block: $req.block")
-
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
     override def reqFinal(req: ReqFinal): Unit =
         log.info(s"ReqFinal for block: $req.block")
-
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastReq(Some(seq))
-        val sendAck = transport.broadcastAck(ownPeer, seq)
-
-        dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()

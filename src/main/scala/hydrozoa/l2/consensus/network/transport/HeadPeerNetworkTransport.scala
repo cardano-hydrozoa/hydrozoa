@@ -12,7 +12,6 @@ import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.node.TestPeer
-import hydrozoa.node.server.Node
 import ox.*
 import ox.channels.*
 import ox.flow.Flow
@@ -93,19 +92,15 @@ trait HeadPeerNetworkTransport:
 
 end HeadPeerNetworkTransport
 
-/** An interface to handle incoming messages that the node should provide.
+/** An interface to handle incoming messages that the node should provide. FIXME: move to a separate
+  * file
   */
 trait IncomingDispatcher:
-    def setNodeActorRef(nodeRef: ActorRef[Node]): Unit // FIXME
+    def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit // FIXME
     def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit // FIXME
-    def dispatchMessage(anyMsg: AnyMsg, reply: Ack => Long)(using Ox): Unit
-    def spawnActorProactively(
-        from: TestPeer,
-        seq: Long,
-        req: Req,
-        send: Req => Long,
-        reply: Ack => Long
-    ): req.resultType
+    def dispatchMessage(anyMsg: AnyMsg): Unit
+    def spawnActorProactively(from: TestPeer, seq: Long, req: Req): Source[req.resultType]
+    def run()(using Ox): Unit
 
 sealed trait Aux
 
@@ -257,11 +252,15 @@ given anyMsgSchema: Schema[AnyMsg] =
 class HeadPeerNetworkTransportWS(
     ownPeer: TestPeer,
     ownPort: Int,
-    peers: Map[TestPeer, Uri],
-    handler: IncomingDispatcher
+    peers: Map[TestPeer, Uri]
 ) extends HeadPeerNetworkTransport:
 
     private val log = Logger(getClass)
+
+    private var dispatcher: ActorRef[IncomingDispatcher] = _
+
+    def setDispatcher(dispatcher: ActorRef[IncomingDispatcher]): Unit =
+        this.dispatcher = dispatcher
 
     // Global channel for incoming messages
     private val incoming: Channel[AnyMsg] = Channel.unlimited
@@ -354,7 +353,8 @@ class HeadPeerNetworkTransportWS(
                 Flow.fromSource(outgoing)
                     .runForeach(msg =>
                         log.info(s"fanning out msg: $msg")
-                        outgoingChannels.foreach(ch => ch.send(msg)))
+                        outgoingChannels.foreach(ch => ch.send(msg))
+                    )
             }
 
             // Incoming channel reader
@@ -364,7 +364,7 @@ class HeadPeerNetworkTransportWS(
                     .runForeach(anyMsg =>
                         log.info(s"Handling incoming msg: $anyMsg")
                         val (from, seq) = anyMsg.origin
-                        handler.dispatchMessage(anyMsg, broadcastAck(from, seq))
+                        dispatcher.tell(_.dispatchMessage(anyMsg))
                     )
             }
 
@@ -415,26 +415,15 @@ class HeadPeerNetworkTransportWS(
         log.info(s"Done!")
         next
 
-//    override def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
-//        val next = nextSeq
-//        val aux = ReqAux(ownPeer, next)
-//        val anyMsg = AnyMsg(req, aux)
-//        log.info(s"Sending a req for sync acks: $anyMsg")
-//        val ch: Channel[Ack] = Channel.bufferedDefault
-//        subscriptions.put(next, ch)
-//        outgoing.send(anyMsg)
-//        ch.asInstanceOf[Source[req.ackType]]
-
 end HeadPeerNetworkTransportWS
 
 object HeadPeerNetworkTransportWS:
     def apply(
         ownPeer: TestPeer,
         ownPort: Int,
-        others: Map[TestPeer, Uri],
-        handler: IncomingDispatcher
+        others: Map[TestPeer, Uri]
     ): HeadPeerNetworkTransportWS =
-        new HeadPeerNetworkTransportWS(ownPeer, ownPort, others, handler)
+        new HeadPeerNetworkTransportWS(ownPeer, ownPort, others)
 
 given anyMsg1WSFCodec: Codec[WebSocketFrame, AnyMsg, CodecFormat.Json] =
     new Codec[WebSocketFrame, AnyMsg, CodecFormat.Json] {

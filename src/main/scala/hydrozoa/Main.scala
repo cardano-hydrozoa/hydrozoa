@@ -15,6 +15,7 @@ import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
 import hydrozoa.l2.consensus.network.transport.{
     AnyMsg,
+    HeadPeerNetworkTransport,
     HeadPeerNetworkTransportWS,
     IncomingDispatcher
 }
@@ -24,7 +25,8 @@ import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import ox.*
-import ox.channels.{Actor, ActorRef, Source}
+import ox.channels.{Actor, ActorRef, Channel, Source}
+import ox.flow.Flow
 import ox.logback.InheritableMDC
 import sttp.client4.UriContext
 import sttp.model.Uri
@@ -136,16 +138,17 @@ def mkHydrozoaNode2(
         private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] =
             mutable.Map.empty
 
-        private var nodeRef: ActorRef[Node] = _
+        private var transport: ActorRef[HeadPeerNetworkTransportWS] = _
 
-        override def setNodeActorRef(nodeRef: ActorRef[Node]): Unit = this.nodeRef = nodeRef
+        override def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit =
+            this.transport = transport
 
         private var consensusActorFactory: ConsensusActorFactory = _
 
         override def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit =
             this.consensusActorFactory = consensusActorFactory
 
-        def dispatchMessage(msg: AnyMsg, reply: Ack => Long)(using Ox): Unit =
+        def dispatchMessage(msg: AnyMsg): Unit =
             log.info(s"Dispatching incoming message: $msg")
 
             val origin = msg.origin
@@ -153,17 +156,19 @@ def mkHydrozoaNode2(
                 case Some(actor) =>
                     log.info(s"Actor was found for origin: $origin")
                     msg.asReqOrAck match
-                        case Left(_, _, req) =>
+                        case Left(originPeer, originSeq, req) =>
                             // FIXME: add check whether init has not been called
                             val acks = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
                             log.info(s"Replying with acks: $acks")
-                            acks.foreach(reply)
-                        case Right(_, _, _, _, ack) =>
-                            //actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
-                            log.info(s"val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))")
+                            acks.foreach(ack =>
+                                transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            )
+                        case Right(_, _, originPeer, originSeq, ack) =>
                             val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))
                             log.info(s"Replying with mbAck: $mbAck")
-                            mbAck.foreach(reply)
+                            mbAck.foreach(ack =>
+                                transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            )
                 case None =>
                     log.info(s"Actor was NOT found for origin: $origin")
                     // TODO: First reaction: here would be nice to check, that if at least one
@@ -175,44 +180,65 @@ def mkHydrozoaNode2(
                     //  get a message about the next block before we finish with the previous one.
                     //  This situation should be definitely tested in simulation.
                     val mbNewActor = msg.asReqOrAck match
-                        case Left(_, _, req) =>
+                        case Left(originPeer, originSeq, req) =>
                             val (newActor, acks) = consensusActorFactory.spawnByReq(req)
-                            acks.foreach(reply)
+                            acks.foreach(ack =>
+                                transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            )
                             Some(newActor)
-                        case Right(_, _, _, _, ack) =>
+                        case Right(_, _, originPeer, originSeq, ack) =>
                             val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack)
-                            mbAck.foreach(reply)
+                            mbAck.foreach(ack =>
+                                transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            )
                             mbActor
                     mbNewActor match
                         case Some(newActor) =>
-                            val newActorRef = Actor.create(newActor)
+                            spawnActorReactivelyIn.send(newActor)
+                            val newActorRef = spawnActorReactivelyOut.receive()
+                            log.info(s"Adding new actor for $origin")
                             actors.put(origin, newActorRef)
                         case None => ()
 
         override def spawnActorProactively(
             from: TestPeer,
             seq: Long,
-            req: Req,
-            send: Req => Long,
-            reply: Ack => Long
-        ): req.resultType =
-            supervised {
-                val origin = (from, seq)
-                val (newActor, acks) = consensusActorFactory.spawnByReq(req)
-                val newActorRef = Actor.create(newActor)
-                actors.put(origin, newActorRef)
-                send(req)
-                acks.foreach(reply)
-                log.info("Getting result source...")
-                val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
-                log.info("Receiving from source...")
-                val ret = source.receive()
-                log.info("Leaving proactive supervised context")
-                ret
-            }
+            req: Req
+        ): Source[req.resultType] =
+            // supervised {
+            val origin = (from, seq)
+            log.info("Spawning actor proactively...")
+            val (newActor, acks) = consensusActorFactory.spawnByReq(req)
+            // val newActorRef = Actor.create(newActor)
+
+            spawnActorReactivelyIn.send(newActor)
+            val newActorRef = spawnActorReactivelyOut.receive()
+            actors.put(origin, newActorRef)
+            transport.tell(_.broadcastReq(Some(seq))(req))
+            acks.foreach(ack => transport.tell(_.broadcastAck(from, seq)(ack)))
+            log.info("Getting result source...")
+            val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
+            // log.info("Receiving from source...")
+            // val ret = source.receive()
+            // log.info("Leaving proactive supervised context")
+            // ret
+            source
+        // }
+
+        private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
+        private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
+
+        def run()(using Ox): Unit =
+            log.info("running reactive spawner...")
+            Flow.fromSource(spawnActorReactivelyIn)
+                .runForeach(actor =>
+                    log.info(s"reactively spanning: ${actor.getClass}")
+                    val actorRef = Actor.create(actor)
+                    spawnActorReactivelyOut.send(actorRef)
+                )
 
     val networkTransport =
-        HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers, incomingMsgDispatcher)
+        HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers)
 
     val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, networkTransport)
 
@@ -296,8 +322,6 @@ object HydrozoaNode extends OxApp:
 
                 val nodeActorRef = Actor.create(node)
 
-                dispatcher.setNodeActorRef(nodeActorRef)
-
                 val nodeStateActor = Actor.create(nodeState)
                 val walletActor = Actor.create(ownPeerWallet)
                 val cardanoActor = Actor.create(cardano)
@@ -326,10 +350,14 @@ object HydrozoaNode extends OxApp:
                     )
                 dispatcher.setConsensusActorFactory(factory)
 
+                val transportRef = Actor.create(transport)
+                dispatcher.setTransport(transportRef)
+
                 val dispatcherActor = Actor.create(dispatcher)
 
-                network.setDispatcherActorRef(dispatcherActor)
-
+                network.setDispatcher(dispatcherActor)
+                transport.setDispatcher(dispatcherActor)
+                forkDiscard { dispatcher.run() }
                 forkDiscard { transport.run() }
 
                 val serverBinding =
@@ -339,5 +367,5 @@ object HydrozoaNode extends OxApp:
             }
         }
 
-        log.info(s"Started Hydrozoa node with args: ${args.mkString(", ")}!")
+        log.info(s"Started Hydrozoa node with args: ${args.mkString(", ")}")
         ExitCode.Success

@@ -350,6 +350,7 @@ class HeadStateGlobal(
         override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
         override def applyBlockRecord(record: BlockRecord): Unit =
+            log.info("applyBlockRecord")
             self.blocksConfirmedL2.append(record)
 
             val l2BlockEffect_ = record.l2Effect.asInstanceOf[MinorBlockL2Effect]
@@ -359,8 +360,8 @@ class HeadStateGlobal(
             val blockNum = record.block.blockHeader.blockNum
 
             val mbGenesis = record.l2Effect match
-                case (_, mbGenesis): MajorBlockL2Effect => mbGenesis
-                case _                                  => None
+                case majorEffect: MajorBlockL2Effect => majorEffect._2
+                case _                               => None
 
             confirmMempoolEvents(
               blockNum,

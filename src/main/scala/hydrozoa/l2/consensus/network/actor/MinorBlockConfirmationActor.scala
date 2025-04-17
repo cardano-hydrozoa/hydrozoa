@@ -41,6 +41,8 @@ private class MinorBlockConfirmationActor(
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
             // Dump state
             // dumpState()
+            // TODO: the absense of this line is a good test!
+            resultChannel.send(())
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")

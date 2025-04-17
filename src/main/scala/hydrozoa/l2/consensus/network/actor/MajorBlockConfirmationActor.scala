@@ -79,6 +79,7 @@ private class MajorBlockConfirmationActor(
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
             // Dump state
             // dumpState()
+            resultChannel.send(())
 
     override def deliver(ack: AckType): Option[AckType] =
         log.debug(s"deliver ack: $ack")

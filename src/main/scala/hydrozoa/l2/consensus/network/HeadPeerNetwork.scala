@@ -19,7 +19,7 @@ import scala.collection.mutable
 // FIXME: revise return types?
 trait HeadPeerNetwork {
 
-    def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit
+    def setDispatcher(dispatcherRef: ActorRef[IncomingDispatcher]): Unit
 
     /** @return
       *   set iof verification keys for all known peers

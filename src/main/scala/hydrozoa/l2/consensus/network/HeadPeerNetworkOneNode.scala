@@ -129,4 +129,4 @@ class HeadPeerNetworkOneNode(
             )
         ???
 
-    override def setDispatcherActorRef(dispatcherRef: ActorRef[IncomingDispatcher]): Unit = ???
+    override def setDispatcher(dispatcherRef: ActorRef[IncomingDispatcher]): Unit = ???
