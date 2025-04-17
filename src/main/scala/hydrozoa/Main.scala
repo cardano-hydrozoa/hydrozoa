@@ -271,11 +271,19 @@ def mkHydrozoaNode2(
 
 val peers = Map.from(
   List(
-    Alice -> uri"ws://localhost:4937/ws",
-    Bob -> uri"ws://localhost:4938/ws",
-    Carol -> uri"ws://localhost:4939/ws"
+    Alice -> uri"ws://alice:4937/ws",
+    Bob -> uri"ws://bob:4938/ws",
+    Carol -> uri"ws://carol:4939/ws"
   )
 )
+
+//val peers = Map.from(
+//    List(
+//        Alice -> uri"ws://localhost:4937/ws",
+//        Bob -> uri"ws://localhost:4938/ws",
+//        Carol -> uri"ws://localhost:4939/ws"
+//    )
+//)
 
 object HydrozoaNode extends OxApp:
 

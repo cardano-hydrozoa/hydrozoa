@@ -76,6 +76,7 @@ class NodeRestApi(node: ActorRef[Node]):
 
     def mkServer(port: Int): NettySyncServer =
         NettySyncServer()
+            .host("0.0.0.0")
             .port(port)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
 

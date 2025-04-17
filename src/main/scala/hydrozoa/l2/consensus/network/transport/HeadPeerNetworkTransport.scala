@@ -371,6 +371,7 @@ class HeadPeerNetworkTransportWS(
             // Server
             val _ = useInScope(
               NettySyncServer()
+                  .host("0.0.0.0")
                   .port(ownPort)
                   .addEndpoint(wsConsensusEndpoint())
                   .start()

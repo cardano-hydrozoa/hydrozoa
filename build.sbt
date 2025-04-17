@@ -1,3 +1,15 @@
+enablePlugins(
+  JavaAppPackaging,
+  DockerPlugin
+)
+
+Compile / mainClass := Some("hydrozoa.HydrozoaNode")
+Docker / packageName := "cardano-hydrozoa/hydrozoa"
+dockerBaseImage := "openjdk:21-jdk"
+dockerExposedPorts ++= Seq(4937)
+//dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
+//dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
+
 // Main application
 lazy val core = (project in file("."))
     .settings(
