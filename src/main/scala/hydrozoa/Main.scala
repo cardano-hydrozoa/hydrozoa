@@ -13,7 +13,11 @@ import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, Settleme
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
-import hydrozoa.l2.consensus.network.transport.{AnyMsg, HeadPeerNetworkTransportWS, IncomingDispatcher}
+import hydrozoa.l2.consensus.network.transport.{
+    AnyMsg,
+    HeadPeerNetworkTransportWS,
+    IncomingDispatcher
+}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.NodeRestApi
@@ -26,6 +30,7 @@ import sttp.client4.UriContext
 import sttp.model.Uri
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 def mkHydrozoaNode(
     ownPeerWallet: Wallet,
@@ -150,27 +155,34 @@ def mkHydrozoaNode2(
                     msg.asReqOrAck match
                         case Left(_, _, req) =>
                             // FIXME: add check whether init has not been called
-                            val ack = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
-                            reply(ack)
+                            val acks = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
+                            log.info(s"Replying with acks: $acks")
+                            acks.foreach(reply)
                         case Right(_, _, _, _, ack) =>
-                            actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
+                            //actor.tell(act => act.deliver(ack.asInstanceOf[act.AckType]))
+                            log.info(s"val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))")
+                            val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))
+                            log.info(s"Replying with mbAck: $mbAck")
+                            mbAck.foreach(reply)
                 case None =>
                     log.info(s"Actor was NOT found for origin: $origin")
-                    // TODO: First reaction: here would be nice to check, that if at least one 
-                    //  block-related consensus actor is already here we must indicate an 
-                    //  erroneous condition: under normal operation there should be exactly 
+                    // TODO: First reaction: here would be nice to check, that if at least one
+                    //  block-related consensus actor is already here we must indicate an
+                    //  erroneous condition: under normal operation there should be exactly
                     //  one block in work.
                     //  After some thinking: no, we should not, since if the next leader got all
-                    //  confirmations and start working on the next block theoretically we can 
+                    //  confirmations and start working on the next block theoretically we can
                     //  get a message about the next block before we finish with the previous one.
-                    //  This situation should be definitely tested in simulation. 
+                    //  This situation should be definitely tested in simulation.
                     val mbNewActor = msg.asReqOrAck match
                         case Left(_, _, req) =>
-                            val (newActor, ack) = consensusActorFactory.spawnByReq(req)
-                            reply(ack)
+                            val (newActor, acks) = consensusActorFactory.spawnByReq(req)
+                            acks.foreach(reply)
                             Some(newActor)
                         case Right(_, _, _, _, ack) =>
-                            consensusActorFactory.spawnByAck(ack)
+                            val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack)
+                            mbAck.foreach(reply)
+                            mbActor
                     mbNewActor match
                         case Some(newActor) =>
                             val newActorRef = Actor.create(newActor)
@@ -186,13 +198,17 @@ def mkHydrozoaNode2(
         ): req.resultType =
             supervised {
                 val origin = (from, seq)
-                val (newActor, ack) = consensusActorFactory.spawnByReq(req)
+                val (newActor, acks) = consensusActorFactory.spawnByReq(req)
                 val newActorRef = Actor.create(newActor)
                 actors.put(origin, newActorRef)
                 send(req)
-                reply(ack)
+                acks.foreach(reply)
+                log.info("Getting result source...")
                 val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
-                source.receive()
+                log.info("Receiving from source...")
+                val ret = source.receive()
+                log.info("Leaving proactive supervised context")
+                ret
             }
 
     val networkTransport =
@@ -221,7 +237,7 @@ def mkHydrozoaNode2(
       nodeState,
       ownPeerWallet,
       initTxBuilder,
-      refundTxBuilder, 
+      refundTxBuilder,
       settlementTxBuilder,
       finalizationTxBuilder
     )
@@ -306,7 +322,7 @@ object HydrozoaNode extends OxApp:
                       initTxBuilder,
                       refundTxBuilder,
                       settlementTxBuilder,
-                      finalizationTxBuilder,
+                      finalizationTxBuilder
                     )
                 dispatcher.setConsensusActorFactory(factory)
 

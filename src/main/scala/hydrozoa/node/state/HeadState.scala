@@ -109,9 +109,9 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         mbGenesis: Option[(TxId, SimpleGenesis)],
-        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
+        depositsAbsorbed: Seq[UtxoIdL1]
     ): Unit
-    def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit
     def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -306,11 +306,15 @@ class HeadStateGlobal(
         def poolEventL2(event: NonGenesisL2): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
+            log.info(
+              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
             if this.isBlockLeader && !this.isBlockPending then
                 log.info("Producing block due to getting new L2 event...")
                 produceBlock(false)
 
         private def produceBlock(finalizing: Boolean): Unit = {
+            self.isBlockPending = Some(true)
             val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
                 blockProductionActor.ask(
                   _.produceBlock(
@@ -336,6 +340,9 @@ class HeadStateGlobal(
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
             self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
+            log.info(
+              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
             if this.isBlockLeader && !this.isBlockPending then
                 log.info("Producing new block due to observing a new deposit utxo...")
                 produceBlock(false)
@@ -350,27 +357,41 @@ class HeadStateGlobal(
 
             val body = record.block.blockBody
             val blockNum = record.block.blockHeader.blockNum
+
+            val mbGenesis = record.l2Effect match
+                case (_, mbGenesis): MajorBlockL2Effect => mbGenesis
+                case _                                  => None
+
             confirmMempoolEvents(
               blockNum,
               body.eventsValid,
-              None,
-              body.eventsInvalid
+              mbGenesis,
+              body.eventsInvalid,
+              body.depositsAbsorbed
             )
 
             val nextBlockNum = record.block.blockHeader.blockNum + 1
             self.isBlockPending = Some(false)
-            self.isBlockLeader = Some(nextBlockNum % this.blockLeadTurn == 0)
+            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
+
+            log.info(
+              s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
 
         // FIXME: this is too complex for state management, should be a part of effect
+        // FIXME: naming
         override def confirmMempoolEvents(
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
+            depositsAbsorbed: Seq[UtxoIdL1]
         ): Unit =
             // 1. Add valid events
+            log.info(s"Add valid events: $eventsValid")
             eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
             // 2. Add genesis if exists
+            log.info(s"Add genesis if exists: $mbGenesis")
             mbGenesis.foreach((txId, genesis) =>
                 // FIXME: timeCurrent
                 val event = AdaSimpleLedger.mkGenesisEvent(genesis)
@@ -378,13 +399,12 @@ class HeadStateGlobal(
                 // Dump L2 tx
                 TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
             )
-            // 3. Remove invalid events
+            // 3. Add handled deposits
+            self.depositHandled.addAll(depositsAbsorbed.toSet)
+            // 4. Remove invalid events
             log.info(s"Removing invalid events: $blockEventsInvalid")
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
-
-        override def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
-            deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
 
         override def finalizeHead(): Unit =
             self.headPhase = Finalizing

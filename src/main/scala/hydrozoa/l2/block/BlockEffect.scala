@@ -20,32 +20,6 @@ object BlockEffect:
 //    block.blockHeader.blockType match
 //        case Minor => ()
 //        case Major =>
-//            // Create settlement tx draft
-//            val txRecipe = SettlementRecipe(
-//              block.blockHeader.versionMajor,
-//              block.blockBody.depositsAbsorbed,
-//              utxosWithdrawn
-//            )
-//            val Right(settlementTxDraft: SettlementTx) =
-//                settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-//            mbOwnPeer /\ mbNetwork match
-//                case Some(ownPeer) -> Some(network) =>
-//                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
-//                    // TODO: broadcast ownWit
-//
-//                    // Confirm block
-//                    val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
-//
-//                    TxDump.dumpMultisigTx(settlementTxDraft)
-//
-//                    // L1 effect
-//                    val wits = acksMajorCombined.map(_.settlement) + ownWit
-//                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
-//                    // val serializedTx = serializeTxHex(settlementTx)
-//
-//                    settlementTx
-//                case _ => // used in MBT
-//                    settlementTxDraft
 //        case Final =>
 //            // Create finalization tx draft
 //            val recipe =

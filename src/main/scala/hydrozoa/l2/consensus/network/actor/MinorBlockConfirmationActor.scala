@@ -49,11 +49,11 @@ private class MinorBlockConfirmationActor(
         tryMakeResult()
         None
 
-    override def init(req: ReqType): AckType =
+    override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
-        this.req = req
-        // The leader can skip validation since its own block.
-        val (utxosActive, mbGenesis, utxosWithdrawn) =
+
+        // Block validation (the leader can skip validation since its own block).
+        val (utxosActive, _, _) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
@@ -75,24 +75,31 @@ private class MinorBlockConfirmationActor(
                   prevHeader,
                   stateL2Cloned,
                   poolEventsL2,
-                  depositUtxos,
+                  depositUtxos, // FIXME: do we need it for a minor block?
                   false
                 )
                 resolution match
-                    case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) => (utxosActive, mbGenesis, utxosWithdrawn)
-                    case _ => throw RuntimeException("Block validation filed.")
+                    case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
+                        (utxosActive, mbGenesis, utxosWithdrawn)
+                    case resolution =>
+                        throw RuntimeException(s"Minor block validation failed: $resolution")
 
+        // Update local state
+        this.req = req
+        this.utxosActive = utxosActive
+
+        // Prepare own acknowledgement
         val (me, signature) =
             walletActor.ask(w => (w.getWalletId, "signature_stub"))
+
         // FIXME: how do we decide whether we want to wrap up the head?
         // Answer: User API should provide a method for that, so with the next
         // acknowledgment the node can indicate they want to finalize the head.
         val ownAck: AckType = AckMinor(me, signature, false)
         deliver(ownAck)
-        ownAck
+        Seq(ownAck)
 
-    private val resultChannel: Channel[Map[WalletId, VerificationKeyBytes]] = Channel.rendezvous
-//    private def resultChannel(using req: ReqType): Channel[req.resultType] = Channel.rendezvous
+    private val resultChannel: Channel[Unit] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

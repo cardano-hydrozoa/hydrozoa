@@ -57,11 +57,12 @@ class MultisigL1EventSource(
                           )
                         )
                         // repeat polling for head address forever
-                        val nativeScriptBB = BBNativeScript.deserializeScriptRef(headNativeScript.bytes)
+                        val nativeScriptBB =
+                            BBNativeScript.deserializeScriptRef(headNativeScript.bytes)
                         val treasuryTokenAmount = asset(
-                            nativeScriptBB.getPolicyId,
-                            beaconTokenName.tokenName,
-                            BigInteger.valueOf(1)
+                          nativeScriptBB.getPolicyId,
+                          beaconTokenName.tokenName,
+                          BigInteger.valueOf(1)
                         )
                         // FIXME: stop once head is closed
                         // FIXME: repeat config
@@ -85,7 +86,7 @@ class MultisigL1EventSource(
         case Deposit(utxo: BBUtxo)
 
     private def utxoType(treasuryTokenAmount: Amount)(utxo: BBUtxo): MultisigUtxoType =
-        if utxo.getAmount.contains(treasuryTokenAmount) 
+        if utxo.getAmount.contains(treasuryTokenAmount)
         then MultisigUtxoType.Treasury(utxo)
         else MultisigUtxoType.Deposit(utxo)
 
@@ -93,19 +94,29 @@ class MultisigL1EventSource(
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        mkUtxo[L1, TreasuryTag](utxoId.txId, utxoId.outputIx, utxo.getAddress |> AddressBechL1.apply, coins)
+        mkUtxo[L1, TreasuryTag](
+          utxoId.txId,
+          utxoId.outputIx,
+          utxo.getAddress |> AddressBechL1.apply,
+          coins
+        )
 
     private def mkDepositUtxo(utxo: BBUtxo): DepositUtxo =
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        mkUtxo[L1, DepositTag](utxoId.txId, utxoId.outputIx, utxo.getAddress |> AddressBechL1.apply, coins)
+        mkUtxo[L1, DepositTag](
+          utxoId.txId,
+          utxoId.outputIx,
+          utxo.getAddress |> AddressBechL1.apply,
+          coins
+        )
 
     private def updateL1State(
         headAddress: AddressBechL1,
         treasuryTokenAmount: Amount
     ): Unit =
-        log.info("Polling head address...")
+        log.trace("Polling head address...")
         val utxos = cardano.ask(_.utxosAtAddress(headAddress))
         val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
         // beacon token -> treasury
@@ -121,11 +132,11 @@ class MultisigL1EventSource(
             val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
 
             val utxoType_ = utxoType(treasuryTokenAmount)
-            
+
             utxos.foreach(utxo =>
                 val utxoId = UtxoId[L1]
                     .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
-                utxoType_(utxo ) match
+                utxoType_(utxo) match
                     case MultisigUtxoType.Treasury(utxo) =>
                         if currentL1State.treasuryUtxo.ref != utxoId then
                             mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))

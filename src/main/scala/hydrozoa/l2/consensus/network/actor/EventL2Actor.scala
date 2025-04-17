@@ -15,13 +15,13 @@ private class EventL2Actor(
     override type ReqType = ReqEventL2
     override type AckType = AckUnit
 
-    override def deliver(_ack: AckType): Option[AckUnit] = None
+    override def deliver(_ack: AckType): Option[AckType] = None
 
-    override def init(req: ReqType): AckType =
+    override def init(req: ReqType): Seq[AckType] =
         log.info(s"init req: $req")
         stateActor.tell(_.head.openPhase(_.poolEventL2(req.eventL2)))
         resultChannel.send(())
-        AckUnit
+        Seq(AckUnit)
 
     private val resultChannel: Channel[Unit] = Channel.buffered(1)
 //    private def resultChannel(using req: ReqType): Channel[req.resultType] = Channel.rendezvous

@@ -36,7 +36,7 @@ private class InitHeadActor(
     private var seedAddress: AddressBechL1 = _
     private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
 
-    override def init(req: ReqInit): AckInit =
+    override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
 
         val headPeers = req.otherHeadPeers + req.initiator
@@ -73,7 +73,7 @@ private class InitHeadActor(
         this.beaconTokenName = beaconTokenName
         this.seedAddress = seedAddress
         deliver(ownAck)
-        ownAck
+        Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
@@ -115,7 +115,7 @@ private class InitHeadActor(
                     // FIXME: what should go next here?
                     throw RuntimeException(msg)
 
-    private val resultChannel: Channel[TxId] = Channel.rendezvous
+    private val resultChannel: Channel[TxId] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

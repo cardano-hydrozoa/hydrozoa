@@ -39,15 +39,15 @@ private class VerificationKeyActor(
         tryMakeResult()
         None
 
-    override def init(req: ReqType): AckType =
+    override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
         val (me, key) =
             walletActor.ask(w => (w.getWalletId, w.exportVerificationKeyBytes))
         val ownAck = AckVerKey(me, key)
         deliver(ownAck)
-        ownAck
+        Seq(ownAck)
 
-    private val resultChannel: Channel[Map[WalletId, VerificationKeyBytes]] = Channel.rendezvous
+    private val resultChannel: Channel[Map[WalletId, VerificationKeyBytes]] = Channel.buffered(1)
 //    private def resultChannel(using req: ReqType): Channel[req.resultType] = Channel.rendezvous
 
     override def result(using req: Req): Source[req.resultType] =

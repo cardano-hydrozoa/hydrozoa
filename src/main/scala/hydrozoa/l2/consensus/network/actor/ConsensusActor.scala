@@ -30,9 +30,9 @@ trait ConsensusActor:
       * @param req
       *   own or some else's Req*
       * @return
-      *   own Ack*
+      *   own Ack* -
       */
-    def init(req: ReqType): AckType
+    def init(req: ReqType): Seq[AckType]
 
     /** Handles an incoming ack, including own ack. Mostly is supposed to store the ack and to
       * attempt to produce the final result. Can be called multiple times. The semantics of
@@ -66,7 +66,7 @@ class ConsensusActorFactory(
 
     private val log = Logger(getClass)
 
-    def spawnByReq(req: Req): (ConsensusActor, Ack) =
+    def spawnByReq(req: Req): (ConsensusActor, Seq[Ack]) =
         log.info("spawnByReq")
         req match
             case req: ReqVerKey =>
@@ -98,43 +98,43 @@ class ConsensusActorFactory(
                 val ownAck = actor.init(req)
                 actor -> ownAck
 
-    def spawnByAck(ack: Ack): Option[ConsensusActor] =
+    def spawnByAck(ack: Ack): (Option[ConsensusActor], Option[Ack]) =
         log.info("spawnByAck")
         ack match
             case ack: AckVerKey =>
                 val actor = mkVerificationKeyActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckInit =>
                 val actor = mkInitHeadActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckRefundLater =>
                 val actor = mkRefundLaterActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> None
             case ack: AckUnit =>
-                None
+                (None, None)
             case ack: AckMinor =>
                 val actor = mkMinorBlockActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckMajor =>
                 val actor = mkMajorBlockActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckMajor2 =>
                 val actor = mkMajorBlockActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckFinal =>
                 val actor = mkFinalBlockActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
             case ack: AckFinal2 =>
                 val actor = mkFinalBlockActor
-                actor.deliver(ack)
-                Some(actor)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
 
     private def mkVerificationKeyActor =
         new VerificationKeyActor(stateActor, walletActor)

@@ -65,14 +65,14 @@ private class FinalBlockConfirmationActor(
         tryMakeResult()
         mbAck
 
-    override def init(req: ReqType): AckFinal =
+    override def init(req: ReqType): Seq[AckFinal] =
         log.trace(s"init req: $req")
         val (me) = walletActor.ask(w => (w.getWalletId))
         val ownAck = AckFinal(me, Seq.empty)
         deliver(ownAck)
-        ownAck
+        Seq(ownAck)
 
-    private val resultChannel: Channel[Map[WalletId, VerificationKeyBytes]] = Channel.rendezvous
+    private val resultChannel: Channel[Map[WalletId, VerificationKeyBytes]] = Channel.buffered(1)
 //    private def resultChannel(using req: ReqType): Channel[req.resultType] = Channel.rendezvous
 
     override def result(using req: Req): Source[req.resultType] =

@@ -40,6 +40,22 @@ import hydrozoa.l2.consensus.network.{
     ackRefundLaterSchema,
     reqInitCodec,
     reqInitSchema,
+    reqMinorCodec,
+    reqMinorSchema,
+    reqMajorCodec,
+    reqMajorSchema,
+    reqFinalCodec,
+    reqFinalSchema,
+    ackMinorCodec,
+    ackMinorSchema,
+    ackMajorCodec,
+    ackMajorSchema,
+    ackMajor2Codec,
+    ackMajor2Schema,
+    ackFinalCodec,
+    ackFinalSchema,
+    ackFinal2Codec,
+    ackFinal2Schema,
     reqVerKeySchema,
     reqRefundLaterCodec,
     reqRefundLaterSchema,
@@ -57,22 +73,23 @@ trait HeadPeerNetworkTransport:
       */
     def nextSeq: Long
 
-    /** Sends a message to all peers, and don't wait for a response.
-      * @param msg
+    /** Sends a request to all peers, returns immediately.
       */
-    def broadcastMessage(seq: Option[Long] = None)(req: Req): Long
+    def broadcastReq(seq: Option[Long] = None)(req: Req): Long
 
-    def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long
-
-    /** Sends a message to all peers, and get back a source channel with replies that may get back.
-      * @param req
-      *   request
-      * @tparam R
-      *   type of request
-      * @return
-      *   source of dependent responses
+    /** Sends an ack as a reply to a request.
       */
-    def broadcastAndCollect[R <: Req](req: R): Source[req.ackType]
+    def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long
+
+//    /** Sends a message to all peers, and get back a source channel with replies that may get back.
+//      * @param req
+//      *   request
+//      * @tparam R
+//      *   type of request
+//      * @return
+//      *   source of dependent responses
+//      */
+//    def broadcastAndCollect[R <: Req](req: R): Source[req.ackType]
 
 end HeadPeerNetworkTransport
 
@@ -114,6 +131,14 @@ enum AnyMsg:
     case AckRefundLaterMsg(content: AckRefundLater, aux: AckAux)
     case ReqEventL2Msg(content: ReqEventL2, aux: ReqAux)
     case AckUnitMsg(aux: AckAux)
+    case ReqMinorMsg(content: ReqMinor, aux: ReqAux)
+    case AckMinorMsg(content: AckMinor, aux: AckAux)
+    case ReqMajorMsg(content: ReqMajor, aux: ReqAux)
+    case AckMajorMsg(content: AckMajor, aux: AckAux)
+    case AckMajor2Msg(content: AckMajor2, aux: AckAux)
+    case ReqFinalMsg(content: ReqFinal, aux: ReqAux)
+    case AckFinalMsg(content: AckFinal, aux: AckAux)
+    case AckFinal2Msg(content: AckFinal2, aux: AckAux)
 
     def getFromSeq: (TestPeer, Long) = this match
         case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
@@ -124,12 +149,25 @@ enum AnyMsg:
         case AckRefundLaterMsg(_, aux) => aux.from -> aux.seq
         case ReqEventL2Msg(_, aux)     => aux.from -> aux.seq
         case AckUnitMsg(aux)           => aux.from -> aux.seq
+        case ReqMinorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMinorMsg(_, aux)       => aux.from -> aux.seq
+        case ReqMajorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMajorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMajor2Msg(_, aux)      => aux.from -> aux.seq
+        case ReqFinalMsg(_, aux)       => aux.from -> aux.seq
+        case AckFinalMsg(_, aux)       => aux.from -> aux.seq
+        case AckFinal2Msg(_, aux)      => aux.from -> aux.seq
 
     def asAck: Option[(TestPeer, Long, Ack)] = this match
         case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case AckInitMsg(content, aux)        => Some(aux.replyTo, aux.replyToSeq, content)
         case AckRefundLaterMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
         case AckUnitMsg(aux)                 => Some(aux.replyTo, aux.replyToSeq, AckUnit())
+        case AckMinorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckMajorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckMajor2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckFinalMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckFinal2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case _                               => None
 
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
@@ -148,7 +186,24 @@ enum AnyMsg:
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
             case ReqEventL2Msg(content, aux) =>
                 Left(aux.from, aux.seq, content)
-            case AckUnitMsg(aux) => Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, AckUnit())
+            case AckUnitMsg(aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, AckUnit())
+            case ReqMinorMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckMinorMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqMajorMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckMajorMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case AckMajor2Msg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqFinalMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckFinalMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case AckFinal2Msg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
 
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
@@ -163,6 +218,14 @@ enum AnyMsg:
         case AckRefundLaterMsg(content, _) => content
         case ReqEventL2Msg(content, _)     => content
         case AckUnitMsg(aux)               => AckUnit()
+        case ReqMinorMsg(content, _)       => content
+        case AckMinorMsg(content, _)       => content
+        case ReqMajorMsg(content, _)       => content
+        case AckMajorMsg(content, _)       => content
+        case AckMajor2Msg(content, _)      => content
+        case ReqFinalMsg(content, _)       => content
+        case AckFinalMsg(content, _)       => content
+        case AckFinal2Msg(content, _)      => content
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
@@ -170,12 +233,20 @@ object AnyMsg:
         case content: ReqInit        => ReqInitMsg(content, aux)
         case content: ReqRefundLater => ReqRefundLaterMsg(content, aux)
         case content: ReqEventL2     => ReqEventL2Msg(content, aux)
+        case content: ReqMinor       => ReqMinorMsg(content, aux)
+        case content: ReqMajor       => ReqMajorMsg(content, aux)
+        case content: ReqFinal       => ReqFinalMsg(content, aux)
 
     def apply[A <: Aux](msg: Ack, aux: AckAux): AnyMsg = msg match
         case content: AckVerKey      => AckVerKeyMsg(content, aux)
         case content: AckInit        => AckInitMsg(content, aux)
         case content: AckRefundLater => AckRefundLaterMsg(content, aux)
         case _: AckUnit              => AckUnitMsg(aux)
+        case content: AckMinor       => AckMinorMsg(content, aux)
+        case content: AckMajor       => AckMajorMsg(content, aux)
+        case content: AckMajor2      => AckMajor2Msg(content, aux)
+        case content: AckFinal       => AckFinalMsg(content, aux)
+        case content: AckFinal2      => AckFinal2Msg(content, aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make
@@ -201,9 +272,9 @@ class HeadPeerNetworkTransportWS(
     // A list of private channels for every peer we are talking to
     private val outgoingChannels: mutable.Buffer[Channel[AnyMsg]] = mutable.Buffer.empty
 
-    private val subscriptions: mutable.Map[Long, Channel[Ack]] = mutable.Map.empty
+    // private val subscriptions: mutable.Map[Long, Channel[Ack]] = mutable.Map.empty
 
-    private var counter: Long = 0 // FIXME: make thread-safe?
+    private var counter: Long = 0
 
     override def nextSeq: Long =
         val ret = counter + 1
@@ -281,7 +352,9 @@ class HeadPeerNetworkTransportWS(
             forkDiscard {
                 log.info("running outgoing fanout thread")
                 Flow.fromSource(outgoing)
-                    .runForeach(msg => outgoingChannels.foreach(ch => ch.send(msg)))
+                    .runForeach(msg =>
+                        log.info(s"fanning out msg: $msg")
+                        outgoingChannels.foreach(ch => ch.send(msg)))
             }
 
             // Incoming channel reader
@@ -290,14 +363,8 @@ class HeadPeerNetworkTransportWS(
                 Flow.fromSource(incoming)
                     .runForeach(anyMsg =>
                         log.info(s"Handling incoming msg: $anyMsg")
-                        val (from, seq) = anyMsg.getFromSeq
-                        // If an ack -- pass to possible subscription channel
-                        anyMsg.asAck match
-                            case Some(replyTo, replyToSeq, ack) =>
-                                subscriptions.get(replyToSeq).foreach(_.send(ack))
-                            case _ => ()
-                        // Always pass to the common dispatcher
-                        handler.dispatchMessage(anyMsg, broadcastMessage(from, seq))
+                        val (from, seq) = anyMsg.origin
+                        handler.dispatchMessage(anyMsg, broadcastAck(from, seq))
                     )
             }
 
@@ -328,32 +395,35 @@ class HeadPeerNetworkTransportWS(
             never
         }
 
-    override def broadcastMessage(seq: Option[Long])(req: Req): Long =
+    override def broadcastReq(seq: Option[Long])(req: Req): Long =
+        log.info(s"broadcastReq")
         val next: Long = seq.getOrElse(nextSeq)
         val aux = ReqAux(ownPeer, next)
         val anyMsg = AnyMsg(req, aux)
         log.info(s"Sending req: $anyMsg")
         outgoing.send(anyMsg)
+        log.info(s"Done!")
         next
 
-    override def broadcastMessage(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
-        log.info(s"broadcastMessage")
+    override def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
+        log.info(s"broadcastAck")
         val next = nextSeq
         val aux = AckAux(ownPeer, next, replyTo, replyToSeq)
         val anyMsg = AnyMsg(ack, aux)
-        log.info(s"Sending an ack: $anyMsg")
+        log.info(s"Sending ack: $anyMsg")
         outgoing.send(anyMsg)
+        log.info(s"Done!")
         next
 
-    override def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
-        val next = nextSeq
-        val aux = ReqAux(ownPeer, next)
-        val anyMsg = AnyMsg(req, aux)
-        log.info(s"Sending a req for sync acks: $anyMsg")
-        val ch: Channel[Ack] = Channel.bufferedDefault
-        subscriptions.put(next, ch)
-        outgoing.send(anyMsg)
-        ch.asInstanceOf[Source[req.ackType]]
+//    override def broadcastAndCollect[R <: Req](req: R): Source[req.ackType] =
+//        val next = nextSeq
+//        val aux = ReqAux(ownPeer, next)
+//        val anyMsg = AnyMsg(req, aux)
+//        log.info(s"Sending a req for sync acks: $anyMsg")
+//        val ch: Channel[Ack] = Channel.bufferedDefault
+//        subscriptions.put(next, ch)
+//        outgoing.send(anyMsg)
+//        ch.asInstanceOf[Source[req.ackType]]
 
 end HeadPeerNetworkTransportWS
 

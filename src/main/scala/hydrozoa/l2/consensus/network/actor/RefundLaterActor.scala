@@ -31,7 +31,7 @@ private class RefundLaterActor(
     private var txDraft: PostDatedRefundTx = _
     private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
 
-    override def init(req: ReqType): AckType =
+    override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
 
         val Right(txDraft) =
@@ -48,7 +48,7 @@ private class RefundLaterActor(
         this.req = req
         this.txDraft = txDraft
         deliver(ownAck)
-        ownAck
+        Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
@@ -71,7 +71,7 @@ private class RefundLaterActor(
             stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, refundTx)))
             resultChannel.send(refundTx)
 
-    private val resultChannel: Channel[PostDatedRefundTx] = Channel.rendezvous
+    private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

@@ -205,7 +205,7 @@ object BlockValidator:
         val keepAlive =
             blockType == Major && false // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
         if mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
-            (blockType == Minor || keepAlive)
+            !(blockType == Minor || keepAlive)
         then return Invalid(MinorBlockWasExpected)
 
         // 8. Return Invalid if any of these fails to hold:

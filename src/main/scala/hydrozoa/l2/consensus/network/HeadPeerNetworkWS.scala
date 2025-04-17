@@ -2,9 +2,7 @@ package hydrozoa.l2.consensus.network
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
-import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
-import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import hydrozoa.{TxId, VerificationKeyBytes}
@@ -32,8 +30,8 @@ class HeadPeerNetworkWS(
     override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
         val seq = transport.nextSeq
         val req = ReqVerKey()
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
@@ -41,22 +39,22 @@ class HeadPeerNetworkWS(
         requireHeadPeersAreKnown(req.otherHeadPeers)
 
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
     override def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx =
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
     override def reqEventL2(req: ReqEventL2): Unit =
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
@@ -64,8 +62,8 @@ class HeadPeerNetworkWS(
         log.info(s"ReqMinor for block: $req.block")
 
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
@@ -73,8 +71,8 @@ class HeadPeerNetworkWS(
         log.info(s"ReqMajor for block: $req.block")
 
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
 
@@ -82,7 +80,7 @@ class HeadPeerNetworkWS(
         log.info(s"ReqFinal for block: $req.block")
 
         val seq = transport.nextSeq
-        val sendReq = transport.broadcastMessage(Some(seq))
-        val sendAck = transport.broadcastMessage(ownPeer, seq)
+        val sendReq = transport.broadcastReq(Some(seq))
+        val sendAck = transport.broadcastAck(ownPeer, seq)
 
         dispatcherRef.ask(_.spawnActorProactively(ownPeer, seq, req, sendReq, sendAck))
