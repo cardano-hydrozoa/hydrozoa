@@ -1,6 +1,5 @@
 package hydrozoa.l2.block
 
-import hydrozoa.Wallet
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, SettlementTx}

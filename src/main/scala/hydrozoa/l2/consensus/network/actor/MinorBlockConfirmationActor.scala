@@ -6,7 +6,7 @@ import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.state.*
-import hydrozoa.{VerificationKeyBytes, Wallet}
+import hydrozoa.Wallet
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable

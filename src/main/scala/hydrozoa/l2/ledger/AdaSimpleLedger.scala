@@ -189,11 +189,12 @@ object AdaSimpleLedger:
         val (_, txId) = asTxL2(withdrawal)
         WithdrawalEventL2(txId, withdrawal)
 
-case class SimpleGenesis (
+case class SimpleGenesis(
     outputs: List[SimpleOutput]
 ) derives CanEqual
 
 object SimpleGenesis:
+    // FIXME: REMOVE
     def apply(ds: DepositUtxos): SimpleGenesis =
         SimpleGenesis(
           ds.map.values.map(o => SimpleOutput(liftAddress(o.address), o.coins)).toList
