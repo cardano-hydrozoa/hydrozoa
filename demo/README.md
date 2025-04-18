@@ -24,7 +24,7 @@ using `sbt` tool:
 
 ```bash
 [in Nix shell, project root]
-$ docker:publishLocal
+$ sbt docker:publishLocal
 $ docker images | grep hydrozoa
 cardano-hydrozoa/hydrozoa   0.1.0-SNAPSHOT   3ee4e908c85c   45 years ago    574MB
 ```
@@ -43,7 +43,7 @@ $ docker exec -it yaci-cli bash
 root@yaci-cli: /app# ./yaci-cli.sh
 devnet:default> create-node
 ...
-devnet:default> start
+devnet:default> reset
 ...
 ```
 

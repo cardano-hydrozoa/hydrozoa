@@ -18,6 +18,7 @@ services:
       - "9400"
     ports:
       - 8093:8093
+      - 9403:9400
     expose:
       - 4937
     logging: *default-logging
@@ -34,6 +35,7 @@ services:
       - "9400"
     ports:
       - 8094:8094
+      - 9404:9400
     expose:
       - 4938
     depends_on:
@@ -52,6 +54,7 @@ services:
       - "9400"
     ports:
       - 8095:8095
+      - 9405:9400
     expose:
       - 4939
     depends_on:
@@ -82,7 +85,7 @@ services:
     entrypoint:
 #      - /app/yaci-cli.sh
 #      - create-node
-#      - reset
+#      - --start
       - sleep
       - infinity
     networks:
