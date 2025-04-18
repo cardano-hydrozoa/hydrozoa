@@ -21,9 +21,11 @@ import hydrozoa.l2.consensus.network.transport.{
 }
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
+import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import io.prometheus.metrics.exporter.httpserver.HTTPServer
 import ox.*
 import ox.channels.{Actor, ActorRef, Channel, Source}
 import ox.flow.Flow
@@ -278,11 +280,11 @@ val peers = Map.from(
 )
 
 //val peers = Map.from(
-//    List(
-//        Alice -> uri"ws://localhost:4937/ws",
-//        Bob -> uri"ws://localhost:4938/ws",
-//        Carol -> uri"ws://localhost:4939/ws"
-//    )
+//  List(
+//    Alice -> uri"ws://localhost:4937/ws",
+//    Bob -> uri"ws://localhost:4938/ws",
+//    Carol -> uri"ws://localhost:4939/ws"
+//  )
 //)
 
 object HydrozoaNode extends OxApp:
@@ -319,11 +321,13 @@ object HydrozoaNode extends OxApp:
                   ownPort,
                   serverPeers,
                   mkWallet(ownPeer),
-                  peers.keySet.-(ownPeer).map(mkWalletId)
+                  peers.keySet.-(ownPeer).map(mkWalletId),
+                  yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
                 )
             }
 
             val apiPort = args.apply(1).toInt
+            val metricsPort = args.apply(2).toInt
 
             // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
@@ -341,6 +345,9 @@ object HydrozoaNode extends OxApp:
                 val blockProducer = new BlockProducer()
 
                 nodeState.blockProductionActor = Actor.create(blockProducer)
+
+                val metrics = Actor.create(PrometheusMetrics())
+                nodeState.metrics = metrics
 
                 val networkRef = Actor.create(network)
                 node.networkRef = networkRef
@@ -370,6 +377,16 @@ object HydrozoaNode extends OxApp:
 
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
+
+                // Metrics
+                log.info(s"Starting metrics http server on port $metricsPort")
+                val metricsServer =
+                    useInScope(
+                      HTTPServer
+                          .builder()
+                          .port(metricsPort)
+                          .buildAndStart()
+                    )(_.stop())
 
                 never
             }

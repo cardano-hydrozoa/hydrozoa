@@ -5,12 +5,13 @@ import hydrozoa.*
 import hydrozoa.infra.{Piper, txHash, verKeyHash}
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
-import hydrozoa.l2.block.BlockTypeL2.Major
+import hydrozoa.l2.block.BlockTypeL2.{Major, Minor}
 import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
+import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
@@ -146,6 +147,11 @@ class HeadStateGlobal(
 
     def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
         this.blockProductionActor = blockProductionActor
+
+    private var metrics: ActorRef[PrometheusMetrics] = _
+
+    def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+        this.metrics = metrics
 
     override def currentPhase: HeadPhase = headPhase
 
@@ -357,7 +363,8 @@ class HeadStateGlobal(
             stateL2.replaceUtxosActive(l2BlockEffect_)
 
             val body = record.block.blockBody
-            val blockNum = record.block.blockHeader.blockNum
+            val blockHeader = record.block.blockHeader
+            val blockNum = blockHeader.blockNum
 
             val mbGenesis = record.l2Effect match
                 case majorEffect: MajorBlockL2Effect => majorEffect._2
@@ -371,9 +378,15 @@ class HeadStateGlobal(
               body.depositsAbsorbed
             )
 
-            val nextBlockNum = record.block.blockHeader.blockNum + 1
+            val nextBlockNum = blockHeader.blockNum + 1
             self.isBlockPending = Some(false)
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
+
+            metrics.tell(m =>
+                if blockHeader.blockType == Minor
+                then m.incBlocksMinor()
+                else m.incBlocksMajor()
+            )
 
             log.info(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"

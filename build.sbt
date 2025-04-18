@@ -38,7 +38,11 @@ lazy val core = (project in file("."))
         // jsoniter + tapit-jsoniter
         "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
         "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.2" % "compile-internal",
-        "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19"
+        "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19",
+        // Prometheus Java "client"
+        "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
+        "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
+        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,

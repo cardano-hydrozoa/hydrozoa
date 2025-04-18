@@ -15,6 +15,7 @@ services:
     command:
       - Alice
       - "8093"
+      - "9400"
     ports:
       - 8093:8093
     expose:
@@ -30,6 +31,7 @@ services:
     command:
       - Bob
       - "8094"
+      - "9400"
     ports:
       - 8094:8094
     expose:
@@ -47,6 +49,7 @@ services:
     command:
       - Carol
       - "8095"
+      - "9400"
     ports:
       - 8095:8095
     expose:
@@ -55,6 +58,44 @@ services:
       - alice
       - bob
     logging: *default-logging
+    networks:
+      hydrozoa_network:
+
+  yaci-cli:
+    image: bloxbean/yaci-cli:0.10.5
+    container_name: yaci-cli
+    hostname: yaci-cli
+    ports:
+      - 3001:3001
+      - 3333:3333
+      - 8090:8090
+      - 8080:8080
+      - 10000:10000
+      - 1337:1337
+      - 1442:1442
+    volumes:
+      - cluster-data:/clusters
+      - ./yaci/node.properties:/app/config/node.properties
+    env_file:
+      - ./yaci/node.properties
+      - ./yaci/env
+    entrypoint:
+#      - /app/yaci-cli.sh
+#      - create-node
+#      - reset
+      - sleep
+      - infinity
+    networks:
+      hydrozoa_network:
+
+  yaci-viewer:
+    image: bloxbean/yaci-viewer:0.10.5
+    container_name: yaci-viewer
+    hostname: yaci-viewer
+    ports:
+      - 5173:5173
+    env_file:
+      - ./yaci/env
     networks:
       hydrozoa_network:
 
@@ -183,4 +224,6 @@ volumes:
   prometheus-data:
     driver: local
   tempo-data:
+    driver: local
+  cluster-data:
     driver: local

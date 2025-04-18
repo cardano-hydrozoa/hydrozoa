@@ -7,6 +7,7 @@ import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.node.TestPeer
+import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
 import ox.channels.ActorRef
 
@@ -22,6 +23,8 @@ class NodeState(
     var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
 
     var blockProductionActor: ActorRef[BlockProducer] = _
+
+    var metrics: ActorRef[PrometheusMetrics] = _
 
     private var ownPeer: TestPeer = _
 
@@ -55,14 +58,17 @@ class NodeState(
                 log.info(s"Initializing Hydrozoa head...")
                 this.headState = Some(HeadStateGlobal(params))
                 this.headState.get.setBlockProductionActor(blockProductionActor)
+                this.headState.get.setMetrics(metrics)
                 log.info(s"Setting up L1 event sourcing...")
                 val initTxId = params.initTx |> txHash
-                multisigL1EventSource.tell(_.awaitInitTx(
-                    initTxId, 
+                multisigL1EventSource.tell(
+                  _.awaitInitTx(
+                    initTxId,
                     params.headAddress,
                     params.headNativeScript,
                     params.beaconTokenName
-                ))
+                  )
+                )
             // TODO: add support for re-opening a head
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>
