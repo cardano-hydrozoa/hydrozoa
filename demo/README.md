@@ -29,30 +29,19 @@ $ docker images | grep hydrozoa
 cardano-hydrozoa/hydrozoa   0.1.0-SNAPSHOT   3ee4e908c85c   45 years ago    574MB
 ```
 
-2. Spin up containers using `docker-compose`
+2. Spin up containers using `docker-compose` (or `docker compose`)
 
 ```bash
 $ cd demo
 $ docker-compose up
 ```
 
-3. Run Yaci (this manual step should be gone)
-
-```bash
-$ docker exec -it yaci-cli bash
-root@yaci-cli: /app# ./yaci-cli.sh
-devnet:default> create-node -o
-...
-devnet:default> start
-...
-```
-
 After that the following things should work:
 1. Yaci Viewer - http://localhost:5173/ - should show slots and genesis txs.
-2. Prometheus - http://localhost:9090/targets - all targets including Alice, Bob, and Carol should be green.
+2. Prometheus - http://localhost:9090/targets - all targets, including Alice, Bob, and Carol should be green.
 3. Grafana - http://localhost:3003/ (not yet configured properly)
 
-4. Play with Hydrozoa:
+3Play with Hydrozoa:
 
 Follow Alice's logs in a separate window:
 

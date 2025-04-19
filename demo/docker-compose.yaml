@@ -82,14 +82,7 @@ services:
     env_file:
       - ./yaci/node.properties
       - ./yaci/env
-    entrypoint:
-#      - /app/yaci-cli.sh
-#      - create-node
-#      - -o
-#      - restart
-#      - --start
-      - sleep
-      - infinity
+    entrypoint: ["/app/yaci-cli.sh", "create-node", "-o", "--start"]
     networks:
       hydrozoa_network:
 
