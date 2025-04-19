@@ -7,37 +7,31 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
-import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
-import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
-import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.*
-import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
+import hydrozoa.node.state.HeadPhase.Open
 import ox.channels.ActorRef
-import ox.{forkDiscard, supervised}
+import ox.resilience.{RetryConfig, retry}
+import ox.scheduling.Jitter
 import scalus.prelude.Maybe
 
-class Node(
-    nodeState: NodeState,
-    ownPeer: Wallet,
-    cardano: CardanoL1,
-    initTxBuilder: InitTxBuilder,
-    depositTxBuilder: DepositTxBuilder,
-    refundTxBuilder: RefundTxBuilder,
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder
-):
+import scala.concurrent.duration.DurationInt
+import scala.util.Try
+
+class Node:
 
     private val log = Logger(getClass)
 
-    var networkRef: ActorRef[HeadPeerNetwork] = _
+    var network: ActorRef[HeadPeerNetwork] = _
+    var nodeState: ActorRef[NodeState] = _
+    var cardano: ActorRef[CardanoL1] = _
+    var wallet: ActorRef[Wallet] = _
+    var depositTxBuilder: ActorRef[DepositTxBuilder] = _
 
     // FIXME: protect, currently used in tests
     def nodeStateReader = nodeState
@@ -52,14 +46,14 @@ class Node(
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
         // Request verification keys from known peers
-        val knownVKeys = networkRef.ask(_.reqVerificationKeys())
+        val knownVKeys = network.ask(_.reqVerificationKeys())
         log.info(s"knownVKeys: $knownVKeys")
 
         // ReqInit
         val seedOutput = UtxoIdL1(txId, txIx)
         val treasuryCoins = treasuryAda * 1_000_000
-        val reqInit = ReqInit(ownPeer.getWalletId, otherHeadPeers, seedOutput, treasuryCoins)
-        val initTxId = networkRef.ask(_.reqInit(reqInit))
+        val reqInit = ReqInit(wallet.ask(_.getWalletId), otherHeadPeers, seedOutput, treasuryCoins)
+        val initTxId = network.ask(_.reqInit(reqInit))
 
         Right(initTxId)
     end initializeHead
@@ -118,7 +112,8 @@ class Node(
         val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-        val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
+        val Right(depositTxDraft, index) =
+            depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe))
         val depositTxHash = txHash(depositTxDraft)
 
         val serializedTx = serializeTxHex(depositTxDraft)
@@ -129,14 +124,16 @@ class Node(
         // TxDump.dumpMultisigTx(depositTxDraft)
 
         val req = ReqRefundLater(depositTxDraft, index)
-        val refundTx = networkRef.ask(_.reqRefundLater(req))
+        val refundTx = network.ask(_.reqRefundLater(req))
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
 
         // TODO: temporarily we submit the deposit tx here on the node that handles the request
         val Right(depositTxId) =
-            cardano.submit(
-              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft))
+            cardano.ask(
+              _.submit(
+                addWitness(depositTxDraft, wallet.ask(_.createTxKeyWitness(depositTxDraft)))
+              )
             ) // TODO: add the combined function for signing
 
         log.info(s"Deposit tx submitted: $depositTxId")
@@ -144,7 +141,7 @@ class Node(
     end deposit
 
     def submitL1(hex: String): Either[String, TxId] =
-        cardano.submit(deserializeTxHex[L1](hex))
+        cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
@@ -153,7 +150,7 @@ class Node(
             case Withdrawal(wd) =>
                 AdaSimpleLedger.mkWithdrawalEvent(wd)
 
-        networkRef.tell(_.reqEventL2(ReqEventL2(event)))
+        network.tell(_.reqEventL2(ReqEventL2(event)))
         Right(event.getEventId)
     end submitL2
 
@@ -166,7 +163,35 @@ class Node(
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
         ???
 
-// ----------------------------------------------------->>
+    def awaitBlock(): Either[String, String] =
+        nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
+            case None => Left("No Hydrozoa Head is present")
+            case Some(_) =>
+                val currentPhase = nodeState.ask(s => s.reader.currentPhase)
+                currentPhase match
+                    case Open =>
+                        val (tip, isBlockPending) =
+                            nodeState.ask(_.head.openPhase(o => (o.l2Tip, o.isBlockPending)))
+                        if !isBlockPending
+                        then Right(tip.blockHeader.toString)
+                        else
+                            def checkPending(): String =
+                                val currentTip = nodeState.ask(_.head.openPhase(_.l2Tip))
+                                if currentTip == tip
+                                then
+                                    val msg = "block is still producing"
+                                    log.info(msg)
+                                    throw RuntimeException(msg)
+                                currentTip.blockHeader.toString
+                            Try(
+                              retry(RetryConfig.backoff(10, 100.millis, 1.second, Jitter.Equal))(
+                                checkPending()
+                              )
+                            ).toEither.swap.map(_.toString).swap
+
+                    case _ => Left("Head should be open, but it's not.")
+
+    // ----------------------------------------------------->>
 
 //
 //    private def dumpState(): Unit =

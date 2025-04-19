@@ -14,8 +14,6 @@ import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-import scala.concurrent.duration.{FiniteDuration, SECONDS}
-
 /** Hydrozoa Node API, currently backed by Tapir HTTP server.
   */
 class NodeRestApi(node: ActorRef[Node]):
@@ -59,17 +57,29 @@ class NodeRestApi(node: ActorRef[Node]):
         .errorOut(stringBody)
         .handle(submitL2)
 
-    private val nextBlockEndpoint =
-        endpoint.post
-            .in("l2")
-            .in("next")
-            .in(query[Option[String]]("nextBlockFinal"))
-            .out(stringBody)
-            .errorOut(stringBody)
-            .handle(nextBlock)
+//    private val nextBlockEndpoint =
+//        endpoint.post
+//            .in("l2")
+//            .in("next")
+//            .in(query[Option[String]]("nextBlockFinal"))
+//            .out(stringBody)
+//            .errorOut(stringBody)
+//            .handle(nextBlock)
+
+    private val awaitBlockEndpoint = endpoint.get
+        .in("awaitBlock")
+        .out(stringBody)
+        .errorOut(stringBody)
+        .handle(awaitBlock)
 
     private val apiEndpoints =
-        List(initEndpoint, depositEndpoint, submitL1Endpoint, submitL2Endpoint, nextBlockEndpoint)
+        List(
+          initEndpoint,
+          depositEndpoint,
+          submitL1Endpoint,
+          submitL2Endpoint,
+          awaitBlockEndpoint
+        )
 
     private val swaggerEndpoints = SwaggerInterpreter()
         .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Hydrozoa Head API", "0.1")
@@ -119,11 +129,14 @@ class NodeRestApi(node: ActorRef[Node]):
     private def submitL2(req: SubmitRequestL2): Either[String, String] =
         node.ask(_.submitL2(req).map(_.toString))
 
-    private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
-        val b = nextBlockFinal match
-            case Some(_) => true
-            case None    => false
-        node.ask(_.handleNextBlock(b).map(_.toString))
+//    private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
+//        val b = nextBlockFinal match
+//            case Some(_) => true
+//            case None    => false
+//        node.ask(_.handleNextBlock(b).map(_.toString))
+
+    private def awaitBlock(_unit: Unit): Either[String, String] =
+        node.ask(_.awaitBlock())
 
 // JSON/Schema instances
 enum SubmitRequestL2:

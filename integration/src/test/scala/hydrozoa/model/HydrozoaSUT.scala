@@ -43,19 +43,22 @@ class OneNodeHydrozoaSUT(
         txIx: TxIx
     ): (Either[InitializationError, TxId], NodeStateInspector) =
         val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
-        (ret, node.nodeStateReader)
+        // (ret, node.nodeStateReader)
+        (ret, ???)
 
     override def deposit(
         depositRequest: DepositRequest
     ): (Either[DepositError, DepositResponse], NodeStateInspector) =
         val ret = node.deposit(depositRequest)
-        (ret, node.nodeStateReader)
+        // (ret, node.nodeStateReader)
+        (ret, ???)
 
     override def produceBlock(
         nextBlockFinal: Boolean
     ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector) =
         val ret = node.handleNextBlock(nextBlockFinal)
-        (ret, node.nodeStateReader)
+        // (ret, node.nodeStateReader)
+        (ret, ???)
 
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
@@ -64,7 +67,8 @@ class OneNodeHydrozoaSUT(
             case tx: SimpleTransaction => Transaction(tx)
             case wd: SimpleWithdrawal  => Withdrawal(wd)
         val ret = node.submitL2(request)
-        (ret, node.nodeStateReader)
+        // (ret, node.nodeStateReader)
+        (ret, ???)
 
     override def shutdownSut(): Unit = ()
 

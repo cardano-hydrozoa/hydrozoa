@@ -83,17 +83,7 @@ def mkHydrozoaNode(
           knownPeers
         )
 
-    val node = Node(
-      nodeStateManager,
-      ownPeerWallet,
-      // network,
-      cardano,
-      initTxBuilder,
-      depositTxBuilder,
-      refundTxBuilder,
-      settlementTxBuilder,
-      finalizationTxBuilder
-    )
+    val node = Node()
     (log, node, cardano)
 }
 
@@ -244,16 +234,7 @@ def mkHydrozoaNode2(
 
     val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, networkTransport)
 
-    val node = Node(
-      nodeState,
-      ownPeerWallet,
-      cardano,
-      initTxBuilder,
-      depositTxBuilder,
-      refundTxBuilder,
-      settlementTxBuilder,
-      finalizationTxBuilder
-    )
+    val node = Node()
 
     // return a bunch of things
     (
@@ -265,6 +246,7 @@ def mkHydrozoaNode2(
       nodeState,
       ownPeerWallet,
       initTxBuilder,
+      depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,
       finalizationTxBuilder
@@ -313,6 +295,7 @@ object HydrozoaNode extends OxApp:
               nodeState,
               ownPeerWallet,
               initTxBuilder,
+              depositTxBuilder,
               refundTxBuilder,
               settlementTxBuilder,
               finalizationTxBuilder
@@ -333,7 +316,7 @@ object HydrozoaNode extends OxApp:
             // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
 
-                val nodeActorRef = Actor.create(node)
+                val nodeActor = Actor.create(node)
 
                 val nodeStateActor = Actor.create(nodeState)
                 val walletActor = Actor.create(ownPeerWallet)
@@ -347,12 +330,20 @@ object HydrozoaNode extends OxApp:
 
                 nodeState.blockProductionActor = Actor.create(blockProducer)
 
-                val metrics = Actor.create(PrometheusMetrics())
-                nodeState.metrics = metrics
+                val metricsActor = Actor.create(PrometheusMetrics())
+                nodeState.metrics = metricsActor
 
-                val networkRef = Actor.create(network)
-                node.networkRef = networkRef
-                blockProducer.setNetworkRef(networkRef)
+                val networkActor = Actor.create(network)
+
+                val depositTxBuilderActor = Actor.create(depositTxBuilder)
+
+                node.network = networkActor
+                node.nodeState = nodeStateActor
+                node.wallet = walletActor
+                node.cardano = cardanoActor
+                node.depositTxBuilder = depositTxBuilderActor
+
+                blockProducer.setNetworkRef(networkActor)
 
                 val factory =
                     new ConsensusActorFactory(
@@ -383,16 +374,16 @@ object HydrozoaNode extends OxApp:
                                 (System.currentTimeMillis() - initializedOn) / 1000
                             case None => 0
                         log.info(s"head uptime is $uptime")
-                        metrics.tell(_.updateHeadUptime(uptime))
+                        metricsActor.tell(_.updateHeadUptime(uptime))
                     }
                 }
 
                 val serverBinding =
-                    useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
+                    useInScope(NodeRestApi(nodeActor).mkServer(apiPort).start())(_.stop())
 
                 // Metrics HTTP server
                 forkDiscard {
-                    log.info(s"Starting metrics http server on port $metricsPort")
+                    log.info(s"Starting metricsActor http server on port $metricsPort")
                     HTTPServer
                         .builder()
                         .port(metricsPort)
