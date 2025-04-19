@@ -209,7 +209,8 @@ case class SimpleTransaction(
     // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
     inputs: List[UtxoIdL2],
     outputs: List[SimpleOutput]
-)
+):
+    def volume(): Long = outputs.map(_.coins).sum.toLong
 
 object SimpleTransaction:
     def apply(input: UtxoIdL2, address: AddressBechL2, ada: Int): SimpleTransaction =

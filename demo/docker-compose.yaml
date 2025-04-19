@@ -85,6 +85,8 @@ services:
     entrypoint:
 #      - /app/yaci-cli.sh
 #      - create-node
+#      - -o
+#      - restart
 #      - --start
       - sleep
       - infinity

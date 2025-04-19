@@ -15,7 +15,6 @@ import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
 import hydrozoa.l2.consensus.network.transport.{
     AnyMsg,
-    HeadPeerNetworkTransport,
     HeadPeerNetworkTransportWS,
     IncomingDispatcher
 }
@@ -30,6 +29,7 @@ import ox.*
 import ox.channels.{Actor, ActorRef, Channel, Source}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
+import ox.scheduling.{RepeatConfig, repeat}
 import sttp.client4.UriContext
 import sttp.model.Uri
 
@@ -271,6 +271,7 @@ def mkHydrozoaNode2(
     )
 }
 
+// TODO: use external network topology config?
 val peers = Map.from(
   List(
     Alice -> uri"ws://alice:4937/ws",
@@ -375,18 +376,28 @@ object HydrozoaNode extends OxApp:
                 forkDiscard { dispatcher.run() }
                 forkDiscard { transport.run() }
 
+                forkDiscard {
+                    repeat(RepeatConfig.fixedRateForever(2000.millis)) {
+                        val uptime = nodeStateActor.ask(_.mbInitializedOn) match
+                            case Some(initializedOn) =>
+                                (System.currentTimeMillis() - initializedOn) / 1000
+                            case None => 0
+                        log.info(s"head uptime is $uptime")
+                        metrics.tell(_.updateHeadUptime(uptime))
+                    }
+                }
+
                 val serverBinding =
                     useInScope(NodeRestApi(nodeActorRef).mkServer(apiPort).start())(_.stop())
 
-                // Metrics
-                log.info(s"Starting metrics http server on port $metricsPort")
-                val metricsServer =
-                    useInScope(
-                      HTTPServer
-                          .builder()
-                          .port(metricsPort)
-                          .buildAndStart()
-                    )(_.stop())
+                // Metrics HTTP server
+                forkDiscard {
+                    log.info(s"Starting metrics http server on port $metricsPort")
+                    HTTPServer
+                        .builder()
+                        .port(metricsPort)
+                        .buildAndStart()
+                }
 
                 never
             }

@@ -6,6 +6,7 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
@@ -69,6 +70,14 @@ class NodeState(
                     params.beaconTokenName
                   )
                 )
+                // Reset head-bound metrics
+                metrics.tell(m =>
+                    m.resetBlocksCounter()
+                    m.clearBlockEvents()
+                    m.setPoolEventsL2(TransactionL2EventLabel, 0)
+                    m.setPoolEventsL2(WithdrawalL2EventLabel, 0)
+                    m.clearLiquidity()
+                )
             // TODO: add support for re-opening a head
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>
@@ -78,6 +87,9 @@ class NodeState(
 
     // Returns read-write API for head state.
     def head: HeadState = getOrThrow
+
+    // TODO: move to state-safe reader
+    def mbInitializedOn: Option[Long] = headState.map(_.initializedOn)
 
     // Returns read-only API for head state.
     val reader: HeadStateReader = new {
@@ -90,7 +102,6 @@ class NodeState(
             getOrThrow.openPhaseReader(foo)
         override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
             getOrThrow.finalizingPhaseReader(foo)
-
     }
 
     private def getOrThrow = {
@@ -123,5 +134,6 @@ case class InitializingHeadParams(
     headAddress: AddressBechL1,
     beaconTokenName: TokenName,
     seedAddress: AddressBechL1,
-    initTx: InitTx
+    initTx: InitTx,
+    initializedOn: Long // system time, milliseconds
 )

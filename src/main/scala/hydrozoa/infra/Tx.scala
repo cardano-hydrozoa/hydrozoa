@@ -90,6 +90,8 @@ def onlyOutputToAddress(
 final class NoMatch
 final class TooManyMatches
 
+def txFees(tx: TxAny): Long = Transaction.deserialize(tx.bytes).getBody.getFee.longValue()
+
 //def outputDatum(tx: TxAny, index: TxIx): Data =
 //    val tx_ = Transaction.deserialize(tx.bytes)
 //    val output = tx_.getBody.getOutputs.get(index.ix.intValue)

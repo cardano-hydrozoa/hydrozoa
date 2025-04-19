@@ -41,9 +41,9 @@ $ docker-compose up
 ```bash
 $ docker exec -it yaci-cli bash
 root@yaci-cli: /app# ./yaci-cli.sh
-devnet:default> create-node
+devnet:default> create-node -o
 ...
-devnet:default> reset
+devnet:default> start
 ...
 ```
 

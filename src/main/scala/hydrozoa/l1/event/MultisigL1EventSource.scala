@@ -51,8 +51,8 @@ class MultisigL1EventSource(
                     case Right(ix, coins, _) =>
                         val utxo = mkUtxo[L1, TreasuryTag](txId, ix, headAddress, coins)
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
-                        nodeState.tell(
-                          _.head.initializingPhase(
+                        nodeState.tell( s =>
+                          s.head.initializingPhase(
                             _.openHead(utxo)
                           )
                         )

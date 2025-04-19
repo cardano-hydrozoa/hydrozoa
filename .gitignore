@@ -33,7 +33,8 @@ artifacts
 # Scala
 .bsp/
 .idea/
-project/
+project/project
+project/target
 target/
 
 # tx dumping ground

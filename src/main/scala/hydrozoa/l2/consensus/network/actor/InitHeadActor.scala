@@ -103,7 +103,8 @@ private class InitHeadActor(
                       headAddress,
                       beaconTokenName,
                       seedAddress,
-                      initTx
+                      initTx,
+                      System.currentTimeMillis()
                     )
                     stateActor.tell(_.initializeHead(params))
                     TxDump.dumpInitTx(initTx)
