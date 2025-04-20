@@ -10,7 +10,7 @@ import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
-import hydrozoa.node.rest.SubmitRequestL2
+import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
@@ -193,6 +193,15 @@ class Node:
                             ).toEither.swap.map(_.toString).swap
 
                     case _ => Left("Head should be open, but it's not.")
+
+    def stateL2(): StateL2Response =
+        nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
+            case None => List.empty
+            case Some(_) =>
+                val currentPhase = nodeState.ask(s => s.reader.currentPhase)
+                currentPhase match
+                    case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
+                    case _    => List.empty
 
     // ----------------------------------------------------->>
 

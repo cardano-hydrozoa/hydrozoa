@@ -35,6 +35,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
     override def getUtxosActive: UtxosSetOpaque = activeState.clone.toMap
 
+    override def getState: Map[UtxoIdL2, OutputL2] = unliftUtxoSet(activeState.clone().toMap)
+
     override def replaceUtxosActive(activeState: UtxosSetOpaque): Unit =
         // TODO: revise
         this.activeState.clear()

@@ -5,11 +5,11 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
-import hydrozoa.node.TestPeer.{Bob, Carol, mkWalletId}
 import hydrozoa.node.rest.NodeRestApi.{
     awaitBlockEndpoint,
     depositEndpoint,
     initEndpoint,
+    stateL2Endpoint,
     submitL1Endpoint,
     submitL2Endpoint
 }
@@ -46,7 +46,8 @@ class NodeRestApi(node: ActorRef[Node]):
           depositEndpoint.handle(runDeposit),
           submitL1Endpoint.handle(runSubmitL1),
           submitL2Endpoint.handle(runSubmitL2),
-          awaitBlockEndpoint.handle(runAwaitBlock)
+          awaitBlockEndpoint.handle(runAwaitBlock),
+          stateL2Endpoint.handle(runStateL2)
         )
 
     private val swaggerEndpoints = SwaggerInterpreter()
@@ -105,6 +106,9 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runAwaitBlock(_unit: Unit): Either[String, String] =
         node.ask(_.awaitBlock())
 
+    private def runStateL2(_unit: Unit): Either[Unit, StateL2Response] =
+        Right(node.ask(_.stateL2()))
+
 object NodeRestApi:
     val initEndpoint = endpoint.put
         .in("init")
@@ -146,6 +150,11 @@ object NodeRestApi:
         .out(stringBody)
         .errorOut(stringBody)
 
+    val stateL2Endpoint = endpoint.get
+        .in("l2")
+        .in("state")
+        .out(jsonBody[StateL2Response])
+
 // JSON/Schema instances
 enum SubmitRequestL2:
     case Transaction(transaction: SimpleTransaction)
@@ -174,3 +183,11 @@ given txIdSchema: Schema[TxId] =
 
 given txIx: Schema[TxIx] =
     Schema.derived[TxIx]
+
+type StateL2Response = List[(UtxoId[L2], Output[L2])]
+
+given stateL2ResponseCodec: JsonValueCodec[StateL2Response] =
+    JsonCodecMaker.make
+
+given stateL2ResponseSchema: Schema[StateL2Response] =
+    Schema.derived[StateL2Response]

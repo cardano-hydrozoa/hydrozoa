@@ -5,26 +5,13 @@ import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript as BBNativeScript
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.*
-import hydrozoa.*
 import hydrozoa.l1.CardanoL1
-import hydrozoa.infra.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxo, TreasuryTag, TreasuryUtxo}
-import hydrozoa.l1.CardanoL1
 import hydrozoa.node.state.NodeState
-import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxo, TreasuryTag, TreasuryUtxo}
 import ox.channels.ActorRef
-import hydrozoa.node.state.NodeState
 import ox.scheduling.{RepeatConfig, repeat}
-import ox.channels.ActorRef
-
-import java.math.BigInteger
-import ox.scheduling.{RepeatConfig, repeat}
-
 import scala.jdk.CollectionConverters.*
-
-import scala.collection.mutable
 import java.math.BigInteger
 import scala.concurrent.duration.DurationInt
 import scala.collection.mutable
@@ -51,10 +38,10 @@ class MultisigL1EventSource(
                     case Right(ix, coins, _) =>
                         val utxo = mkUtxo[L1, TreasuryTag](txId, ix, headAddress, coins)
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
-                        nodeState.tell( s =>
-                          s.head.initializingPhase(
-                            _.openHead(utxo)
-                          )
+                        nodeState.tell(s =>
+                            s.head.initializingPhase(
+                              _.openHead(utxo)
+                            )
                         )
                         // repeat polling for head address forever
                         val nativeScriptBB =

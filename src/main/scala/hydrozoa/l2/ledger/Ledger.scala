@@ -1,5 +1,6 @@
 package hydrozoa.l2.ledger
 
+import hydrozoa.{OutputL2, UtxoIdL2}
 import hydrozoa.l2.ledger.event.AnyEventL2
 
 /** @tparam TUtxosSetOpaque
@@ -38,6 +39,8 @@ trait L2Ledger[
       *   Returns an opaque copy of active utxos.
       */
     def getUtxosActive: TUtxosSetOpaque
+
+    def getState: Map[UtxoIdL2, OutputL2]
 
     /** @return
       *   Whether a ledger's utxos set is empty.
