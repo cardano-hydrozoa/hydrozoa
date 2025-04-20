@@ -37,11 +37,14 @@ class Node:
     def nodeStateReader = nodeState
 
     def initializeHead(
-        otherHeadPeers: Set[WalletId],
+        // otherHeadPeers: Set[WalletId],
         treasuryAda: Long,
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
+        // FIXME: for now others are all known peers minus own peer
+        val otherHeadPeers =
+            nodeState.ask(_.getKnownPeers).filterNot(p => p == wallet.ask(_.getWalletId))
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 

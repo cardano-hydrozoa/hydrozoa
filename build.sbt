@@ -13,13 +13,15 @@ dockerExposedPorts ++= Seq(4937)
 // Main application
 lazy val core = (project in file("."))
     .settings(
+      resolvers +=
+          "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
         // Scalus
         "org.scalus" % "scalus_3" % scalusVersion,
         "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion,
         // Cardano Client library
-        "com.bloxbean.cardano" % "cardano-client-lib" % "0.6.3",
-        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.6.3",
+        "com.bloxbean.cardano" % "cardano-client-lib" % "0.7.0-beta3-SNAPSHOT",
+        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.7.0-beta3-SNAPSHOT",
         // Tapir for API definition
         "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
         "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
@@ -70,7 +72,8 @@ lazy val integration = (project in file("integration"))
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
+        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
+        "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25" % Test
       )
     )
 val scalusVersion = "0.8.5"

@@ -42,9 +42,10 @@ class OneNodeHydrozoaSUT(
         txId: TxId,
         txIx: TxIx
     ): (Either[InitializationError, TxId], NodeStateInspector) =
-        val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
+        ???
+        //val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
         // (ret, node.nodeStateReader)
-        (ret, ???)
+        //(ret, ???)
 
     override def deposit(
         depositRequest: DepositRequest

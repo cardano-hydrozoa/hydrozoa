@@ -6,7 +6,20 @@ import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer.{Bob, Carol, mkWalletId}
-import hydrozoa.node.server.{DepositRequest, Node}
+import hydrozoa.node.rest.NodeRestApi.{
+    awaitBlockEndpoint,
+    depositEndpoint,
+    initEndpoint,
+    submitL1Endpoint,
+    submitL2Endpoint
+}
+import hydrozoa.node.server.{
+    DepositRequest,
+    DepositResponse,
+    Node,
+    depositResponseCodec,
+    depositResponseSchema
+}
 import ox.channels.ActorRef
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -18,45 +31,6 @@ import sttp.tapir.swagger.bundle.SwaggerInterpreter
   */
 class NodeRestApi(node: ActorRef[Node]):
 
-    private val initEndpoint = endpoint.put
-        .in("init")
-        .in(query[Long]("amount")) // how much ADA should be deposited for fees into the treasury
-        .in(query[String]("txId"))
-        .in(query[Long]("txIx"))
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(runInitializeHead)
-
-    /** Simplified API for depositing. */
-    private val depositEndpoint = endpoint.put
-        .in("deposit")
-        .in(query[String]("txId"))
-        .in(query[Long]("txIx"))
-        .in(query[Option[BigInt]]("deadline"))
-        .in(query[String]("address"))
-        .in(query[Option[String]]("datum"))
-        .in(query[String]("refundAddress"))
-        .in(query[Option[String]]("refundDatum"))
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(runDeposit)
-
-    private val submitL1Endpoint = endpoint.put
-        .in("l1")
-        .in("submit")
-        .in(stringBody)
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(submitL1)
-
-    private val submitL2Endpoint = endpoint.put
-        .in("l2")
-        .in("submit")
-        .in(jsonBody[SubmitRequestL2])
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(submitL2)
-
 //    private val nextBlockEndpoint =
 //        endpoint.post
 //            .in("l2")
@@ -66,19 +40,13 @@ class NodeRestApi(node: ActorRef[Node]):
 //            .errorOut(stringBody)
 //            .handle(nextBlock)
 
-    private val awaitBlockEndpoint = endpoint.get
-        .in("awaitBlock")
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(awaitBlock)
-
     private val apiEndpoints =
         List(
-          initEndpoint,
-          depositEndpoint,
-          submitL1Endpoint,
-          submitL2Endpoint,
-          awaitBlockEndpoint
+          initEndpoint.handle(runInit),
+          depositEndpoint.handle(runDeposit),
+          submitL1Endpoint.handle(runSubmitL1),
+          submitL2Endpoint.handle(runSubmitL2),
+          awaitBlockEndpoint.handle(runAwaitBlock)
         )
 
     private val swaggerEndpoints = SwaggerInterpreter()
@@ -90,9 +58,8 @@ class NodeRestApi(node: ActorRef[Node]):
             .port(port)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
 
-    private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        val defPeers = Set(Bob, Carol).map(mkWalletId)
-        node.ask(_.initializeHead(defPeers, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash))
+    private def runInit(amount: Long, txId: String, txIx: Long): Either[String, String] =
+        node.ask(_.initializeHead(amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash))
 
     private def runDeposit(
         txId: String,
@@ -102,7 +69,7 @@ class NodeRestApi(node: ActorRef[Node]):
         datum: Option[String],
         refundAddress: String,
         refundDatum: Option[String]
-    ): Either[String, String] =
+    ): Either[String, DepositResponse] =
         node.ask(
           _.deposit(
             DepositRequest(
@@ -121,12 +88,12 @@ class NodeRestApi(node: ActorRef[Node]):
               )
             )
           )
-        ).map(_.toString)
+        )
 
-    private def submitL1(tx: String): Either[String, String] =
+    private def runSubmitL1(tx: String): Either[String, String] =
         node.ask(_.submitL1(tx).map(_.toString))
 
-    private def submitL2(req: SubmitRequestL2): Either[String, String] =
+    private def runSubmitL2(req: SubmitRequestL2): Either[String, String] =
         node.ask(_.submitL2(req).map(_.toString))
 
 //    private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
@@ -135,13 +102,60 @@ class NodeRestApi(node: ActorRef[Node]):
 //            case None    => false
 //        node.ask(_.handleNextBlock(b).map(_.toString))
 
-    private def awaitBlock(_unit: Unit): Either[String, String] =
+    private def runAwaitBlock(_unit: Unit): Either[String, String] =
         node.ask(_.awaitBlock())
+
+object NodeRestApi:
+    val initEndpoint = endpoint.put
+        .in("init")
+        .in(query[Long]("amount")) // how much ADA should be deposited for fees into the treasury
+        .in(query[String]("txId"))
+        .in(query[Long]("txIx"))
+        .out(stringBody)
+        .errorOut(stringBody)
+
+    /** Simplified API for depositing. */
+    val depositEndpoint = endpoint.put
+        .in("deposit")
+        .in(query[String]("txId"))
+        .in(query[Long]("txIx"))
+        .in(query[Option[BigInt]]("deadline"))
+        .in(query[String]("address"))
+        .in(query[Option[String]]("datum"))
+        .in(query[String]("refundAddress"))
+        .in(query[Option[String]]("refundDatum"))
+        .out(jsonBody[DepositResponse])
+        .errorOut(stringBody)
+
+    val submitL1Endpoint = endpoint.put
+        .in("l1")
+        .in("submit")
+        .in(stringBody)
+        .out(stringBody)
+        .errorOut(stringBody)
+
+    val submitL2Endpoint = endpoint.put
+        .in("l2")
+        .in("submit")
+        .in(jsonBody[SubmitRequestL2])
+        .out(stringBody)
+        .errorOut(stringBody)
+
+    val awaitBlockEndpoint = endpoint.get
+        .in("runAwaitBlock")
+        .out(stringBody)
+        .errorOut(stringBody)
 
 // JSON/Schema instances
 enum SubmitRequestL2:
     case Transaction(transaction: SimpleTransaction)
     case Withdrawal(withdrawal: SimpleWithdrawal)
+
+object SubmitRequestL2:
+    def apply(event: SimpleTransaction | SimpleWithdrawal): SubmitRequestL2 =
+        event match
+            case tx: SimpleTransaction => Transaction(tx)
+            case wd: SimpleWithdrawal  => Withdrawal(wd)
 
 given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
     JsonCodecMaker.make

@@ -1,8 +1,11 @@
 package hydrozoa.node.server
 
+import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import sttp.tapir.Schema
 
 // Types for NODE API
 
@@ -22,11 +25,30 @@ case class DepositRequest(
     refundDatum: Option[Datum]
 )
 
-
 case class DepositResponse(postDatedRefundTx: PostDatedRefundTx, depositId: DepositId) {
-    // TODO: use JSON
     override def toString: String =
         s"refundTx: ${serializeTxHex(postDatedRefundTx)}, deposit utxo: $depositId"
 }
+
+given depositResponseCodec: JsonValueCodec[DepositResponse] =
+    JsonCodecMaker.make
+
+given depositResponseSchema: Schema[DepositResponse] =
+    Schema.derived[DepositResponse]
+
+given utxoIdL1Schema: Schema[UtxoIdL1] =
+    Schema.derived[UtxoIdL1]
+
+given txIdSchema: Schema[TxId] =
+    Schema.derived[TxId]
+
+given txL1Schema: Schema[TxL1] =
+    Schema.derived[TxL1]
+
+given txIxSchema: Schema[TxIx] =
+    Schema.derived[TxIx]
+
+//given txL1Schema: Schema[TxL1] =
+//    Schema.derived[TxL1]
 
 type DepositError = String
