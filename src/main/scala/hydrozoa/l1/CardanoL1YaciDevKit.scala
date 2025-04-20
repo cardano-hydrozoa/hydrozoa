@@ -30,12 +30,14 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val hash = txHash(tx)
 
+        log.info(s"Submitting tx $hash")
         def smartSubmit =
             backendService.getTransactionService.getTransaction(hash.hash).toEither match
                 case Left(_) =>
                     val result = backendService.getTransactionService.submitTransaction(tx.bytes)
                     if result.isSuccessful
                     then
+                        log.info(s"Tx $hash has been submitted to L1.")
                         knownTxs.put(hash, tx)
                         TxId(result.getValue)
                     else throw RuntimeException(result.getResponse)

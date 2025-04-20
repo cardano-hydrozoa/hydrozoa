@@ -1,7 +1,8 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{addWitnessMultisig, serializeTxHex}
+import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
@@ -17,7 +18,8 @@ import scala.collection.mutable
 private class MajorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
-    settlementTxBuilder: SettlementTxBuilder
+    settlementTxBuilder: SettlementTxBuilder,
+    cardano: ActorRef[CardanoL1]
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -76,6 +78,8 @@ private class MajorBlockConfirmationActor(
             // TODO: L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
             stateActor.tell(_.head.openPhase(s => s.applyBlockRecord(record)))
+            log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
+            cardano.tell(_.submit(settlementTx))
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
             // Dump state
             // dumpState()

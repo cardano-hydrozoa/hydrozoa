@@ -159,7 +159,7 @@ class ConsensusActorFactory(
     private def mkMinorBlockActor = new MinorBlockConfirmationActor(stateActor, walletActor)
 
     private def mkMajorBlockActor =
-        new MajorBlockConfirmationActor(stateActor, walletActor, settlementTxBuilder)
+        new MajorBlockConfirmationActor(stateActor, walletActor, settlementTxBuilder, cardanoActor)
 
     private def mkFinalBlockActor =
         new FinalBlockConfirmationActor(stateActor, walletActor, finalizationTxBuilder)
