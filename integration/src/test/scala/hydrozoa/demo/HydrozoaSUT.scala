@@ -35,7 +35,7 @@ trait HydrozoaSUT:
 
     def shutdownSut(): Unit
 
-val peers = Map.from(
+val demoPeers = Map.from(
   List(
     Alice -> uri"http://localhost:8093",
     Bob -> uri"http://localhost:8094",
@@ -53,7 +53,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
         txIx: TxIx
     ): Either[InitializationError, TxId] =
         val response = SttpClientInterpreter()
-            .toRequest(NodeRestApi.initEndpoint, baseUri = peers.get(initiator))
+            .toRequest(NodeRestApi.initEndpoint, baseUri = demoPeers.get(initiator))
             .apply(ada, txId.hash, txIx.ix)
             .send(backend)
 
@@ -67,7 +67,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
     ): Either[DepositError, DepositResponse] =
 
         val response = SttpClientInterpreter()
-            .toRequest(NodeRestApi.depositEndpoint, baseUri = peers.get(depositor))
+            .toRequest(NodeRestApi.depositEndpoint, baseUri = demoPeers.get(depositor))
             .apply(
               r.txId.hash,
               r.txIx.ix.longValue,
@@ -89,7 +89,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
             .map(p =>
                 () =>
                     val response = SttpClientInterpreter()
-                        .toRequest(NodeRestApi.awaitBlockEndpoint, baseUri = peers.get(p))
+                        .toRequest(NodeRestApi.awaitBlockEndpoint, baseUri = demoPeers.get(p))
                         .apply(())
                         .send(backend)
 
@@ -111,7 +111,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
         val response = SttpClientInterpreter()
             .toRequest(
               NodeRestApi.submitL2Endpoint,
-              baseUri = peers.get(Alice)
+              baseUri = demoPeers.get(Alice)
             ) // FIXME: use random peer
             .apply(SubmitRequestL2.apply(event))
             .send(backend)
