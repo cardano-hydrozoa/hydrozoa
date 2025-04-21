@@ -388,14 +388,14 @@ class HeadStateGlobal(
             self.blocksConfirmedL2.append(record)
 
             record.l2Effect match
-                case utxoSet:MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
+                case utxoSet: MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
                 case utxoSet: MajorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
-                case _:FinalBlockL2Effect => ()
+                case _: FinalBlockL2Effect       => ()
 
             val body = record.block.blockBody
             val blockHeader = record.block.blockHeader
             val blockNum = blockHeader.blockNum
-            
+
             val nextBlockNum = blockHeader.blockNum + 1
             self.isBlockPending = Some(false)
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
@@ -423,9 +423,11 @@ class HeadStateGlobal(
 
                 m.observeBlockSize(TransactionL2EventLabel, validTxs)
                 m.observeBlockSize(WithdrawalL2EventLabel, validWds)
-                
-                m.incEventsL2Handled(TransactionL2EventLabel, validTxs + invalidTxs)
-                m.incEventsL2Handled(WithdrawalL2EventLabel, validWds + invalidWds)
+
+                m.incEventsL2Handled(TransactionL2EventLabel, true, validTxs)
+                m.incEventsL2Handled(TransactionL2EventLabel, false, invalidTxs)
+                m.incEventsL2Handled(WithdrawalL2EventLabel, true, validWds)
+                m.incEventsL2Handled(WithdrawalL2EventLabel, true, invalidWds)
 
                 val l2Volume = confirmedEvents.map {
                     case tx: TransactionL2 => tx.transaction.volume()
@@ -474,14 +476,14 @@ class HeadStateGlobal(
                         )
                     case _ => self.poolDeposits.remove(ix)
             )
-            // Metrics - FIXME: factor out 
+            // Metrics - FIXME: factor out
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
             // 3. Remove invalid events
             log.info(s"Removing invalid events: $blockEventsInvalid")
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
-            
+
             // Metrics - FIXME: factor out
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
             metrics.tell(m =>
@@ -584,7 +586,7 @@ type L1PostDatedBlockEffect = Unit
 
 type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect | FinalBlockL2Effect
 type MinorBlockL2Effect = UtxosSetOpaque
-type MajorBlockL2Effect = UtxosSetOpaque 
+type MajorBlockL2Effect = UtxosSetOpaque
 type FinalBlockL2Effect = Unit
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived

@@ -67,7 +67,7 @@ object Workload extends OxApp:
 
         // L2 state update loop
         forkUser {
-            repeat(RepeatConfig.fixedRateForever(3.seconds, Some(10.seconds))) {
+            repeat(RepeatConfig.fixedRateForever(1.seconds, Some(10.seconds))) {
                 val stateL2 = sut.ask(_.stateL2()).toMap
                 l2State.ask(m =>
                     m.clear()
@@ -132,7 +132,8 @@ object Workload extends OxApp:
             utxoIds = utxosAtAddress(depositorAddressL1)
             (seedUtxoId, coins) <- Gen.oneOf(utxoIds)
 
-            recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
+            // recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
+            recipient <- Gen.oneOf(TestPeer.values) // use more addressess
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = AddressBechL2(depositorAccount.toString)
             depositAmount <- Gen.choose(
@@ -166,7 +167,7 @@ object Workload extends OxApp:
 
             recipients <- Gen.containerOfN[List, TestPeer](
               outputCoins.length,
-              Gen.oneOf(s.headPeers)
+              Gen.oneOf(TestPeer.values)
             )
 
             outputs = outputCoins

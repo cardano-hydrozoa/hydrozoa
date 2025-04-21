@@ -95,12 +95,15 @@ class PrometheusMetrics:
         .name("eventsL2Handled")
         .help("number of L2 events handled by head by types")
         .labelNames(
-          "eventType" // Type of event (transaction / withdrawal)
+          "eventType", // Type of event (transaction / withdrawal)
+          "eventValidity" // Vaildity of event (valid / invalid)
         )
         .register
 
-    def incEventsL2Handled(eventType: NonGenesisL2EventLabel, number: Int): Unit =
-        eventsL2Handled.labelValues(nonGenesisEventLabel(eventType)).inc(number)
+    def incEventsL2Handled(eventType: NonGenesisL2EventLabel, valid: Boolean, number: Int): Unit =
+        eventsL2Handled
+            .labelValues(nonGenesisEventLabel(eventType), if valid then "valid" else "invalid")
+            .inc(number)
 
     // Deposit queue size
     private val depositQueueSize = Gauge.builder
