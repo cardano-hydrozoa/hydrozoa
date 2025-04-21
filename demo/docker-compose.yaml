@@ -2,8 +2,8 @@ x-logging:
   &default-logging
   driver: "json-file"
   options:
-    max-size: "1m"
-    max-file: "1"
+    max-size: "25m"
+    max-file: "10"
     tag: "{{.Name}}"
 
 services:
@@ -83,6 +83,7 @@ services:
       - ./yaci/node.properties
       - ./yaci/env
     entrypoint: ["/app/yaci-cli.sh", "create-node", "-o", "--start"]
+    logging: *default-logging
     networks:
       hydrozoa_network:
 
@@ -94,6 +95,7 @@ services:
       - 5173:5173
     env_file:
       - ./yaci/env
+    logging: *default-logging
     networks:
       hydrozoa_network:
 
@@ -189,7 +191,7 @@ services:
       - 10001:10001
       - /var/tempo
     volumes:
-      - ./tempo-data:/var/tempo
+      - tempo-data:/var/tempo
     networks:
       hydrozoa_network:
 
