@@ -104,7 +104,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
 
         val randomNode = Seq(lazyResponses(event.toString.length % lazyResponses.size))
 
-        val results = par(lazyResponses)
+        val results = par(randomNode)
 
         results.head.body match
             case DecodeResult.Value(v) => v.map(TxId.apply)

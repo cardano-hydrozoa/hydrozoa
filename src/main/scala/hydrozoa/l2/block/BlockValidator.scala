@@ -134,7 +134,7 @@ object BlockValidator:
         // 4.a Check for unknown invalid events
         val unknownInvalidEventsL2 =
             eventsInvalid.map(_._1).toSet &~ poolEventsL2.map(_.getEventId).toSet
-        if unknownInvalidEventsL2.nonEmpty then return NotYetKnownL2Events(unknownValidEventsL2)
+        if unknownInvalidEventsL2.nonEmpty then return NotYetKnownL2Events(unknownInvalidEventsL2)
 
         // 4.(b,c) Check all invalid events from the block are indeed invalid
         val eventsInvalidWithEvents = eventsInvalid.map((txId, _) => poolEventsL2Map(txId))
