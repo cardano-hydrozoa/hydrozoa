@@ -1,12 +1,12 @@
 package hydrozoa.demo
 
+import hydrozoa.*
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
 import hydrozoa.node.rest.{NodeRestApi, SubmitRequestL2}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.NodeState
-import hydrozoa.{TxId, TxIx}
 import ox.par
 import sttp.client4.{DefaultSyncBackend, UriContext}
 import sttp.tapir.DecodeResult
@@ -34,6 +34,8 @@ trait HydrozoaSUT:
     ): Either[String, TxId]
 
     def shutdownSut(): Unit
+
+    def stateL2(): List[(UtxoId[L2], Output[L2])]
 
 val demoPeers = Map.from(
   List(
@@ -111,8 +113,9 @@ class RealHydrozoaSUT extends HydrozoaSUT:
         val response = SttpClientInterpreter()
             .toRequest(
               NodeRestApi.submitL2Endpoint,
+              // FIXME: use random peer
               baseUri = demoPeers.get(Alice)
-            ) // FIXME: use random peer
+            )
             .apply(SubmitRequestL2.apply(event))
             .send(backend)
 
@@ -121,6 +124,23 @@ class RealHydrozoaSUT extends HydrozoaSUT:
             case _                     => Left("decoding failed")
 
     override def shutdownSut(): Unit = ()
+
+    override def stateL2(): List[(UtxoId[L2], Output[L2])] =
+        val response = SttpClientInterpreter()
+            .toRequest(
+              NodeRestApi.stateL2Endpoint,
+              // FIXME: use random peer
+              baseUri = demoPeers.get(Alice)
+            )
+            .apply(())
+            .send(backend)
+
+        response.body match
+            case DecodeResult.Value(v) =>
+                v match
+                    case Right(r)  => r
+                    case Left(err) => throw RuntimeException("error getting L2 state from head")
+            case _ => throw RuntimeException("decoding error")
 
 object RealHydrozoaSUT:
     def apply(): RealHydrozoaSUT = new RealHydrozoaSUT

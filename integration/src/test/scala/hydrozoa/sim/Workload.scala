@@ -5,10 +5,10 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.{HydrozoaSUT, RealHydrozoaSUT}
-import hydrozoa.infra.toEither
-import hydrozoa.l1.multisig.state.DepositUtxos
+import hydrozoa.infra.{Piper, toEither}
+import hydrozoa.l2.ledger.{SimpleOutput, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
+import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.HeadPhase
 import hydrozoa.node.state.HeadPhase.Open
@@ -16,12 +16,13 @@ import hydrozoa.sim.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdow
 import org.scalacheck.Gen
 import org.scalacheck.Gen.Parameters
 import org.scalacheck.rng.Seed
-import ox.channels.Channel
+import ox.channels.{Actor, ActorRef, Channel}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
 import ox.{ExitCode, Ox, OxApp, forkUser}
 
+import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
 
@@ -31,16 +32,23 @@ object Workload extends OxApp:
 
     val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
 
+    var l2State: ActorRef[mutable.Map[UtxoIdL2, OutputL2]] = _
+    var sut: ActorRef[HydrozoaSUT] = _
+
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
 
         val commands: Channel[WorkloadCommand] = Channel.unlimited
 
+        l2State = Actor.create(mutable.Map[UtxoIdL2, OutputL2]())
+
+        sut = Actor.create(RealHydrozoaSUT())
+
         // Command generator
         forkUser {
             var s = genInitialState().runGen().get
             log.info(s"Initial state: $s")
-            repeat(RepeatConfig.fixedRateForever(750.millis, Some(1.second))) {
+            repeat(RepeatConfig.fixedRateForever(5000.millis, Some(1.second))) {
                 genCommand(s).runGen() match
                     case Some(cmd) =>
                         log.info(s"Next command: $cmd")
@@ -54,9 +62,20 @@ object Workload extends OxApp:
         // Command sender
         forkUser {
             log.info("Started command executor thread...")
-            val sut = RealHydrozoaSUT()
-            val runCommand_ = runCommand(sut)
-            Flow.fromSource(commands).runForeach(cmd => runCommand_(cmd))
+            Flow.fromSource(commands).runForeach(cmd => runCommand(cmd))
+        }
+
+        // L2 state update loop
+        forkUser {
+            repeat(RepeatConfig.fixedRateForever(1.seconds, Some(10.seconds))) {
+                val stateL2 = sut.ask(_.stateL2()).toMap
+                l2State.ask(m =>
+                    m.clear()
+                    m.addAll(stateL2)
+                )
+                log.info(s"L2 state was updates, utxo count is: ${stateL2.size}")
+            }
+
         }
 
         log.info(s"Started Hydrozoa workload with args: ${args.mkString(", ")}")
@@ -73,19 +92,21 @@ object Workload extends OxApp:
                   // 1 -> Gen.const(ShutdownCommand)
                 )
             case RunningHead =>
-//                lazy val l2InputCommandGen = Gen.frequency(
-//                  5 -> genTransactionL2(s),
-//                  1 -> genL2Withdrawal(s)
-//                )
+                lazy val l2InputCommandGen = Gen.frequency(
+                  5 -> genTransactionL2(s),
+                  1 -> genL2Withdrawal(s)
+                )
 
-                // if s.utxosActiveL2.isEmpty then
-                // Gen.oneOf(genDepositCommand(s), genWaitCommand(s))
-                genDepositCommand(s)
-            // else
-            //    Gen.frequency(
-            //      1 -> genDepositCommand(s),
-            //      7 -> l2InputCommandGen
-            //    )
+                val l2Size = l2State.ask(_.size)
+                log.info(s"L2 state size is: $l2Size")
+                if l2Size < 5 then
+                    // Gen.oneOf(genDepositCommand(s), genWaitCommand(s))
+                    genDepositCommand(s)
+                else
+                    Gen.frequency(
+                      1 -> genDepositCommand(s),
+                      7 -> l2InputCommandGen
+                    )
             case Freed =>
                 Gen.frequency(
                   2 -> genInitializeCommand(s)
@@ -114,42 +135,45 @@ object Workload extends OxApp:
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = AddressBechL2(depositorAccount.toString)
         yield DepositCommand(depositor, seedUtxoId, recipientAddressL2, depositorAddressL1)
-//
-//    def genTransactionL2(s: HydrozoaState): Gen[TransactionL2Command] =
-//        val l2 = AdaSimpleLedger.apply(s.utxosActiveL2)
-//
-//        for
-//            numberOfInputs <- Gen.choose(1, 5.min(s.utxosActiveL2.size))
-//            inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-//            totalCoins = inputs.map(l2.getOutput(_).coins).sum.intValue
-//
-//            outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty) {
-//                tails =>
-//                    val residual = totalCoins - tails.sum
-//                    if residual < 15_000_000
-//                    then Gen.const(Right(residual :: tails))
-//                    else
-//                        for
-//                            next <- Gen.choose(5_000_000, residual)
-//                        yield Left(next :: tails)
-//            }
-//
-//            recipients <- Gen.containerOfN[List, TestPeer](outputCoins.length, Gen.oneOf(s.headPeers))
-//
-//            outputs = outputCoins
-//                .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
-//                .map((coins, address) => SimpleOutput(address, coins))
-//        yield TransactionL2Command(SimpleTransaction(inputs.toList, outputs))
-//
-//    def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =
-//        for
-//            numberOfInputs <- Gen.choose(1, 3.min(s.utxosActiveL2.size))
-//            inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-//        yield WithdrawalL2Command(SimpleWithdrawal(inputs.toList))
-//
 
-    def runCommand(sut: RealHydrozoaSUT)(cmd: WorkloadCommand): Unit =
+    def genTransactionL2(s: HydrozoaState): Gen[TransactionL2Command] =
+        val l2state = l2State.ask(_.toMap)
+
+        for
+            numberOfInputs <- Gen.choose(1, 5.min(l2state.size))
+            inputs <- Gen.pick(numberOfInputs, l2state.keySet)
+            totalCoins = inputs.map(l2state(_).coins).sum.intValue
+
+            outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty) { tails =>
+                val residual = totalCoins - tails.sum
+                if residual < 15_000_000
+                then Gen.const(Right(residual :: tails))
+                else
+                    for next <- Gen.choose(5_000_000, residual)
+                    yield Left(next :: tails)
+            }
+
+            recipients <- Gen.containerOfN[List, TestPeer](
+              outputCoins.length,
+              Gen.oneOf(s.headPeers)
+            )
+
+            outputs = outputCoins
+                .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
+                .map((coins, address) => SimpleOutput(address, coins))
+        yield TransactionL2Command(SimpleTransaction(inputs.toList, outputs))
+
+    def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =
+        val l2state = l2State.ask(_.toMap)
+
+        for
+            numberOfInputs <- Gen.choose(1, 3.min(l2state.size))
+            inputs <- Gen.pick(numberOfInputs, l2state.keySet)
+        yield WithdrawalL2Command(SimpleWithdrawal(inputs.toList))
+
+    def runCommand(cmd: WorkloadCommand): Unit =
         log.info(s"Running command: $cmd")
+        cmd.runSut(sut)
 
     // L1 Utils
     def utxosAtAddress(headAddress: AddressBechL1): Set[UtxoIdL1] =
@@ -175,7 +199,7 @@ sealed trait WorkloadCommand:
 
     def preCondition(state: HydrozoaState): Boolean
     def runState(state: HydrozoaState): (HydrozoaState)
-    def runSut(sut: HydrozoaSUT): Result
+    def runSut(sut: ActorRef[HydrozoaSUT]): Result
 
 class InitializeCommand(
     initiator: TestPeer,
@@ -204,15 +228,16 @@ class InitializeCommand(
           headPhase = Some(Open),
           initiator = Some(initiator),
           headPeers = otherHeadPeers
-          // headAddressBech32 = Some(headAddress),
         )
 
-    override def runSut(sut: HydrozoaSUT): Result =
-        sut.initializeHead(
-          initiator,
-          1000,
-          seedUtxo.txId,
-          seedUtxo.outputIx
+    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
+        sut.ask(
+          _.initializeHead(
+            initiator,
+            1000,
+            seedUtxo.txId,
+            seedUtxo.outputIx
+          )
         )
 
 class DepositCommand(
@@ -235,7 +260,7 @@ class DepositCommand(
 
     override def runState(state: HydrozoaState): HydrozoaState = state
 
-    override def runSut(sut: HydrozoaSUT): Either[DepositError, DepositResponse] =
+    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
         val request = DepositRequest(
           fundUtxo.txId,
           fundUtxo.outputIx,
@@ -245,7 +270,42 @@ class DepositCommand(
           refundAddress,
           None
         )
-        sut.deposit(depositor, request)
+        sut.ask(_.deposit(depositor, request))
+
+class TransactionL2Command(simpleTransaction: SimpleTransaction) extends WorkloadCommand:
+
+    private val log = Logger(getClass)
+
+    override type Result = Unit
+
+    override def toString: String = s"Transaction L2 command { $simpleTransaction }"
+
+    override def preCondition(state: HydrozoaState): Boolean =
+        state.peersNetworkPhase == RunningHead
+            && state.headPhase.contains(Open)
+
+    override def runState(state: HydrozoaState): HydrozoaState = state
+
+    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
+        sut.ask(_.submitL2(simpleTransaction))
+
+class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends WorkloadCommand:
+
+    private val log = Logger(getClass)
+
+    override type Result = Unit
+
+    override def toString: String = s"Withdrawal L2 command { $simpleWithdrawal }"
+
+    override def preCondition(state: HydrozoaState): Boolean =
+        log.info(".preCondition")
+        state.peersNetworkPhase == RunningHead
+        && state.headPhase.contains(Open)
+
+    override def runState(state: HydrozoaState): HydrozoaState = state
+
+    override def runSut(sut: ActorRef[HydrozoaSUT]): Unit =
+        sut.ask(_.submitL2(simpleWithdrawal))
 
 enum PeersNetworkPhase derives CanEqual:
     case NewlyCreated
@@ -260,11 +320,7 @@ case class HydrozoaState(
     // Head
     headPhase: Option[HeadPhase] = None,
     initiator: Option[TestPeer] = None,
-    headPeers: Set[TestPeer] = Set.empty,
-    headAddressBech32: Option[AddressBechL1] = None,
-    headMultisigScript: Option[NativeScript] = None,
-    depositUtxos: DepositUtxos = UtxoSet.apply(),
-    treasuryUtxoId: Option[UtxoIdL1] = None
+    headPeers: Set[TestPeer] = Set.empty
 ):
     override def toString: String =
         "Hydrozoa state:" +
@@ -272,11 +328,7 @@ case class HydrozoaState(
             s"\tKnown peers: ${knownPeers.toString()}\n" +
             s"\tHead phase: ${headPhase.toString}\n" +
             s"\tInitiator: ${initiator.toString}\n" +
-            s"\tHead peers: ${headPeers.toString()}\n" +
-            s"\tHead address ${headAddressBech32.toString}\n" +
-            s"\tHead multisig script: [SKIPPED]\n" +
-            s"\tDeposits utxo: ${depositUtxos.toString}\n" +
-            s"\tTreasury UTxO id: ${treasuryUtxoId.toString}\n"
+            s"\tHead peers: ${headPeers.toString()}\n"
 
 object HydrozoaState:
     def apply(
