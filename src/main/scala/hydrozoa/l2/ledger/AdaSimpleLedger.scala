@@ -6,6 +6,7 @@ import hydrozoa.l1.multisig.state.DepositUtxos
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
 
+import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
@@ -154,6 +155,9 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         ret.toSet.map((k, v) => (unliftOutputRef(k), unliftOutput(v)))
 
 object AdaSimpleLedger:
+
+    var txCounter: AtomicInteger = AtomicInteger()
+    
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
 
     def apply[P <: TInstancePurpose](utxoSet: Map[UtxoIdL2, OutputL2]): AdaSimpleLedger[P] =
@@ -164,17 +168,17 @@ object AdaSimpleLedger:
     def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, EventHash) =
         event match
             case genesis: SimpleGenesis =>
-                val cardanoTx = mkCardanoTxForL2Genesis(genesis)
+                val cardanoTx = mkCardanoTxForL2Genesis(genesis, txCounter.incrementAndGet())
                 val txId = txHash(cardanoTx)
                 println(s"L2 genesis event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
             case transaction: SimpleTransaction =>
-                val cardanoTx = mkCardanoTxForL2Transaction(transaction)
+                val cardanoTx = mkCardanoTxForL2Transaction(transaction, txCounter.incrementAndGet())
                 val txId = txHash(cardanoTx)
                 println(s"L2 transaction event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
             case withdrawal: SimpleWithdrawal =>
-                val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal)
+                val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal, txCounter.incrementAndGet())
                 val txId = txHash(cardanoTx)
                 println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)

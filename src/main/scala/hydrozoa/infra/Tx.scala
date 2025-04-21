@@ -7,7 +7,10 @@ import com.bloxbean.cardano.client.spec.Era
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
-import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScript as BBNativeScript}
+import com.bloxbean.cardano.client.transaction.spec.script.{
+    ScriptAll,
+    NativeScript as BBNativeScript
+}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
@@ -17,6 +20,7 @@ import scalus.builtin.Data
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
+import scala.util.Random
 
 // TODO: make an API
 
@@ -108,7 +112,13 @@ def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOu
 // Cardano L2 transactions for the simplified ledger
 // ----------------------------------------------------------------------------
 
-def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
+/*
+FIXME: this approach doesn't work apparently - we are getting the same txHash for different genesis
+L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
+L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
+L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
+ */
+def mkCardanoTxForL2Genesis(genesis: SimpleGenesis, number: Int): TxL2 =
 
     val virtualOutputs = genesis.outputs.map { output =>
         TransactionOutput.builder
@@ -119,6 +129,10 @@ def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
 
     val body = TransactionBody.builder
         .outputs(virtualOutputs.asJava)
+        // FIXME: this is make-shift hack to make genesis events unique
+        .fee(
+          BigInteger.valueOf(number.longValue)
+        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
@@ -128,7 +142,7 @@ def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
   * @return
   *   Virtual L2 transaction that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
+def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction, number: Int): TxL2 =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -147,6 +161,10 @@ def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
     val body = TransactionBody.builder
         .inputs(virtualInputs.asJava)
         .outputs(virtualOutputs.asJava)
+        // FIXME: this is make-shift hack to make events unique
+        .fee(
+          BigInteger.valueOf(number.longValue)
+        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
@@ -155,7 +173,7 @@ def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
 /** @param withdrawal
   * @return
   */
-def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
+def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal, number: Int): TxL2 =
 
     val virtualInputs = withdrawal.inputs.map { input =>
         TransactionInput.builder
@@ -166,6 +184,10 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
     val body = TransactionBody.builder
         .inputs(virtualInputs.asJava)
+        // FIXME: this is make-shift hack to make withdrawal events unique
+        .fee(
+          BigInteger.valueOf(number.longValue)
+        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
@@ -190,17 +212,16 @@ extension (n: Network) {
     def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
 }
 
-/**
- * This is an ad-hoc implementation, it won't be correct fot other cases.
- * Returns the number of top-level scripts in ScriptAll native script
- * as if they all were `ScriptPubkey` (i.e. require one signatory).
- *
- * @param nativeScript
- * native script, see the comment above
- * @return
- * number of signatories required for a native script
- */
+/** This is an ad-hoc implementation, it won't be correct fot other cases. Returns the number of
+  * top-level scripts in ScriptAll native script as if they all were `ScriptPubkey` (i.e. require
+  * one signatory).
+  *
+  * @param nativeScript
+  *   native script, see the comment above
+  * @return
+  *   number of signatories required for a native script
+  */
 def numberOfSignatories(nativeScript: BBNativeScript): Int =
     nativeScript match
         case scriptAll: ScriptAll => scriptAll.getScripts.size()
-        case _ => 0
+        case _                    => 0
