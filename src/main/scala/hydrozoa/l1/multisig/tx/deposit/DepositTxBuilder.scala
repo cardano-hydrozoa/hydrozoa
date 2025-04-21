@@ -14,5 +14,6 @@ trait DepositTxBuilder {
 
 case class DepositTxRecipe(
     deposit: UtxoIdL1, // the only UTXO with deposit funds in user's wallet
+    depositAmount: Int,
     datum: DepositDatum // datum for deposit utxo
 )

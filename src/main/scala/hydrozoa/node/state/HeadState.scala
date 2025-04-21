@@ -118,7 +118,6 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
-        mbGenesis: Option[(TxId, SimpleGenesis)],
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
         depositsAbsorbed: Seq[UtxoIdL1]
     ): Seq[NonGenesisL2]
@@ -179,11 +178,11 @@ class HeadStateGlobal(
 
     // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
-    // FIXME: currently this will be polluted - clena up on confirmation
     private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
 
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
+    // TODO: these events won't contain genesis events
     private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
@@ -385,20 +384,18 @@ class HeadStateGlobal(
         override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
         override def applyBlockRecord(record: BlockRecord): Unit =
-            log.info("applyBlockRecord")
+            log.info(s"Applying block ${record.block.blockHeader.blockNum}")
             self.blocksConfirmedL2.append(record)
 
-            val l2BlockEffect_ = record.l2Effect.asInstanceOf[MinorBlockL2Effect]
-            stateL2.replaceUtxosActive(l2BlockEffect_)
+            record.l2Effect match
+                case utxoSet:MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
+                case utxoSet: MajorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
+                case _:FinalBlockL2Effect => ()
 
             val body = record.block.blockBody
             val blockHeader = record.block.blockHeader
             val blockNum = blockHeader.blockNum
-
-            val mbGenesis = record.l2Effect match
-                case majorEffect: MajorBlockL2Effect => majorEffect._2
-                case _                               => None
-
+            
             val nextBlockNum = blockHeader.blockNum + 1
             self.isBlockPending = Some(false)
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
@@ -406,7 +403,6 @@ class HeadStateGlobal(
             val confirmedEvents = confirmMempoolEvents(
               blockNum,
               body.eventsValid,
-              mbGenesis,
               body.eventsInvalid,
               body.depositsAbsorbed
             )
@@ -425,11 +421,9 @@ class HeadStateGlobal(
                     .count(_ == TransactionL2EventLabel)
                 val invalidWds = body.eventsInvalid.size - invalidTxs
 
-                m.observeBlockSize(blockType, TransactionL2EventLabel, "valid", validTxs)
-                m.observeBlockSize(blockType, WithdrawalL2EventLabel, "valid", validWds)
-                m.observeBlockSize(blockType, TransactionL2EventLabel, "invalid", invalidTxs)
-                m.observeBlockSize(blockType, WithdrawalL2EventLabel, "invalid", invalidWds)
-
+                m.observeBlockSize(TransactionL2EventLabel, validTxs)
+                m.observeBlockSize(WithdrawalL2EventLabel, validWds)
+                
                 m.incEventsL2Handled(TransactionL2EventLabel, validTxs + invalidTxs)
                 m.incEventsL2Handled(WithdrawalL2EventLabel, validWds + invalidWds)
 
@@ -447,45 +441,49 @@ class HeadStateGlobal(
                     case _ =>
                         m.incBlocksMajor()
                         val depositsNum = body.depositsAbsorbed.size
-                        m.observeBlockSize(blockType, TransactionL2EventLabel, "valid", depositsNum)
+                        m.observeBlockSize("deposit", depositsNum)
                         m.incAbsorbedDeposits(depositsNum)
-                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost(_))
+                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
             })
 
             log.info(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
 
-        // FIXME: this is too complex for state management, should be a part of effect
         // FIXME: naming
         override def confirmMempoolEvents(
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
-            mbGenesis: Option[(TxId, SimpleGenesis)],
             blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
             depositsAbsorbed: Seq[UtxoIdL1]
         ): Seq[NonGenesisL2] =
-            // 1. Add valid events
-            log.info(s"Add valid events: $eventsValid")
+            // 1. Handle valid events
+            log.info(s"Handle valid events: $eventsValid")
             val validEvents = eventsValid.map((txId, _) => markEventAsValid(blockNum, txId))
-            // 2. Add genesis if exists
-            log.info(s"Add genesis if exists: $mbGenesis")
-            mbGenesis.foreach((txId, genesis) =>
-                // FIXME: timeCurrent
-                val event = AdaSimpleLedger.mkGenesisEvent(genesis)
-                self.eventsConfirmedL2.append((event, blockNum))
-                // Dump L2 tx
-                TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
-            )
-            // 3. Add handled deposits
+            // 2. Process handled deposits
+            // 2.1 Add to handled
             self.depositHandled.addAll(depositsAbsorbed.toSet)
-            // 4. Remove invalid events
+            // 2.2 Remove from pool
+            depositsAbsorbed.foreach(d =>
+                val depositId = UtxoIdL1(d.txId, d.outputIx)
+                val ix = self.poolDeposits.indexWhere(p => p.depositId == depositId)
+                ix match
+                    case -1 =>
+                        throw IllegalStateException(
+                          s"pool deposit doesn't contain deposit $depositId"
+                        )
+                    case _ => self.poolDeposits.remove(ix)
+            )
+            // Metrics - FIXME: factor out 
+            metrics.tell(_.setDepositQueueSize(poolDeposits.size))
+
+            // 3. Remove invalid events
             log.info(s"Removing invalid events: $blockEventsInvalid")
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
+            
             // Metrics - FIXME: factor out
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
-
             metrics.tell(m =>
                 m.setPoolEventsL2(TransactionL2EventLabel, txs)
                 m.setPoolEventsL2(WithdrawalL2EventLabel, self.poolEventsL2.size - txs)
@@ -586,7 +584,7 @@ type L1PostDatedBlockEffect = Unit
 
 type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect | FinalBlockL2Effect
 type MinorBlockL2Effect = UtxosSetOpaque
-type MajorBlockL2Effect = (UtxosSetOpaque, Option[(TxId, SimpleGenesis)])
+type MajorBlockL2Effect = UtxosSetOpaque 
 type FinalBlockL2Effect = Unit
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
@@ -598,9 +596,7 @@ def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
 // NB: this won't work as an extension method on union type L1BlockEffect
 def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
     case _: MinorBlockL1Effect => None
-    case tx: InitTx            => tx |> txHash |> Some.apply
-    case tx: SettlementTx      => tx |> txHash |> Some.apply
-    case tx: FinalizationTx    => tx |> txHash |> Some.apply
+    case tx: MultisigTx[_]     => tx |> txHash |> Some.apply
 
 def mbSettlementFees(l1BlockEffect: L1BlockEffect): Option[Long] = l1BlockEffect match
     case tx: SettlementTx => tx |> txFees |> Some.apply

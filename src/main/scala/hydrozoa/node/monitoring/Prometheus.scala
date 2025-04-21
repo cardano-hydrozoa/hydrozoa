@@ -48,37 +48,34 @@ class PrometheusMetrics:
         blockNum.labelValues("total").inc()
         blockNum.labelValues("major").inc()
 
-    private val eventsInBlockUnit = PUnit("eventsInBlock")
-
-    // Size of blocks
+    // Detailed size of blocks
     private val blockSize = Histogram.builder
         .name("blockSize")
         .help(
-          "number of events in blocks produced by block type, " +
-              "event type (deposit / transaction / withdrawal), and event validity"
+          "number of events in blocks (deposit / transaction / withdrawal)"
         )
-        .unit(eventsInBlockUnit)
         .labelNames(
-          "blockType", // Type of block
-          "eventType", // Type of event (deposit / transaction / withdrawal / total)
-          "eventValidity" // valid/invalid
+          // "blockType", // Type of block
+          "eventType" // Type of event (deposit / transaction / withdrawal )
+          // "eventValidity" // valid/invalid
         )
         .register
 
-    def clearBlockEvents(): Unit = blockSize.clear()
+    def clearBlockSize(): Unit = blockSize.clear()
 
     def observeBlockSize(
-        blockType: BlockTypeL2,
+        // blockType: BlockTypeL2,
         eventType: NonGenesisL2EventLabel | String,
-        validity: String,
+        // validity: String,
         number: Int
     ): Unit =
-        val blockTypeLabel = blockType match
-            case Minor => "minor"
-            case Major => "major"
-            case Final => "final"
+//        val blockTypeLabel = blockType match
+//            case Minor => "minor"
+//            case Major => "major"
+//            case Final => "final"
         blockSize
-            .labelValues(blockTypeLabel, nonGenesisEventLabel(eventType), validity)
+//            .labelValues(blockTypeLabel, nonGenesisEventLabel(eventType), validity)
+            .labelValues(nonGenesisEventLabel(eventType))
             .observe(number)
 
     // L2 Events in pool

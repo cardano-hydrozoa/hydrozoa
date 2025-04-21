@@ -2,11 +2,10 @@ package hydrozoa.l2.ledger
 
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.l1.multisig.state.DepositUtxos
+import hydrozoa.l1.multisig.state.{DepositUtxos, depositDatum}
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
 
-import java.util.concurrent.atomic.AtomicInteger
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
@@ -156,8 +155,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
 object AdaSimpleLedger:
 
-    var txCounter: AtomicInteger = AtomicInteger()
-    
+    // var txCounter: AtomicInteger = AtomicInteger()
+
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
 
     def apply[P <: TInstancePurpose](utxoSet: Map[UtxoIdL2, OutputL2]): AdaSimpleLedger[P] =
@@ -168,17 +167,17 @@ object AdaSimpleLedger:
     def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, EventHash) =
         event match
             case genesis: SimpleGenesis =>
-                val cardanoTx = mkCardanoTxForL2Genesis(genesis, txCounter.incrementAndGet())
+                val cardanoTx = mkCardanoTxForL2Genesis(genesis)
                 val txId = txHash(cardanoTx)
                 println(s"L2 genesis event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
             case transaction: SimpleTransaction =>
-                val cardanoTx = mkCardanoTxForL2Transaction(transaction, txCounter.incrementAndGet())
+                val cardanoTx = mkCardanoTxForL2Transaction(transaction)
                 val txId = txHash(cardanoTx)
                 println(s"L2 transaction event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
             case withdrawal: SimpleWithdrawal =>
-                val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal, txCounter.incrementAndGet())
+                val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal)
                 val txId = txHash(cardanoTx)
                 println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
@@ -200,10 +199,13 @@ case class SimpleGenesis(
 ) derives CanEqual
 
 object SimpleGenesis:
-    // FIXME: REMOVE
     def apply(ds: DepositUtxos): SimpleGenesis =
         SimpleGenesis(
-          ds.map.values.map(o => SimpleOutput(liftAddress(o.address), o.coins)).toList
+          ds.map.values.map(o =>
+              val datum = depositDatum(o) match
+                  case Some(datum) => datum
+                  case None => throw RuntimeException("deposit UTxO doesn't contain a proper datum")
+              SimpleOutput(datum.address |> plutusAddressAsL2, o.coins)).toList
         )
     def apply(address: AddressBechL2, ada: Int): SimpleGenesis =
         SimpleGenesis(List(SimpleOutput(address, ada)))

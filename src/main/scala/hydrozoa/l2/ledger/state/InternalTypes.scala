@@ -2,7 +2,7 @@ package hydrozoa.l2.ledger.state
 
 import cats.implicits.toBifunctorOps
 import hydrozoa.{L2, Output, OutputL2, TxId, TxIx, UtxoIdL2}
-import hydrozoa.infra.{decodeBech32AddressL1, decodeBech32AddressL2, extractAddress}
+import hydrozoa.infra.{decodeBech32AddressL1, decodeBech32AddressL2, plutusAddressAsL2}
 import scala.collection.mutable
 
 import scalus.builtin.ByteString
@@ -40,7 +40,7 @@ def liftOutput(bech32: hydrozoa.AddressBechL2, coins: BigInt): OutputInt =
 def unliftOutput(output: OutputInt): Output[L2] =
     val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
     val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
-    Output[L2](extractAddress(output.address).asL1, coins)
+    Output[L2](plutusAddressAsL2(output.address).asL1, coins)
 
 def unliftUtxoSet(utxosSetOpaque: UtxosSetOpaque): Map[UtxoIdL2, OutputL2] =
     utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))

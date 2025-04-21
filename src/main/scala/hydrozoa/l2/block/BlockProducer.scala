@@ -123,7 +123,6 @@ def createBlock(
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
-            // FIXME: construct genesis properly - using the datum
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>

@@ -118,7 +118,7 @@ L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf3
 L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
 L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
  */
-def mkCardanoTxForL2Genesis(genesis: SimpleGenesis, number: Int): TxL2 =
+def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
 
     val virtualOutputs = genesis.outputs.map { output =>
         TransactionOutput.builder
@@ -129,10 +129,10 @@ def mkCardanoTxForL2Genesis(genesis: SimpleGenesis, number: Int): TxL2 =
 
     val body = TransactionBody.builder
         .outputs(virtualOutputs.asJava)
-        // FIXME: this is make-shift hack to make genesis events unique
-        .fee(
-          BigInteger.valueOf(number.longValue)
-        )
+//        // FIXME: this is make-shift hack to make genesis events unique
+//        .fee(
+//          BigInteger.valueOf(number.longValue)
+//        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
@@ -142,7 +142,7 @@ def mkCardanoTxForL2Genesis(genesis: SimpleGenesis, number: Int): TxL2 =
   * @return
   *   Virtual L2 transaction that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction, number: Int): TxL2 =
+def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -161,10 +161,6 @@ def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction, number: Int): TxL2 
     val body = TransactionBody.builder
         .inputs(virtualInputs.asJava)
         .outputs(virtualOutputs.asJava)
-        // FIXME: this is make-shift hack to make events unique
-        .fee(
-          BigInteger.valueOf(number.longValue)
-        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
@@ -173,7 +169,7 @@ def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction, number: Int): TxL2 
 /** @param withdrawal
   * @return
   */
-def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal, number: Int): TxL2 =
+def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
     val virtualInputs = withdrawal.inputs.map { input =>
         TransactionInput.builder
@@ -184,10 +180,6 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal, number: Int): TxL2 
 
     val body = TransactionBody.builder
         .inputs(virtualInputs.asJava)
-        // FIXME: this is make-shift hack to make withdrawal events unique
-        .fee(
-          BigInteger.valueOf(number.longValue)
-        )
         .build
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build

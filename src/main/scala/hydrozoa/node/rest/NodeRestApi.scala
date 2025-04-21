@@ -65,6 +65,7 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runDeposit(
         txId: String,
         txIx: Long,
+        depositAmount: Int,
         deadline: Option[BigInt],
         address: String,
         datum: Option[String],
@@ -76,6 +77,7 @@ class NodeRestApi(node: ActorRef[Node]):
             DepositRequest(
               TxId(txId),
               TxIx(txIx.toChar),
+              depositAmount,
               deadline,
               AddressBechL2(address),
               (datum match
@@ -123,6 +125,7 @@ object NodeRestApi:
         .in("deposit")
         .in(query[String]("txId"))
         .in(query[Long]("txIx"))
+        .in(query[Int]("depositAmount"))
         .in(query[Option[BigInt]]("deadline"))
         .in(query[String]("address"))
         .in(query[Option[String]]("datum"))

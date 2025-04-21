@@ -175,7 +175,6 @@ object BlockValidator:
                 val depositsAbsorbedUtxos = UtxoSet.apply[L1, DepositTag](
                   depositUtxos.map.filter((k, _) => depositsAbsorbed.contains(k))
                 )
-                // FIXME: construct genesis properly - using the datum
                 val genesis: SimpleGenesis = SimpleGenesis.apply(depositsAbsorbedUtxos)
                 stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                     case Right(txId, utxos) => Some(txId, genesis)

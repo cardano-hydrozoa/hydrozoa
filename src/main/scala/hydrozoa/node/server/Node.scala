@@ -112,7 +112,7 @@ class Node:
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), depositDatum)
+        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), r.depositAmount, depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) =

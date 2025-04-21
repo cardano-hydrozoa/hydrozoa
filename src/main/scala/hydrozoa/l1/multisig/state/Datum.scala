@@ -1,7 +1,11 @@
 package hydrozoa.l1.multisig.state
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.OutputL1
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData}
+import scalus.bloxbean.Interop
+import scalus.builtin.Data.{FromData, ToData, fromData}
 import scalus.builtin.FromDataInstances.given
 import scalus.builtin.ToDataInstances.given
 import scalus.builtin.{ByteString, Data, FromData, ToData}
@@ -9,6 +13,8 @@ import scalus.ledger.api.v1.FromDataInstances.given
 import scalus.ledger.api.v1.ToDataInstances.given
 import scalus.ledger.api.v1.{Address, PosixTime}
 import scalus.prelude.Maybe
+
+import scala.util.Try
 
 // MultisigTreasuryDatum
 
@@ -22,7 +28,8 @@ type L2ConsensusParamsH32 = ByteString
 
 // TODO: implement hashing for L2ConsensusParamsH32
 // TODO: implement root hash
-def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum = mkMultisigTreasuryDatum(0, ByteString.empty)
+def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum =
+    mkMultisigTreasuryDatum(0, ByteString.empty)
 
 // TODO: implement hashing for L2ConsensusParamsH32
 // TODO: implement root hash
@@ -48,3 +55,15 @@ case class DepositDatum(
 
 given FromData[DepositDatum] = FromData.deriveCaseClass[DepositDatum]
 given ToData[DepositDatum] = ToData.deriveCaseClass[DepositDatum](0)
+
+def depositDatum(output: OutputL1): Option[DepositDatum] =
+    for
+        datumHex <- output.mbInlineDatum
+        datum <- Try(
+          fromData[DepositDatum](
+            Interop.toScalusData(
+              PlutusData.deserialize(HexUtil.decodeHexString(datumHex))
+            )
+          )
+        ).toOption
+    yield datum

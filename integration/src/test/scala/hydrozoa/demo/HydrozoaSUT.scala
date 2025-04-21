@@ -1,6 +1,7 @@
 package hydrozoa.demo
 
 import hydrozoa.*
+import hydrozoa.demo.{HydrozoaSUT, RealHydrozoaSUT}
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
@@ -26,8 +27,6 @@ trait HydrozoaSUT:
         depositor: TestPeer,
         r: DepositRequest
     ): Either[DepositError, DepositResponse]
-
-    def produceBlock(headPeers: Set[TestPeer]): Either[String, Unit]
 
     def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
@@ -73,6 +72,7 @@ class RealHydrozoaSUT extends HydrozoaSUT:
             .apply(
               r.txId.hash,
               r.txIx.ix.longValue,
+              r.depositAmount,
               r.deadline,
               r.address.bech32,
               None, // r.datum, // FIXME:
@@ -85,41 +85,28 @@ class RealHydrozoaSUT extends HydrozoaSUT:
             case DecodeResult.Value(v) => v
             case _                     => Left("decoding failed")
 
-    override def produceBlock(headPeers: Set[TestPeer]): Either[String, Unit] =
-
-        val lazyResponses = headPeers
-            .map(p =>
-                () =>
-                    val response = SttpClientInterpreter()
-                        .toRequest(NodeRestApi.awaitBlockEndpoint, baseUri = demoPeers.get(p))
-                        .apply(())
-                        .send(backend)
-
-                    response.body match
-                        case DecodeResult.Value(v) => v
-                        case _                     => Left("decoding failed")
-            )
-            .toSeq
-
-        val results = par(lazyResponses)
-        println("*****************************************************")
-        println(results)
-        // TODO: check lefts
-        Right(())
-
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
     ): Either[InitializationError, TxId] =
-        val response = SttpClientInterpreter()
-            .toRequest(
-              NodeRestApi.submitL2Endpoint,
-              // FIXME: use random peer
-              baseUri = demoPeers.get(Alice)
-            )
-            .apply(SubmitRequestL2.apply(event))
-            .send(backend)
 
-        response.body match
+        val lazyResponses = demoPeers
+            .map(p =>
+                () =>
+                    SttpClientInterpreter()
+                        .toRequest(
+                          NodeRestApi.submitL2Endpoint,
+                          baseUri = Some(p._2)
+                        )
+                        .apply(SubmitRequestL2.apply(event))
+                        .send(backend)
+            )
+            .toList
+
+        val randomNode = Seq(lazyResponses(event.toString.length % lazyResponses.size))
+
+        val results = par(lazyResponses)
+
+        results.head.body match
             case DecodeResult.Value(v) => v.map(TxId.apply)
             case _                     => Left("decoding failed")
 

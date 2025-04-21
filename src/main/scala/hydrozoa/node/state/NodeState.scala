@@ -73,7 +73,7 @@ class NodeState(
                 // Reset head-bound metrics
                 metrics.tell(m =>
                     m.resetBlocksCounter()
-                    m.clearBlockEvents()
+                    m.clearBlockSize()
                     m.setPoolEventsL2(TransactionL2EventLabel, 0)
                     m.setPoolEventsL2(WithdrawalL2EventLabel, 0)
                     m.clearLiquidity()

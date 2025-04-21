@@ -374,7 +374,7 @@ object MBTSuite extends Commands:
                 Maybe.Nothing
             )
 
-            val depositTxRecipe = DepositTxRecipe(fundUtxo, depositDatum)
+            val depositTxRecipe = DepositTxRecipe(fundUtxo, ???, depositDatum)
 
             val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
             val backendService = BackendServiceMock(l1Mock, state.pp)
@@ -448,6 +448,7 @@ object MBTSuite extends Commands:
             val request = DepositRequest(
                 fundUtxo.txId,
                 fundUtxo.outputIx,
+                ???,
                 None,
                 address,
                 None,
@@ -559,7 +560,7 @@ object MBTSuite extends Commands:
                     val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
                     val l2Effect: L2BlockEffect = block.blockHeader.blockType match
                         case Minor => utxosActive
-                        case Major => utxosActive /\ mbGenesis
+                        case Major => utxosActive
                         case Final => ()
 
                     val record = BlockRecord(block, l1Effect, (), l2Effect)
@@ -571,7 +572,7 @@ object MBTSuite extends Commands:
                     l2Effect match
                         case utxosActive: MinorBlockL2Effect =>
                             l2.replaceUtxosActive(utxosActive)
-                        case (utxosActive -> mbGenesis) =>
+                        case utxosActive: MajorBlockL2Effect =>
                             l2.replaceUtxosActive(utxosActive)
                         // TODO: delete block events (both valid and invalid)
                         case _: FinalBlockL2Effect =>
