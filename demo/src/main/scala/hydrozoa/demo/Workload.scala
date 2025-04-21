@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.{Piper, toEither}
 import hydrozoa.l2.ledger.{SimpleOutput, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
@@ -11,15 +12,14 @@ import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.HeadPhase
 import hydrozoa.node.state.HeadPhase.Open
-import PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import org.scalacheck.Gen
 import org.scalacheck.Gen.Parameters
 import org.scalacheck.rng.Seed
+import ox.*
 import ox.channels.{Actor, ActorRef, Channel}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
-import ox.*
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt

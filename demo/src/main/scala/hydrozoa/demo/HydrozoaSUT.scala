@@ -1,7 +1,6 @@
 package hydrozoa.demo
 
 import hydrozoa.*
-import hydrozoa.demo.{HydrozoaSUT, RealHydrozoaSUT}
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}

@@ -78,10 +78,10 @@ services:
       - 1442:1442
     volumes:
       - cluster-data:/clusters
-      - ./yaci/node.properties:/app/config/node.properties
+      - ./docker/yaci/node.properties:/app/config/node.properties
     env_file:
-      - ./yaci/node.properties
-      - ./yaci/env
+      - ./docker/yaci/node.properties
+      - ./docker/yaci/env
     entrypoint: ["/app/yaci-cli.sh", "create-node", "-o", "--start"]
     logging: *default-logging
     networks:
@@ -94,7 +94,7 @@ services:
     ports:
       - 5173:5173
     env_file:
-      - ./yaci/env
+      - ./docker/yaci/env
     logging: *default-logging
     networks:
       hydrozoa_network:
@@ -112,7 +112,7 @@ services:
       - --enable-feature=exemplar-storage
       - --enable-feature=native-histograms
     volumes:
-      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./docker/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
       - prometheus-data:/prometheus
     logging: *default-logging
     networks:
@@ -126,7 +126,7 @@ services:
     command:
       - -config.file=/etc/loki/local-config.yaml
     volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - ./docker/loki-config.yaml:/etc/loki/local-config.yaml:ro
     logging: *default-logging
     networks:
       hydrozoa_network:
@@ -136,7 +136,7 @@ services:
     container_name: promtail
     volumes:
       - /var/log:/var/log
-      - ./promtail-config.yaml:/etc/promtail/config.yaml
+      - ./docker/promtail-config.yaml:/etc/promtail/config.yaml
       - /var/run/docker.sock:/var/run/docker.sock
       # - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yaml
@@ -172,9 +172,9 @@ services:
       - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor metricsSummary
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-      - ./grafana/dashboard.json:/var/lib/grafana/dashboards/dashboard.json
-      - ./grafana/default.yaml:/etc/grafana/provisioning/dashboards/default.yaml
+      - ./docker/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./docker/grafana/dashboard.json:/var/lib/grafana/dashboards/dashboard.json
+      - ./docker/grafana/default.yaml:/etc/grafana/provisioning/dashboards/default.yaml
     depends_on:
       - prometheus
       - loki
@@ -200,7 +200,7 @@ services:
     image: grafana/tempo:latest
     command: [-config.file=/etc/tempo.yaml]
     volumes:
-      - ./tempo.yaml:/etc/tempo.yaml
+      - ./docker/tempo.yaml:/etc/tempo.yaml
       - tempo-data:/var/tempo
     ports:
       - 14268:14268  # jaeger ingest
