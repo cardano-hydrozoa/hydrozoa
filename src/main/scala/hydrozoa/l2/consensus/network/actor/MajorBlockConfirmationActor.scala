@@ -12,8 +12,10 @@ import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
 import hydrozoa.node.state.*
 import hydrozoa.{TxId, TxKeyWitness, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
+import ox.resilience.{RetryConfig, retryEither}
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 private class MajorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
@@ -120,31 +122,43 @@ private class MajorBlockConfirmationActor(
                 val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
                 (ownBlock.utxosActive, ownBlock.mbGenesis, ownBlock.utxosWithdrawn)
             else
-                val (prevHeader, stateL2Cloned, poolEventsL2, depositUtxos) =
-                    stateActor.ask(
-                      _.head.openPhase(openHead =>
-                          (
-                            openHead.l2Tip.blockHeader,
-                            openHead.stateL2.blockProduction,
-                            openHead.immutablePoolEventsL2,
-                            openHead.peekDeposits
+                def tryValidate = {
+                    val (prevHeader, stateL2Cloned, poolEventsL2, depositUtxos) =
+                        stateActor.ask(
+                          _.head.openPhase(openHead =>
+                              (
+                                openHead.l2Tip.blockHeader,
+                                openHead.stateL2.blockProduction,
+                                openHead.immutablePoolEventsL2,
+                                openHead.peekDeposits
+                              )
                           )
-                      )
+                        )
+                    val resolution = BlockValidator.validateBlock(
+                      req.block,
+                      prevHeader,
+                      stateL2Cloned,
+                      poolEventsL2,
+                      depositUtxos,
+                      false
                     )
-                val resolution = BlockValidator.validateBlock(
-                  req.block,
-                  prevHeader,
-                  stateL2Cloned,
-                  poolEventsL2,
-                  depositUtxos,
-                  false
-                )
-                resolution match
-                    case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
-                        log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
-                        (utxosActive, mbGenesis, utxosWithdrawn)
-                    case resolution =>
-                        throw RuntimeException(s"Block validation failed: $resolution")
+                    resolution match
+                        case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
+                            log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
+                            Right(utxosActive, mbGenesis, utxosWithdrawn)
+                        case r @ ValidationResolution.NotYetKnownDeposits(depositsUnknown) =>
+                            log.warn(
+                              s"Validation failed with NotYetKnownDeposits: $depositsUnknown"
+                            )
+                            Left(r)
+                        // Fail fast on other errors for now
+                        case resolution =>
+                            throw RuntimeException(s"Block validation failed: $resolution")
+                }
+
+                retryEither(RetryConfig.delay(10, 1.second))(tryValidate) match
+                    case Right(ret) => ret
+                    case Left(err)  => throw RuntimeException(err.toString)
 
         // Update local state
         this.req = req
