@@ -55,8 +55,7 @@ def encodeHex(bytes: IArray[Byte]): String =
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))
 
-extension(vkb: VerificationKeyBytes)
-    def verKeyHash: String = getKeyHash(vkb.bytes)
+extension (vkb: VerificationKeyBytes) def verKeyHash: String = getKeyHash(vkb.bytes)
 
 // Piper!
 implicit class Piper[A](val x: A) extends AnyVal {
@@ -70,11 +69,13 @@ implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
 
 def sequence[A](l: List[Option[A]]): Option[List[A]] = l match {
     case Nil => Some(Nil)
-    case h :: t => h match {
-        case None => None
-        case Some(head) => sequence(t) match {
+    case h :: t =>
+        h match {
             case None => None
-            case Some(list) => Some(head :: list)
+            case Some(head) =>
+                sequence(t) match {
+                    case None       => None
+                    case Some(list) => Some(head :: list)
+                }
         }
-    }
 }

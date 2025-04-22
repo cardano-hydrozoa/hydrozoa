@@ -206,8 +206,10 @@ object BlockValidator:
         then return Invalid(MinorBlockContainsWithdrawals)
         // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
         val keepAlive = blockType == Major && false
-        if (mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
-            !(blockType == Minor || keepAlive || finalizing))
+        if (
+          mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
+          !(blockType == Minor || keepAlive || finalizing)
+        )
         then return Invalid(MinorBlockWasExpected)
 
         // 8. Return Invalid if any of these fails to hold:

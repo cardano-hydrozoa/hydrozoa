@@ -391,7 +391,10 @@ class HeadStateGlobal(
 
         override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
-        override def applyBlockRecord(record: BlockRecord, mbGenesis: Option[(TxId, SimpleGenesis)] = None): Unit =
+        override def applyBlockRecord(
+            record: BlockRecord,
+            mbGenesis: Option[(TxId, SimpleGenesis)] = None
+        ): Unit =
             log.info(s"Applying block ${record.block.blockHeader.blockNum}")
 
             val body = record.block.blockBody
@@ -410,17 +413,20 @@ class HeadStateGlobal(
             self.blocksConfirmedL2.append(record)
 
             val confirmedEvents = applyBlockEvents(
-                blockNum,
-                body.eventsValid,
-                body.eventsInvalid,
-                body.depositsAbsorbed
+              blockNum,
+              body.eventsValid,
+              body.eventsInvalid,
+              body.depositsAbsorbed
             )
 
             // NB: this should be run before replacing utxo set
             val volumeWithdrawn = record.block.validWithdrawals.toList
                 .map(confirmedEvents(_).asInstanceOf[WithdrawalL2])
                 .flatMap(_.withdrawal.inputs)
-                .map(stateL2.getOutput).map(_.coins).sum.toLong
+                .map(stateL2.getOutput)
+                .map(_.coins)
+                .sum
+                .toLong
 
             record.l2Effect match
                 case utxoSet: MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)

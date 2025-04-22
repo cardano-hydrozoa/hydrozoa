@@ -7,7 +7,10 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import ox.channels.ActorRef
 import ox.sleep
@@ -45,8 +48,8 @@ class BlockProducer:
         ) match
             case Some(some @ (block, _, _, _, _)) =>
                 log.info(s"A new block was produced: $block")
-                // FIXME: this is needed now so we can see deposits on all nodes for sure 
-                sleep(1.second) 
+                // FIXME: this is needed now so we can see deposits on all nodes for sure
+                sleep(1.second)
                 log.info(s"Starting consensus on block ${block.blockHeader.blockNum}")
                 block.blockHeader.blockType match
                     case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))

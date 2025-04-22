@@ -17,9 +17,8 @@ def decodeBech32AddressL1(address: AddressBechL1): v1.Address =
 def decodeBech32AddressL2(address: AddressBechL2): v1.Address =
     getAddress(Address(address.bech32))
 
-
 /** Takes Plutus Address from datum and makes a Hydrozoa L2 address.
- */
+  */
 def plutusAddressAsL2(address: v1.Address): AddressBechL2 =
     AddressBechL2(addressToBloxbean(hydrozoaL2Network.toBloxbean, address).getAddress)
 

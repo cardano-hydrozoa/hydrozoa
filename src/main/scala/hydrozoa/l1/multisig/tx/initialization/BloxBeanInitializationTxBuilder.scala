@@ -66,5 +66,8 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .additionalSignersCount(signatories)
             .build()
 
-        Right((initializationTx.serialize |> TxL1.apply |> MultisigTx.apply ), AddressBechL1(seederAddress))
+        Right(
+          (initializationTx.serialize |> TxL1.apply |> MultisigTx.apply),
+          AddressBechL1(seederAddress)
+        )
 }

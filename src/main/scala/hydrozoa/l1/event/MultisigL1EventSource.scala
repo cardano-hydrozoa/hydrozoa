@@ -28,9 +28,9 @@ import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
- *
- * TODO: L1 source component ideally should use streaming not polling
- */
+  *
+  * TODO: L1 source component ideally should use streaming not polling
+  */
 class MultisigL1EventSource(
     nodeState: ActorRef[NodeState],
     cardano: ActorRef[CardanoL1]
@@ -76,10 +76,9 @@ class MultisigL1EventSource(
                             var loop = true
                             while loop do
                                 sleep(100.millis)
-                                loop =
-                                    nodeState.ask(_.mbInitializedOn.isDefined)
-                                        // TODO: we might want to continue during Finalizing phase
-                                        && nodeState.ask(_.head.currentPhase == Open)
+                                loop = nodeState.ask(_.mbInitializedOn.isDefined)
+                                // TODO: we might want to continue during Finalizing phase
+                                    && nodeState.ask(_.head.currentPhase == Open)
 
                             log.info("Leaving L1 source supervised scope")
                         }

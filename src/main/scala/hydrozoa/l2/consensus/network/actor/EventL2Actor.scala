@@ -9,11 +9,10 @@ import ox.{forkDiscard, supervised}
 
 import scala.collection.mutable
 
-/**
- * FIXME: Remove acknowledgements completely.
- * @param stateActor
- * @param dropMyself
- */
+/** FIXME: Remove acknowledgements completely.
+  * @param stateActor
+  * @param dropMyself
+  */
 private class EventL2Actor(
     stateActor: ActorRef[NodeState],
     dropMyself: () => Unit
