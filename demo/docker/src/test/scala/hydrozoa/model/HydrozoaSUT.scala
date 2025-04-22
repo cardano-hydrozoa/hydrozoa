@@ -7,7 +7,7 @@ import hydrozoa.node.TestPeer.mkWallet
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.{BlockRecord, NodeState, WalletId}
-import hydrozoa.{TxId, TxIx, mkHydrozoaNode}
+import hydrozoa.{TxId, TxIx, mkSimpleHydrozoaNode}
 
 /** Hydrozoa peers' network facade.
   */
@@ -81,7 +81,7 @@ object OneNodeHydrozoaSUT:
         useYaci: Boolean = false
     ): OneNodeHydrozoaSUT =
         new OneNodeHydrozoaSUT(
-          mkHydrozoaNode(
+          mkSimpleHydrozoaNode(
             ownPeerWallet = mkWallet(ownPeer),
             knownPeers = knownPeers.map(mkWallet),
             useL1Mock = !useYaci,

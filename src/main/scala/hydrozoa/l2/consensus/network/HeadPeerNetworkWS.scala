@@ -2,7 +2,8 @@ package hydrozoa.l2.consensus.network
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
-import hydrozoa.l2.consensus.network.transport.{HeadPeerNetworkTransportWS, IncomingDispatcher}
+import hydrozoa.l2.consensus.ConsensusDispatcher
+import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransportWS
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import hydrozoa.{TxId, VerificationKeyBytes}
@@ -14,9 +15,9 @@ class HeadPeerNetworkWS(
     transport: HeadPeerNetworkTransportWS
 ) extends HeadPeerNetwork:
 
-    private var dispatcher: ActorRef[IncomingDispatcher] = _
+    private var dispatcher: ActorRef[ConsensusDispatcher] = _
 
-    def setDispatcher(dispatcher: ActorRef[IncomingDispatcher]): Unit =
+    def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
         this.dispatcher = dispatcher
 
     private val log = Logger(getClass)
@@ -54,7 +55,7 @@ class HeadPeerNetworkWS(
         val seq = transport.nextSeq
         val ret = dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
         log.info(s"reqMinor done")
-    
+
     override def reqMajor(req: ReqMajor): Unit =
         log.info(s"ReqMajor for block: $req.block")
         val seq = transport.nextSeq

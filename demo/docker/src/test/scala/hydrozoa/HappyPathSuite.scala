@@ -17,7 +17,7 @@ class HappyPathSuite extends FunSuite {
     private val knownPeers = Set(Bob, Carol, Daniella)
     private val headPeers = knownPeers.take(2)
 
-    private val (log: Logger, node: Node, cardano: CardanoL1) = mkHydrozoaNode(
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkSimpleHydrozoaNode(
       ownPeerWallet = mkWallet(Alice),
       knownPeers = knownPeers.map(mkWallet),
       useL1Mock = true,

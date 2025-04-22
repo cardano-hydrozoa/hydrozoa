@@ -9,6 +9,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
+import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.node.TestPeer
@@ -32,35 +33,35 @@ import sttp.ws.WebSocketFrame
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import hydrozoa.l2.consensus.network.{
-    ackInitCodec,
-    ackInitSchema,
-    ackVerKeySchema,
-    ackRefundLaterCodec,
-    ackRefundLaterSchema,
-    reqInitCodec,
-    reqInitSchema,
-    reqMinorCodec,
-    reqMinorSchema,
-    reqMajorCodec,
-    reqMajorSchema,
-    reqFinalCodec,
-    reqFinalSchema,
-    ackMinorCodec,
-    ackMinorSchema,
-    ackMajorCodec,
-    ackMajorSchema,
-    ackMajor2Codec,
-    ackMajor2Schema,
-    ackFinalCodec,
-    ackFinalSchema,
     ackFinal2Codec,
     ackFinal2Schema,
-    reqVerKeySchema,
+    ackFinalCodec,
+    ackFinalSchema,
+    ackInitCodec,
+    ackInitSchema,
+    ackMajor2Codec,
+    ackMajor2Schema,
+    ackMajorCodec,
+    ackMajorSchema,
+    ackMinorCodec,
+    ackMinorSchema,
+    ackRefundLaterCodec,
+    ackRefundLaterSchema,
+    ackVerKeySchema,
+    reqEventL2Schema,
+    reqFinalCodec,
+    reqFinalSchema,
+    reqInitCodec,
+    reqInitSchema,
+    reqMajorCodec,
+    reqMajorSchema,
+    reqMinorCodec,
+    reqMinorSchema,
     reqRefundLaterCodec,
     reqRefundLaterSchema,
-    reqEventL2Schema,
-    walletIdSchema,
-    testPeerSchema
+    reqVerKeySchema,
+    testPeerSchema,
+    walletIdSchema
 }
 import hydrozoa.node.server.Node
 
@@ -80,27 +81,7 @@ trait HeadPeerNetworkTransport:
       */
     def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long
 
-//    /** Sends a message to all peers, and get back a source channel with replies that may get back.
-//      * @param req
-//      *   request
-//      * @tparam R
-//      *   type of request
-//      * @return
-//      *   source of dependent responses
-//      */
-//    def broadcastAndCollect[R <: Req](req: R): Source[req.ackType]
-
 end HeadPeerNetworkTransport
-
-/** An interface to handle incoming messages that the node should provide. FIXME: move to a separate
-  * file
-  */
-trait IncomingDispatcher:
-    def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit // FIXME
-    def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit // FIXME
-    def dispatchMessage(anyMsg: AnyMsg): Unit
-    def spawnActorProactively(from: TestPeer, seq: Long, req: Req): Source[req.resultType]
-    def run()(using Ox): Unit
 
 sealed trait Aux
 
@@ -257,9 +238,9 @@ class HeadPeerNetworkTransportWS(
 
     private val log = Logger(getClass)
 
-    private var dispatcher: ActorRef[IncomingDispatcher] = _
+    private var dispatcher: ActorRef[ConsensusDispatcher] = _
 
-    def setDispatcher(dispatcher: ActorRef[IncomingDispatcher]): Unit =
+    def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
         this.dispatcher = dispatcher
 
     // Global channel for incoming messages
