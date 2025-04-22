@@ -36,12 +36,14 @@ private class MinorBlockConfirmationActor(
             val l2Effect: L2BlockEffect = utxosActive
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
-            stateActor.tell(_.head.openPhase(s => s.applyBlockRecord(record)))
+            stateActor.tell(nodeState => nodeState.head.openPhase(s =>
+                s.applyBlockRecord(record)
+                // Dump state
+                nodeState.head.dumpState()
+            ))
             // Move head into finalization phase if finalizeHead flag was received
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
-            // Dump state
-            // dumpState()
-            // TODO: the absense of this line is a good test!
+            // TODO: the absence of this line is a good test!
             resultChannel.send(())
 
     override def deliver(ack: AckType): Option[AckType] =

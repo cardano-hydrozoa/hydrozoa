@@ -58,7 +58,6 @@ private class MajorBlockConfirmationActor(
             val ownAck2 = AckMajor2(me, settlementTxKeyWitness, false)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
-            // deliver(ownAck2)
             deilverAck2(ownAck2)
             Some(ownAck2)
         else None
@@ -77,12 +76,17 @@ private class MajorBlockConfirmationActor(
             // Block record and state update by block application
             // TODO: L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
-            stateActor.tell(_.head.openPhase(s => s.applyBlockRecord(record)))
+            stateActor.tell(nodeState =>
+                nodeState.head.openPhase(s =>
+                    s.applyBlockRecord(record)
+                    // Dump state
+                    nodeState.head.dumpState()
+                )
+            )
             log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
             cardano.tell(_.submit(settlementTx))
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
-            // Dump state
-            // dumpState()
+            // TODO: the absence of this line is a good test!
             resultChannel.send(())
 
     override def deliver(ack: AckType): Option[AckType] =

@@ -59,6 +59,8 @@ extension (r: HeadStateReader) {
 trait HeadState:
     // All regimes/phases
     def currentPhase: HeadPhase
+    // Dumps the current state into log
+    def dumpState(): Unit
     // Phase-specific APIs
     def initializingPhase[A](foo: InitializingPhase => A): A
     def openPhase[A](foo: OpenPhase => A): A
@@ -527,6 +529,43 @@ class HeadStateGlobal(
                 )
                 event
     }
+
+    override def dumpState(): Unit =
+        currentPhase match
+            case HeadPhase.Open =>
+                log.trace(
+                  "-----------------------   Open: L1 State --------------------------------------" +
+                      s"\n${openPhase(_.stateL1)}"
+                )
+
+                log.trace(
+                  "-----------------------   Open: POOL    ---------------------------------------" +
+                      s"\n${openPhase(_.immutablePoolEventsL2)}"
+                )
+
+                log.trace(
+                  "-----------------------   Open: L2 State   ------------------------------------" +
+                      s"\n${openPhase(_.stateL2.getUtxosActive)}"
+                )
+                log.trace(
+                  "------------------------  Open: BLOCKS   --------------------------------------" +
+                      s"\n${openPhase(_.immutableBlocksConfirmedL2)}"
+                )
+                log.trace(
+                  "------------------------  Open: EVENTS   --------------------------------------" +
+                      s"\n${openPhase(_.immutableEventsConfirmedL2)}"
+                )
+
+            case HeadPhase.Finalizing =>
+                log.trace(
+                  "-----------------------   Finalizing: L1 State --------------------------------------" +
+                      s"\n${finalizingPhase(_.stateL1)}"
+                )
+                log.trace(
+                  "-----------------------   Finalizing: L2 State   ------------------------------------" +
+                      s"${finalizingPhase(_.stateL2.getUtxosActive)}"
+                )
+            case _ => println("dumpState is missing due to nodes's being in wrong phase.")
 }
 
 object HeadStateGlobal:

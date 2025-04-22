@@ -178,78 +178,13 @@ class Node:
                     case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
                     case _    => List.empty
 
-    // ----------------------------------------------------->>
-
-//
-//    private def dumpState(): Unit =
-//        nodeState.head.currentPhase match
-//            case HeadPhase.Open =>
-//                println(
-//                  "-----------------------   L1 State --------------------------------------"
-//                )
-//                println(nodeState.head.openPhase(_.stateL1))
-//                println
-//                println(
-//                  "-----------------------   POOL    ---------------------------------------"
-//                )
-//                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
-//                println
-//                println(
-//                  "-----------------------   L2 State   ------------------------------------"
-//                )
-//                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
-//                println
-//                println(
-//                  "------------------------  BLOCKS   --------------------------------------"
-//                )
-//                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
-//                println
-//                println(
-//                  "------------------------  EVENTS   --------------------------------------"
-//                )
-//                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
-//
-//            case HeadPhase.Finalizing =>
-//                println(
-//                  "-----------------------   L1 State --------------------------------------"
-//                )
-//                println(nodeState.head.finalizingPhase(_.stateL1))
-//                println(
-//                  "-----------------------   L2 State   ------------------------------------"
-//                )
-//                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
-//            // println
-//            // println(
-//            //    "------------------------  BLOCKS   --------------------------------------"
-//            // )
-//            // println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
-//            case HeadPhase.Finalized => println("Node is finalized.")
+    
 //
 //    private def applyBlock(
 //        blockRecord: BlockRecord
 //    ): Unit =
 //        val block = blockRecord.block
 //        block.blockHeader.blockType match
-//            case Minor =>
-
-//
-//            case Major =>
-//                // L1 effect
-//                val settlementTx = toL1Tx(
-//                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
-//                ) // FIXME: casting
-//                val Right(settlementTxId) = cardano.submit(settlementTx)
-//                log.info(s"Settlement tx submitted: $settlementTxId")
-//
-////                // Emulate L1 event
-////                // TODO: I don't think we have to wait L1 event in reality
-////                //  instead we need to update the treasury right upon submitting.
-////                //  Another concern - probably we have to do it in one atomic change
-////                //  along with the L2 effect. Otherwise the next settlement transaction
-////                //  may use the old treasury.
-////                multisigL1EventManager.map(
-////                  _.handleSettlementTx(settlementTx, settlementTxId)
-////                )
 //
 //            case Final =>
 //                // L1 effect
