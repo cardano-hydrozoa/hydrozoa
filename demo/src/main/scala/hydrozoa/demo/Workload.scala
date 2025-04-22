@@ -99,7 +99,7 @@ object Workload extends OxApp:
 
                 val l2Size = l2State.ask(_.size)
                 log.info(s"L2 state size is: $l2Size")
-                if l2Size < 3 then
+                if l2Size < 10 then
                     // Gen.oneOf(genDepositCommand(s), genWaitCommand(s))
                     genDepositCommand(s)
                 else
@@ -132,8 +132,8 @@ object Workload extends OxApp:
             utxoIds = utxosAtAddress(depositorAddressL1)
             (seedUtxoId, coins) <- Gen.oneOf(utxoIds)
 
-            // recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
-            recipient <- Gen.oneOf(TestPeer.values) // use more addressess
+            // more addresses the better
+            recipient <- Gen.oneOf(TestPeer.values)
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = AddressBechL2(depositorAccount.toString)
             depositAmount <- Gen.choose(
@@ -158,7 +158,7 @@ object Workload extends OxApp:
 
             outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty) { tails =>
                 val residual = totalCoins - tails.sum
-                if residual < 15_000_000
+                if residual < 5_000_000
                 then Gen.const(Right(residual :: tails))
                 else
                     for next <- Gen.choose(5_000_000, residual)

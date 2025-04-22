@@ -1,6 +1,9 @@
 package hydrozoa.l2.ledger.event
 
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 
 sealed trait AnyEventL2[+H, +G, +T, +W, U](eventId: H) {
     type UtxosDiff = U
@@ -31,7 +34,7 @@ enum NonGenesisL2EventLabel derives CanEqual:
     case TransactionL2EventLabel
     case WithdrawalL2EventLabel
 
-def nonGenesisLabel(e: NonGenesisEventL2[_, _, _, _ ,_]): NonGenesisL2EventLabel =
+def nonGenesisLabel(e: NonGenesisEventL2[_, _, _, _, _]): NonGenesisL2EventLabel =
     e match
-        case _:TransactionEventL2[_, _, _, _ ,_] => TransactionL2EventLabel
-        case _:WithdrawalEventL2[_, _, _, _ ,_] => WithdrawalL2EventLabel
+        case _: TransactionEventL2[_, _, _, _, _] => TransactionL2EventLabel
+        case _: WithdrawalEventL2[_, _, _, _, _]  => WithdrawalL2EventLabel
