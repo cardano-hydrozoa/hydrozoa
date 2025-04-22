@@ -12,7 +12,7 @@ class YaciDevKitCardano(ctx: AppCtx) extends Cardano {
         Either.cond(result.isSuccessful, TxId(result.getValue), result.getResponse)
     }
 
-    override def network(): Network =
+    override def network: Network =
         val nw = ctx.network
         Network(nw.getNetworkId, nw.getProtocolMagic)
 

@@ -1,9 +1,15 @@
 package hydrozoa.l1.multisig.state
 
-import hydrozoa.{L1, UtxoSetMutable, Utxo, UtxoSet}
+import hydrozoa.{L1, Utxo, UtxoSet, UtxoSetMutable}
 
 import scala.collection.mutable
 
+/** This is L1 state as node's L1 provider sees it.
+  *
+  * @param treasuryUtxo
+  * @param depositUtxos
+  * @param rolloutUtxos
+  */
 case class MultisigHeadStateL1(
     var treasuryUtxo: TreasuryUtxo,
     depositUtxos: DepositUtxosMutable,

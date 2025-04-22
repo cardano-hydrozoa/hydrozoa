@@ -13,11 +13,14 @@ sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
 
+type UtxosDiff = Set[(OutputRefL2, Output[L2])]
+type UtxosDiffMutable = mutable.Set[(OutputRefL2, Output[L2])] // FIXME L2
+
 // FIXME: move InstancePurpose to L2Ledger
 case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
     verifier: Verifier[L2Event]
 ) extends L2Ledger[
-      Utxos,
+      UtxosSetOpaqueMutable,
       SimpleGenesis,
       SimpleTransaction,
       SimpleWithdrawal,
@@ -26,8 +29,9 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       L2EventHash,
       Verifier[L2Event]
     ]:
-
-    val activeState: Utxos = mutable.Map.empty
+    
+    // FIXME: make it private
+    val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
 
     /** Makes a copy of the current ledger for block production purposes.
       * @param ev
@@ -35,11 +39,10 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       * @return
       *   cloned ledger
       */
-    def blockProduction(implicit
-        ev: InstancePurpose =:= THydrozoaHead
+    def blockProduction(using ev: InstancePurpose =:= THydrozoaHead
     ): AdaSimpleLedger[TBlockProduction] =
         val ledgerForBlockProduction: AdaSimpleLedger[TBlockProduction] = copy()
-        ledgerForBlockProduction.updateUtxosActive(activeState.clone())
+        ledgerForBlockProduction.updateUtxosActive(activeState.clone().toMap)
         ledgerForBlockProduction
 
     override def submit[E1 <: L2Event](
@@ -56,12 +59,21 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
+                val txIn = OutputRefL2(txId, TxIx(output._2))
+                val txOut = Output[L2](output._1.address.asL1, output._1.coins)
+                (txIn, txOut)
+            )
+            .toSet
+
+        val utxoDiffInt = event.genesis.outputs.zipWithIndex
+            .map(output =>
                 val txIn = liftOutputRef(OutputRefL2(txId, TxIx(output._2)))
                 val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
             .toSet
-        activeState.addAll(utxoDiff)
+
+        activeState.addAll(utxoDiffInt)
         Right((txId, utxoDiff))
 
     private def handleTransaction(event: L2Transaction) =
@@ -78,7 +90,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                     (txIn, txOut)
                 )
 
-                val (inputRefs, inputs) = oldUtxos.unzip
+                val (inputRefs, inputs, _) = oldUtxos.unzip3
 
                 if !checkSumInvariant(inputs, newUtxos.map(_._2)) then
                     Left(txId, s"Sum invariant is not hold for tx $txId")
@@ -87,7 +99,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                     inputRefs.foreach(activeState.remove)
                     newUtxos.foreach(activeState.put.tupled)
 
-                    Right((txId, Set[(OutputRefInt, OutputInt)]()))
+                    Right((txId, Set[(OutputRefL2, Output[L2])]()))
 
     private def handleWithdrawal(event: L2Withdrawal) =
         val (_, txId) = AdaSimpleLedger.adopt(event.withdrawal)
@@ -95,10 +107,11 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         resolveInputs(event.withdrawal.inputs) match
             case Left(extraneous) => Left(txId, s"Extraneous utxos in withdrawal: $extraneous")
             case Right(resolved) =>
-                val (withdrawnRefs, withdrawnOutputs) = resolved.unzip
+                val (withdrawnRefs, withdrawnOutputs, (withdrawnPub)) = resolved.unzip3
+                val (withdrawnRefsPub, withdrawnOutputsPub) = withdrawnPub.unzip
                 // FIXME: atomicity
                 withdrawnRefs.foreach(activeState.remove)
-                Right(txId, withdrawnRefs.zip(withdrawnOutputs).toSet)
+                Right(txId, withdrawnRefsPub.zip(withdrawnOutputsPub).toSet)
 
     /** Tries to resolve output refs.
       *
@@ -109,12 +122,12 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
       */
     private def resolveInputs(
         inputs: List[OutputRefL2]
-    ): Either[List[OutputRefL2], List[(OutputRefInt, OutputInt)]] =
+    ): Either[List[OutputRefL2], List[(OutputRefInt, OutputInt, (OutputRefL2, Output[L2]))]] =
         inputs
             .map { e =>
                 val outputRefInt = liftOutputRef(e)
                 activeState.get(outputRefInt) match
-                    case Some(output) => Right(outputRefInt, output)
+                    case Some(output) => Right(outputRefInt, output, (e, unliftOutput(output)))
                     case None         => Left(e)
             }
             .partitionMap(identity) match
@@ -123,12 +136,12 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
     override def isEmpty: Boolean = activeState.isEmpty
 
-    override def flush: Utxos =
+    override def flush: UtxosDiff =
         val ret = activeState.clone()
         activeState.clear()
-        ret
+        ret.toSet.map((k, v) => (unliftOutputRef(k), unliftOutput(v)))
 
-    override def updateUtxosActive(activeState: Utxos): Unit =
+    override def updateUtxosActive(activeState: UtxosSetOpaque): Unit =
         // TODO: revise
         this.activeState.clear()
         this.activeState.addAll(activeState)
@@ -209,7 +222,8 @@ type L2Event = AnyL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdraw
 
 type L2Genesis = GenesisL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
 
-type L2NonGenesis =  NonGenesisL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
+type L2NonGenesis =
+    NonGenesisL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]
 
 type L2Transaction =
     TransactionL2Event[TxId, SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosDiff]

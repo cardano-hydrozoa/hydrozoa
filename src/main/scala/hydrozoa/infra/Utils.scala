@@ -36,6 +36,6 @@ def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
       null // no scripts
     )
 
-def encodeHex(bytes: IArray[Byte]): String = HexUtil.encodeHexString(bytes.toArray)
+def encodeHex(bytes: IArray[Byte]): String = HexUtil.encodeHexString(IArray.genericWrapArray(bytes).toArray)
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))

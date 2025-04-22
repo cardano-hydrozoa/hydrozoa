@@ -31,7 +31,9 @@ object TxL2:
 
 // Bech32 addresses
 case class AddressBechL1(bech32: String)
-case class AddressBechL2(bech32: String)
+case class AddressBechL2(bech32: String) {
+    def asL1: AddressBechL1 = AddressBechL1(bech32)
+}
 
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])

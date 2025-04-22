@@ -8,9 +8,6 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
     TransactionL2EventLabel,
     WithdrawalL2EventLabel
 }
-import hydrozoa.l2.ledger.state.Utxos
-
-import scala.collection.mutable
 
 case class Block(
     blockHeader: BlockHeader,
@@ -43,7 +40,8 @@ case class BlockBody(
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
-type UtxoSetL2 = Utxos
+// FIXME: should come form ledger/node
+type UtxoSetL2 = Map[OutputRefL2, Output[L2]]
 
 opaque type RH32UtxoSetL2 = H32[UtxoSetL2]
 
@@ -85,17 +83,17 @@ case class BlockBuilder[
     depositsAbsorbed: Set[OutputRef[L1]] = Set.empty,
     utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
 ) {
-    def majorBlock(implicit
+    def majorBlock(using
         ev: BlockType =:= TBlockMinor
     ): BlockBuilder[TBlockMajor, BlockNum, VersionMajor] =
         copy(blockType = Major, versionMinor = 0)
 
-    def finalBlock(implicit
+    def finalBlock(using
         ev: BlockType =:= TBlockMinor
     ): BlockBuilder[TBlockFinal, BlockNum, VersionMajor] =
         copy(blockType = Final, versionMinor = 0)
 
-    def blockNum(blockNum: Int)(implicit
+    def blockNum(blockNum: Int)(using
         ev: BlockNum =:= TNone
     ): BlockBuilder[BlockType, TSet, VersionMajor] =
         copy(blockNum = blockNum)
@@ -103,12 +101,12 @@ case class BlockBuilder[
     def timeCreation(timeCreation: PosixTime): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(timeCreation = timeCreation)
 
-    def versionMajor(versionMajor: Int)(implicit
+    def versionMajor(versionMajor: Int)(using
         ev: VersionMajor =:= TNone
     ): BlockBuilder[BlockType, BlockNum, TSet] =
         copy(versionMajor = versionMajor)
 
-    def versionMinor(versionMinor: Int)(implicit
+    def versionMinor(versionMinor: Int)(using
         ev: BlockType =:= TBlockMinor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(versionMinor = versionMinor)
@@ -116,7 +114,7 @@ case class BlockBuilder[
     def withTransaction(txId: TxId): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, TransactionL2EventLabel)))
 
-    def withWithdrawal(txId: TxId)(implicit
+    def withWithdrawal(txId: TxId)(using
         ev: BlockType <:< TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, WithdrawalL2EventLabel)))
@@ -127,7 +125,7 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
-    def withDeposit(d: OutputRef[L1])(implicit
+    def withDeposit(d: OutputRef[L1])(using
         ev: BlockType =:= TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(depositsAbsorbed = depositsAbsorbed.+(d))
@@ -144,7 +142,7 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         foo(this)
 
-    def build(implicit
+    def build(using
         blockNumEv: BlockNum =:= TSet,
         versionMajorEv: VersionMajor =:= TSet
     ): Block =

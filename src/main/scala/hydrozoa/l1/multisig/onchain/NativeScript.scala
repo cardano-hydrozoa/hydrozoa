@@ -9,8 +9,6 @@ import hydrozoa.infra.CryptoHash.*
 import hydrozoa.{
     OutputRefL1,
     ParticipantVerificationKey,
-    TxId,
-    TxIx,
     NativeScript as HNativeScript,
     Network as HNetwork
 }

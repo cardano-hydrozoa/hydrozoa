@@ -1,25 +1,25 @@
 package hydrozoa.l2.block
 
 import hydrozoa.{L1, OutputRefL1, TxId, TxIx}
-import org.scalatest.Assertions.assertTypeError;
 
 class BlockBuilderSpec extends munit.ScalaCheckSuite {
 
     test("no blocks without block number") {
-        assertTypeError("SafeBlockBuilder().build;")
-        assertTypeError("SafeBlockBuilder().majorBlock.build;")
-        assertTypeError("SafeBlockBuilder().finalBlock.build;")
+        compileErrors("SafeBlockBuilder().build;")
+        compileErrors("SafeBlockBuilder().build;")
+        compileErrors("SafeBlockBuilder().majorBlock.build;")
+        compileErrors("SafeBlockBuilder().finalBlock.build;")
     }
 
     test("no block without major version") {
-        assertTypeError("SafeBlockBuilder().blockNum(42).build;")
-        assertTypeError("SafeBlockBuilder().blockNum(42).majorBlock.build;")
-        assertTypeError("SafeBlockBuilder().blockNum(42).finalBlock.build;")
+        compileErrors("SafeBlockBuilder().blockNum(42).build;")
+        compileErrors("SafeBlockBuilder().blockNum(42).majorBlock.build;")
+        compileErrors("SafeBlockBuilder().blockNum(42).finalBlock.build;")
     }
 
     test("no minor versions for major and final blocks") {
-        assertTypeError("SafeBlockBuilder().majorBlock.versionMinor(1)")
-        assertTypeError("SafeBlockBuilder().finalBlock.versionMinor(1)")
+        compileErrors("SafeBlockBuilder().majorBlock.versionMinor(1)")
+        compileErrors("SafeBlockBuilder().finalBlock.versionMinor(1)")
     }
 
     test("minor block") {
@@ -29,7 +29,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
     }
 
     test("no minor blocks with withdrawals") {
-        assertTypeError(
+        compileErrors(
           "SafeBlockBuilder().blockNum(42).versionMajor(5).withWithdrawal(TxId(\"wd1hash\")).build"
         );
     }
@@ -55,13 +55,13 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
     }
 
     test("no minor blocks with deposits") {
-        assertTypeError(
+        compileErrors(
           "SafeBlockBuilder().blockNum(42).versionMajor(5).withWithdrawal(TxId(\"tx1hash\")).build"
         );
     }
 
     test("no final blocks with deposits") {
-        assertTypeError("""SafeBlockBuilder().finalBlock
+        compileErrors("""SafeBlockBuilder().finalBlock
               .blockNum(42)
               .versionMajor(5)
               .withDeposits(Set(mkOutputRef[L1](TxId("wd1hash"), TxIx(0))))
@@ -79,7 +79,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
     }
 
     test("no minor blocks with withdrawals") {
-        assertTypeError(
+        compileErrors(
           "SafeBlockBuilder().blockNum(42).versionMajor(5).withWithdrawal(TxId(\"tx1\")).build"
         );
     }
@@ -98,7 +98,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
     }
 
     test("major can't be promoted as final") {
-        assertTypeError("SafeBlockBuilder().majorBlock.finalBlock")
+        compileErrors("SafeBlockBuilder().majorBlock.finalBlock")
     }
 
 }

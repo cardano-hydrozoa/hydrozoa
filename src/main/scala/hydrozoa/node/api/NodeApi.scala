@@ -119,7 +119,7 @@ class NodeApi(node: Node):
         val b = nextBlockFinal match
             case Some(_) => true
             case None    => false
-        node.handleNextBlock(b)
+        node.handleNextBlock(b).map(_.toString)
 
 // JSON/Schema instances
 enum SubmitRequestL2:

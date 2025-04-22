@@ -27,7 +27,7 @@ def mkBuilder[T](ctx: AppCtx): AbstractTx[T] => QuickTxBuilder#TxContext =
         val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
 
         val evaluator = ScalusTransactionEvaluator(
-          slotConfig = SlotConfig.Preprod, // FIMXE: paramater
+          slotConfig = SlotConfig.Preprod, // FIXME: use config parameter
           protocolParams = protocolParams,
           utxoSupplier = utxoSupplier,
           scriptSupplier = NoScriptSupplier(),

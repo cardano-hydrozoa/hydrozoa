@@ -26,10 +26,12 @@ object AppCtx {
 
     def yaciDevKit(): AppCtx = {
         val url = "http://localhost:8080/api/v1/"
-        val network = new Network(0, 42)
         AppCtx(
-          network,
-          new BFBackendService(url, "")
+          networkL2static,
+          BFBackendService(url, "")
         )
     }
 }
+
+// FIXME:
+val networkL2static = Network(0, 42)
