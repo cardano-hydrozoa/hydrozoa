@@ -10,8 +10,8 @@ Depending on your preferences, consider the following options:
 * Play with Hydrozoa network running it locally => `goto` [demo](https://github.com/cardano-hydrozoa/hydrozoa/tree/euo/metrics-dahboard/demo)
 * Build and read the latest specification => `goto` [specification](https://github.com/cardano-hydrozoa/hydrozoa/tree/euo/metrics-dahboard/specification)
 * Download a pre-built [spec](https://drive.google.com/file/d/1O2QeARutrNf7wZA1GExioWlnS9XMLJ07/view)
-* Join discussions => goto [discussion](https://github.com/cardano-hydrozoa/hydrozoa/discussions)  
-* Start hacking by picking up an issue => goto [issues: help wanted](https://github.com/cardano-hydrozoa/hydrozoa/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22) 
+* Join discussions on GH => goto [discussion](https://github.com/cardano-hydrozoa/hydrozoa/discussions)
+* Start hacking by picking up an issue => goto [issues: help wanted](https://github.com/cardano-hydrozoa/hydrozoa/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22)
 
 # Developer's Guide
 
@@ -19,8 +19,8 @@ Depending on your preferences, consider the following options:
 
 You'll need Java JDK 21+, [scala-cli](https://scala-cli.virtuslab.org/) or [sbt](https://www.scala-sbt.org/)
 of proper versions. 
-The preferred way is to use Nix. Install fresh version of Nix package manager 
-and run `nix develop` to get into a dev-shell with all the dependencies needed.
+The preferred way is to use `Nix`. Install a fresh version of the Nix package manager 
+and run `nix develop` to drill into a dev-shell with all the dependencies needed.
 
 ## Setting up IntelliJ IDEA
 
@@ -41,9 +41,9 @@ Run `test` to run the tests.
 
 Currently, Hydrozoa works against a private network backed with 
 [Yaci DevKit](https://github.com/bloxbean/yaci-devkit).
-Here is the [link](https://devkit.yaci.xyz/docker) to installation page.
+Here is the [link](https://devkit.yaci.xyz/docker) to the installation page.
 
-Enter `devkit`'s CLI, create the node and run it:
+Enter `devkit`'s CLI, create the node, and run it:
 
 ```shell
 devkit start
@@ -53,7 +53,7 @@ devkit start
 
 #### Resetting the local Cardano node
 
-If you need to reset the local testnet run this command (in the `devkit` shell):
+If you need to reset the local testnet, run this command (in the `devkit` shell):
 
 ```shell
 reset
@@ -61,7 +61,7 @@ reset
 
 ### Running Hydrozoa Network
 
-If you use IDEA, see run configurations in `.run` folder. 
+If you use IDEA, check out configurations in `.run` folder. 
 
 Otherwise:
 
@@ -74,12 +74,12 @@ Otherwise:
 ### Testing
 
 In addition to unit tests in the main codebase, there is also `integration` project 
-which contains several test suites, including a model-based test-suite.
-For now, these test suites needs to be updated, please refer to issue #111.
+which contains several test suites, including a model-based test suite.
+For now, these test suites need to be updated, please refer to issue #111.
 
 ## Note on terminology
 
-In an attempt to minimise potential confusion coming from use of word "reference"
+In an attempt to minimise potential confusion coming from the use of the word "reference"
 as an identifier of a utxo and for a utxo that a transaction accesses in a read-only manner
 we use the following terms:
 
