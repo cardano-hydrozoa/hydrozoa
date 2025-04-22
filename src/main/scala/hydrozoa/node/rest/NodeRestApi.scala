@@ -6,7 +6,6 @@ import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
-    awaitBlockEndpoint,
     depositEndpoint,
     initEndpoint,
     stateL2Endpoint,
@@ -31,22 +30,12 @@ import sttp.tapir.swagger.bundle.SwaggerInterpreter
   */
 class NodeRestApi(node: ActorRef[Node]):
 
-//    private val nextBlockEndpoint =
-//        endpoint.post
-//            .in("l2")
-//            .in("next")
-//            .in(query[Option[String]]("nextBlockFinal"))
-//            .out(stringBody)
-//            .errorOut(stringBody)
-//            .handle(nextBlock)
-
     private val apiEndpoints =
         List(
           initEndpoint.handle(runInit),
           depositEndpoint.handle(runDeposit),
           submitL1Endpoint.handle(runSubmitL1),
           submitL2Endpoint.handle(runSubmitL2),
-          awaitBlockEndpoint.handle(runAwaitBlock),
           stateL2Endpoint.handle(runStateL2)
         )
 
@@ -99,15 +88,6 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runSubmitL2(req: SubmitRequestL2): Either[String, String] =
         node.ask(_.submitL2(req).map(_.toString))
 
-//    private def nextBlock(nextBlockFinal: Option[String]): Either[String, String] =
-//        val b = nextBlockFinal match
-//            case Some(_) => true
-//            case None    => false
-//        node.ask(_.handleNextBlock(b).map(_.toString))
-
-    private def runAwaitBlock(_unit: Unit): Either[String, String] =
-        node.ask(_.awaitBlock())
-
     private def runStateL2(_unit: Unit): Either[Unit, StateL2Response] =
         Right(node.ask(_.stateL2()))
 
@@ -145,11 +125,6 @@ object NodeRestApi:
         .in("l2")
         .in("submit")
         .in(jsonBody[SubmitRequestL2])
-        .out(stringBody)
-        .errorOut(stringBody)
-
-    val awaitBlockEndpoint = endpoint.get
-        .in("runAwaitBlock")
         .out(stringBody)
         .errorOut(stringBody)
 

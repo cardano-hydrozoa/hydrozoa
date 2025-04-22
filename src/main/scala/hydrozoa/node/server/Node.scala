@@ -10,8 +10,8 @@ import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
-import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
+import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.Open
@@ -112,7 +112,8 @@ class Node:
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), r.depositAmount, depositDatum)
+        val depositTxRecipe =
+            DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), r.depositAmount, depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) =
@@ -123,7 +124,7 @@ class Node:
         log.info(s"Deposit tx: $serializedTx")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        // FIXME: now it's not multisig
+        // FIXME: in fact it's not a multisig tx, we have to revise tx dumping
         // TxDump.dumpMultisigTx(depositTxDraft)
 
         val req = ReqRefundLater(depositTxDraft, index)
@@ -132,12 +133,13 @@ class Node:
         log.info(s"Refund tx: $serializedRefundTx")
 
         // TODO: temporarily we submit the deposit tx here on the node that handles the request
+        // TODO: shall we add a combined function for signing?
         val Right(depositTxId) =
             cardano.ask(
               _.submit(
                 addWitness(depositTxDraft, wallet.ask(_.createTxKeyWitness(depositTxDraft)))
               )
-            ) // TODO: add the combined function for signing
+            )
 
         log.info(s"Deposit tx submitted: $depositTxId")
         Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
@@ -157,7 +159,8 @@ class Node:
         Right(event.getEventId)
     end submitL2
 
-    /** Manually triggers next block creation procedure.
+    /** Manually triggers next block creation procedure. This was used for model-based testing, and
+      * we will need to get it back.
       * @param nextBlockFinal
       * @return
       */
@@ -165,34 +168,6 @@ class Node:
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
         ???
-
-    def awaitBlock(): Either[String, String] =
-        nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
-            case None => Left("No Hydrozoa Head is present")
-            case Some(_) =>
-                val currentPhase = nodeState.ask(s => s.reader.currentPhase)
-                currentPhase match
-                    case Open =>
-                        val (tip, isBlockPending) =
-                            nodeState.ask(_.head.openPhase(o => (o.l2Tip, o.isBlockPending)))
-                        if !isBlockPending
-                        then Right(tip.blockHeader.toString)
-                        else
-                            def checkPending(): String =
-                                val currentTip = nodeState.ask(_.head.openPhase(_.l2Tip))
-                                if currentTip == tip
-                                then
-                                    val msg = "block is still producing"
-                                    log.info(msg)
-                                    throw RuntimeException(msg)
-                                currentTip.blockHeader.toString
-                            Try(
-                              retry(RetryConfig.backoff(10, 100.millis, 1.second, Jitter.Equal))(
-                                checkPending()
-                              )
-                            ).toEither.swap.map(_.toString).swap
-
-                    case _ => Left("Head should be open, but it's not.")
 
     def stateL2(): StateL2Response =
         nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
