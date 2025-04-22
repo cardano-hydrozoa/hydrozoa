@@ -20,7 +20,8 @@ private class FinalBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     finalizationTxBuilder: FinalizationTxBuilder,
-    cardano: ActorRef[CardanoL1]
+    cardano: ActorRef[CardanoL1],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -81,6 +82,7 @@ private class FinalBlockConfirmationActor(
             cardano.tell(_.submit(finalizationTx))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.debug(s"deliver ack: $ack")

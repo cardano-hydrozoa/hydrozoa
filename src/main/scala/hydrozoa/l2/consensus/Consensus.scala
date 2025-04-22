@@ -17,9 +17,11 @@ trait ConsensusDispatcher:
     //
     def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit
     def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit
+    def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit
     //
     def dispatchMessage(anyMsg: AnyMsg): Unit
     def spawnActorProactively(from: TestPeer, seq: Long, req: Req): Source[req.resultType]
+    def dropActor(origin: (TestPeer, Long)): Unit
     def run()(using Ox): Unit
 end ConsensusDispatcher
 
@@ -29,6 +31,11 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
 
     override def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit =
         this.transport = transport
+
+    private var ownActor: ActorRef[ConsensusDispatcher] = _
+
+    override def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit =
+        this.ownActor = ownActor
 
     private var consensusActorFactory: ConsensusActorFactory = _
 
@@ -62,6 +69,7 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                         )
             case None =>
                 log.info(s"Actor was NOT found for origin: $origin")
+                val dropMyself = () => ownActor.tell(_.dropActor(origin))
                 // TODO: First reaction: here would be nice to check, that if at least one
                 //  block-related consensus actor is already here we must indicate an
                 //  erroneous condition: under normal operation there should be exactly
@@ -72,13 +80,13 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                 //  This situation should be definitely tested in simulation.
                 val mbNewActor = msg.asReqOrAck match
                     case Left(originPeer, originSeq, req) =>
-                        val (newActor, acks) = consensusActorFactory.spawnByReq(req)
+                        val (newActor, acks) = consensusActorFactory.spawnByReq(req, dropMyself)
                         acks.foreach(ack =>
                             transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
                         )
                         Some(newActor)
                     case Right(_, _, originPeer, originSeq, ack) =>
-                        val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack)
+                        val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack, dropMyself)
                         mbAck.foreach(ack =>
                             transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
                         )
@@ -98,7 +106,8 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
     ): Source[req.resultType] =
         val origin = (from, seq)
         log.info("Spawning actor proactively...")
-        val (newActor, acks) = consensusActorFactory.spawnByReq(req)
+        val dropMyself = () => ownActor.tell(_.dropActor(origin))
+        val (newActor, acks) = consensusActorFactory.spawnByReq(req, dropMyself)
         spawnActorReactivelyIn.send(newActor)
         val newActorRef = spawnActorReactivelyOut.receive()
         actors.put(origin, newActorRef)
@@ -107,6 +116,11 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.info("Getting result source...")
         val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
         source
+
+    override def dropActor(origin: (TestPeer, Long)): Unit =
+        log.info(s"Dropping actor for origin $origin")
+        val ret = actors.remove(origin)
+        assert(ret.isDefined)
 
     private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
     private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous

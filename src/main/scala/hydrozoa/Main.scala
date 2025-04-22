@@ -43,7 +43,7 @@ val peers = Map.from(
 )
 val yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
 
-// Local peers and Yaci endpoint
+//// Local peers and Yaci endpoint
 //val peers = Map.from(
 //  List(
 //    Alice -> uri"ws://localhost:4937/ws",
@@ -51,7 +51,7 @@ val yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
 //    Carol -> uri"ws://localhost:4939/ws"
 //  )
 //)
-// val yaciBFApiUri = "http://localhost:8080/api/v1/"
+//val yaciBFApiUri = "http://localhost:8080/api/v1/"
 
 object HydrozoaNode extends OxApp:
 
@@ -88,7 +88,7 @@ object HydrozoaNode extends OxApp:
                   finalizationTxBuilder
                 ) = mkTxBuilders(
                   knownPeers,
-                  yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
+                  yaciBFApiUri = yaciBFApiUri
                 )
                 val cardanoActor = Actor.create(cardano)
                 val nodeStateActor = Actor.create(nodeState)
@@ -109,6 +109,7 @@ object HydrozoaNode extends OxApp:
                 val dispatcher: ConsensusDispatcher = DefaultConsensusDispatcher.apply()
                 dispatcher.setConsensusActorFactory(actorFactory)
                 val dispatcherActor = Actor.create(dispatcher)
+                dispatcher.setOwnActor(dispatcherActor)
 
                 val transport = HeadPeerNetworkTransportWS.apply(ownPeer, ownPort, serverPeers)
                 val transportActor = Actor.create(transport)

@@ -19,7 +19,8 @@ private class MajorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     settlementTxBuilder: SettlementTxBuilder,
-    cardano: ActorRef[CardanoL1]
+    cardano: ActorRef[CardanoL1],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -89,6 +90,7 @@ private class MajorBlockConfirmationActor(
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.debug(s"deliver ack: $ack")

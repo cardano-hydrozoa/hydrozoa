@@ -13,7 +13,8 @@ import scala.collection.mutable
 
 private class MinorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
-    walletActor: ActorRef[Wallet]
+    walletActor: ActorRef[Wallet],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -47,6 +48,7 @@ private class MinorBlockConfirmationActor(
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")

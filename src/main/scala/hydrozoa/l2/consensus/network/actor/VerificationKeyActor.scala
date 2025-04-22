@@ -10,7 +10,8 @@ import scala.collection.mutable
 
 private class VerificationKeyActor(
     stateActor: ActorRef[NodeState],
-    walletActor: ActorRef[Wallet]
+    walletActor: ActorRef[Wallet],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -32,6 +33,7 @@ private class VerificationKeyActor(
             log.trace(s"Actor is done with value: $result")
             stateActor.tell(_.saveKnownPeersVKeys(result))
             resultChannel.send(result)
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")

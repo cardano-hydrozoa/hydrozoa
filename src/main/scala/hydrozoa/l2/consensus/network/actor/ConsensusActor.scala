@@ -66,102 +66,117 @@ class ConsensusActorFactory(
 
     private val log = Logger(getClass)
 
-    def spawnByReq(req: Req): (ConsensusActor, Seq[Ack]) =
+    def spawnByReq(req: Req, dropMyself: () => Unit): (ConsensusActor, Seq[Ack]) =
         log.info("spawnByReq")
         req match
             case req: ReqVerKey =>
-                val actor = mkVerificationKeyActor
+                val actor = mkVerificationKeyActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqInit =>
-                val actor = mkInitHeadActor
+                val actor = mkInitHeadActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqRefundLater =>
-                val actor = mkRefundLaterActor
+                val actor = mkRefundLaterActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqEventL2 =>
-                val actor = mkEventL2Actor
+                val actor = mkEventL2Actor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqMinor =>
-                val actor = mkMinorBlockActor
+                val actor = mkMinorBlockActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqMajor =>
-                val actor = mkMajorBlockActor
+                val actor = mkMajorBlockActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
             case req: ReqFinal =>
-                val actor = mkFinalBlockActor
+                val actor = mkFinalBlockActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
 
-    def spawnByAck(ack: Ack): (Option[ConsensusActor], Option[Ack]) =
+    def spawnByAck(ack: Ack, dropMyself: () => Unit): (Option[ConsensusActor], Option[Ack]) =
         log.info("spawnByAck")
         ack match
             case ack: AckVerKey =>
-                val actor = mkVerificationKeyActor
+                val actor = mkVerificationKeyActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckInit =>
-                val actor = mkInitHeadActor
+                val actor = mkInitHeadActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckRefundLater =>
-                val actor = mkRefundLaterActor
+                val actor = mkRefundLaterActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> None
             case ack: AckUnit =>
                 (None, None)
             case ack: AckMinor =>
-                val actor = mkMinorBlockActor
+                val actor = mkMinorBlockActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckMajor =>
-                val actor = mkMajorBlockActor
+                val actor = mkMajorBlockActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckMajor2 =>
-                val actor = mkMajorBlockActor
+                val actor = mkMajorBlockActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckFinal =>
-                val actor = mkFinalBlockActor
+                val actor = mkFinalBlockActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
             case ack: AckFinal2 =>
-                val actor = mkFinalBlockActor
+                val actor = mkFinalBlockActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
 
-    private def mkVerificationKeyActor =
-        new VerificationKeyActor(stateActor, walletActor)
+    private def mkVerificationKeyActor(dropMyself: () => Unit) =
+        new VerificationKeyActor(stateActor, walletActor, dropMyself)
 
-    private def mkRefundLaterActor =
+    private def mkRefundLaterActor(dropMyself: () => Unit) =
         new RefundLaterActor(
           stateActor,
           walletActor,
-          refundTxBuilder
+          refundTxBuilder,
+          dropMyself
         )
 
-    private def mkInitHeadActor =
+    private def mkInitHeadActor(dropMyself: () => Unit) =
         new InitHeadActor(
           stateActor,
           walletActor,
           cardanoActor,
-          initTxBuilder
+          initTxBuilder,
+          dropMyself
         )
 
-    private def mkEventL2Actor = new EventL2Actor(stateActor)
+    private def mkEventL2Actor(dropMyself: () => Unit) = new EventL2Actor(stateActor, dropMyself)
 
-    private def mkMinorBlockActor = new MinorBlockConfirmationActor(stateActor, walletActor)
+    private def mkMinorBlockActor(dropMyself: () => Unit) =
+        new MinorBlockConfirmationActor(stateActor, walletActor, dropMyself)
 
-    private def mkMajorBlockActor =
-        new MajorBlockConfirmationActor(stateActor, walletActor, settlementTxBuilder, cardanoActor)
+    private def mkMajorBlockActor(dropMyself: () => Unit) =
+        new MajorBlockConfirmationActor(
+          stateActor,
+          walletActor,
+          settlementTxBuilder,
+          cardanoActor,
+          dropMyself
+        )
 
-    private def mkFinalBlockActor =
-        new FinalBlockConfirmationActor(stateActor, walletActor, finalizationTxBuilder, cardanoActor)
+    private def mkFinalBlockActor(dropMyself: () => Unit) =
+        new FinalBlockConfirmationActor(
+          stateActor,
+          walletActor,
+          finalizationTxBuilder,
+          cardanoActor,
+          dropMyself
+        )
 
 end ConsensusActorFactory
