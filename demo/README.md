@@ -61,6 +61,8 @@ Follow Alice's logs in a separate window:
 $ docker logs -f hydrozoa-alice
 ```
 
+You can use Postman collection located in the `demo` folder or `curl`:
+
 Run an initialization request:
 
 ```bash
