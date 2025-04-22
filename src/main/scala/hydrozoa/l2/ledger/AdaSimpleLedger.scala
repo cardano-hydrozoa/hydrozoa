@@ -55,7 +55,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case withdrawal: L2Withdrawal => handleWithdrawal(withdrawal)
 
     private def handleGenesis(event: L2Genesis) =
-        val (_, txId) = AdaSimpleLedger.adopt(event.genesis)
+        val (_, txId) = AdaSimpleLedger.asTxL2(event.genesis)
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
@@ -77,7 +77,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         Right((txId, utxoDiff))
 
     private def handleTransaction(event: L2Transaction) =
-        val (_, txId) = AdaSimpleLedger.adopt(event.transaction)
+        val (_, txId) = AdaSimpleLedger.asTxL2(event.transaction)
 
         resolveInputs(event.transaction.inputs) match
             case Left(extraneous) =>
@@ -102,7 +102,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
                     Right((txId, Set[(OutputRefL2, Output[L2])]()))
 
     private def handleWithdrawal(event: L2Withdrawal) =
-        val (_, txId) = AdaSimpleLedger.adopt(event.withdrawal)
+        val (_, txId) = AdaSimpleLedger.asTxL2(event.withdrawal)
 
         resolveInputs(event.withdrawal.inputs) match
             case Left(extraneous) => Left(txId, s"Extraneous utxos in withdrawal: $extraneous")
@@ -149,7 +149,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
 
-    def adopt(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, L2EventHash) =
+    def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, L2EventHash) =
         event match
             case genesis: SimpleGenesis =>
                 val cardanoTx = mkCardanoTxForL2Genesis(genesis)
@@ -168,15 +168,15 @@ object AdaSimpleLedger:
                 (cardanoTx, txId)
 
     def mkGenesisEvent(genesis: SimpleGenesis): L2Genesis =
-        val (_, txId) = adopt(genesis)
+        val (_, txId) = asTxL2(genesis)
         GenesisL2Event(txId, genesis)
 
     def mkTransactionEvent(tx: SimpleTransaction): L2Transaction =
-        val (_, txId) = adopt(tx)
+        val (_, txId) = asTxL2(tx)
         TransactionL2Event(txId, tx)
 
     def mkWithdrawalEvent(withdrawal: SimpleWithdrawal): L2Withdrawal =
-        val (_, txId) = adopt(withdrawal)
+        val (_, txId) = asTxL2(withdrawal)
         WithdrawalL2Event(txId, withdrawal)
 
 case class SimpleGenesis(

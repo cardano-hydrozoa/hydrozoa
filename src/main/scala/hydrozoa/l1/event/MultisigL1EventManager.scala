@@ -10,7 +10,7 @@ import hydrozoa.l1.multisig.state.{
     given_FromData_DepositDatum
 }
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.node.server.NodeStateManager
+import hydrozoa.node.state.NodeState
 import scalus.builtin.Data.fromData
 
 /** This class is in charge of handling L1 events.
@@ -23,7 +23,7 @@ case class MultisigL1EventManager(
     nativeScript: NativeScript,
     beaconTokenName: String,
     headAddress: AddressBechL1,
-    state: NodeStateManager,
+    nodeState: NodeState,
     log: Logger
 ):
 
@@ -33,8 +33,8 @@ case class MultisigL1EventManager(
         onlyOutputToAddress(initTx, headAddress) match
             case Right(ix, coins, _) =>
                 log.info(s"Treasury output index is: $ix");
-                state.asAbsent {
-                    _.initializeHead(
+                nodeState.head.initializingPhase {
+                    _.openHead(
                       headParams,
                       nativeScript,
                       headAddress,
@@ -59,7 +59,7 @@ case class MultisigL1EventManager(
                 val datum: DepositDatum = fromData(
                   datumAsData
                 ) // FIXME how to check soundness of data? // Try(fromData(...))
-                state.asOpen(
+                nodeState.head.openPhase(
                   _.enqueueDeposit(
                     mkUtxo[L1, DepositTag]( // FIXME: pass the whole datum
                       txId,
@@ -86,10 +86,9 @@ case class MultisigL1EventManager(
 
         // TODO: handle datum
         // val newTreasuryDatum: MultisigTreasuryDatum = fromData(outputDatum(tx, TxIx(0)))
-            
+
         val Right(treasury) = onlyOutputToAddress(tx, headAddress)
-        state.asOpen(_.newTreasury(txHash, TxIx(0), treasury._2))
+        nodeState.head.openPhase(_.newTreasury(txHash, TxIx(0), treasury._2))
 
     def handleFinalizationTx(tx: TxAny, txHash: TxId): Unit =
         log.info(s"Handling finalization tx: $txHash")
-        state.asOpen(_.finalizeHead())
