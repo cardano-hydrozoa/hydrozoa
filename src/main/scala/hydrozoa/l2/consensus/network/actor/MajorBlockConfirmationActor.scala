@@ -80,7 +80,7 @@ private class MajorBlockConfirmationActor(
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
             stateActor.tell(nodeState =>
                 nodeState.head.openPhase(s =>
-                    s.applyBlockRecord(record)
+                    s.applyBlockRecord(record, mbGenesis)
                     // Dump state
                     nodeState.head.dumpState()
                 )

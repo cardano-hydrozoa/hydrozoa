@@ -6,7 +6,10 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.state.HeadPhase.Finalized
@@ -26,7 +29,10 @@ class NodeState(
 
     var blockProductionActor: ActorRef[BlockProducer] = _
 
-    var metrics: ActorRef[PrometheusMetrics] = _
+    private var metrics: ActorRef[PrometheusMetrics] = _
+
+    def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+        this.metrics = metrics
 
     private var ownPeer: TestPeer = _
 
@@ -64,12 +70,12 @@ class NodeState(
             log.info(s"Setting up L1 event sourcing...")
             val initTxId = params.initTx |> txHash
             multisigL1EventSource.tell(
-                _.awaitInitTx(
-                    initTxId,
-                    params.headAddress,
-                    params.headNativeScript,
-                    params.beaconTokenName
-                )
+              _.awaitInitTx(
+                initTxId,
+                params.headAddress,
+                params.headNativeScript,
+                params.beaconTokenName
+              )
             )
             // Reset head-bound metrics
             metrics.tell(m =>
@@ -83,13 +89,14 @@ class NodeState(
 
         headState match
             case None => initializeHead()
-            case Some(head) => head.headPhase match
-                case Finalized => initializeHead()
-                case _ =>
-                    val err = "The only supported head is already exists and not finalized yet."
-                    log.warn(err)
-                    throw new IllegalStateException(err)
-    
+            case Some(head) =>
+                head.headPhase match
+                    case Finalized => initializeHead()
+                    case _ =>
+                        val err = "The only supported head is already exists and not finalized yet."
+                        log.warn(err)
+                        throw new IllegalStateException(err)
+
     // Returns read-write API for head state.
     def head: HeadState = getOrThrow
 

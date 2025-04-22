@@ -196,16 +196,21 @@ object AdaSimpleLedger:
 
 case class SimpleGenesis(
     outputs: List[SimpleOutput]
-) derives CanEqual
+) derives CanEqual:
+    def volume(): Long = outputs.map(_.coins).sum.toLong
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =
         SimpleGenesis(
-          ds.map.values.map(o =>
-              val datum = depositDatum(o) match
-                  case Some(datum) => datum
-                  case None => throw RuntimeException("deposit UTxO doesn't contain a proper datum")
-              SimpleOutput(datum.address |> plutusAddressAsL2, o.coins)).toList
+          ds.map.values
+              .map(o =>
+                  val datum = depositDatum(o) match
+                      case Some(datum) => datum
+                      case None =>
+                          throw RuntimeException("deposit UTxO doesn't contain a proper datum")
+                  SimpleOutput(datum.address |> plutusAddressAsL2, o.coins)
+              )
+              .toList
         )
     def apply(address: AddressBechL2, ada: Int): SimpleGenesis =
         SimpleGenesis(List(SimpleOutput(address, ada)))

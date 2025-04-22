@@ -131,7 +131,8 @@ object HydrozoaNode extends OxApp:
                 nodeState.blockProductionActor = Actor.create(blockProducer)
 
                 val metricsActor = Actor.create(PrometheusMetrics())
-                nodeState.metrics = metricsActor
+                nodeState.setMetrics(metricsActor)
+                cardano.setMetrics(metricsActor)
 
                 val depositTxBuilderActor = Actor.create(depositTxBuilder)
                 val node = Node()

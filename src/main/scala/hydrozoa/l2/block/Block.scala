@@ -12,7 +12,16 @@ import hydrozoa.l2.merkle.RH32UtxoSetL2
 case class Block(
     blockHeader: BlockHeader,
     blockBody: BlockBody
-)
+):
+    def validTransactions: Seq[TxId] =
+        blockBody.eventsValid
+            .filter(_._2 == TransactionL2EventLabel)
+            .map(_._1)
+
+    def validWithdrawals: Seq[TxId] =
+        blockBody.eventsValid
+            .filter(_._2 == WithdrawalL2EventLabel)
+            .map(_._1)
 
 val zeroBlock =
     Block(BlockHeader(0, Major, timeCurrent, 0, 0, 42), BlockBody.empty)

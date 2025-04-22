@@ -117,13 +117,13 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def applyBlockRecord(block: BlockRecord): Unit
-    def confirmMempoolEvents(
+    def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, SimpleGenesis)] = None): Unit
+    def applyBlockEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
         depositsAbsorbed: Seq[UtxoIdL1]
-    ): Seq[NonGenesisL2]
+    ): Map[TxId, NonGenesisL2]
     def requestFinalization(): Unit
     def isFinalizationRequested: Boolean
     def switchToFinalizingPhase(): Unit
@@ -391,29 +391,40 @@ class HeadStateGlobal(
 
         override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
-        override def applyBlockRecord(record: BlockRecord): Unit =
+        override def applyBlockRecord(record: BlockRecord, mbGenesis: Option[(TxId, SimpleGenesis)] = None): Unit =
             log.info(s"Applying block ${record.block.blockHeader.blockNum}")
-            self.blocksConfirmedL2.append(record)
-
-            record.l2Effect match
-                case utxoSet: MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
-                case _: FinalBlockL2Effect       => ()
 
             val body = record.block.blockBody
             val blockHeader = record.block.blockHeader
             val blockNum = blockHeader.blockNum
 
-            val nextBlockNum = blockHeader.blockNum + 1
+            // Clear up
             self.isBlockPending = Some(false)
-            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
             self.pendingOwnBlock = None
-            
-            val confirmedEvents = confirmMempoolEvents(
-              blockNum,
-              body.eventsValid,
-              body.eventsInvalid,
-              body.depositsAbsorbed
+
+            // Next block leader
+            val nextBlockNum = blockHeader.blockNum + 1
+            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
+
+            // State
+            self.blocksConfirmedL2.append(record)
+
+            val confirmedEvents = applyBlockEvents(
+                blockNum,
+                body.eventsValid,
+                body.eventsInvalid,
+                body.depositsAbsorbed
             )
+
+            // NB: this should be run before replacing utxo set
+            val volumeWithdrawn = record.block.validWithdrawals.toList
+                .map(confirmedEvents(_).asInstanceOf[WithdrawalL2])
+                .flatMap(_.withdrawal.inputs)
+                .map(stateL2.getOutput).map(_.coins).sum.toLong
+
+            record.l2Effect match
+                case utxoSet: MinorBlockL2Effect => stateL2.replaceUtxosActive(utxoSet)
+                case _: FinalBlockL2Effect       => ()
 
             // NB: should be run after confirmMempoolEvents
             metrics.tell(m => {
@@ -437,12 +448,17 @@ class HeadStateGlobal(
                 m.incEventsL2Handled(WithdrawalL2EventLabel, true, validWds)
                 m.incEventsL2Handled(WithdrawalL2EventLabel, true, invalidWds)
 
-                val l2Volume = confirmedEvents.map {
-                    case tx: TransactionL2 => tx.transaction.volume()
-                    case _                 => 0
-                }.sum
+                // FIXME: should be calculated on L1
+                mbGenesis.foreach(g => m.addInboundL1Volume(g._2.volume()))
 
-                m.addTransactedL2Volume(l2Volume)
+                val volumeTransacted = record.block.validTransactions.toList
+                    .map(confirmedEvents(_).asInstanceOf[TransactionL2])
+                    .map(_.transaction.volume())
+                    .sum
+                m.addTransactedL2Volume(volumeTransacted)
+
+                // FIXME: should be calculated on L1
+                m.addOutboundL1Volume(volumeWithdrawn)
 
                 blockType match
                     case Minor =>
@@ -460,16 +476,36 @@ class HeadStateGlobal(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
 
-        // FIXME: naming
-        override def confirmMempoolEvents(
+        override def applyBlockEvents(
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
-            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
+            eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
             depositsAbsorbed: Seq[UtxoIdL1]
-        ): Seq[NonGenesisL2] =
+        ): Map[TxId, NonGenesisL2] =
+
+            def applyValidEvent(blockNum: Int, txId: EventHash): (EventHash, NonGenesisL2) =
+                log.info(s"Marking event $txId as validated by block $blockNum")
+                self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
+                    case -1 => throw IllegalStateException(s"pool event $txId was not found")
+                    case i =>
+                        val event = self.poolEventsL2.remove(i)
+                        self.eventsConfirmedL2.append((event, blockNum))
+                        // Remove possible duplicates form the pool
+                        self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
+                            |> self.poolEventsL2.subtractAll
+                        // Dump L2 tx
+                        TxDump.dumpL2Tx(event match
+                            case TransactionL2(_, transaction) =>
+                                AdaSimpleLedger.asTxL2(transaction)._1
+                            case WithdrawalL2(_, withdrawal) =>
+                                AdaSimpleLedger.asTxL2(withdrawal)._1
+                        )
+                        (txId, event)
+
             // 1. Handle valid events
             log.info(s"Handle valid events: $eventsValid")
-            val validEvents = eventsValid.map((txId, _) => markEventAsValid(blockNum, txId))
+            val validEvents = eventsValid.map((txId, _) => applyValidEvent(blockNum, txId))
+
             // 2. Process handled deposits
             // 2.1 Add to handled
             self.depositHandled.addAll(depositsAbsorbed.toSet)
@@ -488,8 +524,8 @@ class HeadStateGlobal(
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
             // 3. Remove invalid events
-            log.info(s"Removing invalid events: $blockEventsInvalid")
-            self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
+            log.info(s"Removing invalid events: $eventsInvalid")
+            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
             // Metrics - FIXME: factor out
@@ -499,28 +535,7 @@ class HeadStateGlobal(
                 m.setPoolEventsL2(WithdrawalL2EventLabel, self.poolEventsL2.size - txs)
             )
 
-            validEvents
-
-        // FIXME: naming
-        private def markEventAsValid(blockNum: Int, txId: EventHash): NonGenesisL2 = {
-            log.info(s"Marking event $txId as validated by block $blockNum")
-            self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
-                case -1 => throw IllegalStateException(s"pool event $txId was not found")
-                case i =>
-                    val event = self.poolEventsL2.remove(i)
-                    self.eventsConfirmedL2.append((event, blockNum))
-                    // Remove possible duplicates form the pool
-                    self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
-                        |> self.poolEventsL2.subtractAll
-                    // Dump L2 tx
-                    TxDump.dumpL2Tx(event match
-                        case TransactionL2(_, transaction) =>
-                            AdaSimpleLedger.asTxL2(transaction)._1
-                        case WithdrawalL2(_, withdrawal) =>
-                            AdaSimpleLedger.asTxL2(withdrawal)._1
-                    )
-                    event
-        }
+            validEvents.toMap
 
         override def requestFinalization(): Unit =
             log.info("Head finalization has been requested, next block will be final.")

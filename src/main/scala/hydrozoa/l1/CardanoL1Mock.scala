@@ -3,12 +3,16 @@ package hydrozoa.l1
 import com.bloxbean.cardano.client.api.model.Utxo
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
+import hydrozoa.node.monitoring.PrometheusMetrics
+import ox.channels.ActorRef
 import ox.resilience.RetryConfig
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
 
 class CardanoL1Mock() extends CardanoL1:
+
+    override def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit = ()
 
     private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
 

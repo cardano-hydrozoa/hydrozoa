@@ -1,14 +1,11 @@
 package hydrozoa.node.monitoring
 
-import hydrozoa.l2.block.BlockTypeL2
-import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
     TransactionL2EventLabel,
     WithdrawalL2EventLabel
 }
 import io.prometheus.metrics.core.metrics.{Counter, Gauge, Histogram}
-import io.prometheus.metrics.model.snapshots.Unit as PUnit
 
 def nonGenesisEventLabel(eventType: NonGenesisL2EventLabel | String): String = {
     val eventTypeLabel = eventType match
@@ -28,7 +25,7 @@ class PrometheusMetrics:
         .help("seconds passed since head's initialization")
         .register
 
-    def updateHeadUptime(uptime: Long): Unit = headUptime.set(uptime)
+    def updateHeadUptime(uptime: Long): Unit = headUptime.set(uptime.toDouble)
 
     // Number of blocks
     private val blockNum = Gauge.builder
@@ -149,13 +146,10 @@ class PrometheusMetrics:
         .labelNames("volumeType") // inboundL1 / outboundL1 / transactedL2 / feesL1
         .register
 
-    // FIXME: wire in
     def addInboundL1Volume(increase: Long): Unit = volume.labelValues("inboundL1").inc(increase)
-    // FIXME: wire in
     def addOutboundL1Volume(increase: Long): Unit = volume.labelValues("outboundL1").inc(increase)
     def addTransactedL2Volume(increase: Long): Unit =
         volume.labelValues("transactedL2").inc(increase)
-    // FIXME: wire in
     def addFeesL1Volume(increase: Long): Unit = volume.labelValues("feesL1").inc(increase)
 
     // Costs
