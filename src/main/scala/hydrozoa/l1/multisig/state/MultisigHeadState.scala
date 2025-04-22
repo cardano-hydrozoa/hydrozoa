@@ -4,9 +4,7 @@ import hydrozoa.{L1, Utxo, UtxoSet, UtxoSetMutable}
 
 import scala.collection.mutable
 
-/** FIXME: make it immutable!
-  *
-  * This is L1 state as node's L1 provider sees it.
+/** This is L1 state as node's L1 provider sees it.
   *
   * @param treasuryUtxo
   * @param depositUtxos

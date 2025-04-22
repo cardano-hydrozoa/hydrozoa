@@ -12,8 +12,7 @@ import scalus.ledger.api.v1.PosixTime
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-
-import scala.util.{Try, boundary}
+import scala.util.Try
 
 class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 

@@ -1,9 +1,10 @@
 package hydrozoa.node.server
 
 import hydrozoa.TxL2
-import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx, MultisigTxTag}
 
+/** TODO: review, currently broken
+  */
 object TxDump:
     private val txDumpL1: os.Path = os.pwd / "txsl1.out"
     private val txDumpL2: os.Path = os.pwd / "txsl2.out"

@@ -20,7 +20,6 @@ import scalus.builtin.Data
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
-import scala.util.Random
 
 // TODO: make an API
 
@@ -31,10 +30,7 @@ def txHash[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): TxId =
 def serializeTxHex[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): String =
     HexUtil.encodeHexString(getAnyTxBytes(tx))
 
-def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) =
-    tx match
-        case multisig: MultisigTx[T] => multisig.toL1Tx.bytes
-        case tx: Tx[L]               => tx.bytes
+def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) = tx.bytes
 
 def deserializeTxHex[L <: AnyLevel](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
 
