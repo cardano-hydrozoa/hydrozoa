@@ -1,8 +1,9 @@
 package hydrozoa.node.state
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.*
+import hydrozoa.l1.multisig.tx.{FinalizationTx, InitializationTx, SettlementTx}
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, zeroBlock}
+import hydrozoa.l2.block.{Block, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
@@ -59,13 +60,13 @@ sealed trait MultisigRegimeReader extends HeadStateReaderApi:
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
-    def currentTreasuryRef: OutputRefL1
+    def currentTreasuryRef: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
-    def immutablePoolEventsL2: Seq[L2NonGenesis]
-    def immutableBlocksConfirmedL2: Seq[Block]
-    def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
+    def immutablePoolEventsL2: Seq[NonGenesisL2]
+    def immutableBlocksConfirmedL2: Seq[BlockRecord]
+    def immutableEventsConfirmedL2: Seq[(EventL2, Int)]
     def l2Tip: Block
     def l2LastMajor: Block
     def peekDeposits: DepositUtxos
@@ -92,21 +93,21 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(deposit: DepositUtxo): Unit
-    def poolEventL2(event: L2NonGenesis): Unit
+    def poolEventL2(event: NonGenesisL2): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def addBlock(block: Block): Unit
+    def addBlock(block: BlockRecord): Unit
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         mbGenesis: Option[(TxId, SimpleGenesis)],
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
     ): Unit
-    def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit
+    def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit
     def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
-    def closeHead(block: Block): Unit
+    def closeHead(block: BlockRecord): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def confirmValidMempoolEvents(
         blockNum: Int,
@@ -133,11 +134,15 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         None // FIXME: can be obtained from stateL1.treasuryUtxo
     private var beaconTokenName: Option[String] = None // FIXME: use more sHeadStateApipecific type
     private var seedAddress: Option[AddressBechL1] = None
+
+    // Hydrozoa blocks
     private val genesisBlock: Unit = () // FIXME: use instead zeroBlock
-    private val blocksConfirmedL2: mutable.Buffer[Block] = mutable.Buffer() // BlockRecord
+    private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
+    // Currently pending block
     private val blockPending: Option[BlockRecord] = None
-    private val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
-    private val poolEventsL2: mutable.Buffer[L2NonGenesis] = mutable.Buffer()
+
+    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
     private var finalizing: Option[Boolean] = None
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
@@ -187,7 +192,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
-        def currentTreasuryRef: OutputRefL1 = self.stateL1.get.treasuryUtxo.ref
+        def currentTreasuryRef: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
         def headBechAddress: AddressBechL1 = self.headBechAddress.get
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
@@ -195,12 +200,13 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def headPeers: List[Peer] = self.headPeers
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
-        def immutablePoolEventsL2: Seq[L2NonGenesis] = self.poolEventsL2.toSeq
-        def immutableBlocksConfirmedL2: Seq[Block] = self.blocksConfirmedL2.toSeq
-        def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.eventsConfirmedL2.toSeq
+        def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
+        def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
+        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.eventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
         def l2LastMajor: Block = self.blocksConfirmedL2
-            .findLast(_.blockHeader.blockType == Major)
+            .findLast(_.block.blockHeader.blockType == Major)
+            .map(_.block)
             .getOrElse(zeroBlock)
         def peekDeposits: DepositUtxos = UtxoSet(self.stateL1.get.depositUtxos)
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
@@ -217,7 +223,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         with FinalizingPhaseReader:
         def l2Tip: Block = l2Tip_
 
-    private def l2Tip_ = blocksConfirmedL2.lastOption.getOrElse(zeroBlock)
+    private def l2Tip_ = blocksConfirmedL2.map(_.block).lastOption.getOrElse(zeroBlock)
 
     // Subclasses that implements APIs (writers)
     private final class InitializingPhaseImpl
@@ -246,7 +252,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         def enqueueDeposit(d: DepositUtxo): Unit =
             self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
 
-        def poolEventL2(event: L2NonGenesis): Unit = self.poolEventsL2.append(event)
+        def poolEventL2(event: NonGenesisL2): Unit = self.poolEventsL2.append(event)
 
         def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
             self.stateL1.get.treasuryUtxo =
@@ -254,7 +260,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
 
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
-        def addBlock(block: Block): Unit = self.blocksConfirmedL2.append(block)
+        def addBlock(block: BlockRecord): Unit = self.blocksConfirmedL2.append(block)
 
         // FIXME: this is too complex for state management, should be a part of effect
         def confirmMempoolEvents(
@@ -280,14 +286,14 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
                     case i  => self.poolEventsL2.remove(i)
             )
 
-        def removeAbsorbedDeposits(deposits: Seq[OutputRef[L1]]): Unit =
+        def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
 
         def finalizeHead(): Unit = headPhase = Finalizing
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
-        def closeHead(finalBlock: Block): Unit =
+        def closeHead(finalBlock: BlockRecord): Unit =
             self.blocksConfirmedL2.append(finalBlock)
             self.headPhase = Finalized
         def confirmValidMempoolEvents(
@@ -295,7 +301,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit = eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
 
-    private def markEventAsValid(blockNum: Int, txId: L2EventHash): Unit = {
+    private def markEventAsValid(blockNum: Int, txId: EventHash): Unit = {
         self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
             case -1 => throw IllegalStateException(s"pool event $txId was not found")
             case i =>
@@ -303,9 +309,9 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
                 self.eventsConfirmedL2.append((event, blockNum))
                 // Dump L2 tx
                 TxDump.dumpL2Tx(event match
-                    case L2Transaction(_, transaction) =>
+                    case TransactionL2(_, transaction) =>
                         AdaSimpleLedger.asTxL2(transaction)._1
-                    case L2Withdrawal(_, withdrawal) =>
+                    case WithdrawalL2(_, withdrawal) =>
                         AdaSimpleLedger.asTxL2(withdrawal)._1
                 )
     }
@@ -315,4 +321,14 @@ object HeadStateGlobal:
     def apply(peers: List[Peer]): HeadStateGlobal =
         new HeadStateGlobal(headPhase = Initializing, headPeers = peers)
 
-case class BlockRecord()
+case class BlockRecord(
+    block: Block,
+    l1Effect: L1BlockEffect,
+    l1PostDatedEffect: L1PostDatedBlockEffect,
+    l2Effect: L2BlockEffect
+)
+
+type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
+type MinorBlockL1Effect = Unit
+type L1PostDatedBlockEffect = Unit
+type L2BlockEffect = Unit

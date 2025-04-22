@@ -2,6 +2,7 @@ package hydrozoa.infra
 
 import co.nstant.in.cbor.model.{Array, ByteString, Map, UnsignedInteger}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
+import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.*
 import com.bloxbean.cardano.client.crypto.bip32.{HdKeyGenerator, HdKeyPair}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
@@ -10,6 +11,7 @@ import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
+
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
@@ -34,8 +36,7 @@ def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) 
         case multisig: MultisigTx[T] => multisig.toL1Tx.bytes
         case tx: Tx[L]               => tx.bytes
 
-// TODO: generalize fot both L1 and L2
-def deserializeTxHex(hex: String): TxAny = Tx[AnyLevel](HexUtil.decodeHexString(hex))
+def deserializeTxHex[L <: AnyLevel](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
 
 // Pure function to create a transaction key witness with a HD key.
 // TODO: handle exceptions
@@ -154,24 +155,6 @@ def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOu
         .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
         .build
 
-//def toBloxBeanTransactionOutput(output: TxOut): TransactionOutput =
-//    val Just(e) = AssocMap.lookup(output.value)(ScalusByteString.empty)
-//    val Just(coins) = AssocMap.lookup(e)(ScalusByteString.empty)
-//    TransactionOutput.builder
-//        .address(
-//          addressToBloxbean(AppCtx.yaciDevKit().network, output.address).getAddress
-//        ) // FIXME: network
-//        .value(Value.builder.coin(coins.bigInteger).build)
-//        .build
-
-//def toBloxBeanTransactionInput(input: v1.TxOutRef): TransactionInput = {
-//    TransactionInput
-//        .builder()
-//        .transactionId(input.id.hash.toHex)
-//        .index(input.idx.intValue)
-//        .build()
-//}
-
 // ----------------------------------------------------------------------------
 // Cardano L2 transactions for the simplified ledger
 // ----------------------------------------------------------------------------
@@ -238,3 +221,22 @@ def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
 
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
+
+def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
+    val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
+    inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex))).toSeq
+
+def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
+    val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
+    val txId = txHash(tx)
+    outputs.zipWithIndex
+        .map((o, ix) =>
+            val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix))
+            val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
+            (utxoId, utxo)
+        )
+        .toSeq
+
+extension (n: Network) {
+    def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
+}

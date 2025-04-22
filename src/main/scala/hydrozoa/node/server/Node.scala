@@ -3,7 +3,7 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.l1.Cardano
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventManager
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
@@ -19,18 +19,18 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosDiff}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
 import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
-import hydrozoa.node.state.{HeadPhase, NodeState}
+import hydrozoa.node.state.{BlockRecord, HeadPhase, L1BlockEffect, NodeState}
 import scalus.prelude.Maybe
 
 class Node(
     nodeState: NodeState,
     ownKeys: (ParticipantSecretKey, ParticipantVerificationKey),
     network: HeadPeerNetwork,
-    cardano: Cardano,
+    cardano: CardanoL1,
     wallet: Wallet,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
@@ -54,7 +54,7 @@ class Node(
         // All nodes' verification keys
         val vKeys = network.participantsKeys() + ownKeys._2
         // Native script, head address, and token
-        val seedOutput = OutputRefL1(txId, txIx)
+        val seedOutput = UtxoIdL1(txId, txIx)
         val (headNativeScript, headAddress) =
             mkHeadNativeScriptAndAddress(vKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(seedOutput)
@@ -175,7 +175,7 @@ class Node(
           Maybe.fromOption(r.datum.map(datumByteString))
         )
 
-        val depositTxRecipe = DepositTxRecipe(OutputRefL1(r.txId, r.txIx), depositDatum)
+        val depositTxRecipe = DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
@@ -226,11 +226,11 @@ class Node(
 
         println(nodeState.head.openPhase(_.stateL1))
 
-        Right(DepositResponse(refundTx, OutputRefL1(depositTxHash, index)))
+        Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
     }
 
     def submitL1(hex: String): Either[String, TxId] =
-        cardano.submit(deserializeTxHex(hex))
+        cardano.submit(deserializeTxHex[L1](hex))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         nodeState.head.openPhase { s =>
@@ -250,11 +250,13 @@ class Node(
       * @param nextBlockFinal
       * @return
       */
-    def handleNextBlock(nextBlockFinal: Boolean): Either[String, (Block, UtxosDiff, UtxosDiff)] =
+    def handleNextBlock(
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
 
         def nextBlockInOpen(
             nextBlockFinal: Boolean
-        ): Option[(Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)])] =
+        ): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
             nodeState.head.openPhase { s =>
 
                 println(
@@ -279,7 +281,7 @@ class Node(
             }
 
         def nextBlockInFinal()
-            : (Block, UtxosSetOpaque, UtxosDiff, UtxosDiff, Option[(TxId, SimpleGenesis)]) =
+            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
             nodeState.head.finalizingPhase { s =>
 
                 println(
@@ -301,11 +303,11 @@ class Node(
             }
 
         def handleNewBlock(
-            block: Block,
-            utxosActive: UtxosSetOpaque,
-            utxosWithdrawn: UtxosDiff,
-            mbGenesis: Option[(TxId, SimpleGenesis)]
-        ): Unit =
+                              block: Block,
+                              utxosActive: UtxosSetOpaque,
+                              utxosWithdrawn: UtxosSet,
+                              mbGenesis: Option[(TxId, SimpleGenesis)]
+        ): L1BlockEffect =
             block.blockHeader.blockType match
                 case Minor =>
                     // TODO: produce and broadcast own signature
@@ -314,6 +316,7 @@ class Node(
                     applyMinorBlockL2Effect(block, utxosActive)
                     // No L1 effects so far in multisig mode for Minor blocks
                     dumpState()
+                    ()
 
                 case Major =>
                     // Create settlement tx draft
@@ -362,6 +365,7 @@ class Node(
                     )
 
                     dumpState()
+                    settlementTx
 
                 case Final =>
                     // Create finalization tx draft
@@ -401,21 +405,26 @@ class Node(
                         finalizationTxId
                       )
                     )
+                    finalizationTx
 
         val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
             case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
             case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
-            case _ =>
-                log.error(
-                  "The head is not in Open or Finalizing phase. A block can't be produced"
-                )
+            case phase =>
+                log.error(s"A block can't be produced in phase: $phase")
                 (None, false)
 
         maybeNewBlock match
             case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                val l1effect = handleNewBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                //
+                val record = BlockRecord(block, l1effect, (), ())
+                nodeState.head.currentState match
+                    case HeadPhase.Open       => nodeState.head.openPhase(_.addBlock(record))
+                    case HeadPhase.Finalizing => nodeState.head.finalizingPhase(_.closeHead(record))
                 if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
-                Right((block, utxosAdded, utxosWithdrawn))
+                // Result
+                Right((record, utxosAdded, utxosWithdrawn))
             case None => Left("Block can't be produced at the moment.")
 
     private def dumpState(): Unit = {
@@ -432,7 +441,7 @@ class Node(
         println(
           "-----------------------   L2 State   ------------------------------------"
         )
-        println(nodeState.head.openPhase(_.stateL2.activeState))
+        println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
         println
         println(
           "------------------------  BLOCKS   --------------------------------------"
@@ -450,9 +459,8 @@ class Node(
         utxosActive: UtxosSetOpaque
     ): Unit =
         nodeState.head.openPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
+            s.stateL2.replaceUtxosActive(utxosActive)
             val body = block.blockBody
-            s.addBlock(block)
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
               body.eventsValid,
@@ -467,9 +475,8 @@ class Node(
         mbGenesis: Option[(TxId, SimpleGenesis)]
     ): Unit =
         nodeState.head.openPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
+            s.stateL2.replaceUtxosActive(utxosActive)
             val body = block.blockBody
-            s.addBlock(block)
             s.confirmMempoolEvents(
               block.blockHeader.blockNum,
               body.eventsValid,
@@ -490,8 +497,6 @@ class Node(
         utxosActive: UtxosSetOpaque
     ): Unit =
         nodeState.head.finalizingPhase { s =>
-            s.stateL2.updateUtxosActive(utxosActive)
-            val body = block.blockBody
-            s.confirmValidMempoolEvents(block.blockHeader.blockNum, body.eventsValid)
-            s.closeHead(block)
+            s.stateL2.replaceUtxosActive(utxosActive)
+            s.confirmValidMempoolEvents(block.blockHeader.blockNum, block.blockBody.eventsValid)
         }
