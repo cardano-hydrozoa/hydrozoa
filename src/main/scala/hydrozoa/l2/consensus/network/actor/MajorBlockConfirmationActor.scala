@@ -6,11 +6,11 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
-import hydrozoa.l2.consensus.network.{Ack, AckMajor, AckMajor2, AckVerKey, Req, ReqMajor, ReqVerKey}
-import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
-import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes, Wallet}
+import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.node.state.*
+import hydrozoa.{TxId, TxKeyWitness, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -38,7 +38,8 @@ private class MajorBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
-        val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
+        val (headPeers, isFinalizationRequested) =
+            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isFinalizationRequested)))
         log.debug(s"headPeers: $headPeers")
         if ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
@@ -55,7 +56,7 @@ private class MajorBlockConfirmationActor(
             // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
-            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, false)
+            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isFinalizationRequested)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
             deilverAck2(ownAck2)

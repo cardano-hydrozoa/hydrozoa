@@ -76,8 +76,8 @@ object BlockValidator:
         prevHeader: BlockHeader,
         stateL2: AdaSimpleLedger[TBlockProduction],
         poolEventsL2: Seq[NonGenesisL2], // FIXME: missing in the spec
-        depositUtxos: DepositUtxos, // FIXME: missing in the spec
-        finalizing: Boolean // FIXME: missing in the spec
+        depositUtxos: DepositUtxos, // FIXME: missing in the spec, is not needed for minor blocks
+        finalizing: Boolean // FIXME: missing in the spec, can be removed I guess
     ): ValidationResolution =
 
         // 1. Initialize the variables and arguments.

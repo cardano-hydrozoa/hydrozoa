@@ -123,6 +123,8 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
         eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
         depositsAbsorbed: Seq[UtxoIdL1]
     ): Seq[NonGenesisL2]
+    def requestFinalization(): Unit
+    def isFinalizationRequested: Boolean
     def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -174,9 +176,13 @@ class HeadStateGlobal(
     // Flag that allows the check whether "no new block awaits the peers’ confirmation"
     // [If true] it postpones the creation of the next block until
     // we are done with the previous one.
-    // FIXME: 1. Suspend actors 2. Try to create a block when set back to false
+    // FIXME: 1. Suspend actors
+    // FIXME: 2. Try to create a block when set back to false
     private var isBlockPending: Option[Boolean] = None
     private var pendingOwnBlock: Option[OwnBlock] = None
+
+    // Flag to store the fact of node's being asked for finalization.
+    private var mbIsFinalizationRequested: Option[Boolean] = None
 
     // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
@@ -294,6 +300,7 @@ class HeadStateGlobal(
             self.blockLeadTurn = Some(nodeRoundRobinTurn)
             self.isBlockLeader = Some(self.blockLeadTurn.get == 1)
             self.isBlockPending = Some(false)
+            self.mbIsFinalizationRequested = Some(false)
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
@@ -494,6 +501,12 @@ class HeadStateGlobal(
             )
 
             validEvents
+
+        override def requestFinalization(): Unit =
+            log.info("Head finalization has been requested, next block will be final.")
+            self.mbIsFinalizationRequested = Some(true)
+
+        override def isFinalizationRequested: Boolean = self.mbIsFinalizationRequested.get
 
         override def finalizeHead(): Unit =
             self.headPhase = Finalizing

@@ -49,7 +49,4 @@ given txL1Schema: Schema[TxL1] =
 given txIxSchema: Schema[TxIx] =
     Schema.derived[TxIx]
 
-//given txL1Schema: Schema[TxL1] =
-//    Schema.derived[TxL1]
-
 type DepositError = String

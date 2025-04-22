@@ -7,7 +7,6 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
-import hydrozoa.l2.block.*
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
@@ -16,12 +15,7 @@ import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.Open
 import ox.channels.ActorRef
-import ox.resilience.{RetryConfig, retry}
-import ox.scheduling.Jitter
 import scalus.prelude.Maybe
-
-import scala.concurrent.duration.DurationInt
-import scala.util.Try
 
 class Node:
 
@@ -177,9 +171,20 @@ class Node:
                 currentPhase match
                     case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
                     case _    => List.empty
+    end stateL2
 
-    
-//
+    def tryFinalize(): Either[String, String] =
+        nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
+            case None => Left("No head was found.")
+            case Some(_) =>
+                nodeState.ask(_.head.currentPhase) match
+                    case Open =>
+                        nodeState.tell(_.head.openPhase(_.requestFinalization()))
+                        Right("Head finalization request succeeded.")
+                    case other =>
+                        Left(s"Head is in the wrong phase: $other")
+
+    //
 //    private def applyBlock(
 //        blockRecord: BlockRecord
 //    ): Unit =

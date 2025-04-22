@@ -10,7 +10,8 @@ import hydrozoa.node.rest.NodeRestApi.{
     initEndpoint,
     stateL2Endpoint,
     submitL1Endpoint,
-    submitL2Endpoint
+    submitL2Endpoint,
+    finalizeEndpoint
 }
 import hydrozoa.node.server.{
     DepositRequest,
@@ -36,7 +37,8 @@ class NodeRestApi(node: ActorRef[Node]):
           depositEndpoint.handle(runDeposit),
           submitL1Endpoint.handle(runSubmitL1),
           submitL2Endpoint.handle(runSubmitL2),
-          stateL2Endpoint.handle(runStateL2)
+          stateL2Endpoint.handle(runStateL2),
+          finalizeEndpoint.handle(runFinalize)
         )
 
     private val swaggerEndpoints = SwaggerInterpreter()
@@ -91,6 +93,9 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runStateL2(_unit: Unit): Either[Unit, StateL2Response] =
         Right(node.ask(_.stateL2()))
 
+    private def runFinalize(_unit: Unit): Either[String, String] =
+        node.ask(_.tryFinalize())
+
 object NodeRestApi:
     val initEndpoint = endpoint.put
         .in("init")
@@ -132,6 +137,8 @@ object NodeRestApi:
         .in("l2")
         .in("state")
         .out(jsonBody[StateL2Response])
+
+    val finalizeEndpoint = endpoint.post.in("/finalize").out(stringBody).errorOut(stringBody)
 
 // JSON/Schema instances
 enum SubmitRequestL2:
