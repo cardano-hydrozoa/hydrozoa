@@ -1,8 +1,7 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.l1.multisig.tx.DepositTx
-import hydrozoa.{TxIx, UtxoIdL1}
+import hydrozoa.{TxIx, TxL1, UtxoIdL1}
 
 trait DepositTxBuilder {
 
@@ -10,7 +9,7 @@ trait DepositTxBuilder {
       * @return
       *   deposit tx draft + output index that points to the deposit utxo
       */
-    def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (DepositTx, TxIx)]
+    def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)]
 }
 
 case class DepositTxRecipe(

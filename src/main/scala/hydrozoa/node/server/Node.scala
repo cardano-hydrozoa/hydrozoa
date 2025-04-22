@@ -4,18 +4,15 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.event.MultisigL1EventManager
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis, UtxosSet}
@@ -23,123 +20,51 @@ import hydrozoa.node.rest.SubmitRequestL2
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
+import ox.channels.ActorRef
+import ox.{forkDiscard, supervised}
 import scalus.prelude.Maybe
 
 class Node(
     nodeState: NodeState,
     ownPeer: Wallet,
-    network: HeadPeerNetwork,
     cardano: CardanoL1,
     initTxBuilder: InitTxBuilder,
     depositTxBuilder: DepositTxBuilder,
     refundTxBuilder: RefundTxBuilder,
     settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    log: Logger
+    finalizationTxBuilder: FinalizationTxBuilder
 ):
 
-    // FIXME: protect
-    def nodeStateReader = nodeState
+    private val log = Logger(getClass)
 
-    // FIXME: find the proper place for it
-    private var multisigL1EventManager: Option[MultisigL1EventManager] = None
+    var networkRef: ActorRef[HeadPeerNetwork] = _
+
+    // FIXME: protect, currently used in tests
+    def nodeStateReader = nodeState
 
     def initializeHead(
         otherHeadPeers: Set[WalletId],
-        ada: Long,
+        treasuryAda: Long,
         txId: TxId,
         txIx: TxIx
-    ): Either[InitializeError, TxId] = {
-
+    ): Either[InitializationError, TxId] =
         assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
+        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
-        // FIXME: Check there is no head or it's closed
+        // Request verification keys from known peers
+        val knownVKeys = networkRef.ask(_.reqVerificationKeys())
+        log.info(s"knownVKeys: $knownVKeys")
 
-        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $ada ADA")
-
-        // Make a recipe to build init tx
-
-        val headVKeys =
-            network.reqVerificationKeys(otherHeadPeers) + ownPeer.exportVerificationKeyBytes
-        // Native script, head address, and token
+        // ReqInit
         val seedOutput = UtxoIdL1(txId, txIx)
-        val (headNativeScript, headAddress) =
-            mkHeadNativeScriptAndAddress(headVKeys, cardano.network)
-        val beaconTokenName = mkBeaconTokenName(seedOutput)
-        val treasuryCoins = ada * 1_000_000
-        val initTxRecipe = InitTxRecipe(
-          headAddress,
-          seedOutput,
-          treasuryCoins,
-          headNativeScript,
-          beaconTokenName
-        )
+        val treasuryCoins = treasuryAda * 1_000_000
+        val reqInit = ReqInit(ownPeer.getWalletId, otherHeadPeers, seedOutput, treasuryCoins)
+        val initTxId = networkRef.ask(_.reqInit(reqInit))
 
-        log.info(s"initTxRecipe: $initTxRecipe")
+        Right(initTxId)
+    end initializeHead
 
-        // Builds and balance initialization tx
-        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match
-            case Right(v, seedAddress) => (v, seedAddress)
-            case Left(err)             => return Left(err)
-
-        log.info("Init tx draft hash: " + txHash(txDraft))
-
-        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(txDraft)
-
-        val peersWits: Set[TxKeyWitness] =
-            network.reqInit(otherHeadPeers, ReqInit(seedOutput, treasuryCoins))
-        // TODO: broadcast ownWit
-
-        // TODO: this is temporal, in real world we need to give the tx to the initiator to be signed
-        val userWit = ownPeer.createTxKeyWitness(txDraft)
-
-        // All wits are here, we can sign and submit
-        val wits = peersWits + ownWit + userWit
-
-        val initTx = wits.foldLeft(txDraft)(addWitness)
-        val serializedTx = serializeTxHex(initTx)
-        log.info("Init tx: " + serializedTx)
-        log.info("Init tx hash: " + txHash(initTx))
-
-        cardano.submit(initTx.toL1Tx) match
-            case Right(txHash) =>
-                // Put the head into Initializing phase
-
-                nodeState.initializeHead((otherHeadPeers + ownPeer.getWalletId).toList)
-
-                log.info(
-                  s"Head was initialized at address: $headAddress, token name: $beaconTokenName"
-                )
-
-                // initialize new multisig event manager
-                multisigL1EventManager = Some(
-                  MultisigL1EventManager(
-                    HeadParams.default,
-                    headNativeScript,
-                    beaconTokenName,
-                    headAddress,
-                    nodeState,
-                    log
-                  )
-                )
-
-                // Emulate L1 init event
-                multisigL1EventManager.foreach(
-                  _.handleInitTx(initTx.toL1Tx, seedAddress)
-                )
-
-                TxDump.dumpInitTx(initTx)
-                // FIXME:
-                // println(nodeState.head.asOpen(_.stateL1))
-                Right(txHash)
-
-            case Left(err) =>
-                log.error(s"Can't submit init tx: $err")
-                Left(err)
-
-    }
-
-    def deposit(r: DepositRequest): Either[DepositError, DepositResponse] = {
+    def deposit(r: DepositRequest): Either[DepositError, DepositResponse] =
 
         log.info(s"Deposit request: $r")
 
@@ -200,66 +125,37 @@ class Node(
         log.info(s"Deposit tx: $serializedTx")
         log.info(s"Deposit tx hash: $depositTxHash, deposit output index: $index")
 
-        TxDump.dumpMultisigTx(depositTxDraft)
+        // FIXME: now it's not multisig
+        // TxDump.dumpMultisigTx(depositTxDraft)
 
-        val Right(refundTxDraft) =
-            refundTxBuilder.mkPostDatedRefundTxDraft(
-              PostDatedRefundRecipe(depositTxDraft, index)
-            )
-
-        TxDump.dumpMultisigTx(refundTxDraft)
-
-        // Own signature
-        val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(refundTxDraft)
-
-        // ReqRefundLater
-        // TODO: Add a comment to explain how it's guaranteed that
-        //  a deposit cannot be stolen by malicious peers
-        val peersWits: Set[TxKeyWitness] =
-            network.reqRefundLater(ReqRefundLater(depositTxDraft, index))
-        // TODO: broadcast ownWit
-
-        val wits = peersWits + ownWit
-
-        val refundTx = wits.foldLeft(refundTxDraft)(addWitness)
+        val req = ReqRefundLater(depositTxDraft, index)
+        val refundTx = networkRef.ask(_.reqRefundLater(req))
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
 
-        // TODO temporarily we submit the deposit tx here
+        // TODO: temporarily we submit the deposit tx here on the node that handles the request
         val Right(depositTxId) =
             cardano.submit(
-              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft)).toL1Tx
-            ) // TODO: add the combined function
+              addWitness(depositTxDraft, ownPeer.createTxKeyWitness(depositTxDraft))
+            ) // TODO: add the combined function for signing
+
         log.info(s"Deposit tx submitted: $depositTxId")
-
-        // Emulate L1 deposit event
-        multisigL1EventManager.map(
-          _.handleDepositTx(toL1Tx(depositTxDraft), depositTxHash)
-        )
-
-        // TODO: store the post-dated refund in the store along with the deposit id
-
-        println(nodeState.head.openPhase(_.stateL1))
-
         Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
-    }
+    end deposit
 
     def submitL1(hex: String): Either[String, TxId] =
         cardano.submit(deserializeTxHex[L1](hex))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
-        nodeState.head.openPhase { s =>
-            val ledger = s.stateL2
+        val event = req match
+            case Transaction(tx) =>
+                AdaSimpleLedger.mkTransactionEvent(tx)
+            case Withdrawal(wd) =>
+                AdaSimpleLedger.mkWithdrawalEvent(wd)
 
-            val event = req match
-                case Transaction(tx) =>
-                    AdaSimpleLedger.mkTransactionEvent(tx)
-                case Withdrawal(wd) =>
-                    AdaSimpleLedger.mkWithdrawalEvent(wd)
-
-            s.poolEventL2(event)
-            Right(event.getEventId)
-        }
+        networkRef.tell(_.reqEventL2(ReqEventL2(event)))
+        Right(event.getEventId)
+    end submitL2
 
     /** Manually triggers next block creation procedure.
       * @param nextBlockFinal
@@ -268,276 +164,106 @@ class Node(
     def handleNextBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
+        ???
 
-        def nextBlockInOpen(
-            nextBlockFinal: Boolean
-        ): Option[(Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
-            nodeState.head.openPhase { s =>
+// ----------------------------------------------------->>
 
-                println(
-                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInOpen"
-                )
-                println("-----------------------   POOL    --------------------------------------")
-                println(s.immutablePoolEventsL2)
-                println("-----------------------   L1 State --------------------------------------")
-                println(s.stateL1)
-                println
+//
+//    private def dumpState(): Unit =
+//        nodeState.head.currentPhase match
+//            case HeadPhase.Open =>
+//                println(
+//                  "-----------------------   L1 State --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.stateL1))
+//                println
+//                println(
+//                  "-----------------------   POOL    ---------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
+//                println
+//                println(
+//                  "-----------------------   L2 State   ------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
+//                println
+//                println(
+//                  "------------------------  BLOCKS   --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
+//                println
+//                println(
+//                  "------------------------  EVENTS   --------------------------------------"
+//                )
+//                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
+//
+//            case HeadPhase.Finalizing =>
+//                println(
+//                  "-----------------------   L1 State --------------------------------------"
+//                )
+//                println(nodeState.head.finalizingPhase(_.stateL1))
+//                println(
+//                  "-----------------------   L2 State   ------------------------------------"
+//                )
+//                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
+//            // println
+//            // println(
+//            //    "------------------------  BLOCKS   --------------------------------------"
+//            // )
+//            // println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
+//            case HeadPhase.Finalized => println("Node is finalized.")
+//
+//    private def applyBlock(
+//        blockRecord: BlockRecord
+//    ): Unit =
+//        val block = blockRecord.block
+//        block.blockHeader.blockType match
+//            case Minor =>
 
-                val maybeNewBlock = createBlock(
-                  s.stateL2.blockProduction,
-                  s.immutablePoolEventsL2,
-                  s.peekDeposits,
-                  s.l2Tip.blockHeader,
-                  timeCurrent,
-                  false
-                )
+//
+//            case Major =>
+//                // L1 effect
+//                val settlementTx = toL1Tx(
+//                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
+//                ) // FIXME: casting
+//                val Right(settlementTxId) = cardano.submit(settlementTx)
+//                log.info(s"Settlement tx submitted: $settlementTxId")
+//
+////                // Emulate L1 event
+////                // TODO: I don't think we have to wait L1 event in reality
+////                //  instead we need to update the treasury right upon submitting.
+////                //  Another concern - probably we have to do it in one atomic change
+////                //  along with the L2 effect. Otherwise the next settlement transaction
+////                //  may use the old treasury.
+////                multisigL1EventManager.map(
+////                  _.handleSettlementTx(settlementTx, settlementTxId)
+////                )
+//
+//            case Final =>
+//                // L1 effect
+//                val finalizationTx = toL1Tx(
+//                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
+//                ) // FIXME: casting
+//                val Right(finalizationTxId) = cardano.submit(finalizationTx)
+//                log.info(s"Finalizationtx submitted: $finalizationTxId")
+//
+////                // Emulate L1 event
+////                // TODO: temporarily handle the event, again, we don't want to wait
+////                multisigL1EventManager.foreach(
+////                  _.handleFinalizationTx(
+////                    finalizationTx,
+////                    finalizationTxId
+////                  )
+////                )
+//
+//                // L2 effect
+//                nodeState.head.finalizingPhase { s =>
+//                    s.stateL2.flush
+//                    s.confirmValidMempoolEvents(
+//                      block.blockHeader.blockNum,
+//                      block.blockBody.eventsValid
+//                    )
+//                    s.closeHead(blockRecord)
+//                }
 
-                maybeNewBlock
-            }
-
-        def nextBlockInFinal()
-            : (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
-            nodeState.head.finalizingPhase { s =>
-
-                println(
-                  ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> handleNextBlock.nextBlockInFinal"
-                )
-                println("-----------------------   L1 State --------------------------------------")
-                println(s.stateL1)
-                println
-
-                val finalBlock = createBlock(
-                  s.stateL2.blockProduction,
-                  Seq.empty,
-                  UtxoSet(Map.empty),
-                  s.l2Tip.blockHeader,
-                  timeCurrent,
-                  true
-                )
-                finalBlock.get
-            }
-
-        val (maybeNewBlock, finalizeHead) = nodeState.head.currentPhase match
-            case HeadPhase.Open       => (nextBlockInOpen(nextBlockFinal), nextBlockFinal)
-            case HeadPhase.Finalizing => (Some(nextBlockInFinal()), false)
-            case phase =>
-                log.error(s"A block can't be produced in phase: $phase")
-                (None, false)
-
-        maybeNewBlock match
-            case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
-                // Create effects
-                val l1Effect =
-                    mkL1BlockEffect(
-                      settlementTxBuilder,
-                      finalizationTxBuilder,
-                      Some(ownPeer),
-                      Some(network),
-                      block,
-                      utxosWithdrawn
-                    )
-                val l2Effect = block.blockHeader.blockType match
-                    case Minor => utxosActive
-                    case Major => utxosActive /\ mbGenesis
-                    case Final => ()
-
-                // Record and block application
-                val record = BlockRecord(block, l1Effect, (), l2Effect)
-                applyBlock(record)
-                // Move head into finalization phase if finalizeHead flag is received
-                if (finalizeHead) nodeState.head.openPhase(_.finalizeHead())
-                // Dump state
-                dumpState()
-                // Result
-                Right((record, utxosAdded, utxosWithdrawn))
-            case None => Left("Block can't be produced at the moment.")
-
-    private def dumpState(): Unit =
-        nodeState.head.currentPhase match
-            case HeadPhase.Open =>
-                println(
-                  "-----------------------   L1 State --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.stateL1))
-                println
-                println(
-                  "-----------------------   POOL    ---------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutablePoolEventsL2))
-                println
-                println(
-                  "-----------------------   L2 State   ------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.stateL2.getUtxosActive))
-                println
-                println(
-                  "------------------------  BLOCKS   --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutableBlocksConfirmedL2))
-                println
-                println(
-                  "------------------------  EVENTS   --------------------------------------"
-                )
-                println(nodeState.head.openPhase(_.immutableEventsConfirmedL2))
-
-            case HeadPhase.Finalizing =>
-                println(
-                    "-----------------------   L1 State --------------------------------------"
-                )
-                println(nodeState.head.finalizingPhase(_.stateL1))
-                println(
-                    "-----------------------   L2 State   ------------------------------------"
-                )
-                println(nodeState.head.finalizingPhase(_.stateL2.getUtxosActive))
-                //println
-                //println(
-                //    "------------------------  BLOCKS   --------------------------------------"
-                //)
-                //println(nodeState.head.finalizingPhase(_.immutableBlocksConfirmedL2))
-            case HeadPhase.Finalized => println("Node is finalized.")
-
-    private def applyBlock(
-        blockRecord: BlockRecord
-    ): Unit =
-        val block = blockRecord.block
-        block.blockHeader.blockType match
-            case Minor =>
-                // No L1 effects so far in multisig mode for Minor blocks
-                // L2 effect
-                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MinorBlockL2Effect]
-                nodeState.head.openPhase { s =>
-                    s.addBlock(blockRecord)
-                    s.stateL2.replaceUtxosActive(l2BlockEffect_)
-                    val body = block.blockBody
-                    s.confirmMempoolEvents(
-                      block.blockHeader.blockNum,
-                      body.eventsValid,
-                      None,
-                      body.eventsInvalid
-                    )
-                }
-
-            case Major =>
-                // L1 effect
-                val settlementTx = toL1Tx(
-                  blockRecord.l1Effect.asInstanceOf[SettlementTx]
-                ) // FIXME: casting
-                val Right(settlementTxId) = cardano.submit(settlementTx)
-                log.info(s"Settlement tx submitted: $settlementTxId")
-
-                // Emulate L1 event
-                // TODO: I don't think we have to wait L1 event in reality
-                //  instead we need to update the treasury right upon submitting.
-                //  Another concern - probably we have to do it in one atomic change
-                //  along with the L2 effect. Otherwise the next settlement transaction
-                //  may use the old treasury.
-                multisigL1EventManager.map(
-                  _.handleSettlementTx(settlementTx, settlementTxId)
-                )
-
-                // L2 effect
-                val l2BlockEffect_ = blockRecord.l2Effect.asInstanceOf[MajorBlockL2Effect]
-                nodeState.head.openPhase { s =>
-                    s.addBlock(blockRecord)
-                    s.stateL2.replaceUtxosActive(l2BlockEffect_._1)
-                    val body = block.blockBody
-                    s.confirmMempoolEvents(
-                      block.blockHeader.blockNum,
-                      body.eventsValid,
-                      l2BlockEffect_._2,
-                      body.eventsInvalid
-                    )
-
-                    // FIXME: we should it clean up immediately, so the next block won't pick it up again
-                    //  Solution: keep L1 state in accordance to ledger, filter out deposits absorbed
-                    //  They can be known from L1 major block effects (currently not implemented).
-                    s.removeAbsorbedDeposits(body.depositsAbsorbed)
-                }
-
-            case Final =>
-                // L1 effect
-                val finalizationTx = toL1Tx(
-                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
-                ) // FIXME: casting
-                val Right(finalizationTxId) = cardano.submit(finalizationTx)
-                log.info(s"Finalizationtx submitted: $finalizationTxId")
-
-                // Emulate L1 event
-                // TODO: temporarily handle the event, again, we don't want to wait
-                multisigL1EventManager.foreach(
-                  _.handleFinalizationTx(
-                    finalizationTx,
-                    finalizationTxId
-                  )
-                )
-
-                // L2 effect
-                nodeState.head.finalizingPhase { s =>
-                    s.stateL2.flush
-                    s.confirmValidMempoolEvents(
-                      block.blockHeader.blockNum,
-                      block.blockBody.eventsValid
-                    )
-                    s.closeHead(blockRecord)
-                }
-
-def mkL1BlockEffect(
-    settlementTxBuilder: SettlementTxBuilder,
-    finalizationTxBuilder: FinalizationTxBuilder,
-    mbOwnPeer: Option[Wallet],
-    mbNetwork: Option[HeadPeerNetwork],
-    block: Block,
-    utxosWithdrawn: UtxosSet
-): L1BlockEffect =
-    block.blockHeader.blockType match
-        case Minor => ()
-        case Major =>
-            // Create settlement tx draft
-            val txRecipe = SettlementRecipe(
-              block.blockHeader.versionMajor,
-              block.blockBody.depositsAbsorbed,
-              utxosWithdrawn
-            )
-            val Right(settlementTxDraft: SettlementTx) =
-                settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-            mbOwnPeer /\ mbNetwork match
-                case Some(ownPeer) -> Some(network) =>
-                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(settlementTxDraft)
-                    // TODO: broadcast ownWit
-
-                    // Confirm block
-                    val acksMajorCombined = network.reqMajor(block, utxosWithdrawn)
-
-                    TxDump.dumpMultisigTx(settlementTxDraft)
-
-                    // L1 effect
-                    val wits = acksMajorCombined.map(_.settlement) + ownWit
-                    val settlementTx = wits.foldLeft(settlementTxDraft)(addWitness)
-                    // val serializedTx = serializeTxHex(settlementTx)
-
-                    settlementTx
-                case _ => // used in MBT
-                    settlementTxDraft
-        case Final =>
-            // Create finalization tx draft
-            val recipe =
-                FinalizationRecipe(block.blockHeader.versionMajor, utxosWithdrawn)
-            val Right(finalizationTxDraft: FinalizationTx) =
-                finalizationTxBuilder.buildFinalizationTxDraft(recipe)
-
-            mbOwnPeer /\ mbNetwork match
-                case Some(ownPeer) -> Some(network) =>
-                    val ownWit: TxKeyWitness = ownPeer.createTxKeyWitness(finalizationTxDraft)
-                    // TODO: broadcast ownWit
-
-                    // Confirm block
-                    val acksFinalCombined = network.reqFinal(block, utxosWithdrawn)
-
-                    // L1 effect
-                    val wits = acksFinalCombined.map(_.finalization) + ownWit
-                    val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitness)
-                    // val serializedTx = serializeTxHex(finalizationTx)
-
-                    finalizationTx
-                case _ => // used in MBT
-                    finalizationTxDraft
+end Node

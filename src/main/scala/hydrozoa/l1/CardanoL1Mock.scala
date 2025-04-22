@@ -1,10 +1,14 @@
 package hydrozoa.l1
 
+import com.bloxbean.cardano.client.api.model.Utxo
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
+import ox.resilience.RetryConfig
+import ox.scheduling.Jitter
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 class CardanoL1Mock() extends CardanoL1:
 
@@ -31,8 +35,10 @@ class CardanoL1Mock() extends CardanoL1:
         Right(txId)
     }
 
-    // TODO: Add Either
-    override def awaitTx(txId: TxId): Unit = ()
+    override def awaitTx(
+        txId: TxId,
+        retryConfig: RetryConfig[Throwable, Option[TxL1]]
+    ): Option[TxL1] = knownTxs.get(txId)
 
     override def network: Network = Network(0, 42)
 
@@ -42,6 +48,8 @@ class CardanoL1Mock() extends CardanoL1:
         utxosActive.filter((_, utxo) => utxo.address == address).keySet.toSet
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
+
+    override def utxosAtAddress(headAddress: AddressBechL1): List[Utxo] = ???
 
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =

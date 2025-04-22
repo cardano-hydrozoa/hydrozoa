@@ -14,7 +14,7 @@ import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.createBlock
+import hydrozoa.l2.block.{BlockEffect, createBlock}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.unliftUtxoSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
@@ -219,7 +219,7 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[InitializeError, TxId]
+        override type RealResult = Either[InitializationError, TxId]
 
         override def toString: String =
             s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
@@ -556,7 +556,7 @@ object MBTSuite extends Commands:
                     val settlementTxBuilder = BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
                     val finalizationTxBuilder = BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
-                    val l1Effect = mkL1BlockEffect(settlementTxBuilder, finalizationTxBuilder, None, None, block, utxosWithdrawn)
+                    val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
                     val l2Effect: L2BlockEffect = block.blockHeader.blockType match
                         case Minor => utxosActive
                         case Major => utxosActive /\ mbGenesis

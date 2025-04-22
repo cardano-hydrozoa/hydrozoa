@@ -17,7 +17,7 @@ trait HydrozoaSUT:
         ada: Long,
         txId: TxId,
         txIx: TxIx
-    ): (Either[InitializeError, TxId], NodeStateInspector)
+    ): (Either[InitializationError, TxId], NodeStateInspector)
 
     def deposit(
         depositRequest: DepositRequest
@@ -41,7 +41,7 @@ class OneNodeHydrozoaSUT(
         ada: Long,
         txId: TxId,
         txIx: TxIx
-    ): (Either[InitializeError, TxId], NodeStateInspector) =
+    ): (Either[InitializationError, TxId], NodeStateInspector) =
         val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
         (ret, node.nodeStateReader)
 
@@ -59,7 +59,7 @@ class OneNodeHydrozoaSUT(
 
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
-    ): (Either[InitializeError, TxId], NodeStateInspector) =
+    ): (Either[InitializationError, TxId], NodeStateInspector) =
         val request = event match
             case tx: SimpleTransaction => Transaction(tx)
             case wd: SimpleWithdrawal  => Withdrawal(wd)

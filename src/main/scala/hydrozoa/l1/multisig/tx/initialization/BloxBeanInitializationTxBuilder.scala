@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.{NativeScript, ScriptAll}
 import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
-import hydrozoa.l1.multisig.tx.{InitializationTx, MultisigTx}
+import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.{AddressBechL1, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
@@ -28,14 +28,14 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
       */
     override def mkInitializationTxDraft(
         recipe: InitTxRecipe
-    ): Either[String, (InitializationTx, AddressBechL1)] =
+    ): Either[String, (InitTx, AddressBechL1)] =
         // TODO: Should be passed as an arg, but cannot be serialized easily.
         val Right(seedUtxo) = backendService.getUtxoService
             .getTxOutput(recipe.seedOutput.txId.hash, recipe.seedOutput.outputIx.ix.intValue)
             .toEither
 
         val beaconToken = Asset.builder
-            .name(recipe.beaconTokenName)
+            .name(recipe.beaconTokenName.tokenName)
             .value(BigInteger.valueOf(1))
             .build
 
@@ -66,6 +66,5 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .additionalSignersCount(signatories)
             .build()
 
-        //Right(MultisigTx(TxL1(initializationTx.serialize)), AddressBechL1(seederAddress))
         Right((initializationTx.serialize |> TxL1.apply |> MultisigTx.apply ), AddressBechL1(seederAddress))
 }

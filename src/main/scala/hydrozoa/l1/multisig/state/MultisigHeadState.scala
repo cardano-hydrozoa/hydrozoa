@@ -15,7 +15,7 @@ import scala.collection.mutable
 case class MultisigHeadStateL1(
     var treasuryUtxo: TreasuryUtxo,
     depositUtxos: DepositUtxosMutable,
-    // FIXME: move to rollout effect
+    // FIXME: move to rollout effect (?)
     rolloutUtxos: RolloutUtxosMutable
 )
 

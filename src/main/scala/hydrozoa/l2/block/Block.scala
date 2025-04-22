@@ -15,7 +15,7 @@ case class Block(
 )
 
 val zeroBlock =
-    Block(BlockHeader(0, Major, timeCurrent, 0, 0, RH32UtxoSetL2.dummy), BlockBody.empty)
+    Block(BlockHeader(0, Major, timeCurrent, 0, 0, 42), BlockBody.empty)
 
 case class BlockHeader(
     blockNum: Int,
@@ -23,7 +23,7 @@ case class BlockHeader(
     timeCreation: PosixTime,
     versionMajor: Int,
     versionMinor: Int,
-    utxosActive: RH32UtxoSetL2
+    utxosActive: Int // RH32UtxoSetL2
 )
 
 enum BlockTypeL2 derives CanEqual:
@@ -75,7 +75,8 @@ case class BlockBuilder[
     eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty, // TODO: are sets ok?
     eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
     depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
-    utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+    // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+    utxosActive: Int = 42
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor
@@ -124,7 +125,10 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(depositsAbsorbed = depositsAbsorbed ++ Seq(d))
 
-    def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+//    def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+//        copy(utxosActive = utxosActive)
+
+    def utxosActive(utxosActive: Int): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(utxosActive = utxosActive)
 
     def apply(

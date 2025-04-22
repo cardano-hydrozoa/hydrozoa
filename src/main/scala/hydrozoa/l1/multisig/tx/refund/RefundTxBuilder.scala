@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.refund
 
-import hydrozoa.TxIx
-import hydrozoa.l1.multisig.tx.{DepositTxTag, MultisigTx, PostDatedRefundTx}
+import hydrozoa.{TxIx, TxL1}
+import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 
 trait RefundTxBuilder {
     def mkPostDatedRefundTxDraft(
@@ -10,6 +10,6 @@ trait RefundTxBuilder {
 }
 
 case class PostDatedRefundRecipe(
-    depositTx: MultisigTx[DepositTxTag], // =:= DepositTx, breaks extensions somehow
+    depositTx: TxL1,
     txIx: TxIx
 )

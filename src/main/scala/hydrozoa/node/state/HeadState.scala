@@ -2,17 +2,18 @@ package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{Piper, txHash}
+import hydrozoa.infra.{Piper, txHash, verKeyHash}
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
-import hydrozoa.l2.block.{Block, BlockTypeL2, zeroBlock}
+import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
+import ox.channels.ActorRef
 
 import scala.CanEqual.derived
 import scala.collection.mutable
@@ -20,6 +21,8 @@ import scala.collection.mutable
 enum HeadPhase derives CanEqual:
     case Initializing
     case Open
+    // If one of the peers indicated in AckMinor/AckMajor2 that they want the next block be final
+    // and the last, we move the head into Finalizing phase.
     case Finalizing
     case Finalized
     // case Dispute
@@ -64,7 +67,7 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
-    def beaconTokenName: String // TODO: use more concrete type
+    def beaconTokenName: TokenName
     def seedAddress: AddressBechL1
     def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
@@ -77,6 +80,10 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def l2LastMajor: Block
     def peekDeposits: DepositUtxos
     def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
+    def blockLeadTurn: Int
+    def isBlockLeader: Boolean
+    def isBlockPending: Boolean
+    def pendingOwnBlock: OwnBlock
 
 sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
     def l2Tip: Block
@@ -88,28 +95,23 @@ sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
 sealed trait HeadStateApi
 
 sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader:
-    def openHead(
-        headParams: HeadParams,
-        headNativeScript: NativeScript,
-        headBechAddress: AddressBechL1,
-        beaconTokenName: String,
-        treasuryUtxo: TreasuryUtxo,
-        seedAddress: AddressBechL1
-    ): Unit
+    def openHead(treasuryUtxo: TreasuryUtxo): Unit
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
-    def enqueueDeposit(deposit: DepositUtxo): Unit
+    def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
     def poolEventL2(event: NonGenesisL2): Unit
-    def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
+    def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
+    def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
+    def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def addBlock(block: BlockRecord): Unit // FIXME: name
+    def applyBlockRecord(block: BlockRecord): Unit
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
         mbGenesis: Option[(TxId, SimpleGenesis)],
-        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+        eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
+        depositsAbsorbed: Seq[UtxoIdL1]
     ): Unit
-    def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit
     def finalizeHead(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -124,34 +126,52 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
-    extends HeadStateReader
+class HeadStateGlobal(
+    var headPhase: HeadPhase,
+    val ownPeer: WalletId,
+    val headPeerVKs: Map[WalletId, VerificationKeyBytes],
+    val headParams: HeadParams,
+    val headNativeScript: NativeScript,
+    val headAddress: AddressBechL1,
+    val beaconTokenName: TokenName,
+    val seedAddress: AddressBechL1,
+    val initTx: InitTx // Block #0 L1-effect
+) extends HeadStateReader
     with HeadState {
     self =>
 
     private val log = Logger(getClass)
 
-    //
-    def currentPhase: HeadPhase = headPhase
+    private var blockProductionActor: ActorRef[BlockProducer] = _
 
-    //
-    private var initialTreasury: Option[TreasuryUtxo] = None
-    private var headParams: Option[HeadParams] = None
-    private var headNativeScript: Option[NativeScript] = None
-    private var headBechAddress: Option[AddressBechL1] =
-        None // FIXME: can be obtained from stateL1.treasuryUtxo
-    private var beaconTokenName: Option[String] = None // FIXME: use more sHeadStateApipecific type
-    private var seedAddress: Option[AddressBechL1] = None
+    def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
+        this.blockProductionActor = blockProductionActor
 
-    // Hydrozoa blocks
-    private val genesisBlock: Unit = () // FIXME: use instead zeroBlock
-    private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
-    // Currently pending block
-    private val blockPending: Option[BlockRecord] = None
+    override def currentPhase: HeadPhase = headPhase
 
-    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    // Round-robin peer's turn. Having it we always can decide whether
+    // the node should be a leader of the next block.
+    private var blockLeadTurn: Option[Int] = None
+    // Flag that indicated the node is the leader of the next block.
+    private var isBlockLeader: Option[Boolean] = None
+    // Flag that allows the check whether "no new block awaits the peers’ confirmation"
+    // [If true] it postpones the creation of the next block until
+    // we are done with the previous one.
+    // FIXME: 1. Suspend actors 2. Try to create a block when set back to false
+    private var isBlockPending: Option[Boolean] = None
+    private var pendingOwnBlock: Option[OwnBlock] = None
+
+    // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[NonGenesisL2] = mutable.Buffer()
-    private var finalizing: Option[Boolean] = None
+    private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
+
+    // Hydrozoa L2 blocks, confirmed events, and deposits handled
+    private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
+    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
+    private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
+
+    // L1&L2 states
     private var stateL1: Option[MultisigHeadStateL1] = None
     private var stateL2: Option[AdaSimpleLedger[THydrozoaHead]] = None
 
@@ -197,16 +217,16 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
     // Subclasses that implements APIs (readers)
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
-        def headPeers: Set[WalletId] = self.headPeers.toSet
-        def headNativeScript: NativeScript = self.headNativeScript.get
-        def beaconTokenName: String = self.beaconTokenName.get
-        def seedAddress: AddressBechL1 = self.seedAddress.get
+        def headPeers: Set[WalletId] = self.headPeerVKs.keySet
+        def headNativeScript: NativeScript = self.headNativeScript
+        def beaconTokenName: TokenName = self.beaconTokenName
+        def seedAddress: AddressBechL1 = self.seedAddress
         def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
-        def headBechAddress: AddressBechL1 = self.headBechAddress.get
+        def headBechAddress: AddressBechL1 = self.headAddress
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
-        def headPeers: Set[WalletId] = self.headPeers.toSet
+        def headPeers: Set[WalletId] = self.headPeerVKs.keySet
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
@@ -217,15 +237,27 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
             .findLast(_.block.blockHeader.blockType == Major)
             .map(_.block)
             .getOrElse(zeroBlock)
-        def peekDeposits: DepositUtxos = UtxoSet(self.stateL1.get.depositUtxos)
+        def peekDeposits: DepositUtxos =
+            // Subtracts deposits that are known to have been handled yet, though their utxo may be still
+            // on stateL1.depositUtxos.
+            self.stateL1.get.depositUtxos.map.view
+                .filterKeys(k => !self.depositHandled.contains(k))
+                .toMap
+                |> UtxoSet.apply[L1, DepositTag]
+
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
-            val headParams = self.headParams.get
+            val headParams = self.headParams
             val consensusParams = headParams.l2ConsensusParams
             (
               consensusParams.depositMarginMaturity,
               headParams.minimalDepositWindow,
               consensusParams.depositMarginExpiry
             )
+
+        def blockLeadTurn: Int = self.blockLeadTurn.get
+        def isBlockLeader: Boolean = self.isBlockLeader.get
+        def isBlockPending: Boolean = self.isBlockPending.get
+        def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
 
     private class FinalizingPhaseReaderImpl
         extends MultisigRegimeReaderImpl
@@ -239,48 +271,128 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
         extends InitializingPhaseReaderImpl
         with InitializingPhase:
         def openHead(
-            headParams: HeadParams,
-            headNativeScript: NativeScript,
-            headBechAddress: AddressBechL1,
-            beaconTokenName: String,
-            treasuryUtxo: TreasuryUtxo,
-            seedAddress: AddressBechL1
+            treasuryUtxo: TreasuryUtxo
         ): Unit =
+            self.blockLeadTurn = Some(nodeRoundRobinTurn)
+            self.isBlockLeader = Some(self.blockLeadTurn.get == 1)
+            self.isBlockPending = Some(false)
             self.headPhase = Open
-            self.headParams = Some(headParams)
-            self.headNativeScript = Some(headNativeScript)
-            self.headBechAddress = Some(headBechAddress)
-            self.beaconTokenName = Some(beaconTokenName)
-            self.initialTreasury = Some(treasuryUtxo)
-            self.seedAddress = Some(seedAddress)
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
             self.stateL2 = Some(AdaSimpleLedger())
+            log.info(
+              s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
+            )
+
+    def nodeRoundRobinTurn: Int =
+        /* Let's say we have three peers: Alice, Bob, and Carol.
+           And their VKH happen to give the same order.
+           Then on Alice this function will return 1, so Alice's turns will be 1,4,7,...
+           For Bob, it will return 2, so it will give turns 2,5,8,...
+           Lastly, for Carol it will give 0, so 3,6,9 will be her turns.
+         */
+        val headSize = headPeerVKs.size
+        val headPeersVKH = headPeerVKs.map((k, v) => (k, v.verKeyHash))
+        val turns = headPeersVKH.values.toList.sorted
+        val ownVKH = headPeersVKH(ownPeer)
+        val ownIndex = turns.indexOf(ownVKH) + 1
+        ownIndex % headSize
 
     private class OpenPhaseImpl extends OpenPhaseReaderImpl with OpenPhase:
 
-        def enqueueDeposit(d: DepositUtxo): Unit =
-            self.stateL1.map(s => s.depositUtxos.map.put(d.ref, d.output))
+        def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit =
+            log.info(s"Enqueueing deposit: $depositId")
+            self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
 
-        def poolEventL2(event: NonGenesisL2): Unit = self.poolEventsL2.append(event)
+        def poolEventL2(event: NonGenesisL2): Unit =
+            log.info(s"Pooling event: $event")
+            self.poolEventsL2.append(event)
+            log.info(
+              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
+            if this.isBlockLeader && !this.isBlockPending then
+                log.info("Producing block due to getting new L2 event...")
+                produceBlock(false)
 
-        def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit =
-            self.stateL1.get.treasuryUtxo =
-                mkUtxo[L1, TreasuryTag](txId, txIx, self.headBechAddress.get, coins)
+        private def produceBlock(finalizing: Boolean): Unit = {
+            self.isBlockPending = Some(true)
+            val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
+                blockProductionActor.ask(
+                  _.produceBlock(
+                    stateL2.blockProduction,
+                    if finalizing then Seq.empty else immutablePoolEventsL2,
+                    if finalizing then UtxoSet(Map.empty) else peekDeposits,
+                    l2Tip.blockHeader,
+                    timeCurrent,
+                    finalizing
+                  )
+                )
+            self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+        }
 
-        def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
+        override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
+            log.info("Net treasury utxo")
+            self.stateL1.get.treasuryUtxo = treasuryUtxo
 
-        def addBlock(block: BlockRecord): Unit = self.blocksConfirmedL2.append(block)
+        def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
+            log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
+            depositIds.foreach(self.stateL1.get.depositUtxos.map.remove)
+
+        def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
+            log.info(s"Adding new deposit utxos: $depositUtxos")
+            self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
+            log.info(
+              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
+            if this.isBlockLeader && !this.isBlockPending then
+                log.info("Producing new block due to observing a new deposit utxo...")
+                produceBlock(false)
+
+        override def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
+
+        override def applyBlockRecord(record: BlockRecord): Unit =
+            log.info("applyBlockRecord")
+            self.blocksConfirmedL2.append(record)
+
+            val l2BlockEffect_ = record.l2Effect.asInstanceOf[MinorBlockL2Effect]
+            stateL2.replaceUtxosActive(l2BlockEffect_)
+
+            val body = record.block.blockBody
+            val blockNum = record.block.blockHeader.blockNum
+
+            val mbGenesis = record.l2Effect match
+                case majorEffect: MajorBlockL2Effect => majorEffect._2
+                case _                               => None
+
+            confirmMempoolEvents(
+              blockNum,
+              body.eventsValid,
+              mbGenesis,
+              body.eventsInvalid,
+              body.depositsAbsorbed
+            )
+
+            val nextBlockNum = record.block.blockHeader.blockNum + 1
+            self.isBlockPending = Some(false)
+            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
+
+            log.info(
+              s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
+            )
 
         // FIXME: this is too complex for state management, should be a part of effect
-        def confirmMempoolEvents(
+        // FIXME: naming
+        override def confirmMempoolEvents(
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
+            depositsAbsorbed: Seq[UtxoIdL1]
         ): Unit =
             // 1. Add valid events
+            log.info(s"Add valid events: $eventsValid")
             eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
             // 2. Add genesis if exists
+            log.info(s"Add genesis if exists: $mbGenesis")
             mbGenesis.foreach((txId, genesis) =>
                 // FIXME: timeCurrent
                 val event = AdaSimpleLedger.mkGenesisEvent(genesis)
@@ -288,15 +400,15 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
                 // Dump L2 tx
                 TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
             )
-            // 3. Remove invalid events
+            // 3. Add handled deposits
+            self.depositHandled.addAll(depositsAbsorbed.toSet)
+            // 4. Remove invalid events
             log.info(s"Removing invalid events: $blockEventsInvalid")
             self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
-        def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
-            deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
-
-        def finalizeHead(): Unit = headPhase = Finalizing
+        override def finalizeHead(): Unit =
+            self.headPhase = Finalizing
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
@@ -329,11 +441,21 @@ class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
 }
 
 object HeadStateGlobal:
-    val log: Logger = Logger(getClass)
-    def apply(peers: List[WalletId]): HeadStateGlobal =
-        assert(peers.length >= 2, "The number of peers should be >= 2")
-        log.info(s"Creating head state global with peers: $peers")
-        new HeadStateGlobal(headPhase = Initializing, headPeers = peers)
+    private val log = Logger(getClass)
+    def apply(params: InitializingHeadParams): HeadStateGlobal =
+        log.info(s"Creating head state with parameters: $params")
+        assert(params.headPeerVKs.size >= 2, "The number of peers should be >= 2")
+        new HeadStateGlobal(
+          headPhase = Initializing,
+          ownPeer = params.ownPeer,
+          headPeerVKs = params.headPeerVKs,
+          headParams = params.headParams,
+          headNativeScript = params.headNativeScript,
+          headAddress = params.headAddress,
+          beaconTokenName = params.beaconTokenName,
+          seedAddress = params.seedAddress,
+          initTx = params.initTx
+        )
 
 case class BlockRecord(
     block: Block,
@@ -342,7 +464,33 @@ case class BlockRecord(
     l2Effect: L2BlockEffect
 )
 
-type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
+case class OwnBlock(
+    block: Block,
+    utxosActive: UtxosSetOpaque,
+    utxosWithdrawn: UtxosSet,
+    mbGenesis: Option[(TxId, SimpleGenesis)]
+)
+
+case class PendingDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: PostDatedRefundTx
+)
+
+type DepositRecord = AbsorbedDeposit | RefundedDeposit
+
+case class AbsorbedDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: PostDatedRefundTx,
+    blockNum: Int
+)
+
+case class RefundedDeposit(
+    depositId: UtxoIdL1,
+    postDatedRefundTx: Option[PostDatedRefundTx],
+    immediateRefundTx: Option[TxL1]
+)
+
+type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
 type MinorBlockL1Effect = Unit
 type L1PostDatedBlockEffect = Unit
 
@@ -357,15 +505,9 @@ def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
     case _: MinorBlockL1Effect             => None
     case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
 
-//extension (l1BlockEffect: L1BlockEffect)
-//    def mbTxHash: Option[TxId] = l1BlockEffect match
-//        case _: MinorBlockL1Effect => None
-//        case tx: InitializationTx => tx |> txHash |> Some.apply
-//        case tx: SettlementTx => tx |> txHash |> Some.apply
-//        case tx: FinalizationTx => tx  |> txHash |> Some.apply
-
+// NB: this won't work as an extension method on union type L1BlockEffect
 def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
     case _: MinorBlockL1Effect => None
-    case tx: InitializationTx  => tx |> txHash |> Some.apply
+    case tx: InitTx            => tx |> txHash |> Some.apply
     case tx: SettlementTx      => tx |> txHash |> Some.apply
     case tx: FinalizationTx    => tx |> txHash |> Some.apply

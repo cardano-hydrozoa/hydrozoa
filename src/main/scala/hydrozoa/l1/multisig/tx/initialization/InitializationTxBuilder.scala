@@ -1,12 +1,12 @@
 package hydrozoa.l1.multisig.tx.initialization
 
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.InitializationTx
+import hydrozoa.l1.multisig.tx.InitTx
 
 trait InitTxBuilder {
     def mkInitializationTxDraft(
         recipe: InitTxRecipe
-    ): Either[String, (InitializationTx, AddressBechL1)]
+    ): Either[String, (InitTx, AddressBechL1)]
 }
 
 case class InitTxRecipe(
@@ -14,5 +14,5 @@ case class InitTxRecipe(
     seedOutput: UtxoIdL1,
     coins: Long,
     headNativeScript: NativeScript,
-    beaconTokenName: String
+    beaconTokenName: TokenName
 )

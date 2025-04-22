@@ -1,31 +1,72 @@
 package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.{Piper, sequence, txHash}
+import hydrozoa.l1.event.MultisigL1EventSource
+import hydrozoa.l1.multisig.tx.InitTx
+import hydrozoa.l2.block.BlockProducer
+import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.node.TestPeer
+import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
+import ox.channels.ActorRef
 
 import scala.collection.mutable
 
 /** The class that provides read-write and read-only access to the state of the node.
   */
-class NodeState():
+class NodeState(
+):
 
     val log: Logger = Logger(getClass)
 
-    // All known peers in a peer network (not to confuse with head's pears)
-    private var knownPeers: mutable.Set[WalletId] = mutable.Set.empty
+    var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
+
+    var blockProductionActor: ActorRef[BlockProducer] = _
+
+    private var ownPeer: TestPeer = _
+
+    // All known peers in a peer network (not to confuse with head's peers)
+    private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
+
+    def getKnownPeers: Set[WalletId] = knownPeers.toSet
+
+    // All learned peers' verification keys
+    private val knownPeersVKeys: mutable.Map[WalletId, VerificationKeyBytes] = mutable.Map.empty
+
+    def getVerificationKeys(peers: Set[WalletId]): Option[Set[VerificationKeyBytes]] =
+        val mbList = peers.toList.map(knownPeersVKeys.get) |> sequence
+        mbList.map(_.toSet)
+
+    def getVerificationKeyMap(peers: Set[WalletId]): Map[WalletId, VerificationKeyBytes] =
+        val ret = knownPeersVKeys.view.filterKeys(peers.contains)
+        assert(peers.size == ret.size, "All VK should present.")
+        ret.toMap
+
+    def saveKnownPeersVKeys(keys: Map[WalletId, VerificationKeyBytes]): Unit =
+        log.info(s"Saving learned verification keys for known peers: $keys")
+        knownPeersVKeys.addAll(keys)
 
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
-    // seedUtxo: ???
-    def initializeHead(peers: List[WalletId]): Unit =
+    def initializeHead(params: InitializingHeadParams): Unit =
         headState match
             case None =>
-                log.info(s"Initializing a new head for peers: $peers")
-                this.headState = Some(HeadStateGlobal(peers))
-            // FIXME:
+                log.info(s"Initializing Hydrozoa head...")
+                this.headState = Some(HeadStateGlobal(params))
+                this.headState.get.setBlockProductionActor(blockProductionActor)
+                log.info(s"Setting up L1 event sourcing...")
+                val initTxId = params.initTx |> txHash
+                multisigL1EventSource.tell(_.awaitInitTx(
+                    initTxId, 
+                    params.headAddress,
+                    params.headNativeScript,
+                    params.beaconTokenName
+                ))
+            // TODO: add support for re-opening a head
             // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
             case Some(_) =>
-                val err = "The head is already initialized."
+                val err = "The only supported head is already exists."
                 log.warn(err)
                 throw new IllegalStateException(err)
 
@@ -43,6 +84,7 @@ class NodeState():
             getOrThrow.openPhaseReader(foo)
         override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
             getOrThrow.finalizingPhaseReader(foo)
+
     }
 
     private def getOrThrow = {
@@ -54,14 +96,26 @@ class NodeState():
                 throw IllegalStateException(err)
     }
 
+object NodeState:
+    def apply(
+        knownPeers: Set[WalletId]
+    ): NodeState =
+        val nodeState = new NodeState()
+        nodeState.knownPeers.addAll(knownPeers)
+        nodeState
+
 // FIXME: add pub key
 case class WalletId(
     name: String
 )
 
-object NodeState:
-    def apply(knownPeers: Set[WalletId]): NodeState =
-        // TODO: @atlanter: is there a way to make it more concise?
-        val nodeState = new NodeState()
-        nodeState.knownPeers.addAll(knownPeers)
-        nodeState
+case class InitializingHeadParams(
+    ownPeer: WalletId,
+    headPeerVKs: Map[WalletId, VerificationKeyBytes],
+    headParams: HeadParams,
+    headNativeScript: NativeScript,
+    headAddress: AddressBechL1,
+    beaconTokenName: TokenName,
+    seedAddress: AddressBechL1,
+    initTx: InitTx
+)

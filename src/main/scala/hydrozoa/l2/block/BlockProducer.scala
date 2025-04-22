@@ -1,19 +1,60 @@
 package hydrozoa.l2.block
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
+import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
-}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.merkle.RH32UtxoSetL2
+import ox.channels.ActorRef
+import ox.sleep
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
+import scala.language.strictEquality
 
 // TODO: unify in terms of abstract ledger and types
+
+class BlockProducer:
+
+    private val log = Logger(getClass)
+
+    private var networkRef: ActorRef[HeadPeerNetwork] = _
+
+    def setNetworkRef(networkRef: ActorRef[HeadPeerNetwork]): Unit =
+        this.networkRef = networkRef
+
+    def produceBlock(
+        stateL2: AdaSimpleLedger[TBlockProduction],
+        poolEvents: Seq[NonGenesisL2],
+        depositsPending: DepositUtxos,
+        prevHeader: BlockHeader,
+        timeCreation: PosixTime,
+        finalizing: Boolean
+    ): (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
+        createBlock(
+          stateL2,
+          poolEvents,
+          depositsPending,
+          prevHeader,
+          timeCreation,
+          finalizing
+        ) match
+            case Some(some @ (block, _, _, _, _)) =>
+                log.info(s"A new block was produced: $block")
+                // FIXME: this is needed now so we can see deposits on all nodes for sure 
+                sleep(1.second) 
+                log.info(s"Starting consensus on block ${block.blockHeader.blockNum}")
+                block.blockHeader.blockType match
+                    case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))
+                    case Major => networkRef.tell(_.reqMajor(ReqMajor(block)))
+                    case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
+                some
+            case None =>
+                throw RuntimeException("Should not happen: was not able to produce a block.")
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
@@ -82,13 +123,14 @@ def createBlock(
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
-            // FIXME: construct genesis properly
+            // FIXME: construct genesis properly - using the datum
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    depositsAbsorbed = eligibleDeposits.map.keySet
-                        .toList.sortWith((a, b) => a._1.hash.compareTo(b._1.hash) < 0)
+                    depositsAbsorbed = eligibleDeposits.map.keySet.toList.sortWith((a, b) =>
+                        a._1.hash.compareTo(b._1.hash) < 0
+                    )
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None
@@ -113,7 +155,8 @@ def createBlock(
     val blockBuilder = BlockBuilder()
         .timeCreation(timeCreation)
         .blockNum(prevHeader.blockNum + 1)
-        .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
+//        .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
+        .utxosActive(42) // TODO: calculate Merkle root hash
         .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
         .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
 

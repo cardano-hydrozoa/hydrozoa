@@ -7,9 +7,9 @@ import scala.collection.mutable
 
 /** Cardano network layers.
   */
-sealed trait AnyLevel
-sealed trait L1 extends AnyLevel
-sealed trait L2 extends AnyLevel
+sealed trait AnyLevel derives CanEqual
+sealed trait L1 extends AnyLevel derives CanEqual
+sealed trait L2 extends AnyLevel derives CanEqual
 
 /** Cardano txs in a serialized form.
   * @param bytes
@@ -50,7 +50,7 @@ case class TxId(hash: String) derives CanEqual
 //  Currently, the absence of Schema for Char prevents us from doing so.
 case class TxIx(ix: Int) derives CanEqual
 
-final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx)
+final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx) derives CanEqual
 
 type UtxoIdL1 = UtxoId[L1]
 type UtxoIdL2 = UtxoId[L2]
@@ -84,15 +84,22 @@ case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L
 case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
 
 object UtxoSet:
-    def apply[L <: AnyLevel, F](): UtxoSet[L, F] = UtxoSet(Map.empty)
+    def apply[L <: AnyLevel, F](): UtxoSet[L, F] = new UtxoSet(Map.empty)
+    def apply[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]]): UtxoSet[L, F] = new UtxoSet(
+      map
+    )
     def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
-        UtxoSet(mutableUtxoSet.map.toMap)
+        new UtxoSet(mutableUtxoSet.map.toMap)
 
 // Policy ID
 case class PolicyId(policyId: String)
 
 // A verification key of a peer, used on both L1 and L2
 case class VerificationKeyBytes(bytes: Array[Byte])
+
+object VerificationKeyBytes:
+    def applyI(bytes: IArray[Byte]): VerificationKeyBytes =
+        new VerificationKeyBytes(IArray.genericWrapArray(bytes).toArray)
 
 // A signing key of a peer, used on both L1 and L2
 case class SigningKeyBytes(bytes: Array[Byte])
@@ -103,6 +110,8 @@ case class NativeScript(bytes: Array[Byte])
 
 case class Datum(bytes: Array[Byte])
 
+case class TokenName(tokenName: String)
+
 // UDiffTime
 opaque type UDiffTimeMilli = BigInt
 
@@ -110,7 +119,7 @@ object UDiffTimeMilli:
     inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
 extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x
 
-opaque type PosixTime = BigInt
+type PosixTime = BigInt
 
 // FIXME: move to another module
 def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond

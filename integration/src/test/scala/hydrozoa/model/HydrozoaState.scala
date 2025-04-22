@@ -85,7 +85,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
             override def headNativeScript: NativeScript = s.headMultisigScript.get
 
-            override def beaconTokenName: String = ???
+            override def beaconTokenName: TokenName = ???
 
             override def seedAddress: AddressBechL1 = ???
 
