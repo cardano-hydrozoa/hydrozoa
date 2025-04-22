@@ -49,7 +49,7 @@ def createBlock(
     // at the end using the block builder
     val txValid, wdValid: mutable.Set[TxId] = mutable.Set.empty
     val eventsInvalid: mutable.Set[(TxId, NonGenesisL2EventLabel)] = mutable.Set.empty
-    var depositsAbsorbed: Set[UtxoId[L1]] = Set.empty
+    var depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty
 
     // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
     // val previousMajorBlock = state.asOpen(_.l2LastMajor)
@@ -82,11 +82,13 @@ def createBlock(
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
         if eligibleDeposits.map.isEmpty then None
         else
+            // FIXME: construct genesis properly
             val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
                     depositsAbsorbed = eligibleDeposits.map.keySet
+                        .toList.sortWith((a, b) => a._1.hash.compareTo(b._1.hash) < 0)
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None

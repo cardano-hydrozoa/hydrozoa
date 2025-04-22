@@ -1,8 +1,6 @@
 package hydrozoa.infra
 
 import com.bloxbean.cardano.client.crypto.Blake2bUtil.{blake2bHash224, blake2bHash256}
-import com.bloxbean.cardano.client.crypto.KeyGenUtil
-import hydrozoa.{ParticipantSecretKey, ParticipantVerificationKey}
 
 // Opaque types and functions for cryptographic hashes used in Hydrozoa.
 
@@ -43,12 +41,3 @@ object CryptoHash:
             def bytes: IArray[Byte] = x
         }
     }
-
-// Generating nodes keys
-
-// FIXME: move to another module
-// Generating keys for a node
-def genNodeKey(): (ParticipantSecretKey, ParticipantVerificationKey) = {
-    val keys = KeyGenUtil.generateKey
-    (ParticipantSecretKey(keys.getSkey.getBytes), ParticipantVerificationKey(keys.getVkey.getBytes))
-}

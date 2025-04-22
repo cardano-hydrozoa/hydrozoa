@@ -1,28 +1,28 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.common.OrderEnum
+import com.bloxbean.cardano.client.api.exception.ApiException
 import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
-import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
-import hydrozoa.infra.toResult
-import hydrozoa.{UtxoIdL1, TxId, TxIx}
+import com.fasterxml.jackson.databind.JsonNode
+import hydrozoa.infra.{ResultUtils, toResult}
+import hydrozoa.{AddressBechL1, OutputL1, TxId, TxIx, UtxoIdL1}
 
-import java.io.File
 import java.math.BigInteger
 import java.util
 import scala.jdk.CollectionConverters.*
 
-class BackendServiceMock(cardanoL1: CardanoL1Mock) extends BackendService:
+class BackendServiceMock(cardanoL1: CardanoL1Mock, pp: ProtocolParams) extends BackendService:
     override def getAssetService: AssetService = ???
 
-    override def getBlockService: BlockService = BlockServiceMock(cardanoL1)
+    override def getBlockService: BlockService = new BlockServiceMock
 
     override def getNetworkInfoService: NetworkInfoService = ???
 
     override def getPoolService: PoolService = ???
 
-    override def getTransactionService: TransactionService = TransactionServiceMock(cardanoL1)
+    override def getTransactionService: TransactionService = new TransactionServiceMock
 
     override def getUtxoService: UtxoService = UtxoServiceMock(cardanoL1)
 
@@ -30,13 +30,13 @@ class BackendServiceMock(cardanoL1: CardanoL1Mock) extends BackendService:
 
     override def getAccountService: AccountService = ???
 
-    override def getEpochService: EpochService = EpochServiceMock(cardanoL1)
+    override def getEpochService: EpochService = EpochServiceMock(pp)
 
     override def getMetadataService: MetadataService = ???
 
-    override def getScriptService: ScriptService = ScriptServiceMock(cardanoL1)
+    override def getScriptService: ScriptService = new ScriptServiceMock
 
-class BlockServiceMock(cardanoL1Mock: CardanoL1Mock) extends BlockService:
+class BlockServiceMock extends BlockService:
     override def getLatestBlock: Result[Block] =
         val latest = Block.builder().slot(42).build()
         val result = Result.success("dummy").asInstanceOf[Result[Block]]
@@ -47,7 +47,7 @@ class BlockServiceMock(cardanoL1Mock: CardanoL1Mock) extends BlockService:
 
     override def getBlockByNumber(blockNumber: BigInteger): Result[Block] = ???
 
-class TransactionServiceMock(cardanoL1Mock: CardanoL1Mock) extends TransactionService:
+class TransactionServiceMock extends TransactionService:
     override def submitTransaction(cborData: Array[Byte]): Result[String] = ???
 
     override def getTransaction(txnHash: String): Result[TransactionContent] = ???
@@ -69,8 +69,15 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         address: String,
         count: Int,
         page: Int,
-        order: OrderEnum
-    ): Result[util.List[Utxo]] = ???
+        _order: OrderEnum
+    ): Result[util.List[Utxo]] =
+        val addressUtxos = cardanoL1Mock.getUtxosActive
+            .filter((_, output) => output.address == AddressBechL1(address))
+            .map((id, output) => mkUtxo(id.txId.hash, id.outputIx.ix)(output))
+
+        addressUtxos.drop(count*(page-1)).take(count) match
+            case Nil => ResultUtils.mkResultError
+            case pageElems => ResultUtils.mkResult(pageElems.toList.asJava)
 
     override def getUtxos(
         address: String,
@@ -88,22 +95,23 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
     ): Result[util.List[Utxo]] = ???
 
     override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
-        val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex))
-        val opt = cardanoL1Mock.utxosActive
+        val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex.toChar))
+        val opt = cardanoL1Mock.getUtxosActive
             .get(utxoId)
-            .map(output =>
-                Utxo.builder()
-                    .txHash(txHash)
-                    .outputIndex(outputIndex)
-                    .address(output.address.bech32)
-                    .amount(
-                      List(Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).asJava
-                    )
-                    .build()
-            )
+            .map(mkUtxo(txHash, outputIndex))
         opt.toResult(s"utxo not found: $txHash#$outputIndex")
 
-class EpochServiceMock(cardanoL1Mock: CardanoL1Mock) extends EpochService:
+    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo = Utxo
+        .builder()
+        .txHash(txHash)
+        .outputIndex(outputIndex)
+        .address(output.address.bech32)
+        .amount(
+          List(Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).asJava
+        )
+        .build()
+
+class EpochServiceMock(pp: ProtocolParams) extends EpochService:
     override def getLatestEpoch: Result[EpochContent] = ???
 
     override def getEpoch(epoch: Integer): Result[EpochContent] = ???
@@ -111,13 +119,11 @@ class EpochServiceMock(cardanoL1Mock: CardanoL1Mock) extends EpochService:
     override def getProtocolParameters(epoch: Integer): Result[ProtocolParams] = ???
 
     override def getProtocolParameters: Result[ProtocolParams] =
-        val or = new ObjectMapper().reader()
-        val pp = or.readValue(File("protocolParameters.json"), classOf[ProtocolParams])
         val res = Result.success("dummy").asInstanceOf[Result[ProtocolParams]]
         res.withValue(pp)
         res
 
-class ScriptServiceMock(cardanoL1Mock: CardanoL1Mock) extends ScriptService:
+class ScriptServiceMock extends ScriptService:
     override def getScriptDatum(datumHash: String): Result[ScriptDatum] = ???
 
     override def getScriptDatumCbor(datumHash: String): Result[ScriptDatumCbor] = ???

@@ -5,6 +5,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.node.TestPeer.{Bob, Carol, mkWalletId}
 import hydrozoa.node.server.{DepositRequest, Node}
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -75,12 +76,13 @@ class NodeRestApi(node: Node):
     def start(): Unit =
         NettySyncServer()
             .port(8088)
-            .modifyConfig(c => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
+            //.modifyConfigc => c.connectionTimeout(FiniteDuration(1200, SECONDS)))
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
             .startAndWait()
 
     private def runInitializeHead(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        node.initializeHead(amount, TxId(txId), TxIx(txIx)).map(_.hash)
+        val defPeers = Set(Bob, Carol).map(mkWalletId)
+        node.initializeHead(defPeers, amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash)
 
     private def runDeposit(
         txId: String,
@@ -94,7 +96,7 @@ class NodeRestApi(node: Node):
         node.deposit(
           DepositRequest(
             TxId(txId),
-            TxIx(txIx),
+            TxIx(txIx.toChar),
             deadline,
             AddressBechL2(address),
             (datum match

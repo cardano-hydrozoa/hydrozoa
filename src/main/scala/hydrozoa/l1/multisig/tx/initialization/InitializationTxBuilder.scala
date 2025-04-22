@@ -10,7 +10,7 @@ trait InitTxBuilder {
 }
 
 case class InitTxRecipe(
-    headAddressBech32: String,
+    headAddressBech32: AddressBechL1,
     seedOutput: UtxoIdL1,
     coins: Long,
     headNativeScript: NativeScript,

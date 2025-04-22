@@ -5,13 +5,14 @@ import com.bloxbean.cardano.client.api.model.Amount.{asset, lovelace}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
-import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{mkBuilder, toEither}
+import com.bloxbean.cardano.client.transaction.spec.script.{NativeScript, ScriptAll}
+import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
 import hydrozoa.l1.multisig.tx.{InitializationTx, MultisigTx}
 import hydrozoa.{AddressBechL1, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
+import scalus.|>
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -38,11 +39,11 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .value(BigInteger.valueOf(1))
             .build
 
-        val script = NativeScript.deserializeScriptRef(recipe.headNativeScript.bytes)
+        val headNativeScript = NativeScript.deserializeScriptRef(recipe.headNativeScript.bytes)
 
         val treasuryValue = List(
           lovelace(BigInteger.valueOf(recipe.coins)),
-          asset(script.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
+          asset(headNativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
         )
 
         val treasuryDatum = Interop.toPlutusData(mkInitMultisigTreasuryDatum.toData)
@@ -50,18 +51,21 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
         val seederAddress = seedUtxo.getAddress
 
         val txPartial = Tx()
-            .mintAssets(script, beaconToken)
+            .mintAssets(headNativeScript, beaconToken)
             .collectFrom(List(seedUtxo).asJava)
-            .payToContract(recipe.headAddressBech32, treasuryValue.asJava, treasuryDatum)
+            .payToContract(recipe.headAddressBech32.bech32, treasuryValue.asJava, treasuryDatum)
             .from(seederAddress)
+
+        // native multisig + one required signer to spend seed utxo
+        val signatories = numberOfSignatories(headNativeScript) + 1
 
         val initializationTx = builder
             .apply(txPartial)
             .feePayer(seederAddress)
             .withRequiredSigners(Address(seederAddress))
-            // TODO: magic number
-            .additionalSignersCount(4)
+            .additionalSignersCount(signatories)
             .build()
 
-        Right(MultisigTx(TxL1(initializationTx.serialize)), AddressBechL1(seederAddress))
+        //Right(MultisigTx(TxL1(initializationTx.serialize)), AddressBechL1(seederAddress))
+        Right((initializationTx.serialize |> TxL1.apply |> MultisigTx.apply ), AddressBechL1(seederAddress))
 }

@@ -5,11 +5,10 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
+import hydrozoa.TxL1
+import hydrozoa.infra.{force, mkBuilder, numberOfSignatories, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
-import hydrozoa.l2.ledger.state.unwrapTxOut
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{AppCtx, TxL1}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -26,7 +25,7 @@ class BloxBeanFinalizationTxBuilder(
         r: FinalizationRecipe
     ): Either[String, FinalizationTx] =
 
-        val treasuryUtxoId = reader.multisigRegime(_.currentTreasuryRef)
+        val treasuryUtxoId = reader.multisigRegime(_.treasuryUtxoId)
         val treasuryUtxo = backendService.getUtxoService
             .getTxOutput(treasuryUtxoId._1.hash, treasuryUtxoId._2.ix.intValue)
             .force
@@ -76,8 +75,7 @@ class BloxBeanFinalizationTxBuilder(
             // NB: .preBalanceTx should be called only once
             .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsToWithdraw.asJava))
             .feePayer(seedAddress)
-            // TODOk: magic numbers
-            .additionalSignersCount(3)
+            .additionalSignersCount(numberOfSignatories(headNativeScript))
             .build
 
         Right(MultisigTx(TxL1(finalizationTx.serialize)))

@@ -1,10 +1,12 @@
 package hydrozoa.l2.block
 
 import hydrozoa.*
-import hydrozoa.infra.CryptoHash.H32
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.l2.merkle.RH32UtxoSetL2
 
 case class Block(
@@ -24,7 +26,7 @@ case class BlockHeader(
     utxosActive: RH32UtxoSetL2
 )
 
-enum BlockTypeL2:
+enum BlockTypeL2 derives CanEqual:
     case Minor
     case Major
     case Final
@@ -39,8 +41,6 @@ object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)
 
 // FIXME: should come form ledger/node
-
-
 
 /*
 Block builder. Missing checks:
@@ -66,16 +66,16 @@ case class BlockBuilder[
     BlockNum <: TCheck,
     VersionMajor <: TCheck
 ] private (
-                                     blockType: BlockTypeL2 = Minor,
-                                     blockNum: Int = 0,
-                                     timeCreation: PosixTime = timeCurrent,
-                                     versionMajor: Int = 0,
-                                     versionMinor: Int = 0,
-                                     // FIXME: add type tags
-                                     eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
-                                     eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
-                                     depositsAbsorbed: Set[UtxoId[L1]] = Set.empty,
-                                     utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+    blockType: BlockTypeL2 = Minor,
+    blockNum: Int = 0,
+    timeCreation: PosixTime = timeCurrent,
+    versionMajor: Int = 0,
+    versionMinor: Int = 0,
+    // FIXME: add type tags
+    eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty, // TODO: are sets ok?
+    eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
+    depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
+    utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor
@@ -120,9 +120,9 @@ case class BlockBuilder[
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
     def withDeposit(d: UtxoId[L1])(using
-                                   ev: BlockType =:= TBlockMajor
+        ev: BlockType =:= TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(depositsAbsorbed = depositsAbsorbed.+(d))
+        copy(depositsAbsorbed = depositsAbsorbed ++ Seq(d))
 
     def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(utxosActive = utxosActive)
@@ -149,7 +149,7 @@ case class BlockBuilder[
             versionMinor,
             utxosActive
           ),
-          BlockBody(this.eventsValid.toSeq, this.eventsInvalid.toSeq, this.depositsAbsorbed.toSeq)
+          BlockBody(this.eventsValid.toSeq, this.eventsInvalid.toSeq, this.depositsAbsorbed)
         )
 }
 

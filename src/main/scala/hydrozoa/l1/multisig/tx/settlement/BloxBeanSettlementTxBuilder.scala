@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import hydrozoa.TxL1
-import hydrozoa.infra.{force, mkBuilder, toBloxBeanTransactionOutput}
+import hydrozoa.infra.{force, mkBuilder, numberOfSignatories, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkMultisigTreasuryDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
@@ -28,12 +28,18 @@ class BloxBeanSettlementTxBuilder(
         r: SettlementRecipe
     ): Either[String, SettlementTx] =
 
-        val inputsIds = r.deposits.toSet + reader.multisigRegime(_.currentTreasuryRef)
+        // We use a buffer here since despite the fact inputs are a set,
+        // the order matters - different orders produce different txIds.
+        val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
 
-        val utxoInput: Set[Utxo] =
-            inputsIds.map(r =>
-                backendService.getUtxoService.getTxOutput(r.txId.hash, r.outputIx.ix.toInt).force
-            )
+        val utxoInput: Seq[Utxo] =
+            utxoIds
+                .map(r =>
+                    backendService.getUtxoService
+                        .getTxOutput(r.txId.hash, r.outputIx.ix)
+                        .force
+                )
+                .toSeq
 
         val outputsToWithdraw =
             r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
@@ -76,8 +82,7 @@ class BloxBeanSettlementTxBuilder(
                 t.getWitnessSet.getNativeScripts.add(headNativeScript)
                 t.getBody.getOutputs.addAll(outputsToWithdraw.asJava)
             )
-            // TODO: magic numbers
-            .additionalSignersCount(3)
+            .additionalSignersCount(numberOfSignatories(headNativeScript))
             .build
 
         Right(MultisigTx(TxL1(settlementTx.serialize())))

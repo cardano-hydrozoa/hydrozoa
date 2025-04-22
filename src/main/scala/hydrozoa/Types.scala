@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.common.model.Network
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 
 import scala.collection.mutable
@@ -22,7 +23,7 @@ type TxAny = Tx[AnyLevel]
 type TxL1 = Tx[L1]
 
 object TxL1:
-    def apply(bytes: Array[Byte]): TxL1 = Tx[L1](bytes)
+    inline def apply(bytes: Array[Byte]): TxL1 = Tx[L1](bytes)
 
 type TxL2 = Tx[L2]
 
@@ -30,21 +31,24 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBechL1(bech32: String)
-case class AddressBechL2(bech32: String) {
+case class AddressBechL1(bech32: String) derives CanEqual:
+    def asL2: AddressBechL2 = AddressBechL2(bech32)
+
+case class AddressBechL2(bech32: String) derives CanEqual:
     def asL1: AddressBechL1 = AddressBechL1(bech32)
-}
 
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
 // Transaction hash
-case class TxId(hash: String)
+case class TxId(hash: String) derives CanEqual
 
 // Transaction output index
-// TODO: use Int, Long is too long
-// transaction_index = uint .size 2
-case class TxIx(ix: Long)
+
+// transaction_index = uint .size 2, so Int, which is 32 signed is just on the mark.
+// TODO: we can also use Char probably, it's unsigned and it's 16-bit long
+//  Currently, the absence of Schema for Char prevents us from doing so.
+case class TxIx(ix: Int) derives CanEqual
 
 final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx)
 
@@ -80,17 +84,18 @@ case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L
 case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
 
 object UtxoSet:
+    def apply[L <: AnyLevel, F](): UtxoSet[L, F] = UtxoSet(Map.empty)
     def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
         UtxoSet(mutableUtxoSet.map.toMap)
 
 // Policy ID
 case class PolicyId(policyId: String)
 
-// A verification key of a participant, used on both L1 and L2
-case class ParticipantVerificationKey(bytes: Array[Byte])
+// A verification key of a peer, used on both L1 and L2
+case class VerificationKeyBytes(bytes: Array[Byte])
 
-// A signing key of a participant, used on both L1 and L2
-case class ParticipantSecretKey(bytes: Array[Byte])
+// A signing key of a peer, used on both L1 and L2
+case class SigningKeyBytes(bytes: Array[Byte])
 
 case class Network(networkId: Int, protocolMagic: Long)
 
@@ -109,3 +114,8 @@ opaque type PosixTime = BigInt
 
 // FIXME: move to another module
 def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
+
+// FIXME: should be parameter
+val networkL1static = Network(0, 42)
+
+val hydrozoaL2Network = Network(0, 42)

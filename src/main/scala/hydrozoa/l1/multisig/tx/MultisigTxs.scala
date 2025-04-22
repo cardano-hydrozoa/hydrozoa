@@ -18,7 +18,7 @@ type SettlementTx = MultisigTx[SettlementTxTag]
 type FinalizationTx = MultisigTx[FinalizationTxTag]
 
 object MultisigTx:
-    def apply[T <: MultisigTxTag](tx: TxL1): MultisigTx[T] = tx
+    inline def apply[T <: MultisigTxTag](tx: TxL1): MultisigTx[T] = tx
 
 extension [T <: MultisigTxTag](tx: MultisigTx[T]) {
     def toL1Tx: TxL1 = tx

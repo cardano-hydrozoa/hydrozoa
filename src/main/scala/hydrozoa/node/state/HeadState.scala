@@ -1,18 +1,23 @@
 package hydrozoa.node.state
+
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.{Piper, txHash}
 import hydrozoa.l1.multisig.state.*
-import hydrozoa.l1.multisig.tx.{FinalizationTx, InitializationTx, SettlementTx}
+import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.Major
 import hydrozoa.l2.block.{Block, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
+import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 
+import scala.CanEqual.derived
 import scala.collection.mutable
 
-enum HeadPhase:
+enum HeadPhase derives CanEqual:
     case Initializing
     case Open
     case Finalizing
@@ -53,14 +58,15 @@ trait HeadState:
 sealed trait HeadStateReaderApi
 
 sealed trait InitializingPhaseReader extends HeadStateReaderApi:
-    def headPeers: List[Peer]
+    def headPeers: Set[WalletId]
 
-sealed trait MultisigRegimeReader extends HeadStateReaderApi:
+trait MultisigRegimeReader extends HeadStateReaderApi:
+    def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
     def headBechAddress: AddressBechL1
     def beaconTokenName: String // TODO: use more concrete type
     def seedAddress: AddressBechL1
-    def currentTreasuryRef: UtxoIdL1
+    def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
@@ -96,7 +102,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def poolEventL2(event: NonGenesisL2): Unit
     def newTreasury(txId: TxId, txIx: TxIx, coins: BigInt): Unit
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def addBlock(block: BlockRecord): Unit
+    def addBlock(block: BlockRecord): Unit // FIXME: name
     def confirmMempoolEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
@@ -118,10 +124,12 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
-private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer])
+class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[WalletId])
     extends HeadStateReader
     with HeadState {
     self =>
+
+    private val log = Logger(getClass)
 
     //
     def currentPhase: HeadPhase = headPhase
@@ -189,15 +197,16 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
     // Subclasses that implements APIs (readers)
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
+        def headPeers: Set[WalletId] = self.headPeers.toSet
         def headNativeScript: NativeScript = self.headNativeScript.get
         def beaconTokenName: String = self.beaconTokenName.get
         def seedAddress: AddressBechL1 = self.seedAddress.get
-        def currentTreasuryRef: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
+        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
         def headBechAddress: AddressBechL1 = self.headBechAddress.get
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
-        def headPeers: List[Peer] = self.headPeers
+        def headPeers: Set[WalletId] = self.headPeers.toSet
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
@@ -267,7 +276,7 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
             blockNum: Int,
             eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
             mbGenesis: Option[(TxId, SimpleGenesis)],
-            eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
+            blockEventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)]
         ): Unit =
             // 1. Add valid events
             eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
@@ -280,11 +289,9 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
                 TxDump.dumpL2Tx(AdaSimpleLedger.asTxL2(genesis)._1)
             )
             // 3. Remove invalid events
-            eventsInvalid.foreach((txId, _) =>
-                self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
-                    case -1 => throw IllegalStateException(s"pool event $txId was not found")
-                    case i  => self.poolEventsL2.remove(i)
-            )
+            log.info(s"Removing invalid events: $blockEventsInvalid")
+            self.poolEventsL2.filter(e => blockEventsInvalid.map(_._1).contains(e.getEventId))
+                |> self.poolEventsL2.subtractAll
 
         def removeAbsorbedDeposits(deposits: Seq[UtxoId[L1]]): Unit =
             deposits.foreach(self.stateL1.get.depositUtxos.map.remove)
@@ -302,11 +309,15 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
         ): Unit = eventsValid.foreach((txId, _) => markEventAsValid(blockNum, txId))
 
     private def markEventAsValid(blockNum: Int, txId: EventHash): Unit = {
+        log.info(s"Marking event $txId as validated by block $blockNum")
         self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
             case -1 => throw IllegalStateException(s"pool event $txId was not found")
             case i =>
                 val event = self.poolEventsL2.remove(i)
                 self.eventsConfirmedL2.append((event, blockNum))
+                // Remove possible duplicates form the pool
+                self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
+                    |> self.poolEventsL2.subtractAll
                 // Dump L2 tx
                 TxDump.dumpL2Tx(event match
                     case TransactionL2(_, transaction) =>
@@ -318,7 +329,10 @@ private class HeadStateGlobal(var headPhase: HeadPhase, val headPeers: List[Peer
 }
 
 object HeadStateGlobal:
-    def apply(peers: List[Peer]): HeadStateGlobal =
+    val log: Logger = Logger(getClass)
+    def apply(peers: List[WalletId]): HeadStateGlobal =
+        assert(peers.length >= 2, "The number of peers should be >= 2")
+        log.info(s"Creating head state global with peers: $peers")
         new HeadStateGlobal(headPhase = Initializing, headPeers = peers)
 
 case class BlockRecord(
@@ -331,4 +345,27 @@ case class BlockRecord(
 type L1BlockEffect = InitializationTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
 type MinorBlockL1Effect = Unit
 type L1PostDatedBlockEffect = Unit
-type L2BlockEffect = Unit
+
+type L2BlockEffect = MinorBlockL2Effect | MajorBlockL2Effect | FinalBlockL2Effect
+type MinorBlockL2Effect = UtxosSetOpaque
+type MajorBlockL2Effect = (UtxosSetOpaque, Option[(TxId, SimpleGenesis)])
+type FinalBlockL2Effect = Unit
+
+given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
+
+def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
+    case _: MinorBlockL1Effect             => None
+    case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
+
+//extension (l1BlockEffect: L1BlockEffect)
+//    def mbTxHash: Option[TxId] = l1BlockEffect match
+//        case _: MinorBlockL1Effect => None
+//        case tx: InitializationTx => tx |> txHash |> Some.apply
+//        case tx: SettlementTx => tx |> txHash |> Some.apply
+//        case tx: FinalizationTx => tx  |> txHash |> Some.apply
+
+def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
+    case _: MinorBlockL1Effect => None
+    case tx: InitializationTx  => tx |> txHash |> Some.apply
+    case tx: SettlementTx      => tx |> txHash |> Some.apply
+    case tx: FinalizationTx    => tx |> txHash |> Some.apply

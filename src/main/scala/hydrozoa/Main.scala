@@ -1,38 +1,42 @@
 package hydrozoa
 
-import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.api.model.ProtocolParams
+import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
-import hydrozoa.AppCtx.yaciDevKit
-import hydrozoa.infra.genNodeKey
+import hydrozoa.l1.*
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
-import hydrozoa.l1.wallet.{MockWallet, Wallet}
-import hydrozoa.l1.{BackendServiceMock, CardanoL1, CardanoL1Mock, CardanoL1YaciDevKit}
-import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkMock}
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkOneNode}
+import hydrozoa.node.TestPeer.{Alice, Bob, Carol, mkWallet}
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
-import hydrozoa.node.state.{HeadStateReader, NodeState}
+import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 
-def mkDefaultHydrozoaNode = {
-    val ownKeys = genNodeKey()
-    val ctx: AppCtx = yaciDevKit()
+def mkHydrozoaNode(
+    ownPeerWallet: Wallet,
+    knownPeers: Set[Wallet],
+    useL1Mock: Boolean = false,
+    pp: Option[ProtocolParams] = None,
+    yaciBFApiUri: String = "http://localhost:8080/api/v1/"
+) = {
 
     // Components
     val log = Logger("Hydrozoa")
-    val wallet = MockWallet(ctx, 0)
 
     // Cardano L1
-     val cardano: CardanoL1 = CardanoL1YaciDevKit(ctx)
-     val backendService: BackendService = ctx.backendService
-
-//    val cardano = CardanoL1Mock()
-//    val backendService = BackendServiceMock(cardano)
+    val (cardano, backendService) = if useL1Mock then
+        val cardano = CardanoL1Mock()
+        (cardano, BackendServiceMock(cardano, pp.get))
+    else
+        val backendService = BFBackendService(yaciBFApiUri, "")
+        val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService)
+        (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeStateManager: NodeState = NodeState()
+    val nodeStateManager: NodeState = NodeState(knownPeers.map(p => WalletId(p.getName)))
     val nodeStateReader: HeadStateReader = nodeStateManager.reader
 
     // Tx Builders
@@ -47,22 +51,22 @@ def mkDefaultHydrozoaNode = {
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
     val network: HeadPeerNetwork =
-        HeadPeerNetworkMock(
+        HeadPeerNetworkOneNode(
           nodeStateReader,
           initTxBuilder,
           refundTxBuilder,
           settlementTxBuilder,
           finalizationTxBuilder,
           cardano,
-          ownKeys._2
+          ownPeerWallet,
+          knownPeers
         )
 
     val node = Node(
       nodeStateManager,
-      ownKeys,
+      ownPeerWallet,
       network,
       cardano,
-      wallet,
       initTxBuilder,
       depositTxBuilder,
       refundTxBuilder,
@@ -77,7 +81,12 @@ object HydrozoaNodeServer:
 
     @main def main(args: String*): Unit = {
 
-        val (log: Logger, node: Node, _) = mkDefaultHydrozoaNode
+        val (log: Logger, node: Node, _) = {
+            mkHydrozoaNode(
+                mkWallet(Alice),
+                Set(Bob, Carol).map(mkWallet)
+            )
+        }
 
         log.warn("Starting Hydrozoa Node API Server...")
         NodeRestApi(node).start()

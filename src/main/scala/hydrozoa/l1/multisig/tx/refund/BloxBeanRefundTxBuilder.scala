@@ -9,7 +9,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.TxL1
-import hydrozoa.infra.{addressToBloxbean, mkBuilder, toBloxbean, txOutputToUtxo}
+import hydrozoa.infra.{addressToBloxbean, mkBuilder, numberOfSignatories, toBloxbean, txOutputToUtxo}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
@@ -36,7 +36,7 @@ class BloxBeanRefundTxBuilder(
         val txBytes = r.depositTx.toL1Tx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
-        val txIxInt = r.txIx.ix.intValue()
+        val txIxInt = r.txIx.ix.toInt
         val depositOutput = tb.getBody.getOutputs.get(txIxInt) // TODO: may throw
         val depositUtxo = txOutputToUtxo(txHash, txIxInt, depositOutput)
 
@@ -92,8 +92,7 @@ class BloxBeanRefundTxBuilder(
             .apply(txPartial)
             .validFrom(beginSlot)
             .preBalanceTx((_, t) => t.getWitnessSet.getNativeScripts.add(headNativeScript))
-            // TODO: magic numbers
-            .additionalSignersCount(3)
+            .additionalSignersCount(numberOfSignatories(headNativeScript))
             .feePayer(refundAddress.toBech32)
             .build
 

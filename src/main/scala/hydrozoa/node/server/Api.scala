@@ -22,6 +22,7 @@ case class DepositRequest(
     refundDatum: Option[Datum]
 )
 
+
 case class DepositResponse(postDatedRefundTx: PostDatedRefundTx, depositId: DepositId) {
     // TODO: use JSON
     override def toString: String =

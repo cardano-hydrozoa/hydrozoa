@@ -12,6 +12,7 @@ import scala.jdk.CollectionConverters.*
 sealed trait TInstancePurpose
 sealed trait THydrozoaHead extends TInstancePurpose
 sealed trait TBlockProduction extends TInstancePurpose
+sealed trait TMBTSuite extends TInstancePurpose
 
 // TODO: Add phantom type to reflect the purpose.
 type UtxosSet = Set[(UtxoIdL2, Output[L2])]
@@ -66,7 +67,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = UtxoIdL2(txId, TxIx(output._2))
+                val txIn = UtxoIdL2(txId, TxIx(output._2.toChar))
                 val txOut = Output[L2](output._1.address.asL1, output._1.coins)
                 (txIn, txOut)
             )
@@ -74,7 +75,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
         val utxoDiffInt = event.genesis.outputs.zipWithIndex
             .map(output =>
-                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
+                val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
                 val txOut = liftOutput(output._1.address, output._1.coins)
                 (txIn, txOut)
             )
@@ -92,7 +93,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case Right(oldUtxos) =>
                 // Outputs
                 val newUtxos = event.transaction.outputs.zipWithIndex.map(output =>
-                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2)))
+                    val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
                     val txOut = liftOutput(output._1.address, output._1.coins)
                     (txIn, txOut)
                 )
@@ -141,6 +142,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
             case (Nil, resolved) => Right(resolved)
             case (extraneous, _) => Left(extraneous)
 
+    def getOutput(utxoId: UtxoIdL2): OutputL2 = activeState(utxoId |> liftOutputRef) |> unliftOutput
+
     override def isEmpty: Boolean = activeState.isEmpty
 
     override def flush: UtxosSet =
@@ -150,6 +153,11 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
 object AdaSimpleLedger:
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
+
+    def apply[P <: TInstancePurpose](utxoSet: Map[UtxoIdL2, OutputL2]): AdaSimpleLedger[P] =
+        val ledger = AdaSimpleLedger[P](NoopVerifier)
+        ledger.replaceUtxosActive(utxoSet |> liftUtxoSet)
+        ledger
 
     def asTxL2(event: SimpleGenesis | SimpleTransaction | SimpleWithdrawal): (TxL2, EventHash) =
         event match
@@ -181,9 +189,9 @@ object AdaSimpleLedger:
         val (_, txId) = asTxL2(withdrawal)
         WithdrawalEventL2(txId, withdrawal)
 
-case class SimpleGenesis(
+case class SimpleGenesis (
     outputs: List[SimpleOutput]
-)
+) derives CanEqual
 
 object SimpleGenesis:
     def apply(ds: DepositUtxos): SimpleGenesis =

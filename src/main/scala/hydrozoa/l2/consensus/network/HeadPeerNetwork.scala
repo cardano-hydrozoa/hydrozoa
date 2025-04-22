@@ -4,15 +4,18 @@ import hydrozoa.*
 import hydrozoa.l1.multisig.tx.DepositTx
 import hydrozoa.l2.block.{Block, BlockHeader}
 import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.node.state.WalletId
 
 trait HeadPeerNetwork {
 
-    /** @return
-      *   verification keys for known participants
+    /** @param peers
+      *   peers we are looking for
+      * @return
+      *   verification keys for peers provided
       */
-    def participantsKeys(): Set[ParticipantVerificationKey]
+    def reqVerificationKeys(peers: Set[WalletId]): Set[VerificationKeyBytes]
 
-    def reqInit(req: ReqInit): Set[TxKeyWitness]
+    def reqInit(headPeers: Set[WalletId], req: ReqInit): Set[TxKeyWitness]
 
     def reqRefundLater(req: ReqRefundLater): Set[TxKeyWitness]
 

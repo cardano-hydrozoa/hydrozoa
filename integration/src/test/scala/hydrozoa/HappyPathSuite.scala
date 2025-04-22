@@ -4,7 +4,8 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l2.ledger.SimpleWithdrawal
-import hydrozoa.mkDefaultHydrozoaNode
+import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
 import hydrozoa.node.server.{DepositRequest, Node}
 import munit.FunSuite
@@ -13,20 +14,26 @@ import munit.FunSuite
   */
 class HappyPathSuite extends FunSuite {
 
-    private val (log: Logger, node: Node, cardano: CardanoL1) = mkDefaultHydrozoaNode
+    private val knownPeers = Set(Bob, Carol, Daniella)
+    private val headPeers = knownPeers.take(2)
+
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkHydrozoaNode(
+      ownPeerWallet = mkWallet(Alice),
+      knownPeers = knownPeers.map(mkWallet),
+      useL1Mock = true,
+      pp = Some(Utils.protocolParams)
+    )
 
     override def beforeAll(): Unit = {
-//        val params = Try(node...)
-//        assume(
-//            params.isSuccess,
-//            "This test requires a Blockfrost API available. Start Yaci Devkit before running this test."
-//        )
         assume(true, "Env is presumably set up and reset.")
     }
 
     test("Hydrozoa happy-path scenario") {
         val result = for
+
+            // 1. Initialize the head
             initTxId <- node.initializeHead(
+              headPeers.map(mkWalletId),
               100,
               TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
               TxIx(0)
@@ -82,7 +89,6 @@ class HappyPathSuite extends FunSuite {
 
             finalBlock <- node.handleNextBlock(false)
             _ = cardano.awaitTx(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-
         yield ()
 
         result match
