@@ -1,0 +1,17 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="HydrozoaNode - Alice" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="hydrozoa.HydrozoaNode" />
+    <module name="core" />
+    <option name="PROGRAM_PARAMETERS" value="Alice 8093 9400" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="hydrozoa.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <method v="2">
+      <option name="Make" enabled="true" />
+      <option name="BSP.BeforeRunTask" enabled="true" />
+    </method>
+  </configuration>
+</component>
