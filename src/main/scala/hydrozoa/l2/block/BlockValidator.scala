@@ -204,10 +204,10 @@ object BlockValidator:
         // Duplicates 3.b
         if (utxosWithdrawn.nonEmpty && blockType == Minor)
         then return Invalid(MinorBlockContainsWithdrawals)
-        val keepAlive =
-            blockType == Major && false // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
-        if mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
-            !(blockType == Minor || keepAlive)
+        // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
+        val keepAlive = blockType == Major && false
+        if (mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
+            !(blockType == Minor || keepAlive || finalizing))
         then return Invalid(MinorBlockWasExpected)
 
         // 8. Return Invalid if any of these fails to hold:

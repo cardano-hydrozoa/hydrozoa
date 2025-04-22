@@ -106,7 +106,7 @@ private class InitHeadActor(
                       initTx,
                       System.currentTimeMillis()
                     )
-                    stateActor.tell(_.initializeHead(params))
+                    stateActor.tell(_.tryInitializeHead(params))
                     TxDump.dumpInitTx(initTx)
                     resultChannel.send(txHash)
 

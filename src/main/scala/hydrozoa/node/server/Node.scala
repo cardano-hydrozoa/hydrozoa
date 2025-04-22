@@ -180,6 +180,7 @@ class Node:
                 nodeState.ask(_.head.currentPhase) match
                     case Open =>
                         nodeState.tell(_.head.openPhase(_.requestFinalization()))
+                        log.info("Head finalization was successfully requested")
                         Right("Head finalization request succeeded.")
                     case other =>
                         Left(s"Head is in the wrong phase: $other")

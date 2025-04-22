@@ -23,6 +23,7 @@ import hydrozoa.node.TestPeer.*
 import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
+import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import io.prometheus.metrics.exporter.httpserver.HTTPServer
 import ox.*
@@ -371,7 +372,10 @@ object HydrozoaNode extends OxApp:
                     repeat(RepeatConfig.fixedRateForever(2000.millis)) {
                         val uptime = nodeStateActor.ask(_.mbInitializedOn) match
                             case Some(initializedOn) =>
-                                (System.currentTimeMillis() - initializedOn) / 1000
+                                nodeStateActor.ask(_.head.currentPhase) match
+                                    case Initializing | Open | Finalizing =>
+                                        (System.currentTimeMillis() - initializedOn) / 1000
+                                    case _ => 0
                             case None => 0
                         log.info(s"head uptime is $uptime")
                         metricsActor.tell(_.updateHeadUptime(uptime))

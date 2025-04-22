@@ -44,7 +44,7 @@ private class MinorBlockConfirmationActor(
                 )
             )
             // Move head into finalization phase if finalizeHead flag was received
-            if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
+            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
 

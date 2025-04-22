@@ -11,10 +11,14 @@ import hydrozoa.infra.*
 import hydrozoa.l1.multisig.state.given_FromData_DepositDatum
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
+import hydrozoa.node.state.HeadPhase.Open
 import hydrozoa.node.state.NodeState
+
 import java.math.BigInteger
 import ox.channels.ActorRef
 import ox.scheduling.{RepeatConfig, repeat}
+import ox.{fork, sleep, supervised}
+
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
@@ -24,7 +28,9 @@ import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
-  */
+ *
+ * TODO: L1 source component ideally should use streaming not polling
+ */
 class MultisigL1EventSource(
     nodeState: ActorRef[NodeState],
     cardano: ActorRef[CardanoL1]
@@ -37,6 +43,7 @@ class MultisigL1EventSource(
         headNativeScript: NativeScript,
         beaconTokenName: TokenName
     ): Unit =
+        log.info("awaitInitTx")
         cardano.ask(_.awaitTx(txId)) match
             case Some(initTx) =>
                 log.info(s"Init tx $txId appeared on-chain.")
@@ -49,7 +56,7 @@ class MultisigL1EventSource(
                               _.openHead(utxo)
                             )
                         )
-                        // repeat polling for head address forever
+
                         val nativeScriptBB =
                             BBNativeScript.deserializeScriptRef(headNativeScript.bytes)
                         val treasuryTokenAmount = asset(
@@ -58,12 +65,24 @@ class MultisigL1EventSource(
                           BigInteger.valueOf(1)
                         )
 
-                        // FIXME: stop once head is closed
-                        // FIXME: repeat config
-                        // TODO: use streaming
-                        repeat(RepeatConfig.fixedRateForever(500.millis))(
-                          updateL1State(headAddress, treasuryTokenAmount)
-                        )
+                        // repeat polling for head address while head exists
+                        supervised {
+                            fork {
+                                repeat(RepeatConfig.fixedRateForever(1000.millis))(
+                                  updateL1State(headAddress, treasuryTokenAmount)
+                                )
+                            }
+
+                            var loop = true
+                            while loop do
+                                sleep(100.millis)
+                                loop =
+                                    nodeState.ask(_.mbInitializedOn.isDefined)
+                                        // TODO: we might want to continue during Finalizing phase
+                                        && nodeState.ask(_.head.currentPhase == Open)
+
+                            log.info("Leaving L1 source supervised scope")
+                        }
                     case Left(err) =>
                         err match
                             case _: NoMatch =>
@@ -126,45 +145,59 @@ class MultisigL1EventSource(
         headAddress: AddressBechL1,
         treasuryTokenAmount: Amount
     ): Unit =
-        log.trace("Polling head address...")
-        val utxos = cardano.ask(_.utxosAtAddress(headAddress))
-        val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
-        // beacon token -> treasury
-        // rollout token -> rollout
-        // otherwise -> maybe deposit
-        val (mbNewTreasury, depositsNew, depositsGone) =
-            //
-            var mbNewTreasury: Option[TreasuryUtxo] = None
-            val depositsNew: UtxoSetMutable[L1, DepositTag] =
-                UtxoSetMutable[L1, DepositTag](mutable.Map.empty)
-            //
-            val knownDepositIds = currentL1State.depositUtxos.map.keySet
-            val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
+        nodeState.ask(_.mbInitializedOn) match
+            case None =>
+                log.trace("Head does not exist...")
+            case Some(_) =>
+                nodeState.ask(_.head.currentPhase) match
+                    case Open =>
+                        log.trace("Polling head address...")
+                        val utxos = cardano.ask(_.utxosAtAddress(headAddress))
+                        // FIXME: no guarantees head is still open
+                        val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
+                        // beacon token -> treasury
+                        // rollout token -> rollout
+                        // otherwise -> maybe deposit
+                        val (mbNewTreasury, depositsNew, depositsGone) =
+                            //
+                            var mbNewTreasury: Option[TreasuryUtxo] = None
+                            val depositsNew: UtxoSetMutable[L1, DepositTag] =
+                                UtxoSetMutable[L1, DepositTag](mutable.Map.empty)
+                            //
+                            val knownDepositIds = currentL1State.depositUtxos.map.keySet
+                            val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
 
-            val utxoType_ = utxoType(treasuryTokenAmount)
+                            val utxoType_ = utxoType(treasuryTokenAmount)
 
-            utxos.foreach(utxo =>
-                val utxoId = UtxoId[L1]
-                    .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
-                utxoType_(utxo) match
-                    case MultisigUtxoType.Treasury(utxo) =>
-                        // log.debug(s"UTXO type: treasury $utxoId")
-                        if currentL1State.treasuryUtxo.ref != utxoId then
-                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
-                    case MultisigUtxoType.Deposit(utxo) =>
-                        // log.debug(s"UTXO type: deposit $utxoId")
-                        existingDeposits.add(utxoId)
-                        if (!knownDepositIds.contains(utxoId)) then
-                            val depositUtxo = mkDepositUtxoUnsafe(utxo)
-                            depositsNew.map.put(depositUtxo.ref, depositUtxo.output)
-                    case MultisigUtxoType.Unknown(utxo) =>
-                        log.debug(s"UTXO type: unknown: $utxoId")
-            )
-            val depositsGone: Set[UtxoIdL1] = knownDepositIds.toSet &~ existingDeposits.toSet
-            (mbNewTreasury, depositsNew, depositsGone)
+                            utxos.foreach(utxo =>
+                                val utxoId = UtxoId[L1]
+                                    .apply(
+                                      utxo.getTxHash |> TxId.apply,
+                                      utxo.getOutputIndex |> TxIx.apply
+                                    )
+                                utxoType_(utxo) match
+                                    case MultisigUtxoType.Treasury(utxo) =>
+                                        // log.debug(s"UTXO type: treasury $utxoId")
+                                        if currentL1State.treasuryUtxo.ref != utxoId then
+                                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
+                                    case MultisigUtxoType.Deposit(utxo) =>
+                                        // log.debug(s"UTXO type: deposit $utxoId")
+                                        existingDeposits.add(utxoId)
+                                        if (!knownDepositIds.contains(utxoId)) then
+                                            val depositUtxo = mkDepositUtxoUnsafe(utxo)
+                                            depositsNew.map.put(depositUtxo.ref, depositUtxo.output)
+                                    case MultisigUtxoType.Unknown(utxo) =>
+                                        log.debug(s"UTXO type: unknown: $utxoId")
+                            )
+                            val depositsGone: Set[UtxoIdL1] =
+                                knownDepositIds.toSet &~ existingDeposits.toSet
+                            (mbNewTreasury, depositsNew, depositsGone)
 
-        nodeState.tell(_.head.openPhase(openHead =>
-            mbNewTreasury.foreach(openHead.newTreasuryUtxo)
-            if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
-            if depositsNew.map.nonEmpty then openHead.addDepositUtxos(depositsNew |> UtxoSet.apply)
-        ))
+                        // FIXME: no guarantees head is still open
+                        nodeState.tell(_.head.openPhase(openHead =>
+                            mbNewTreasury.foreach(openHead.newTreasuryUtxo)
+                            if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
+                            if depositsNew.map.nonEmpty then
+                                openHead.addDepositUtxos(depositsNew |> UtxoSet.apply)
+                        ))
+                    case _ => log.trace("Head is not in open state...")

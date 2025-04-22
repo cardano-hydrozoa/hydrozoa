@@ -138,7 +138,7 @@ object NodeRestApi:
         .in("state")
         .out(jsonBody[StateL2Response])
 
-    val finalizeEndpoint = endpoint.post.in("/finalize").out(stringBody).errorOut(stringBody)
+    val finalizeEndpoint = endpoint.post.in("finalize").out(stringBody).errorOut(stringBody)
 
 // JSON/Schema instances
 enum SubmitRequestL2:

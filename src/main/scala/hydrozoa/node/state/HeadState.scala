@@ -99,7 +99,8 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
 
 sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
     def l2Tip: Block
-
+    def isBlockLeader: Boolean
+    def pendingOwnBlock: OwnBlock
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Head state manager hierarchy
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -125,11 +126,11 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     ): Seq[NonGenesisL2]
     def requestFinalization(): Unit
     def isFinalizationRequested: Boolean
-    def finalizeHead(): Unit
+    def switchToFinalizingPhase(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def stateL2: AdaSimpleLedger[THydrozoaHead]
-    def closeHead(block: BlockRecord): Unit
+    def finalizeHead(block: BlockRecord): Unit
 
 /** It's global in a sense that the same value spans over all possible states a head might be in.
   * Probably we can split it up in the future. Doesn't expose fiels; instead implements
@@ -283,6 +284,8 @@ class HeadStateGlobal(
         extends MultisigRegimeReaderImpl
         with FinalizingPhaseReader:
         def l2Tip: Block = l2Tip_
+        def isBlockLeader: Boolean = self.isBlockLeader.get
+        def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
 
     private def l2Tip_ = blocksConfirmedL2.map(_.block).lastOption.getOrElse(zeroBlock)
 
@@ -403,7 +406,8 @@ class HeadStateGlobal(
             val nextBlockNum = blockHeader.blockNum + 1
             self.isBlockPending = Some(false)
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
-
+            self.pendingOwnBlock = None
+            
             val confirmedEvents = confirmMempoolEvents(
               blockNum,
               body.eventsValid,
@@ -516,7 +520,7 @@ class HeadStateGlobal(
                             AdaSimpleLedger.asTxL2(withdrawal)._1
                     )
                     event
-        }            
+        }
 
         override def requestFinalization(): Unit =
             log.info("Head finalization has been requested, next block will be final.")
@@ -524,7 +528,7 @@ class HeadStateGlobal(
 
         override def isFinalizationRequested: Boolean = self.mbIsFinalizationRequested.get
 
-        override def finalizeHead(): Unit =
+        override def switchToFinalizingPhase(): Unit =
             if this.isBlockLeader && !this.isBlockPending then
                 log.info("Producing final block...")
                 produceBlock(true)
@@ -533,7 +537,7 @@ class HeadStateGlobal(
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
         def stateL2: AdaSimpleLedger[THydrozoaHead] = self.stateL2.get
 
-        def closeHead(record: BlockRecord): Unit =
+        def finalizeHead(record: BlockRecord): Unit =
             require(
               record.block.blockHeader.blockType == Final,
               "Non-final block in finalizing phase."
@@ -593,7 +597,7 @@ class HeadStateGlobal(
             })
 
             log.info("Head was closed.")
-    
+
     override def dumpState(): Unit =
         currentPhase match
             case HeadPhase.Open =>

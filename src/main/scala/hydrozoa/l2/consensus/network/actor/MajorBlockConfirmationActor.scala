@@ -86,7 +86,7 @@ private class MajorBlockConfirmationActor(
             )
             log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
             cardano.tell(_.submit(settlementTx))
-            if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
+            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
 

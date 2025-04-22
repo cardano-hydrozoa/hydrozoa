@@ -36,7 +36,7 @@ private class FinalBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
-        val headPeers = stateActor.ask(_.head.openPhase(open => open.headPeers))
+        val headPeers = stateActor.ask(_.head.finalizingPhase(_.headPeers))
         log.debug(s"headPeers: $headPeers")
         if ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
@@ -61,7 +61,7 @@ private class FinalBlockConfirmationActor(
 
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")
-        val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
+        val headPeers = stateActor.ask(_.head.finalizingPhase(_.headPeers))
         if (acks2.keySet == headPeers) then
             // Create effects
             // L1 effect
@@ -72,7 +72,11 @@ private class FinalBlockConfirmationActor(
             val l2Effect: L2BlockEffect = ()
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
-            stateActor.tell(nodeState => nodeState.head.finalizingPhase(s => s.closeHead(record)))
+            // Close the head
+            stateActor.tell(nodeState =>
+                nodeState.head.finalizingPhase(s => s.finalizeHead(record))
+            )
+            // Submit finalization tx
             log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
             cardano.tell(_.submit(finalizationTx))
             // TODO: the absence of this line is a good test!
@@ -98,35 +102,34 @@ private class FinalBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         val utxosWithdrawn =
-            // TODO: Block validation (the leader can skip validation for its own block).
-//            if stateActor.ask(_.head.openPhase(_.isBlockLeader))
-//            then
-//                val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
-//                (ownBlock.utxosActive, ownBlock.mbGenesis, ownBlock.utxosWithdrawn)
-//            else
-            val (prevHeader, stateL2Cloned) =
-                stateActor.ask(
-                  _.head.finalizingPhase(head =>
-                      (
-                        head.l2Tip.blockHeader,
-                        head.stateL2.blockProduction,
+            if stateActor.ask(_.head.finalizingPhase(_.isBlockLeader))
+            then
+                val ownBlock = stateActor.ask(_.head.finalizingPhase(_.pendingOwnBlock))
+                ownBlock.utxosWithdrawn
+            else
+                val (prevHeader, stateL2Cloned) =
+                    stateActor.ask(
+                      _.head.finalizingPhase(head =>
+                          (
+                            head.l2Tip.blockHeader,
+                            head.stateL2.blockProduction,
+                          )
                       )
-                  )
+                    )
+                val resolution = BlockValidator.validateBlock(
+                  req.block,
+                  prevHeader,
+                  stateL2Cloned,
+                  Seq.empty,
+                  UtxoSet.apply(),
+                  true
                 )
-            val resolution = BlockValidator.validateBlock(
-              req.block,
-              prevHeader,
-              stateL2Cloned,
-              Seq.empty,
-              UtxoSet.apply[L1, DepositTag](),
-              false
-            )
-            resolution match
-                case ValidationResolution.Valid(_, _, utxosWithdrawn) =>
-                    log.info(s"Final block ${req.block.blockHeader.blockNum} is valid.")
-                    utxosWithdrawn
-                case resolution =>
-                    throw RuntimeException(s"Final block validation failed: $resolution")
+                resolution match
+                    case ValidationResolution.Valid(_, _, utxosWithdrawn) =>
+                        log.info(s"Final block ${req.block.blockHeader.blockNum} is valid.")
+                        utxosWithdrawn
+                    case resolution =>
+                        throw RuntimeException(s"Final block validation failed: $resolution")
 
         // Update local state
         this.req = req
