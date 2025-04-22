@@ -59,7 +59,7 @@ private class MajorBlockConfirmationActor(
             val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isFinalizationRequested)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
-            deilverAck2(ownAck2)
+            deliverAck2(ownAck2)
             Some(ownAck2)
         else None
 
@@ -97,13 +97,13 @@ private class MajorBlockConfirmationActor(
                 acks.put(ack.peer, ack)
                 ()
             case ack2: AckMajor2 =>
-                deilverAck2(ack2)
+                deliverAck2(ack2)
         val mbAck2 = tryMakeAck2()
         tryMakeResult()
         log.info(s"exiting deliver, mbAck2: $mbAck2")
         mbAck2
 
-    private def deilverAck2(ack2: AckMajor2): Unit = {
+    private def deliverAck2(ack2: AckMajor2): Unit = {
         acks2.put(ack2.peer, ack2)
         if ack2.nextBlockFinal then this.finalizeHead = true
     }
@@ -111,7 +111,7 @@ private class MajorBlockConfirmationActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
-        // Block validation (the leader can skip validation since its own block).
+        // Block validation (the leader can skip validation for its own block).
         val (utxosActive, mbGenesis, utxosWithdrawn) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then

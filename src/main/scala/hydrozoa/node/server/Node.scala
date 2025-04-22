@@ -183,39 +183,4 @@ class Node:
                         Right("Head finalization request succeeded.")
                     case other =>
                         Left(s"Head is in the wrong phase: $other")
-
-    //
-//    private def applyBlock(
-//        blockRecord: BlockRecord
-//    ): Unit =
-//        val block = blockRecord.block
-//        block.blockHeader.blockType match
-//
-//            case Final =>
-//                // L1 effect
-//                val finalizationTx = toL1Tx(
-//                  blockRecord.l1Effect.asInstanceOf[FinalizationTx]
-//                ) // FIXME: casting
-//                val Right(finalizationTxId) = cardano.submit(finalizationTx)
-//                log.info(s"Finalizationtx submitted: $finalizationTxId")
-//
-////                // Emulate L1 event
-////                // TODO: temporarily handle the event, again, we don't want to wait
-////                multisigL1EventManager.foreach(
-////                  _.handleFinalizationTx(
-////                    finalizationTx,
-////                    finalizationTxId
-////                  )
-////                )
-//
-//                // L2 effect
-//                nodeState.head.finalizingPhase { s =>
-//                    s.stateL2.flush
-//                    s.confirmValidMempoolEvents(
-//                      block.blockHeader.blockNum,
-//                      block.blockBody.eventsValid
-//                    )
-//                    s.closeHead(blockRecord)
-//                }
-
 end Node
