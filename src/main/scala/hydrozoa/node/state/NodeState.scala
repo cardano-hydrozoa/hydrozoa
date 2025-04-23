@@ -6,7 +6,13 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.node.TestPeer
+import hydrozoa.node.monitoring.PrometheusMetrics
+import hydrozoa.node.state.HeadPhase.Finalized
 import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
 import ox.channels.ActorRef
 
@@ -22,6 +28,11 @@ class NodeState(
     var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
 
     var blockProductionActor: ActorRef[BlockProducer] = _
+
+    private var metrics: ActorRef[PrometheusMetrics] = _
+
+    def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+        this.metrics = metrics
 
     private var ownPeer: TestPeer = _
 
@@ -49,29 +60,48 @@ class NodeState(
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
-    def initializeHead(params: InitializingHeadParams): Unit =
+    def tryInitializeHead(params: InitializingHeadParams): Unit =
+
+        def initializeHead(): Unit = {
+            log.info(s"Initializing Hydrozoa head...")
+            this.headState = Some(HeadStateGlobal(params))
+            this.headState.get.setBlockProductionActor(blockProductionActor)
+            this.headState.get.setMetrics(metrics)
+            log.info(s"Setting up L1 event sourcing...")
+            val initTxId = params.initTx |> txHash
+            multisigL1EventSource.tell(
+              _.awaitInitTx(
+                initTxId,
+                params.headAddress,
+                params.headNativeScript,
+                params.beaconTokenName
+              )
+            )
+            // Reset head-bound metrics
+            metrics.tell(m =>
+                m.resetBlocksCounter()
+                m.clearBlockSize()
+                m.setPoolEventsL2(TransactionL2EventLabel, 0)
+                m.setPoolEventsL2(WithdrawalL2EventLabel, 0)
+                m.clearLiquidity()
+            )
+        }
+
         headState match
-            case None =>
-                log.info(s"Initializing Hydrozoa head...")
-                this.headState = Some(HeadStateGlobal(params))
-                this.headState.get.setBlockProductionActor(blockProductionActor)
-                log.info(s"Setting up L1 event sourcing...")
-                val initTxId = params.initTx |> txHash
-                multisigL1EventSource.tell(_.awaitInitTx(
-                    initTxId, 
-                    params.headAddress,
-                    params.headNativeScript,
-                    params.beaconTokenName
-                ))
-            // TODO: add support for re-opening a head
-            // case Some(Finalized) => this.headState = Some(HeadStateGlobal())
-            case Some(_) =>
-                val err = "The only supported head is already exists."
-                log.warn(err)
-                throw new IllegalStateException(err)
+            case None => initializeHead()
+            case Some(head) =>
+                head.headPhase match
+                    case Finalized => initializeHead()
+                    case _ =>
+                        val err = "The only supported head is already exists and not finalized yet."
+                        log.warn(err)
+                        throw new IllegalStateException(err)
 
     // Returns read-write API for head state.
     def head: HeadState = getOrThrow
+
+    // TODO: move to state-safe reader
+    def mbInitializedOn: Option[Long] = headState.map(_.initializedOn)
 
     // Returns read-only API for head state.
     val reader: HeadStateReader = new {
@@ -84,7 +114,6 @@ class NodeState(
             getOrThrow.openPhaseReader(foo)
         override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
             getOrThrow.finalizingPhaseReader(foo)
-
     }
 
     private def getOrThrow = {
@@ -117,5 +146,6 @@ case class InitializingHeadParams(
     headAddress: AddressBechL1,
     beaconTokenName: TokenName,
     seedAddress: AddressBechL1,
-    initTx: InitTx
+    initTx: InitTx,
+    initializedOn: Long // system time, milliseconds
 )

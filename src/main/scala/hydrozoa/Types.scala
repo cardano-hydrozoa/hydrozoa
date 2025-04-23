@@ -1,6 +1,5 @@
 package hydrozoa
 
-import com.bloxbean.cardano.client.common.model.Network
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 
 import scala.collection.mutable
@@ -63,21 +62,27 @@ object UtxoIdL2:
 
 // FIXME: parameterize AddressBech
 // FIXME: migrate to Value
-case class Output[L <: AnyLevel](address: AddressBechL1, coins: BigInt)
+case class Output[L <: AnyLevel](
+    address: AddressBechL1,
+    coins: BigInt,
+    mbInlineDatum: Option[String] = None
+)
 
 type OutputL1 = Output[L1]
 type OutputL2 = Output[L2]
 
-// FIXME: We also neew Utxo without MltisigUtxoTag
+// FIXME: We also need Utxo without MultisigUtxoTag
 case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
 
-def mkUtxo[L <: AnyLevel, T <: MultisigUtxoTag](
-    txId: TxId,
-    txIx: TxIx,
-    address: AddressBechL1,
-    coins: BigInt
-) =
-    Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins))
+object Utxo:
+    def apply[L <: AnyLevel, T <: MultisigUtxoTag](
+        txId: TxId,
+        txIx: TxIx,
+        address: AddressBechL1,
+        coins: BigInt,
+        mbInlineDatum: Option[String] = None
+    ) =
+        new Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins, mbInlineDatum))
 
 case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L]])
 

@@ -2,7 +2,7 @@ package hydrozoa.l2.ledger
 
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.l1.multisig.state.DepositUtxos
+import hydrozoa.l1.multisig.state.{DepositUtxos, depositDatum}
 import hydrozoa.l2.ledger.event.*
 import hydrozoa.l2.ledger.state.*
 
@@ -34,6 +34,8 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
     private val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
 
     override def getUtxosActive: UtxosSetOpaque = activeState.clone.toMap
+
+    override def getState: Map[UtxoIdL2, OutputL2] = unliftUtxoSet(activeState.clone().toMap)
 
     override def replaceUtxosActive(activeState: UtxosSetOpaque): Unit =
         // TODO: revise
@@ -152,6 +154,9 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         ret.toSet.map((k, v) => (unliftOutputRef(k), unliftOutput(v)))
 
 object AdaSimpleLedger:
+
+    // var txCounter: AtomicInteger = AtomicInteger()
+
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
 
     def apply[P <: TInstancePurpose](utxoSet: Map[UtxoIdL2, OutputL2]): AdaSimpleLedger[P] =
@@ -191,13 +196,21 @@ object AdaSimpleLedger:
 
 case class SimpleGenesis(
     outputs: List[SimpleOutput]
-) derives CanEqual
+) derives CanEqual:
+    def volume(): Long = outputs.map(_.coins).sum.toLong
 
 object SimpleGenesis:
-    // FIXME: REMOVE
     def apply(ds: DepositUtxos): SimpleGenesis =
         SimpleGenesis(
-          ds.map.values.map(o => SimpleOutput(liftAddress(o.address), o.coins)).toList
+          ds.map.values
+              .map(o =>
+                  val datum = depositDatum(o) match
+                      case Some(datum) => datum
+                      case None =>
+                          throw RuntimeException("deposit UTxO doesn't contain a proper datum")
+                  SimpleOutput(datum.address |> plutusAddressAsL2, o.coins)
+              )
+              .toList
         )
     def apply(address: AddressBechL2, ada: Int): SimpleGenesis =
         SimpleGenesis(List(SimpleOutput(address, ada)))
@@ -209,7 +222,8 @@ case class SimpleTransaction(
     // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
     inputs: List[UtxoIdL2],
     outputs: List[SimpleOutput]
-)
+):
+    def volume(): Long = outputs.map(_.coins).sum.toLong
 
 object SimpleTransaction:
     def apply(input: UtxoIdL2, address: AddressBechL2, ada: Int): SimpleTransaction =

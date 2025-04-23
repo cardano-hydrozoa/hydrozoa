@@ -20,7 +20,8 @@ import scala.collection.mutable
 private class RefundLaterActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
-    refundTxBuilder: RefundTxBuilder
+    refundTxBuilder: RefundTxBuilder,
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -70,6 +71,7 @@ private class RefundLaterActor(
             val depositUtxoId = UtxoIdL1.apply(txHash(req.depositTx), req.index)
             stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, refundTx)))
             resultChannel.send(refundTx)
+            dropMyself()
 
     private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
 

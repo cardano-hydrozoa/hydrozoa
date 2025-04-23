@@ -5,11 +5,10 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l2.block.{Block, BlockBody, BlockHeader, BlockTypeL2}
-import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
+import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import sttp.tapir.Schema
@@ -19,7 +18,7 @@ import scala.collection.mutable
 // FIXME: revise return types?
 trait HeadPeerNetwork {
 
-    def setDispatcher(dispatcherRef: ActorRef[IncomingDispatcher]): Unit
+    def setDispatcher(dispatcherRef: ActorRef[ConsensusDispatcher]): Unit
 
     /** @return
       *   set iof verification keys for all known peers
@@ -360,7 +359,7 @@ given ackFinalSchema: Schema[AckFinal] =
 
 case class AckFinal2(
     peer: WalletId,
-    settlement: TxKeyWitness
+    finalization: TxKeyWitness
 ) extends Ack
 
 given ackFinal2Codec: JsonValueCodec[AckFinal2] =

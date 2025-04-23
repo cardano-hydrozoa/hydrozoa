@@ -10,6 +10,6 @@ trait FinalizationTxBuilder {
 }
 
 case class FinalizationRecipe(
-                                 majorVersion: Int,
-                                 utxosWithdrawn: UtxosSet // FIXME: add phantom type parameter
+    majorVersion: Int,
+    utxosWithdrawn: UtxosSet // FIXME: add phantom type parameter
 )

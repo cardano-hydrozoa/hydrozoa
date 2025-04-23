@@ -75,9 +75,12 @@ object BlockValidator:
         block: Block,
         prevHeader: BlockHeader,
         stateL2: AdaSimpleLedger[TBlockProduction],
-        poolEventsL2: Seq[NonGenesisL2], // FIXME: missing in the spec
-        depositUtxos: DepositUtxos, // FIXME: missing in the spec
-        finalizing: Boolean // FIXME: missing in the spec
+        // FIXME: missing in the spec, empty for final block
+        poolEventsL2: Seq[NonGenesisL2],
+        // FIXME: missing in the spec, is not needed for minor and final blocks
+        depositUtxos: DepositUtxos,
+        // FIXME: missing in the spec, can be removed I guess
+        finalizing: Boolean
     ): ValidationResolution =
 
         // 1. Initialize the variables and arguments.
@@ -134,7 +137,7 @@ object BlockValidator:
         // 4.a Check for unknown invalid events
         val unknownInvalidEventsL2 =
             eventsInvalid.map(_._1).toSet &~ poolEventsL2.map(_.getEventId).toSet
-        if unknownInvalidEventsL2.nonEmpty then return NotYetKnownL2Events(unknownValidEventsL2)
+        if unknownInvalidEventsL2.nonEmpty then return NotYetKnownL2Events(unknownInvalidEventsL2)
 
         // 4.(b,c) Check all invalid events from the block are indeed invalid
         val eventsInvalidWithEvents = eventsInvalid.map((txId, _) => poolEventsL2Map(txId))
@@ -175,7 +178,6 @@ object BlockValidator:
                 val depositsAbsorbedUtxos = UtxoSet.apply[L1, DepositTag](
                   depositUtxos.map.filter((k, _) => depositsAbsorbed.contains(k))
                 )
-                // FIXME: construct genesis properly - using the datum
                 val genesis: SimpleGenesis = SimpleGenesis.apply(depositsAbsorbedUtxos)
                 stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                     case Right(txId, utxos) => Some(txId, genesis)
@@ -202,10 +204,12 @@ object BlockValidator:
         // Duplicates 3.b
         if (utxosWithdrawn.nonEmpty && blockType == Minor)
         then return Invalid(MinorBlockContainsWithdrawals)
-        val keepAlive =
-            blockType == Major && false // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
-        if mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
-            !(blockType == Minor || keepAlive)
+        // TODO: block.timeCreation ≥ previousMajorBlock.timeCreation + multisigRegimeKeepAlive
+        val keepAlive = blockType == Major && false
+        if (
+          mbGenesis.isEmpty && utxosWithdrawn.isEmpty &&
+          !(blockType == Minor || keepAlive || finalizing)
+        )
         then return Invalid(MinorBlockWasExpected)
 
         // 8. Return Invalid if any of these fails to hold:

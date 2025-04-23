@@ -17,7 +17,7 @@ class HappyPathSuite extends FunSuite {
     private val knownPeers = Set(Bob, Carol, Daniella)
     private val headPeers = knownPeers.take(2)
 
-    private val (log: Logger, node: Node, cardano: CardanoL1) = mkHydrozoaNode(
+    private val (log: Logger, node: Node, cardano: CardanoL1) = mkSimpleHydrozoaNode(
       ownPeerWallet = mkWallet(Alice),
       knownPeers = knownPeers.map(mkWallet),
       useL1Mock = true,
@@ -33,7 +33,7 @@ class HappyPathSuite extends FunSuite {
 
             // 1. Initialize the head
             initTxId <- node.initializeHead(
-              headPeers.map(mkWalletId),
+              // headPeers.map(mkWalletId),
               100,
               TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
               TxIx(0)
@@ -45,6 +45,7 @@ class HappyPathSuite extends FunSuite {
               DepositRequest(
                 initTxId,
                 TxIx(1),
+                100_000_000,
                 None,
                 AddressBechL2(
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
@@ -63,6 +64,7 @@ class HappyPathSuite extends FunSuite {
               DepositRequest(
                 deposit1.depositId.txId,
                 TxIx(1),
+                100_000_000,
                 None,
                 AddressBechL2(
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"

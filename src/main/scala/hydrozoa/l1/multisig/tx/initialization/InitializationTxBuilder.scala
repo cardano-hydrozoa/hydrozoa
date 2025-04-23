@@ -12,7 +12,7 @@ trait InitTxBuilder {
 case class InitTxRecipe(
     headAddressBech32: AddressBechL1,
     seedOutput: UtxoIdL1,
-    coins: Long,
+    coins: BigInt,
     headNativeScript: NativeScript,
     beaconTokenName: TokenName
 )

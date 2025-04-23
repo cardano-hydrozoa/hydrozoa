@@ -33,9 +33,13 @@ artifacts
 # Scala
 .bsp/
 .idea/
-project/
+project/project
+project/target
 target/
 
 # tx dumping ground
 txsl1.out
 txsl2.out
+
+/flamegraph.html
+/yaci-store.log

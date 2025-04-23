@@ -1,23 +1,28 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{addWitnessMultisig, serializeTxHex}
+import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
-import hydrozoa.l2.consensus.network.{Ack, AckMajor, AckMajor2, AckVerKey, Req, ReqMajor, ReqVerKey}
-import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
-import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes, Wallet}
+import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.node.state.*
+import hydrozoa.{TxId, TxKeyWitness, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
+import ox.resilience.{RetryConfig, retryEither}
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 private class MajorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
-    settlementTxBuilder: SettlementTxBuilder
+    settlementTxBuilder: SettlementTxBuilder,
+    cardano: ActorRef[CardanoL1],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -36,7 +41,8 @@ private class MajorBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
-        val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
+        val (headPeers, isFinalizationRequested) =
+            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isFinalizationRequested)))
         log.debug(s"headPeers: $headPeers")
         if ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
@@ -53,11 +59,10 @@ private class MajorBlockConfirmationActor(
             // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
-            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, false)
+            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isFinalizationRequested)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
-            // deliver(ownAck2)
-            deilverAck2(ownAck2)
+            deliverAck2(ownAck2)
             Some(ownAck2)
         else None
 
@@ -75,11 +80,19 @@ private class MajorBlockConfirmationActor(
             // Block record and state update by block application
             // TODO: L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
-            stateActor.tell(_.head.openPhase(s => s.applyBlockRecord(record)))
-            if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
-            // Dump state
-            // dumpState()
+            stateActor.tell(nodeState =>
+                nodeState.head.openPhase(s =>
+                    s.applyBlockRecord(record, mbGenesis)
+                    // Dump state
+                    nodeState.head.dumpState()
+                )
+            )
+            log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
+            cardano.tell(_.submit(settlementTx))
+            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
+            // TODO: the absence of this line is a good test!
             resultChannel.send(())
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.debug(s"deliver ack: $ack")
@@ -88,13 +101,13 @@ private class MajorBlockConfirmationActor(
                 acks.put(ack.peer, ack)
                 ()
             case ack2: AckMajor2 =>
-                deilverAck2(ack2)
+                deliverAck2(ack2)
         val mbAck2 = tryMakeAck2()
         tryMakeResult()
         log.info(s"exiting deliver, mbAck2: $mbAck2")
         mbAck2
 
-    private def deilverAck2(ack2: AckMajor2): Unit = {
+    private def deliverAck2(ack2: AckMajor2): Unit = {
         acks2.put(ack2.peer, ack2)
         if ack2.nextBlockFinal then this.finalizeHead = true
     }
@@ -102,38 +115,50 @@ private class MajorBlockConfirmationActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
-        // Block validation (the leader can skip validation since its own block).
+        // Block validation (the leader can skip validation for its own block).
         val (utxosActive, mbGenesis, utxosWithdrawn) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
                 (ownBlock.utxosActive, ownBlock.mbGenesis, ownBlock.utxosWithdrawn)
             else
-                val (prevHeader, stateL2Cloned, poolEventsL2, depositUtxos) =
-                    stateActor.ask(
-                      _.head.openPhase(openHead =>
-                          (
-                            openHead.l2Tip.blockHeader,
-                            openHead.stateL2.blockProduction,
-                            openHead.immutablePoolEventsL2,
-                            openHead.peekDeposits
+                def tryValidate = {
+                    val (prevHeader, stateL2Cloned, poolEventsL2, depositUtxos) =
+                        stateActor.ask(
+                          _.head.openPhase(openHead =>
+                              (
+                                openHead.l2Tip.blockHeader,
+                                openHead.stateL2.blockProduction,
+                                openHead.immutablePoolEventsL2,
+                                openHead.peekDeposits
+                              )
                           )
-                      )
+                        )
+                    val resolution = BlockValidator.validateBlock(
+                      req.block,
+                      prevHeader,
+                      stateL2Cloned,
+                      poolEventsL2,
+                      depositUtxos,
+                      false
                     )
-                val resolution = BlockValidator.validateBlock(
-                  req.block,
-                  prevHeader,
-                  stateL2Cloned,
-                  poolEventsL2,
-                  depositUtxos,
-                  false
-                )
-                resolution match
-                    case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
-                        log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
-                        (utxosActive, mbGenesis, utxosWithdrawn)
-                    case resolution =>
-                        throw RuntimeException(s"Block validation failed: $resolution")
+                    resolution match
+                        case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
+                            log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
+                            Right(utxosActive, mbGenesis, utxosWithdrawn)
+                        case r @ ValidationResolution.NotYetKnownDeposits(depositsUnknown) =>
+                            log.warn(
+                              s"Validation failed with NotYetKnownDeposits: $depositsUnknown"
+                            )
+                            Left(r)
+                        // Fail fast on other errors for now
+                        case resolution =>
+                            throw RuntimeException(s"Block validation failed: $resolution")
+                }
+
+                retryEither(RetryConfig.delay(10, 1.second))(tryValidate) match
+                    case Right(ret) => ret
+                    case Left(err)  => throw RuntimeException(err.toString)
 
         // Update local state
         this.req = req

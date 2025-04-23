@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import com.bloxbean.cardano.client.address.Address
-import com.bloxbean.cardano.client.api.model.Amount.ada
+import com.bloxbean.cardano.client.api.model.Amount.{lovelace}
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
@@ -9,12 +9,12 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
-import hydrozoa.l1.multisig.tx.MultisigTx
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{TxIx, TxL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
 
+import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
 class BloxBeanDepositTxBuilder(
@@ -31,9 +31,7 @@ class BloxBeanDepositTxBuilder(
             .toEither
 
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
-
-        // TODO: valueToAmountList(utxoFunding.toValue) OR we should ask for a value (might be easier)
-        val amountList: List[Amount] = List(ada(100))
+        val amountList: List[Amount] = List(lovelace(r.depositAmount.bigInteger))
         val datum: PlutusData = Interop.toPlutusData(r.datum.toData)
         val depositorAddress = utxoFunding.getAddress
 

@@ -1,13 +1,37 @@
+enablePlugins(
+  JavaAppPackaging,
+  DockerPlugin
+)
+
+Compile / mainClass := Some("hydrozoa.HydrozoaNode")
+Docker / packageName := "cardano-hydrozoa/hydrozoa"
+dockerBaseImage := "openjdk:21-jdk"
+dockerExposedPorts ++= Seq(4937)
+//dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
+//dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
+
+val scalusVersion = "0.8.5"
+
+// Latest Scala 3 LTS version
+ThisBuild / scalaVersion := "3.3.5"
+
+ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
+
+// Add the Scalus compiler plugin
+addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
+
 // Main application
 lazy val core = (project in file("."))
     .settings(
+      resolvers +=
+          "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
         // Scalus
         "org.scalus" % "scalus_3" % scalusVersion,
         "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion,
         // Cardano Client library
-        "com.bloxbean.cardano" % "cardano-client-lib" % "0.6.3",
-        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.6.3",
+        "com.bloxbean.cardano" % "cardano-client-lib" % "0.7.0-beta3-SNAPSHOT",
+        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.7.0-beta3-SNAPSHOT",
         // Tapir for API definition
         "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
         "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
@@ -26,7 +50,11 @@ lazy val core = (project in file("."))
         // jsoniter + tapit-jsoniter
         "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.33.2",
         "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.2" % "compile-internal",
-        "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19"
+        "com.softwaremill.sttp.tapir" %% "tapir-jsoniter-scala" % "1.11.19",
+        // Prometheus Java "client"
+        "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
+        "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
+        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
@@ -35,26 +63,31 @@ lazy val core = (project in file("."))
       )
     )
 
-// Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.5"
-
-ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
-
-// Add the Scalus compiler plugin
-addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
-
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("munit.Framework")
+
 // Integration tests
 lazy val integration = (project in file("integration"))
     .dependsOn(core) // your current subproject
     .settings(
+      Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-      )
+      ),
     )
-val scalusVersion = "0.8.5"
+
+// Demo workload
+lazy val demo = (project in file("demo"))
+    .dependsOn(core) // your current subproject
+    .settings(
+        Compile / mainClass := Some("hydrozoa.demo.Workload"),
+        publish / skip := true,
+        libraryDependencies ++= Seq(
+            "org.scalacheck" %% "scalacheck" % "1.18.1",
+            "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25"
+        )
+    )

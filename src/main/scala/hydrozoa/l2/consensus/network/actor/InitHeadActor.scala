@@ -19,7 +19,8 @@ private class InitHeadActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
-    initTxBuilder: InitTxBuilder
+    initTxBuilder: InitTxBuilder,
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -103,11 +104,13 @@ private class InitHeadActor(
                       headAddress,
                       beaconTokenName,
                       seedAddress,
-                      initTx
+                      initTx,
+                      System.currentTimeMillis()
                     )
-                    stateActor.tell(_.initializeHead(params))
+                    stateActor.tell(_.tryInitializeHead(params))
                     TxDump.dumpInitTx(initTx)
                     resultChannel.send(txHash)
+                    dropMyself()
 
                 case Left(err) =>
                     val msg = s"Can't submit init tx: $err"

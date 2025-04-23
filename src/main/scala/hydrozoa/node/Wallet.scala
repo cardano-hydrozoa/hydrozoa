@@ -22,7 +22,8 @@ class Wallet(
     verificationKey: walletModule.VerificationKey,
     signingKey: walletModule.SigningKey
 ):
-    private lazy val verificationKeysBytes = walletModule.exportVerificationKeyBytes(verificationKey)
+    private lazy val verificationKeysBytes =
+        walletModule.exportVerificationKeyBytes(verificationKey)
     def getName: String = name
     def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
     def createTxKeyWitness[L <: AnyLevel](tx: Tx[L]): TxKeyWitness =

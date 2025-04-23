@@ -4,7 +4,9 @@ import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{toEither, txHash}
+import hydrozoa.infra.{toEither, txFees, txHash}
+import hydrozoa.node.monitoring.PrometheusMetrics
+import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import ox.scheduling.Jitter
 import scalus.ledger.api.v1.PosixTime
@@ -12,12 +14,16 @@ import scalus.ledger.api.v1.PosixTime
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-
-import scala.util.{Try, boundary}
+import scala.util.Try
 
 class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     private val log = Logger(getClass)
+
+    private var metrics: ActorRef[PrometheusMetrics] = _
+
+    override def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+        this.metrics = metrics
 
     // TODO: temporarily: Yaci cannot return serialized tx so far
     private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
@@ -30,18 +36,26 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
     override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
         val hash = txHash(tx)
 
+        log.info(s"Submitting tx $hash")
+
+        def handleSubmit(): Unit = {
+            knownTxs.put(hash, tx)
+            metrics.tell(_.addFeesL1Volume(txFees(tx)))
+        }
+
         def smartSubmit =
             backendService.getTransactionService.getTransaction(hash.hash).toEither match
                 case Left(_) =>
                     val result = backendService.getTransactionService.submitTransaction(tx.bytes)
                     if result.isSuccessful
                     then
-                        knownTxs.put(hash, tx)
+                        log.info(s"Tx $hash has been submitted to L1.")
+                        handleSubmit()
                         TxId(result.getValue)
                     else throw RuntimeException(result.getResponse)
                 case Right(_) =>
                     log.info(s"Tx already on the chain: $hash")
-                    knownTxs.put(hash, tx)
+                    handleSubmit()
                     hash
 
         Try(

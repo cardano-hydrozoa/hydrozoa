@@ -1,19 +1,20 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.Wallet
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
 import hydrozoa.node.state.*
-import hydrozoa.Wallet
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
 
 private class MinorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
-    walletActor: ActorRef[Wallet]
+    walletActor: ActorRef[Wallet],
+    dropMyself: () => Unit
 ) extends ConsensusActor:
 
     private val log = Logger(getClass)
@@ -36,13 +37,18 @@ private class MinorBlockConfirmationActor(
             val l2Effect: L2BlockEffect = utxosActive
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
-            stateActor.tell(_.head.openPhase(s => s.applyBlockRecord(record)))
+            stateActor.tell(nodeState =>
+                nodeState.head.openPhase(s =>
+                    s.applyBlockRecord(record)
+                    // Dump state
+                    nodeState.head.dumpState()
+                )
+            )
             // Move head into finalization phase if finalizeHead flag was received
-            if (finalizeHead) stateActor.tell(_.head.openPhase(_.finalizeHead()))
-            // Dump state
-            // dumpState()
-            // TODO: the absense of this line is a good test!
+            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
+            // TODO: the absence of this line is a good test!
             resultChannel.send(())
+            dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")
@@ -55,20 +61,34 @@ private class MinorBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         // Block validation (the leader can skip validation since its own block).
-        val (utxosActive, _, _) =
+        val (utxosActive, _, _, isFinalizationRequested) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
-                val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
-                (ownBlock.utxosActive, ownBlock.mbGenesis, ownBlock.utxosWithdrawn)
+                val (ownBlock, isFinalizationRequested) = stateActor.ask(
+                  _.head.openPhase(open => (open.pendingOwnBlock, open.isFinalizationRequested))
+                )
+                (
+                  ownBlock.utxosActive,
+                  ownBlock.mbGenesis,
+                  ownBlock.utxosWithdrawn,
+                  isFinalizationRequested
+                )
             else
-                val (prevHeader, stateL2Cloned, poolEventsL2, depositUtxos) =
+                val (
+                  prevHeader,
+                  stateL2Cloned,
+                  poolEventsL2,
+                  depositUtxos,
+                  isFinalizationRequested
+                ) =
                     stateActor.ask(
-                      _.head.openPhase(openHead =>
+                      _.head.openPhase(open =>
                           (
-                            openHead.l2Tip.blockHeader,
-                            openHead.stateL2.blockProduction,
-                            openHead.immutablePoolEventsL2,
-                            openHead.peekDeposits
+                            open.l2Tip.blockHeader,
+                            open.stateL2.blockProduction,
+                            open.immutablePoolEventsL2,
+                            open.peekDeposits,
+                            open.isFinalizationRequested
                           )
                       )
                     )
@@ -78,11 +98,11 @@ private class MinorBlockConfirmationActor(
                   stateL2Cloned,
                   poolEventsL2,
                   depositUtxos, // FIXME: do we need it for a minor block?
-                  false
+                  false // minor is not a final
                 )
                 resolution match
                     case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
-                        (utxosActive, mbGenesis, utxosWithdrawn)
+                        (utxosActive, mbGenesis, utxosWithdrawn, isFinalizationRequested)
                     case resolution =>
                         throw RuntimeException(s"Minor block validation failed: $resolution")
 
@@ -97,7 +117,7 @@ private class MinorBlockConfirmationActor(
         // FIXME: how do we decide whether we want to wrap up the head?
         // Answer: User API should provide a method for that, so with the next
         // acknowledgment the node can indicate they want to finalize the head.
-        val ownAck: AckType = AckMinor(me, signature, false)
+        val ownAck: AckType = AckMinor(me, signature, isFinalizationRequested)
         deliver(ownAck)
         Seq(ownAck)
 

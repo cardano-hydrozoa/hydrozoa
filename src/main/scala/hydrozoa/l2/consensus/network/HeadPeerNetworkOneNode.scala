@@ -9,12 +9,14 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.consensus.network.transport.IncomingDispatcher
+import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.state.{HeadStateReader, WalletId}
 import hydrozoa.{TxId, TxKeyWitness, VerificationKeyBytes, Wallet}
 import ox.channels.ActorRef
 
+/** TODO: revise, broken
+  */
 class HeadPeerNetworkOneNode(
     reader: HeadStateReader,
     initTxBuilder: InitTxBuilder,
@@ -129,4 +131,4 @@ class HeadPeerNetworkOneNode(
             )
         ???
 
-    override def setDispatcher(dispatcherRef: ActorRef[IncomingDispatcher]): Unit = ???
+    override def setDispatcher(dispatcherRef: ActorRef[ConsensusDispatcher]): Unit = ???
