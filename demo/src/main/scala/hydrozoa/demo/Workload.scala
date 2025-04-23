@@ -136,9 +136,9 @@ object Workload extends OxApp:
             recipient <- Gen.oneOf(TestPeer.values)
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = AddressBechL2(depositorAccount.toString)
-            depositAmount <- Gen.choose(
-              5_000_000.min(coins.intValue),
-              100_000_000.min(coins.intValue)
+            depositAmount: BigInt <- Gen.choose(
+              BigInt.apply(5_000_000).min(coins),
+              BigInt.apply(100_000_000).min(coins)
             )
         yield DepositCommand(
           depositor,
@@ -154,14 +154,14 @@ object Workload extends OxApp:
         for
             numberOfInputs <- Gen.choose(1, 5.min(l2state.size))
             inputs <- Gen.pick(numberOfInputs, l2state.keySet)
-            totalCoins = inputs.map(l2state(_).coins).sum.intValue
+            totalCoins = inputs.map(l2state(_).coins).sum
 
-            outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty) { tails =>
+            outputCoins <- Gen.tailRecM[List[BigInt], List[BigInt]](List.empty) { tails =>
                 val residual = totalCoins - tails.sum
                 if residual < 5_000_000
                 then Gen.const(Right(residual :: tails))
                 else
-                    for next <- Gen.choose(5_000_000, residual)
+                    for next <- Gen.choose(BigInt(5_000_000), residual)
                     yield Left(next :: tails)
             }
 
@@ -198,7 +198,7 @@ object Workload extends OxApp:
                     .map(u => UtxoIdL1(TxId(u.getTxHash), TxIx(u.getOutputIndex)))
                     .toSet
 
-    def utxosAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, Long] =
+    def utxosAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, BigInt] =
         // NB: can't be more than 100
         backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
             case Left(err) =>
@@ -208,11 +208,12 @@ object Workload extends OxApp:
                     .map(u =>
                         (
                           UtxoIdL1(TxId(u.getTxHash), TxIx(u.getOutputIndex)),
-                          u.getAmount.asScala
-                              .find(a => a.getUnit.equals("lovelace"))
-                              .get
-                              .getQuantity
-                              .longValue()
+                          BigInt.apply(
+                            u.getAmount.asScala
+                                .find(a => a.getUnit.equals("lovelace"))
+                                .get
+                                .getQuantity
+                          )
                         )
                     )
                     .toMap
@@ -274,7 +275,7 @@ class InitializeCommand(
 class DepositCommand(
     depositor: TestPeer,
     fundUtxo: UtxoIdL1,
-    depositAmount: Int,
+    depositAmount: BigInt,
     address: AddressBechL2,
     refundAddress: AddressBechL1
 ) extends WorkloadCommand:

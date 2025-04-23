@@ -42,7 +42,7 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
         val headNativeScript = NativeScript.deserializeScriptRef(recipe.headNativeScript.bytes)
 
         val treasuryValue = List(
-          lovelace(BigInteger.valueOf(recipe.coins)),
+          lovelace(recipe.coins.bigInteger),
           asset(headNativeScript.getPolicyId, beaconToken.getName, BigInteger.valueOf(1))
         )
 

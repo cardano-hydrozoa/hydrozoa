@@ -31,7 +31,7 @@ class BloxBeanDepositTxBuilder(
             .toEither
 
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
-        val amountList: List[Amount] = List(lovelace(BigInteger.valueOf(r.depositAmount.longValue)))
+        val amountList: List[Amount] = List(lovelace(r.depositAmount.bigInteger))
         val datum: PlutusData = Interop.toPlutusData(r.datum.toData)
         val depositorAddress = utxoFunding.getAddress
 

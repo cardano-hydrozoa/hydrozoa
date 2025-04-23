@@ -18,7 +18,7 @@ type DepositId = UtxoIdL1
 case class DepositRequest(
     txId: TxId,
     txIx: TxIx,
-    depositAmount: Int,
+    depositAmount: BigInt,
     deadline: Option[BigInt],
     address: AddressBechL2,
     datum: Option[Datum],
