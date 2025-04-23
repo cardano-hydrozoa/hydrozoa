@@ -41,10 +41,19 @@ $ docker compose up
 ```
 
 Once up, the following should work:
-1. Yaci Viewer - http://localhost:5173/
-2. Grafana - http://localhost:3003/
+* Yaci Viewer - http://localhost:5173/
+* Grafana - http://localhost:3003/
 
 Navigate to provisioned Hydrozoa dashboard to observe the head.
+
+## Cleaning up
+
+In some cases you might want to remove containers and volumes 
+(be careful, this command can DESTROY your data):
+
+```bash
+docker system prune --volumes
+```
 
 ## Running demo workload
 
