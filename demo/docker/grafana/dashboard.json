@@ -246,6 +246,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -254,7 +255,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -309,6 +311,8 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
+          "fieldMinMax": false,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -317,7 +321,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -342,7 +347,7 @@
           "values": false
         },
         "showPercentChange": false,
-        "textMode": "auto",
+        "textMode": "value",
         "wideLayout": true
       },
       "pluginVersion": "11.6.0",
@@ -359,7 +364,7 @@
           "useBackend": false
         }
       ],
-      "title": "Volume absorbed, ADA",
+      "title": "Deposits absorbed,₳",
       "type": "stat"
     },
     {
@@ -372,6 +377,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 2,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -392,7 +398,7 @@
       },
       "id": 11,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
@@ -422,7 +428,7 @@
           "useBackend": false
         }
       ],
-      "title": "Settlement AVG fees, ADA",
+      "title": "Settlement AVG fees, ₳",
       "type": "stat"
     },
     {
@@ -435,6 +441,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -443,13 +450,14 @@
                 "color": "yellow"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 3,
+        "h": 10,
+        "w": 2,
         "x": 18,
         "y": 0
       },
@@ -490,7 +498,7 @@
           "useBackend": false
         }
       ],
-      "title": "L2 Invalid Events",
+      "title": "L2 invalid events",
       "type": "stat"
     },
     {
@@ -571,6 +579,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -579,7 +588,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -626,7 +636,7 @@
           "useBackend": false
         }
       ],
-      "title": "L2 Valid Txs",
+      "title": "L2 Txs",
       "type": "stat"
     },
     {
@@ -639,6 +649,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -647,7 +658,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -689,7 +701,7 @@
           "useBackend": false
         }
       ],
-      "title": "L2 Tx Volume, ADA",
+      "title": "L2 Tx Volume, ₳",
       "type": "stat"
     },
     {
@@ -706,7 +718,7 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "ADA",
+            "axisLabel": "₳",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
@@ -735,6 +747,7 @@
               "mode": "off"
             }
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -743,7 +756,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -786,7 +800,7 @@
           "useBackend": false
         }
       ],
-      "title": "Head liquidity",
+      "title": "Head liquidity, ₳",
       "type": "timeseries"
     },
     {
@@ -861,7 +875,7 @@
           "useBackend": false
         }
       ],
-      "title": "Settlement costs",
+      "title": "Settlement costs, lovelaces",
       "type": "histogram"
     },
     {
@@ -874,6 +888,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -882,7 +897,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -929,7 +945,7 @@
           "useBackend": false
         }
       ],
-      "title": "L2 Valid withdrawals",
+      "title": "L2 withdrawals",
       "type": "stat"
     },
     {
@@ -942,6 +958,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -950,7 +967,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -992,7 +1010,7 @@
           "useBackend": false
         }
       ],
-      "title": "Volume withdrawn, ADA",
+      "title": "Volume withdrawn, ₳",
       "type": "stat"
     },
     {
@@ -1005,6 +1023,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -1013,7 +1032,8 @@
                 "color": "green"
               }
             ]
-          }
+          },
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -1055,7 +1075,7 @@
           "useBackend": false
         }
       ],
-      "title": "Total L1 fees, ADA",
+      "title": "Total L1 fees, ₳",
       "type": "stat"
     },
     {
@@ -1111,7 +1131,7 @@
               }
             ]
           },
-          "unit": "Blocks"
+          "unit": "locale"
         },
         "overrides": []
       },
@@ -1206,5 +1226,5 @@
   "timezone": "browser",
   "title": "Hydrozoa - Alice peer",
   "uid": "dej91pokobmrkd",
-  "version": 2
+  "version": 1
 }
