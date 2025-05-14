@@ -11,7 +11,6 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.node.TestPeer
 import ox.*
 import ox.channels.*
@@ -60,12 +59,19 @@ import hydrozoa.l2.consensus.network.{
     reqRefundLaterCodec,
     reqRefundLaterSchema,
     reqVerKeySchema,
-    testPeerSchema,
-    walletIdSchema
+    testPeerSchema
 }
 import hydrozoa.node.server.Node
 
 trait HeadPeerNetworkTransport:
+
+    /** Installs the dispatcher actor.
+      */
+    def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit
+
+    /** Runs the transport.
+      */
+    def run(): Unit
 
     /** Get the next number for a message, increases the counter.
       * @return
@@ -239,8 +245,7 @@ class HeadPeerNetworkTransportWS(
     private val log = Logger(getClass)
 
     private var dispatcher: ActorRef[ConsensusDispatcher] = _
-
-    def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
+    override def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
         this.dispatcher = dispatcher
 
     // Global channel for incoming messages
@@ -251,8 +256,6 @@ class HeadPeerNetworkTransportWS(
 
     // A list of private channels for every peer we are talking to
     private val outgoingChannels: mutable.Buffer[Channel[AnyMsg]] = mutable.Buffer.empty
-
-    // private val subscriptions: mutable.Map[Long, Channel[Ack]] = mutable.Map.empty
 
     private var counter: Long = 0
 
@@ -325,7 +328,7 @@ class HeadPeerNetworkTransportWS(
                         throw throwable
             }
 
-    def run(): Unit =
+    override def run(): Unit =
         supervised {
 
             // Outgoing fanout thread
