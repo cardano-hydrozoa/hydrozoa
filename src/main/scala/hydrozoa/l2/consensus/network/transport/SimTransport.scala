@@ -81,4 +81,5 @@ class SimTransport(simNetwork: SimNetwork, ownPeer: TestPeer) extends HeadPeerNe
         next
 
 object SimTransport:
-    def apply(simNetwork: SimNetwork, ownPeer: TestPeer) = new SimTransport(simNetwork, ownPeer)
+    def apply(simNetwork: SimNetwork, ownPeer: TestPeer): HeadPeerNetworkTransport =
+        new SimTransport(simNetwork, ownPeer)

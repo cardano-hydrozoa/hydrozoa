@@ -45,7 +45,7 @@ class SimTransportSpec extends munit.ScalaCheckSuite {
 // TODO: review ConsensusDispatcher trait
 class SinkDispatcher(sink: Sink[AnyMsg]) extends ConsensusDispatcher:
     //
-    override def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit = ???
+    override def setTransport(transport: ActorRef[HeadPeerNetworkTransport]): Unit = ???
     override def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit = ???
     override def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit = ???
     //

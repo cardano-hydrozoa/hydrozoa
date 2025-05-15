@@ -407,7 +407,7 @@ object HeadPeerNetworkTransportWS:
         ownPeer: TestPeer,
         ownPort: Int,
         others: Map[TestPeer, Uri]
-    ): HeadPeerNetworkTransportWS =
+    ): HeadPeerNetworkTransport =
         new HeadPeerNetworkTransportWS(ownPeer, ownPort, others)
 
 given anyMsg1WSFCodec: Codec[WebSocketFrame, AnyMsg, CodecFormat.Json] =
