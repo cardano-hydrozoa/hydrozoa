@@ -27,7 +27,12 @@ val peers = Map.from(
 
 val yaciBFApiUri = "http://localhost:8080/api/v1/"
 
-def runNode(simNetwork: SimNetwork, ownPeer: TestPeer, log: Logger) = {
+def runNode(
+    simNetwork: SimNetwork,
+    ownPeer: TestPeer,
+    log: Logger,
+    nodeCallback: ((TestPeer, Node) => Unit)
+) = {
     InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
         forkUser {
 
@@ -106,6 +111,8 @@ def runNode(simNetwork: SimNetwork, ownPeer: TestPeer, log: Logger) = {
                 node.cardano = cardanoActor
                 val nodeActor = Actor.create(node)
 
+                nodeCallback(ownPeer, node)
+
                 // Run fibers
 
                 // Consensus dispatcher
@@ -118,9 +125,9 @@ def runNode(simNetwork: SimNetwork, ownPeer: TestPeer, log: Logger) = {
                     transport.run()
                 }
 
-                // Client node API
-                val serverBinding =
-                    useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(_.stop())
+//                // Client node API
+//                val serverBinding =
+//                    useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(_.stop())
 
                 never
             }
@@ -128,9 +135,9 @@ def runNode(simNetwork: SimNetwork, ownPeer: TestPeer, log: Logger) = {
     }
 }
 
-object HydrozoaLocalComposition extends OxApp:
+object HydrozoaLocal extends OxApp:
 
-    private val log = Logger("main")
+    private val log = Logger("HydrozoaLocal")
 
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
@@ -140,7 +147,7 @@ object HydrozoaLocalComposition extends OxApp:
 
             peers.keys.foreach(peer =>
                 forkDiscard {
-                    runNode(simNetwork, peer, log)
+                    runNode(simNetwork, peer, log, (_, _) => ())
                 }
             )
             never
