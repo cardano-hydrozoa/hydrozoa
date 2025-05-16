@@ -190,19 +190,21 @@ object HydrozoaNode extends OxApp:
 
 def mkTxBuilders(
     knownPeers: Set[WalletId],
-    // useL1Mock: Boolean = false,
-    pp: Option[ProtocolParams] = None,
-    yaciBFApiUri: String = "http://localhost:8080/api/v1/"
+    useYaci: Boolean = false,
+    yaciBFApiUri: String = "http://localhost:8080/api/v1/",
+    pp: Option[ProtocolParams] = None
 ) =
 
     // Cardano L1
-    // val (cardano, backendService) = if useL1Mock then
-    //    val cardano = CardanoL1Mock()
-    //    (cardano, BackendServiceMock(cardano, pp.get))
-    // else
-    val backendService = BFBackendService(yaciBFApiUri, "")
-    val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService)
-    (cardano, backendService)
+    val (cardano, backendService) =
+        if useYaci then
+            val backendService = BFBackendService(yaciBFApiUri, "")
+            val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService)
+            (cardano, backendService)
+        else
+            val cardano = CardanoL1Mock()
+            val backendService = BackendServiceMock(cardano, pp.get)
+            (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
     val nodeState: NodeState = NodeState(knownPeers)

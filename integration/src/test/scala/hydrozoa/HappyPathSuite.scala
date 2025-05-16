@@ -1,14 +1,10 @@
 package hydrozoa
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.txHash
-import hydrozoa.l1.CardanoL1
-import hydrozoa.l2.ledger.SimpleWithdrawal
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
-import hydrozoa.node.server.{DepositRequest, Node}
-import hydrozoa.sut.LocalFacade
+import hydrozoa.node.server.DepositRequest
+import hydrozoa.sut.{LocalFacade, Utils}
 import munit.FunSuite
 import ox.supervised
 
@@ -18,20 +14,12 @@ import java.lang.Thread.sleep
   */
 class HappyPathSuite extends FunSuite {
 
-    // private val log = Logger(getClass)
-    private val testPeers = Set(Alice, Bob, Carol)
-
-    override def beforeAll(): Unit = {
-        assume(true, "Env is presumably set up and reset.")
-    }
+    private val testPeers = Set(Alice, Bob, Carol, Daniella)
 
     test("Hydrozoa happy-path scenario") {
         supervised {
 
-            val sut = LocalFacade.apply(
-              peers = testPeers,
-              pp = Utils.protocolParams
-            )
+            val sut = LocalFacade.apply(testPeers)
 
             val result = for
 
@@ -105,9 +93,11 @@ class HappyPathSuite extends FunSuite {
             result match
                 case Right(_)  => ()
                 case Left(err) => fail(err)
+
+            sut.shutdownSut()
         }
 
         println("Done!")
-        // TODO: stop SUT
     }
+
 }

@@ -16,6 +16,8 @@ class SimNetwork(peers: List[TestPeer]):
         yield (sender, receiver)
         pairs.zip(pairs.map(_ => Channel.unlimited)).toMap
 
+    def knownPeers: Set[TestPeer] = peers.toSet
+
     def chanKeys: Iterable[(TestPeer, TestPeer)] = chans.keys
 
     def mkInbox(recipient: TestPeer)(using Ox): Source[AnyMsg] =
