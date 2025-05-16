@@ -10,9 +10,11 @@ import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.BlockRecord
 import ox.logback.InheritableMDC
-import ox.{forkDiscard, never, supervised}
+import ox.resilience.{RetryConfig, retry}
+import ox.{Ox, forkDiscard, forkUser, never, supervised}
 
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 class LocalFacade(
     peers: Map[TestPeer, Node]
@@ -56,30 +58,36 @@ class LocalFacade(
 object LocalFacade:
     private val log = Logger("LocalFacade")
     def apply(
-        ownPeer: TestPeer,
-        knownPeers: Set[TestPeer],
+        peers: Set[TestPeer],
         pp: ProtocolParams,
         useYaci: Boolean = false
-    ): HydrozoaFacade =
+    )(using Ox): HydrozoaFacade =
 
         InheritableMDC.init
 
-        val peers = mutable.Map.empty[TestPeer, Node]
+        val nodes = mutable.Map.empty[TestPeer, Node]
 
-        supervised {
-            val simNetwork = SimNetwork.apply(peers.keys.toList)
+        forkUser {
+            supervised {
+                val simNetwork = SimNetwork.apply(peers.toList)
 
-            peers.keys.foreach(peer =>
-                forkDiscard {
-                    runNode(
-                      simNetwork,
-                      peer,
-                      log,
-                      (p, n) => { peers.put(p, n); () }
-                    )
-                }
-            )
-            never
+                peers.foreach(peer =>
+                    forkDiscard {
+                        runNode(
+                          simNetwork,
+                          peer,
+                          log,
+                          (p, n) => {
+                              nodes.put(p, n); ()
+                          }
+                        )
+                    }
+                )
+                never
+            }
         }
 
-        new LocalFacade(peers.toMap)
+        retry(RetryConfig.delayForever(100.millis))
+            (if nodes.size < peers.size then throw RuntimeException())
+
+        new LocalFacade(nodes.toMap)
