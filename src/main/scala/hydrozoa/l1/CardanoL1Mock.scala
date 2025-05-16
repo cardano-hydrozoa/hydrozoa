@@ -1,18 +1,20 @@
 package hydrozoa.l1
 
+import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.Utxo
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
-import hydrozoa.node.monitoring.PrometheusMetrics
+import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters.*
 
 class CardanoL1Mock() extends CardanoL1:
 
-    override def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit = ()
+    override def setMetrics(metrics: ActorRef[Metrics]): Unit = ()
 
     private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
 
@@ -51,7 +53,22 @@ class CardanoL1Mock() extends CardanoL1:
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
-    override def utxosAtAddress(headAddress: AddressBechL1): List[Utxo] = ???
+    // TODO: we have to support tokens here, otherwise L1 UTxOs can't be recognized
+    override def utxosAtAddress(address: AddressBechL1): List[Utxo] =
+        utxosActive
+            .filter((_, utxo) => utxo.address == address)
+            .map((utxoId, output) =>
+                Utxo(
+                  utxoId.txId.hash,
+                  utxoId.outputIx.ix,
+                  address.bech32,
+                  List(lovelace(output.coins.bigInteger)).asJava,
+                  null, // no datum hashes
+                  output.mbInlineDatum.getOrElse(""),
+                  null // no scripts
+                )
+            )
+            .toList
 
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =

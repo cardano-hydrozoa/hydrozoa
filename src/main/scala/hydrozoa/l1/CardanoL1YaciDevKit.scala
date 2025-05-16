@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{toEither, txFees, txHash}
-import hydrozoa.node.monitoring.PrometheusMetrics
+import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import ox.scheduling.Jitter
@@ -20,9 +20,9 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     private val log = Logger(getClass)
 
-    private var metrics: ActorRef[PrometheusMetrics] = _
+    private var metrics: ActorRef[Metrics] = _
 
-    override def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+    override def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
     // TODO: temporarily: Yaci cannot return serialized tx so far

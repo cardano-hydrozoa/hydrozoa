@@ -3,7 +3,11 @@ package hydrozoa.l2.consensus
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.Req
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
-import hydrozoa.l2.consensus.network.transport.{AnyMsg, HeadPeerNetworkTransportWS}
+import hydrozoa.l2.consensus.network.transport.{
+    AnyMsg,
+    HeadPeerNetworkTransport,
+    HeadPeerNetworkTransportWS
+}
 import hydrozoa.node.TestPeer
 import ox.Ox
 import ox.channels.{Actor, ActorRef, Channel, Source}
@@ -15,7 +19,7 @@ import scala.collection.mutable
   */
 trait ConsensusDispatcher:
     //
-    def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit
+    def setTransport(transport: ActorRef[HeadPeerNetworkTransport]): Unit
     def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit
     def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit
     //
@@ -27,9 +31,9 @@ end ConsensusDispatcher
 
 class DefaultConsensusDispatcher extends ConsensusDispatcher:
 
-    private var transport: ActorRef[HeadPeerNetworkTransportWS] = _
+    private var transport: ActorRef[HeadPeerNetworkTransport] = _
 
-    override def setTransport(transport: ActorRef[HeadPeerNetworkTransportWS]): Unit =
+    override def setTransport(transport: ActorRef[HeadPeerNetworkTransport]): Unit =
         this.transport = transport
 
     private var ownActor: ActorRef[ConsensusDispatcher] = _
@@ -126,10 +130,10 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
     private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
 
     def run()(using Ox): Unit =
-        log.info("running reactive spawner...")
+        log.info("running actor spawner...")
         Flow.fromSource(spawnActorReactivelyIn)
             .runForeach(actor =>
-                log.info(s"reactively spanning: ${actor.getClass}")
+                log.info(s"spanning new actor: ${actor.getClass}")
                 val actorRef = Actor.create(actor)
                 spawnActorReactivelyOut.send(actorRef)
             )

@@ -15,7 +15,59 @@ def nonGenesisEventLabel(eventType: NonGenesisL2EventLabel | String): String = {
     eventTypeLabel
 }
 
-class PrometheusMetrics:
+trait Metrics:
+    def updateHeadUptime(uptime: Long): Unit
+    def resetBlocksCounter(): Unit
+    def incBlocksMinor(): Unit
+    def incBlocksMajor(): Unit
+    def clearBlockSize(): Unit
+    def observeBlockSize(eventType: NonGenesisL2EventLabel | String, number: Int): Unit
+    def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit
+    def incEventsL2Handled(eventType: NonGenesisL2EventLabel, valid: Boolean, number: Int): Unit
+    def setDepositQueueSize(size: Int): Unit
+    def incAbsorbedDeposits(howMany: Int): Unit
+    def clearLiquidity(): Unit
+    def setTreasuryLiquidity(coins: Long): Unit
+    def setDepositsLiquidity(coins: Long): Unit
+    def addInboundL1Volume(increase: Long): Unit
+    def addOutboundL1Volume(increase: Long): Unit
+    def addTransactedL2Volume(increase: Long): Unit
+    def addFeesL1Volume(increase: Long): Unit
+    def observeDepositCost(amount: Long): Unit
+    def observeSettlementCost(amount: Long): Unit
+
+class NoopMetrics extends Metrics:
+    override def updateHeadUptime(uptime: Long): Unit = ()
+    override def resetBlocksCounter(): Unit = ()
+    override def incBlocksMinor(): Unit = ()
+    override def incBlocksMajor(): Unit = ()
+    override def clearBlockSize(): Unit = ()
+    override def observeBlockSize(
+        eventType: NonGenesisL2EventLabel | String,
+        number: Int
+    ): Unit = ()
+    override def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit = ()
+    override def incEventsL2Handled(
+        eventType: NonGenesisL2EventLabel,
+        valid: Boolean,
+        number: Int
+    ): Unit = ()
+    override def setDepositQueueSize(size: Int): Unit = ()
+    override def incAbsorbedDeposits(howMany: Int): Unit = ()
+    override def clearLiquidity(): Unit = ()
+    override def setTreasuryLiquidity(coins: Long): Unit = ()
+    override def setDepositsLiquidity(coins: Long): Unit = ()
+    override def addInboundL1Volume(increase: Long): Unit = ()
+    override def addOutboundL1Volume(increase: Long): Unit = ()
+    override def addTransactedL2Volume(increase: Long): Unit = ()
+    override def addFeesL1Volume(increase: Long): Unit = ()
+    override def observeDepositCost(amount: Long): Unit = ()
+    override def observeSettlementCost(amount: Long): Unit = ()
+
+object NoopMetrics:
+    def apply(): Metrics = new NoopMetrics()
+
+class PrometheusMetrics extends Metrics:
 
     // JvmMetrics.builder.register // initialize the out-of-the-box JVM metrics
 
@@ -25,7 +77,7 @@ class PrometheusMetrics:
         .help("seconds passed since head's initialization")
         .register
 
-    def updateHeadUptime(uptime: Long): Unit = headUptime.set(uptime.toDouble)
+    override def updateHeadUptime(uptime: Long): Unit = headUptime.set(uptime.toDouble)
 
     // Number of blocks
     private val blockNum = Gauge.builder
@@ -34,14 +86,14 @@ class PrometheusMetrics:
         .labelNames("blockType") // minor / major / total
         .register
 
-    def resetBlocksCounter(): Unit =
+    override def resetBlocksCounter(): Unit =
         blockNum.clear()
 
-    def incBlocksMinor(): Unit =
+    override def incBlocksMinor(): Unit =
         blockNum.labelValues("total").inc()
         blockNum.labelValues("minor").inc()
 
-    def incBlocksMajor(): Unit =
+    override def incBlocksMajor(): Unit =
         blockNum.labelValues("total").inc()
         blockNum.labelValues("major").inc()
 
@@ -58,9 +110,9 @@ class PrometheusMetrics:
         )
         .register
 
-    def clearBlockSize(): Unit = blockSize.clear()
+    override def clearBlockSize(): Unit = blockSize.clear()
 
-    def observeBlockSize(
+    override def observeBlockSize(
         // blockType: BlockTypeL2,
         eventType: NonGenesisL2EventLabel | String,
         // validity: String,
@@ -84,7 +136,7 @@ class PrometheusMetrics:
         )
         .register
 
-    def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit =
+    override def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit =
         poolEventsL2.labelValues(nonGenesisEventLabel(eventType)).set(number)
 
     // L2 Events handled
@@ -97,7 +149,11 @@ class PrometheusMetrics:
         )
         .register
 
-    def incEventsL2Handled(eventType: NonGenesisL2EventLabel, valid: Boolean, number: Int): Unit =
+    override def incEventsL2Handled(
+        eventType: NonGenesisL2EventLabel,
+        valid: Boolean,
+        number: Int
+    ): Unit =
         eventsL2Handled
             .labelValues(nonGenesisEventLabel(eventType), if valid then "valid" else "invalid")
             .inc(number)
@@ -108,7 +164,7 @@ class PrometheusMetrics:
         .help("the current size of deposit queue")
         .register
 
-    def setDepositQueueSize(size: Int): Unit = depositQueueSize.set(size.toDouble)
+    override def setDepositQueueSize(size: Int): Unit = depositQueueSize.set(size.toDouble)
 
     // Deposit absorbed/returned
     private val deposits = Counter.builder
@@ -117,7 +173,8 @@ class PrometheusMetrics:
         .labelNames("state") // absorbed / returned
         .register
 
-    def incAbsorbedDeposits(howMany: Int): Unit = deposits.labelValues("absorbed").inc(howMany)
+    override def incAbsorbedDeposits(howMany: Int): Unit =
+        deposits.labelValues("absorbed").inc(howMany)
 
     // Liquidity
     private val liquidity = Gauge.builder
@@ -126,13 +183,13 @@ class PrometheusMetrics:
         .labelNames("utxoType") // treasury / deposits / rollouts
         .register
 
-    def clearLiquidity(): Unit =
+    override def clearLiquidity(): Unit =
         liquidity.clear()
 
-    def setTreasuryLiquidity(coins: Long): Unit =
+    override def setTreasuryLiquidity(coins: Long): Unit =
         liquidity.labelValues("treasury").set(coins.toDouble)
 
-    def setDepositsLiquidity(coins: Long): Unit =
+    override def setDepositsLiquidity(coins: Long): Unit =
         liquidity.labelValues("deposits").set(coins.toDouble)
 
     private val volume = Counter.builder
@@ -146,11 +203,13 @@ class PrometheusMetrics:
         .labelNames("volumeType") // inboundL1 / outboundL1 / transactedL2 / feesL1
         .register
 
-    def addInboundL1Volume(increase: Long): Unit = volume.labelValues("inboundL1").inc(increase)
-    def addOutboundL1Volume(increase: Long): Unit = volume.labelValues("outboundL1").inc(increase)
-    def addTransactedL2Volume(increase: Long): Unit =
+    override def addInboundL1Volume(increase: Long): Unit =
+        volume.labelValues("inboundL1").inc(increase)
+    override def addOutboundL1Volume(increase: Long): Unit =
+        volume.labelValues("outboundL1").inc(increase)
+    override def addTransactedL2Volume(increase: Long): Unit =
         volume.labelValues("transactedL2").inc(increase)
-    def addFeesL1Volume(increase: Long): Unit = volume.labelValues("feesL1").inc(increase)
+    override def addFeesL1Volume(increase: Long): Unit = volume.labelValues("feesL1").inc(increase)
 
     // Costs
     private val costs = Histogram.builder
@@ -159,13 +218,16 @@ class PrometheusMetrics:
         .register
 
     // FIXME: wire in
-    def observeDepositCost(amount: Long): Unit =
+    override def observeDepositCost(amount: Long): Unit =
         costs.labelValues("deposit").observe(amount.toDouble)
 
-    def observeSettlementCost(amount: Long): Unit =
+    override def observeSettlementCost(amount: Long): Unit =
         costs.labelValues("settlement").observe(amount.toDouble)
 
 // Other ideas to add:
 //  - number of actors
 //  - consensus interaction duration
 //  - L2 state: liquidity/number of utxo/addresses
+
+object PrometheusMetrics:
+    def apply(): Metrics = new PrometheusMetrics()

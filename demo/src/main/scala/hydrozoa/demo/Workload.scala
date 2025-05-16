@@ -12,6 +12,7 @@ import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.HeadPhase
 import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.sut.{HydrozoaFacade, RealFacade}
 import org.scalacheck.Gen
 import org.scalacheck.Gen.Parameters
 import org.scalacheck.rng.Seed
@@ -20,10 +21,19 @@ import ox.channels.{Actor, ActorRef, Channel}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
+import sttp.client4.UriContext
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
+
+val demoPeers = Map.from(
+  List(
+    Alice -> uri"http://localhost:8093",
+    Bob -> uri"http://localhost:8094",
+    Carol -> uri"http://localhost:8095"
+  )
+)
 
 object Workload extends OxApp:
 
@@ -32,7 +42,7 @@ object Workload extends OxApp:
     val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
 
     var l2State: ActorRef[mutable.Map[UtxoIdL2, OutputL2]] = _
-    var sut: ActorRef[HydrozoaSUT] = _
+    var sut: ActorRef[HydrozoaFacade] = _
 
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
@@ -41,7 +51,7 @@ object Workload extends OxApp:
 
         l2State = Actor.create(mutable.Map[UtxoIdL2, OutputL2]())
 
-        sut = Actor.create(RealHydrozoaSUT())
+        sut = Actor.create(RealFacade.apply(demoPeers))
 
         // Command generator
         forkUser {
@@ -231,7 +241,7 @@ sealed trait WorkloadCommand:
 
     def preCondition(state: HydrozoaState): Boolean
     def runState(state: HydrozoaState): (HydrozoaState)
-    def runSut(sut: ActorRef[HydrozoaSUT]): Result
+    def runSut(sut: ActorRef[HydrozoaFacade]): Result
 
 class InitializeCommand(
     initiator: TestPeer,
@@ -262,7 +272,7 @@ class InitializeCommand(
           headPeers = otherHeadPeers
         )
 
-    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
+    override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
         sut.ask(
           _.initializeHead(
             initiator,
@@ -293,7 +303,7 @@ class DepositCommand(
 
     override def runState(state: HydrozoaState): HydrozoaState = state
 
-    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
+    override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
         val request = DepositRequest(
           fundUtxo.txId,
           fundUtxo.outputIx,
@@ -323,7 +333,7 @@ class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Workloa
 
     override def runState(state: HydrozoaState): HydrozoaState = state
 
-    override def runSut(sut: ActorRef[HydrozoaSUT]): Result =
+    override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
         sut.ask(_.submitL2(simpleTransaction))
 
 class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends WorkloadCommand:
@@ -341,7 +351,7 @@ class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends WorkloadCo
 
     override def runState(state: HydrozoaState): HydrozoaState = state
 
-    override def runSut(sut: ActorRef[HydrozoaSUT]): Unit =
+    override def runSut(sut: ActorRef[HydrozoaFacade]): Unit =
         sut.ask(_.submitL2(simpleWithdrawal))
 
 enum PeersNetworkPhase derives CanEqual:

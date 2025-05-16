@@ -3,16 +3,17 @@ package hydrozoa.l2.consensus.network
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l2.consensus.ConsensusDispatcher
-import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransportWS
+import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransport
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import hydrozoa.{TxId, VerificationKeyBytes}
 import ox.channels.ActorRef
 
+// TODO: naming - this has nothing to do with WS
 class HeadPeerNetworkWS(
     ownPeer: TestPeer,
     knownPeers: Set[WalletId],
-    transport: HeadPeerNetworkTransportWS
+    transport: HeadPeerNetworkTransport
 ) extends HeadPeerNetwork:
 
     private var dispatcher: ActorRef[ConsensusDispatcher] = _

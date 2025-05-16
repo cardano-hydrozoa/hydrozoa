@@ -1,7 +1,7 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.model.Utxo
-import hydrozoa.node.monitoring.PrometheusMetrics
+import hydrozoa.node.monitoring.Metrics
 import hydrozoa.{AddressBechL1, Network, TxId, TxL1}
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
@@ -11,7 +11,7 @@ import scalus.ledger.api.v1.PosixTime
 import scala.concurrent.duration.DurationInt
 
 trait CardanoL1 {
-    def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit
+    def setMetrics(metrics: ActorRef[Metrics]): Unit
     //
     def submit(tx: TxL1): Either[SubmissionError, TxId]
     def awaitTx(

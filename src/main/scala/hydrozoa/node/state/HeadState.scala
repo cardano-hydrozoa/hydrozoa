@@ -20,7 +20,7 @@ import hydrozoa.l2.ledger.event.{
     nonGenesisLabel
 }
 import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.node.monitoring.PrometheusMetrics
+import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
@@ -158,9 +158,9 @@ class HeadStateGlobal(
     def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
         this.blockProductionActor = blockProductionActor
 
-    private var metrics: ActorRef[PrometheusMetrics] = _
+    private var metrics: ActorRef[Metrics] = _
 
-    def setMetrics(metrics: ActorRef[PrometheusMetrics]): Unit =
+    def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
     override def currentPhase: HeadPhase = headPhase
