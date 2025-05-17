@@ -15,10 +15,11 @@ import ox.resilience.{RetryConfig, retry}
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
+import scala.util.Try
 
 class LocalFacade(
     peers: Map[TestPeer, Node],
-    fork: CancellableFork[Nothing]
+    thread: Thread
 ) extends HydrozoaFacade:
 
     private val log = Logger(getClass)
@@ -58,43 +59,49 @@ class LocalFacade(
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")
-        fork.cancelNow()
+        thread.stop()
 
 object LocalFacade:
     private val log = Logger("LocalFacade")
     def apply(
         peers: Set[TestPeer]
-    )(using Ox): HydrozoaFacade =
+    ): HydrozoaFacade =
 
         InheritableMDC.init
 
         val nodes = mutable.Map.empty[TestPeer, Node]
 
-        val f = forkCancellable {
-            supervised {
-                val simNetwork = SimNetwork.apply(peers.toList)
-
-                peers.foreach(peer =>
-                    forkDiscard {
-                        LocalNode.runNode(
-                          simNetwork = simNetwork,
-                          ownPeer = peer,
-                          useYaci = true,
-                          pp = Some(Utils.protocolParams),
-                          nodeCallback = (p, n) => { discard(nodes.put(p, n)) }
-                        )
-                    }
+        val thread = new Thread {
+            override def run(): Unit =
+                Try(
+                  supervised {
+                      val simNetwork = SimNetwork.apply(peers.toList)
+                      peers.foreach(peer =>
+                          forkDiscard {
+                              LocalNode.runNode(
+                                simNetwork = simNetwork,
+                                ownPeer = peer,
+                                useYaci = false,
+                                pp = Some(Utils.protocolParams),
+                                nodeCallback = (p, n) => {
+                                    discard(nodes.put(p, n))
+                                }
+                              )
+                          }
+                      )
+                      never
+                  }
                 )
-                never
-            }
         }
+
+        thread.start()
 
         // Waiting for all nodes to initialize
         retry(RetryConfig.delayForever(100.millis))(
           if nodes.size < peers.size then throw RuntimeException()
         )
 
-        new LocalFacade(nodes.toMap, f)
+        new LocalFacade(nodes.toMap, thread)
 
 // TODO: Is there something similar in stdlib?
 def discard(_any: Any): Unit = ()
