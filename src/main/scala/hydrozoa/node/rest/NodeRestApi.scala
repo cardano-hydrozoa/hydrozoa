@@ -7,11 +7,11 @@ import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
     depositEndpoint,
+    finalizeEndpoint,
     initEndpoint,
     stateL2Endpoint,
     submitL1Endpoint,
-    submitL2Endpoint,
-    finalizeEndpoint
+    submitL2Endpoint
 }
 import hydrozoa.node.server.{
     DepositRequest,
@@ -20,6 +20,7 @@ import hydrozoa.node.server.{
     depositResponseCodec,
     depositResponseSchema
 }
+import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -50,8 +51,15 @@ class NodeRestApi(node: ActorRef[Node]):
             .port(port)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
 
-    private def runInit(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        node.ask(_.initializeHead(amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash))
+    private def runInit(request: InitRequest): Either[String, String] =
+        node.ask(
+          _.initializeHead(
+            request.otherPeers.toSet,
+            request.amount,
+            request.seedUtxoTxId,
+            request.seedUtxoTxIx
+          ).map(_.hash)
+        )
 
     private def runDeposit(
         txId: String,
@@ -99,9 +107,7 @@ class NodeRestApi(node: ActorRef[Node]):
 object NodeRestApi:
     val initEndpoint = endpoint.put
         .in("init")
-        .in(query[Long]("amount")) // how much ADA should be deposited for fees into the treasury
-        .in(query[String]("txId"))
-        .in(query[Long]("txIx"))
+        .in(jsonBody[InitRequest])
         .out(stringBody)
         .errorOut(stringBody)
 
@@ -176,3 +182,16 @@ given stateL2ResponseCodec: JsonValueCodec[StateL2Response] =
 
 given stateL2ResponseSchema: Schema[StateL2Response] =
     Schema.derived[StateL2Response]
+
+case class InitRequest(
+    otherPeers: List[WalletId],
+    amount: Long,
+    seedUtxoTxId: TxId,
+    seedUtxoTxIx: TxIx
+)
+
+given initRequestCodec: JsonValueCodec[InitRequest] =
+    JsonCodecMaker.make
+
+given initRequestSchema: Schema[InitRequest] =
+    Schema.derived[InitRequest]

@@ -276,6 +276,7 @@ class InitializeCommand(
         sut.ask(
           _.initializeHead(
             initiator,
+            otherHeadPeers.map(TestPeer.mkWalletId(_)),
             1000,
             seedUtxo.txId,
             seedUtxo.outputIx

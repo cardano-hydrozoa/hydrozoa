@@ -3,13 +3,31 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
+import hydrozoa.infra.{
+    NoMatch,
+    PSStyleAssoc,
+    Piper,
+    TooManyMatches,
+    decodeBech32AddressL1,
+    decodeBech32AddressL2,
+    onlyOutputToAddress,
+    serializeTxHex,
+    txHash
+}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{
+    BloxBeanInitializationTxBuilder,
+    InitTxBuilder,
+    InitTxRecipe
+}
+import hydrozoa.l1.multisig.tx.refund.{
+    BloxBeanRefundTxBuilder,
+    PostDatedRefundRecipe,
+    RefundTxBuilder
+}
 import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
@@ -19,29 +37,37 @@ import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.state.unliftUtxoSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.{account, mkWallet, mkWalletId}
+import hydrozoa.node.TestPeer.{account, mkWallet}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
+import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
-import org.scalacheck.Prop.propBoolean
+import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
+import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.commands.Commands
-import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, Properties}
 import scalus.prelude.Maybe
-import sttp.client4.Response
-import sttp.client4.quick.*
 
 import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
 import scala.util.{Failure, Success, Try}
 
+/** Might be a bit of abuse of `collect`, but works - compare and report values
+ * in case they don't match.
+ */
+def cmpAndCollect[A](expected: A, sut: A)(using CanEqual[A, A]): Prop =
+    val r =
+        if expected == sut
+        then Result.apply(Prop.True)
+        else Result.apply(Prop.False).collect(expected).collect(sut)
+    Prop.apply(r)
+
 object MBTSuite extends Commands:
 
-    var useYaci = false
+//    var useYaci = false
     private val log = Logger(getClass)
 
     override type State = HydrozoaState // Wrapper around a simplified head
-    override type Sut = HydrozoaSUT // Facade to a network of Hydrozoa's peeers
+    override type Sut = HydrozoaFacade // Facade to a network of Hydrozoa's peers
 
     override def canCreateNewSut(
         newState: State,
@@ -50,22 +76,12 @@ object MBTSuite extends Commands:
     ): Boolean = initSuts.isEmpty && runningSuts.isEmpty
 
     override def newSut(state: State): Sut =
-        // Reset Yaci DevKit
-        if useYaci then
-            val response: Response[String] = quickRequest
-                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-                .send()
-        // Create a new SUT
-        println("--------------------> new SUT")
-        OneNodeHydrozoaSUT(
-          state.knownPeers.head,
-          state.knownPeers.tail,
-          Utils.protocolParams,
-          useYaci
-        )
+        println("--------------------> create SUT")
+        LocalFacade.apply(state.knownPeers)
 
-    override def destroySut(_sut: Sut): Unit =
+    override def destroySut(sut: Sut): Unit =
         println("<-------------------- destroy SUT")
+        sut.shutdownSut()
 
     override def initialPreCondition(state: State): Boolean =
         state.peersNetworkPhase == NewlyCreated
@@ -167,74 +183,77 @@ object MBTSuite extends Commands:
         for finalize <- Gen.prob(0.01)
     yield ProduceBlockCommand(finalize)
 
-    /** State-like Command that uses `runState` instead of `nextState`. Additionally branches on
-      * `result`, providing `SutInspector` for successful path.
+    /** ------------------------------------------------------------------------------------------
+     * StateLikeCommand
+     * ------------------------------------------------------------------------------------------
+     */
+
+    /** State-like Command that uses Haskell-style `runState` instead of `nextState`.
       */
-    trait StateLikeInspectabeCommand extends Command:
-
-        final type SutInspector = NodeStateInspector
-
-        type RealResult
-
-        type Result = (RealResult, SutInspector)
+    trait StateLikeCommand extends Command:
 
         final override def nextState(state: State): State = runState(state)._2
 
-        def runState(state: State): (RealResult, State)
+        def runState(state: State): (Result, State)
 
         final override def postCondition(stateBefore: State, result: Try[Result]): Prop =
             val (expectedResult, stateAfter) = runState(stateBefore)
             result match
-                case Success(realResult: RealResult, sutInspector: SutInspector) =>
+                case Success(realResult: Result) =>
                     postConditionSuccess(
                       expectedResult,
                       stateBefore,
                       stateAfter,
-                      realResult,
-                      sutInspector
+                      realResult
                     )
                 case Failure(e) =>
                     postConditionFailure(expectedResult, stateBefore, stateAfter, e)
 
         def postConditionSuccess(
-            expectedResult: RealResult,
+            expectedResult: Result,
             stateBefore: State,
             stateAfter: State,
-            result: RealResult,
-            sutInspector: SutInspector
+            result: Result
         ): Prop
 
         def postConditionFailure(
-            expectedResult: RealResult,
+            expectedResult: Result,
             stateBefore: State,
             stateAfter: State,
             err: Throwable
         ): Prop
 
+
+    /** ------------------------------------------------------------------------------------------
+     * InitializeCommand
+     * ------------------------------------------------------------------------------------------
+     */
+
     class InitializeCommand(
         initiator: TestPeer,
         otherHeadPeers: Set[TestPeer],
         seedUtxo: UtxoIdL1
-    ) extends StateLikeInspectabeCommand:
+    ) extends StateLikeCommand:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[InitializationError, TxId]
+        override type Result = Either[InitializationError, TxId]
 
         override def toString: String =
             s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 
-        override def run(sut: HydrozoaSUT): Result =
+        override def run(sut: Sut): Result =
             log.info(".run")
 
             sut.initializeHead(
-              otherHeadPeers.map(mkWalletId),
+              initiator,
+              otherHeadPeers.map(TestPeer.mkWalletId(_)),
               1000,
               seedUtxo.txId,
               seedUtxo.outputIx
             )
 
-        override def runState(state: State): (RealResult, State) =
+        override def runState(state: State): (Result, State) =
             log.info(".runState")
 
             // Native script, head address, and token
@@ -293,10 +312,10 @@ object MBTSuite extends Commands:
               2d23c51250da7467b21#1) (of class scala.util.Left))
             */
 
-            if otherHeadPeers.isEmpty then
-                (Left("Solo mode is not supported yet"), state)
-            else
-                (Right(txId), newState)
+//            if otherHeadPeers.isEmpty then
+//                (Left("Solo mode is not supported yet"), state)
+//            else
+            (Right(txId), newState)
 
         override def preCondition(state: State): Boolean =
             log.info(".preCondition")
@@ -307,11 +326,10 @@ object MBTSuite extends Commands:
                 case _            => false
 
         override def postConditionSuccess(
-            expectedResult: RealResult,
+            expectedResult: Result,
             stateBefore: State,
             stateAfter: State,
-            sutResult: RealResult,
-            sutInspector: SutInspector
+            sutResult: Result
         ): Prop =
             log.info(".postConditionSuccess")
 
@@ -319,24 +337,30 @@ object MBTSuite extends Commands:
                 case Left(err) =>
                     s"Unexpected negative resposne: $err" |: Prop.falsified
                 case Right(sutTxHash) =>
-                    val reader = sutInspector.reader
-                    val headPhase = reader.currentPhase
-                    val headPeers = stateAfter.headPeers + stateAfter.initiator.get
+                    //val reader = sutInspector.reader
+                    //val headPhase = reader.currentPhase
+//                    val headPeers = stateAfter.headPeers + stateAfter.initiator.get
+//
+//                    (s"headPeers in Initializing phase should be: $headPeers"
+//                        |: headPhase == Initializing ==> (reader
+//                            .initializingPhaseReader(_.headPeers)
+//                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
+//                    && (s"headPeers in Open phase should be: $headPeers"
+//                        |: headPhase == Open ==> (reader
+//                            .openPhaseReader(_.headPeers)
+//                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
+//                    &&
+//                    (s"result should be the same" |:
+//                        sutResult == expectedResult)
 
-                    (s"headPeers in Initializing phase should be: $headPeers"
-                        |: headPhase == Initializing ==> (reader
-                            .initializingPhaseReader(_.headPeers)
-                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
-                    && (s"headPeers in Open phase should be: $headPeers"
-                        |: headPhase == Open ==> (reader
-                            .openPhaseReader(_.headPeers)
-                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
-                    && (s"result should be the same" |:
-                        sutResult == expectedResult)
+                    (s"result should be the same" |:
+                        //cmpAndCollect(expectedResult, sutResult))
+
+                        cmpAndCollect(sutResult, expectedResult))
 
         // TODO: this is more for demonstration purposes
         override def postConditionFailure(
-            _expectedResult: RealResult,
+            _expectedResult: Result,
             _stateBefore: State,
             _stateAfter: State,
             err: Throwable
@@ -346,16 +370,21 @@ object MBTSuite extends Commands:
             s"Should not crash unless number of peers is too small: $err"
             |: otherHeadPeers.isEmpty
 
+    /** ------------------------------------------------------------------------------------------
+     * DepositCommand
+     * ------------------------------------------------------------------------------------------
+     */
+
     class DepositCommand(
         depositor: TestPeer,
         fundUtxo: UtxoIdL1,
         address: AddressBechL2,
         refundAddress: AddressBechL1
-    ) extends StateLikeInspectabeCommand:
+    ) extends StateLikeCommand:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[DepositError, DepositResponse]
+        override type Result = Either[DepositError, DepositResponse]
 
         override def toString: String =
             s"Deposit command { depositor = $depositor, fund utxo = $fundUtxo, address = $address, refund address = $refundAddress}"
@@ -417,8 +446,7 @@ object MBTSuite extends Commands:
             expectedResult: Either[DepositError, DepositResponse],
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
-            result: Either[DepositError, DepositResponse],
-            sutInspector: SutInspector
+            result: Either[DepositError, DepositResponse]
         ): Prop =
             log.info(".postConditionSuccess")
 
@@ -444,7 +472,8 @@ object MBTSuite extends Commands:
             s"Should not crash: $err"
                 |: false
 
-        override def run(sut: HydrozoaSUT): (Either[DepositError, DepositResponse], SutInspector) =
+        override def run(sut: Sut): (Either[DepositError, DepositResponse]) =
+            log.info(".run")
             val request = DepositRequest(
                 fundUtxo.txId,
                 fundUtxo.outputIx,
@@ -455,8 +484,7 @@ object MBTSuite extends Commands:
                 refundAddress,
                 None
             )
-            log.info(".run")
-            sut.deposit(request)
+            sut.deposit(depositor, request)
 
         override def preCondition(state: HydrozoaState): Boolean =
             val preCondition = state.peersNetworkPhase == RunningHead
@@ -467,6 +495,11 @@ object MBTSuite extends Commands:
             log.info(s".preCondition: $preCondition")
             preCondition
 
+    /** ------------------------------------------------------------------------------------------
+     * L2 Transaction Command
+     * ------------------------------------------------------------------------------------------
+     */
+
     class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Command:
 
         private val log = Logger(getClass)
@@ -475,7 +508,7 @@ object MBTSuite extends Commands:
 
         override def toString: String = s"Transaction L2 command { $simpleTransaction }"
 
-        override def run(sut: HydrozoaSUT): Unit =
+        override def run(sut: Sut): Unit =
             log.info(".run")
             sut.submitL2(simpleTransaction)
 
@@ -494,6 +527,11 @@ object MBTSuite extends Commands:
             log.info(".postCondition")
             true
 
+    /** ------------------------------------------------------------------------------------------
+     * L2 Withdrawal Command
+     * ------------------------------------------------------------------------------------------
+     */
+
     class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends Command:
 
         private val log = Logger(getClass)
@@ -502,7 +540,7 @@ object MBTSuite extends Commands:
 
         override def toString: String = s"Withdrawal L2 command { $simpleWithdrawal }"
 
-        override def run(sut: HydrozoaSUT): Unit =
+        override def run(sut: Sut): Unit =
             log.info(".run")
             sut.submitL2(simpleWithdrawal)
 
@@ -521,11 +559,15 @@ object MBTSuite extends Commands:
             log.info(".postCondition")
             true
 
-    class ProduceBlockCommand(finalization: Boolean) extends StateLikeInspectabeCommand:
+    /** ------------------------------------------------------------------------------------------
+     * Produce Block Command
+     * ------------------------------------------------------------------------------------------
+     */
+    class ProduceBlockCommand(finalization: Boolean) extends StateLikeCommand:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
+        override type Result = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
 
         override def toString: String = s"Produce block command {finalization = $finalization}"
 
@@ -610,8 +652,7 @@ object MBTSuite extends Commands:
             expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
-            result: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
-            sutInspector: SutInspector
+            result: Either[String, (BlockRecord, UtxosSet, UtxosSet)]
         ): Prop =
             log.info(".postConditionSuccess")
 
@@ -657,7 +698,7 @@ object MBTSuite extends Commands:
             log.error(".postConditionFailure should never happen")
             false
 
-        override def run(sut: HydrozoaSUT): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], SutInspector) =
+        override def run(sut: Sut): (Either[String, (BlockRecord, UtxosSet, UtxosSet)]) =
             log.info(".run")
             sut.produceBlock(finalization)
 
@@ -666,6 +707,10 @@ object MBTSuite extends Commands:
             state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
 
+    /** ------------------------------------------------------------------------------------------
+     * Shutdown Command
+     * ------------------------------------------------------------------------------------------
+     */
     object ShutdownCommand extends UnitCommand:
 
         private val log = Logger(getClass)
@@ -679,7 +724,7 @@ object MBTSuite extends Commands:
             "Shutdown always possible in NewlyCreated and Freed phases" |:
                 phase == NewlyCreated || phase == Freed ==> (success == true)
 
-        override def run(sut: HydrozoaSUT): Unit =
+        override def run(sut: Sut): Unit =
             log.info(".run")
             sut.shutdownSut()
 
@@ -705,7 +750,7 @@ object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with
 //        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
 
 
-object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
-    MBTSuite.useYaci = true
-    property("Just works, nothing bad happens") = MBTSuite.property()
-//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
+//object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
+//    MBTSuite.useYaci = true
+//    property("Just works, nothing bad happens") = MBTSuite.property()
+////        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)

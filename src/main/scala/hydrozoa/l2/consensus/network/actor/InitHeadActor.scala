@@ -61,6 +61,8 @@ private class InitHeadActor(
         // Builds and balance initialization tx
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
+        log.info("Init tx draft: " + serializeTxHex(txDraft))
+
         log.info("Init tx draft hash: " + txHash(txDraft))
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))

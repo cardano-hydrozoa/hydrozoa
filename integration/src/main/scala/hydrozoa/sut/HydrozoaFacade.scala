@@ -4,13 +4,14 @@ import hydrozoa.*
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
-import hydrozoa.node.state.BlockRecord
+import hydrozoa.node.state.{BlockRecord, WalletId}
 
 /** Hydrozoa peers' network SUT facade.
   */
 trait HydrozoaFacade:
     def initializeHead(
         initiator: TestPeer,
+        otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TxId,
         txIx: TxIx

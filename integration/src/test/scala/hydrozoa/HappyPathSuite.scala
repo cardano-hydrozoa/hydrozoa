@@ -27,6 +27,7 @@ class HappyPathSuite extends FunSuite {
             // 1. Initialize the head
             initTxId <- sut.initializeHead(
               Alice,
+              testPeers.-(Alice).map(TestPeer.mkWalletId(_)),
               100,
               TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
               TxIx(0)

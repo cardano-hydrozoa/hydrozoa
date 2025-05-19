@@ -4,9 +4,9 @@ import hydrozoa.*
 import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
-import hydrozoa.node.rest.{NodeRestApi, SubmitRequestL2}
+import hydrozoa.node.rest.{InitRequest, NodeRestApi, SubmitRequestL2}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.BlockRecord
+import hydrozoa.node.state.{BlockRecord, WalletId}
 import ox.par
 import sttp.client4.DefaultSyncBackend
 import sttp.model.Uri
@@ -20,13 +20,16 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
 
     override def initializeHead(
         initiator: TestPeer,
+        otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
+        val request = InitRequest(otherHeadPeers.toList, ada, txId, txIx)
+
         val response = SttpClientInterpreter()
             .toRequest(NodeRestApi.initEndpoint, baseUri = peers.get(initiator))
-            .apply(ada, txId.hash, txIx.ix)
+            .apply(request)
             .send(backend)
 
         response.body match
