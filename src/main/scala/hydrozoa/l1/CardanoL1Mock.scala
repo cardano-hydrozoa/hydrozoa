@@ -70,6 +70,13 @@ class CardanoL1Mock() extends CardanoL1:
             )
             .toList
 
+    override def utxoIdsAdaAtAddress(address: AddressBechL1): Map[UtxoIdL1, BigInt] =
+        utxosActive
+            .filter((_, utxo) => utxo.address == address)
+            .view
+            .mapValues(_.coins)
+            .toMap
+
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock

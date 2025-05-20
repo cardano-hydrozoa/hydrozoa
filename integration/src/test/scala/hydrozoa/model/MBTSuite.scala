@@ -122,19 +122,22 @@ object MBTSuite extends Commands:
         yield InitializeCommand(initiator, headPeers.toSet, seedUtxoId)
 
     def genDepositCommand(s: State): Gen[DepositCommand] =
-        // in one-node hydrozoa we can only deposit on behalf of initiator
-        val depositor = s.initiator.get
-        val depositorAccount = TestPeer.account(depositor)
-        val depositorAddressL1 = AddressBechL1(depositorAccount.toString) // FIXME: extension
-        val l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
-        val utxoIds = l1.utxoIdsByAddress(depositorAddressL1)
 
         for
-            seedUtxoId <- Gen.oneOf(utxoIds)
+            depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
+            depositorAccount = TestPeer.account(depositor)
+            depositorAddressL1 = AddressBechL1(depositorAccount.toString) // FIXME: extension
+            l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
+            (seedUtxoId, coins) <- Gen.oneOf(l1.utxoIdsAdaAtAddress(depositorAddressL1))
+
             recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = AddressBechL2(depositorAccount.toString) // FIXME: extension
-        yield DepositCommand(depositor, seedUtxoId, recipientAddressL2, depositorAddressL1)
+            depositAmount: BigInt <- Gen.choose(
+                BigInt.apply(5_000_000).min(coins),
+                BigInt.apply(100_000_000).min(coins)
+            )
+        yield DepositCommand(depositor, seedUtxoId, depositAmount, recipientAddressL2, depositorAddressL1)
 
     def genTransactionL2(s: State): Gen[TransactionL2Command] =
         val l2 = AdaSimpleLedger.apply(s.utxosActiveL2)
@@ -367,6 +370,7 @@ object MBTSuite extends Commands:
     class DepositCommand(
         depositor: TestPeer,
         fundUtxo: UtxoIdL1,
+        amount: BigInt,
         address: AddressBechL2,
         refundAddress: AddressBechL1
     ) extends StateLikeCommand:
@@ -392,7 +396,7 @@ object MBTSuite extends Commands:
                 Maybe.Nothing
             )
 
-            val depositTxRecipe = DepositTxRecipe(fundUtxo, ???, depositDatum)
+            val depositTxRecipe = DepositTxRecipe(fundUtxo, amount, depositDatum)
 
             val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
             val backendService = BackendServiceMock(l1Mock, state.pp)
@@ -457,16 +461,14 @@ object MBTSuite extends Commands:
             err: Throwable
         ): Prop =
             log.info(".postConditionFailure")
-
-            s"Should not crash: $err"
-                |: false
+            s"Should not crash: $err" |: false
 
         override def run(sut: Sut): (Either[DepositError, DepositResponse]) =
             log.info(".run")
             val request = DepositRequest(
                 fundUtxo.txId,
                 fundUtxo.outputIx,
-                ???,
+                amount,
                 None,
                 address,
                 None,

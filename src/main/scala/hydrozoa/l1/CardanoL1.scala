@@ -2,7 +2,7 @@ package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.model.Utxo
 import hydrozoa.node.monitoring.Metrics
-import hydrozoa.{AddressBechL1, Network, TxId, TxL1}
+import hydrozoa.{AddressBechL1, Network, TxId, TxL1, UtxoIdL1}
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
 import ox.scheduling.Jitter
@@ -22,6 +22,8 @@ trait CardanoL1 {
     def network: Network
     def lastBlockTime: PosixTime
     def utxosAtAddress(headAddress: AddressBechL1): List[Utxo]
+
+    def utxoIdsAdaAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, BigInt]
 }
 
 type SubmissionError = String

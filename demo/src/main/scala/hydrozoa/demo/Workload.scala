@@ -6,6 +6,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.{Piper, toEither}
+import hydrozoa.l1.CardanoL1YaciDevKit
 import hydrozoa.l2.ledger.{SimpleOutput, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
@@ -40,6 +41,8 @@ object Workload extends OxApp:
     private val log = Logger("main")
 
     val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
+
+    val cardanoL1YaciDevKit = CardanoL1YaciDevKit(backendService)
 
     var l2State: ActorRef[mutable.Map[UtxoIdL2, OutputL2]] = _
     var sut: ActorRef[HydrozoaFacade] = _
@@ -129,7 +132,9 @@ object Workload extends OxApp:
             initiator <- Gen.oneOf(s.knownPeers)
             account = TestPeer.account(initiator)
             headPeers = s.knownPeers.filterNot(p => p == initiator)
-            utxoIds: Set[UtxoIdL1] = utxoIdsAtAddress(AddressBechL1(account.toString))
+            utxoIds: Set[UtxoIdL1] = cardanoL1YaciDevKit
+                .utxoIdsAdaAtAddress(AddressBechL1(account.toString))
+                .keySet
 
             seedUtxoId <- Gen.oneOf(utxoIds)
         yield InitializeCommand(initiator, headPeers, seedUtxoId)
@@ -139,8 +144,8 @@ object Workload extends OxApp:
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
             depositorAccount = TestPeer.account(depositor)
             depositorAddressL1 = AddressBechL1(depositorAccount.toString)
-            utxoIds = utxosAtAddress(depositorAddressL1)
-            (seedUtxoId, coins) <- Gen.oneOf(utxoIds)
+            utxos = cardanoL1YaciDevKit.utxoIdsAdaAtAddress(depositorAddressL1)
+            (seedUtxoId, coins) <- Gen.oneOf(utxos)
 
             // more addresses the better
             recipient <- Gen.oneOf(TestPeer.values)
@@ -196,37 +201,6 @@ object Workload extends OxApp:
     def runCommand(cmd: WorkloadCommand): Unit =
         log.info(s"Running command: $cmd")
         cmd.runSut(sut)
-
-    // L1 Utils
-    def utxoIdsAtAddress(headAddress: AddressBechL1): Set[UtxoIdL1] =
-        // NB: can't be more than 100
-        backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
-            case Left(err) =>
-                throw RuntimeException(err)
-            case Right(utxos) =>
-                utxos.asScala
-                    .map(u => UtxoIdL1(TxId(u.getTxHash), TxIx(u.getOutputIndex)))
-                    .toSet
-
-    def utxosAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, BigInt] =
-        // NB: can't be more than 100
-        backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
-            case Left(err) =>
-                throw RuntimeException(err)
-            case Right(utxos) =>
-                utxos.asScala
-                    .map(u =>
-                        (
-                          UtxoIdL1(TxId(u.getTxHash), TxIx(u.getOutputIndex)),
-                          BigInt.apply(
-                            u.getAmount.asScala
-                                .find(a => a.getUnit.equals("lovelace"))
-                                .get
-                                .getQuantity
-                          )
-                        )
-                    )
-                    .toMap
 
     // Run Gen with random seed
     extension [T](g: Gen[T])
