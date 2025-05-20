@@ -34,7 +34,8 @@ class LocalFacade(
         ada: Long,
         txId: TxId,
         txIx: TxIx
-    ): Either[InitializationError, TxId] = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
+    ): Either[InitializationError, TxId] =
+        peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
 
     override def deposit(
         depositor: TestPeer,
@@ -65,7 +66,8 @@ class LocalFacade(
 object LocalFacade:
     private val log = Logger("LocalFacade")
     def apply(
-        peers: Set[TestPeer]
+        peers: Set[TestPeer],
+        useYaci: Boolean = false
     ): HydrozoaFacade =
 
         InheritableMDC.init
@@ -82,7 +84,7 @@ object LocalFacade:
                             LocalNode.runNode(
                               simNetwork = simNetwork,
                               ownPeer = peer,
-                              useYaci = false,
+                              useYaci = useYaci,
                               pp = Some(Utils.protocolParams),
                               nodeCallback = (p, n) => {
                                   discard(nodes.put(p, n))

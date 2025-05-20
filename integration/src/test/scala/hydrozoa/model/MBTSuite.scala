@@ -3,31 +3,13 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{
-    NoMatch,
-    PSStyleAssoc,
-    Piper,
-    TooManyMatches,
-    decodeBech32AddressL1,
-    decodeBech32AddressL2,
-    onlyOutputToAddress,
-    serializeTxHex,
-    txHash
-}
+import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{
-    BloxBeanInitializationTxBuilder,
-    InitTxBuilder,
-    InitTxRecipe
-}
-import hydrozoa.l1.multisig.tx.refund.{
-    BloxBeanRefundTxBuilder,
-    PostDatedRefundRecipe,
-    RefundTxBuilder
-}
+import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
@@ -46,6 +28,8 @@ import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.commands.Commands
 import org.scalacheck.{Gen, Prop, Properties}
 import scalus.prelude.Maybe
+import sttp.client4.Response
+import sttp.client4.quick.*
 
 import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
@@ -63,7 +47,7 @@ def cmpAndCollect[A](expected: A, sut: A)(using CanEqual[A, A]): Prop =
 
 object MBTSuite extends Commands:
 
-//    var useYaci = false
+    var useYaci = false
     private val log = Logger(getClass)
 
     override type State = HydrozoaState // Wrapper around a simplified head
@@ -77,7 +61,12 @@ object MBTSuite extends Commands:
 
     override def newSut(state: State): Sut =
         println("--------------------> create SUT")
-        LocalFacade.apply(state.knownPeers)
+        // Reset Yaci DevKit
+        if useYaci then
+            val response: Response[String] = quickRequest
+                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
+                .send()
+        LocalFacade.apply(state.knownPeers, useYaci)
 
     override def destroySut(sut: Sut): Unit =
         println("<-------------------- destroy SUT")
@@ -750,7 +739,7 @@ object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with
 //        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
 
 
-//object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
-//    MBTSuite.useYaci = true
-//    property("Just works, nothing bad happens") = MBTSuite.property()
-////        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
+object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
+    MBTSuite.useYaci = true
+    property("Just works, nothing bad happens") = MBTSuite.property()
+//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
