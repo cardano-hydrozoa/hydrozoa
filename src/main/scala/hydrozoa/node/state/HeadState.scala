@@ -146,7 +146,8 @@ class HeadStateGlobal(
     val beaconTokenName: TokenName,
     val seedAddress: AddressBechL1,
     val initTx: InitTx, // Block #0 L1-effect
-    val initializedOn: Long
+    val initializedOn: Long,
+    val autonomousBlocks: Boolean
 ) extends HeadStateReader
     with HeadState {
     self =>
@@ -310,7 +311,7 @@ class HeadStateGlobal(
               s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
             )
 
-    def nodeRoundRobinTurn: Int =
+    private def nodeRoundRobinTurn: Int =
         /* Let's say we have three peers: Alice, Bob, and Carol.
            And their VKH happen to give the same order.
            Then on Alice this function will return 1, so Alice's turns will be 1,4,7,...
@@ -344,24 +345,33 @@ class HeadStateGlobal(
                 m.setPoolEventsL2(WithdrawalL2EventLabel, self.poolEventsL2.size - txs)
             )
             // Try produce block
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing block due to getting new L2 event...")
-                produceBlock(false)
+            log.info("Try to produce a block due to getting new L2 event...")
+            tryProduceBlock(false)
 
-        private def produceBlock(finalizing: Boolean): Unit = {
-            self.isBlockPending = Some(true)
-            val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
-                blockProductionActor.ask(
-                  _.produceBlock(
-                    stateL2.blockProduction,
-                    if finalizing then Seq.empty else immutablePoolEventsL2,
-                    if finalizing then UtxoSet(Map.empty) else peekDeposits,
-                    l2Tip.blockHeader,
-                    timeCurrent,
-                    finalizing
-                  )
+        private def tryProduceBlock(finalizing: Boolean): Unit = {
+            if self.autonomousBlocks && this.isBlockLeader && !this.isBlockPending then
+                log.info(s"Producing a new block...")
+                self.isBlockPending = Some(true)
+                val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
+                    blockProductionActor.ask(
+                      _.produceBlock(
+                        stateL2.blockProduction,
+                        if finalizing then Seq.empty else immutablePoolEventsL2,
+                        if finalizing then UtxoSet(Map.empty) else peekDeposits,
+                        l2Tip.blockHeader,
+                        timeCurrent,
+                        finalizing
+                      )
+                    )
+                self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+            else
+                log.info(
+                  s"Block can't be produced: " +
+                      s"autonomousBlocks=${self.autonomousBlocks} " +
+                      s"isBlockLeader=${this.isBlockLeader} " +
+                      s"isBlockPending=${this.isBlockPending} "
                 )
-            self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+
         }
 
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
@@ -381,9 +391,8 @@ class HeadStateGlobal(
               s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
             updateDepositLiquidity()
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing new block due to observing a new deposit utxo...")
-                produceBlock(false)
+            log.info("Try to produce a new block due to observing a new deposit utxo...")
+            tryProduceBlock(false)
 
         private def updateDepositLiquidity(): Unit =
             val coins = self.stateL1.get.depositUtxos.map.values.map(_.coins).sum
@@ -550,9 +559,10 @@ class HeadStateGlobal(
         override def isFinalizationRequested: Boolean = self.mbIsFinalizationRequested.get
 
         override def switchToFinalizingPhase(): Unit =
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing final block...")
-                produceBlock(true)
+            log.info("Try to produce the final block...")
+            tryProduceBlock(true)
+            // TODO: should be fine, though we need to test finalization
+            log.info("Putting head into Finalizing phase.")
             self.headPhase = Finalizing
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
@@ -672,7 +682,8 @@ object HeadStateGlobal:
           beaconTokenName = params.beaconTokenName,
           seedAddress = params.seedAddress,
           initTx = params.initTx,
-          initializedOn = params.initializedOn
+          initializedOn = params.initializedOn,
+          autonomousBlocks = params.autonomousBlocks
         )
 
 case class BlockRecord(

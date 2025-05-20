@@ -20,7 +20,7 @@ import scala.collection.mutable
 
 /** The class that provides read-write and read-only access to the state of the node.
   */
-class NodeState:
+class NodeState(autonomousBlocks: Boolean):
 
     val log: Logger = Logger(getClass)
 
@@ -66,6 +66,8 @@ class NodeState:
         log.info(s"Saving learned verification keys for known peers: $keys")
         knownPeersVKeys.addAll(keys)
 
+    def autonomousBlockProduction: Boolean = autonomousBlocks
+    
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
@@ -136,9 +138,10 @@ class NodeState:
 
 object NodeState:
     def apply(
-        knownPeers: Set[WalletId]
+        knownPeers: Set[WalletId],
+        autonomousBlocks: Boolean = true
     ): NodeState =
-        val nodeState = new NodeState()
+        val nodeState = new NodeState(autonomousBlocks)
         nodeState.knownPeers.addAll(knownPeers)
         nodeState
 
@@ -156,5 +159,6 @@ case class InitializingHeadParams(
     beaconTokenName: TokenName,
     seedAddress: AddressBechL1,
     initTx: InitTx,
-    initializedOn: Long // system time, milliseconds
+    initializedOn: Long, // system time, milliseconds
+    autonomousBlocks: Boolean
 )

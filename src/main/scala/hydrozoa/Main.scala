@@ -88,6 +88,7 @@ object HydrozoaNode extends OxApp:
                   finalizationTxBuilder
                 ) = mkTxBuilders(
                   knownPeers,
+                  true,
                   yaciBFApiUri = yaciBFApiUri
                 )
                 val cardanoActor = Actor.create(cardano)
@@ -190,6 +191,7 @@ object HydrozoaNode extends OxApp:
 
 def mkTxBuilders(
     knownPeers: Set[WalletId],
+    autonomousBlocks: Boolean,
     useYaci: Boolean = false,
     yaciBFApiUri: String = "http://localhost:8080/api/v1/",
     pp: Option[ProtocolParams] = None
@@ -207,7 +209,7 @@ def mkTxBuilders(
             (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeState: NodeState = NodeState.apply(knownPeers)
+    val nodeState: NodeState = NodeState.apply(knownPeers, autonomousBlocks)
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders

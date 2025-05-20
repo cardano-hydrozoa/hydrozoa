@@ -1,6 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.*
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
@@ -10,7 +11,6 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import hydrozoa.*
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -97,7 +97,10 @@ private class InitHeadActor(
             cardanoActor.ask(_.submit(toL1Tx(initTx))) match
                 case Right(txHash) =>
                     // Put the head into Initializing phase
-                    val headPeersVKs = stateActor.ask(_.getVerificationKeyMap(headPeers))
+                    val (headPeersVKs, autonomousBlocks) =
+                        stateActor.ask(s =>
+                            (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction)
+                        )
                     val params = InitializingHeadParams(
                       ownAck.peer,
                       headPeersVKs,
@@ -107,7 +110,8 @@ private class InitHeadActor(
                       beaconTokenName,
                       seedAddress,
                       initTx,
-                      System.currentTimeMillis()
+                      System.currentTimeMillis(),
+                      autonomousBlocks
                     )
                     stateActor.tell(_.tryInitializeHead(params))
                     TxDump.dumpInitTx(initTx)

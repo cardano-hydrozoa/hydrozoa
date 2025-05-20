@@ -23,13 +23,13 @@ val peersApiPorts = Map.from(
     Alice -> 8093,
     Bob -> 8094,
     Carol -> 8095,
-    Daniella -> 8096,
-    Erin -> 8097,
-    Frank -> 8098,
-    Gustavo -> 8099,
-    Hector -> 8100,
-    Isabel -> 8101,
-    Julia -> 8102
+//    Daniella -> 8096,
+//    Erin -> 8097,
+//    Frank -> 8098,
+//    Gustavo -> 8099,
+//    Hector -> 8100,
+//    Isabel -> 8101,
+//    Julia -> 8102
   )
 )
 
@@ -64,105 +64,104 @@ object LocalNode:
         nodeCallback: ((TestPeer, Node) => Unit)
     ): Unit =
         InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
-            forkDiscard {
-                supervised {
-                    // Network peers minus own peer
-                    val knownPeers = simNetwork.knownPeers.-(ownPeer).map(mkWalletId)
+            supervised {
+                // Network peers minus own peer
+                val knownPeers = simNetwork.knownPeers.-(ownPeer).map(mkWalletId)
 
-                    val (
-                      cardano,
-                      nodeState,
+                val (
+                  cardano,
+                  nodeState,
+                  initTxBuilder,
+                  depositTxBuilder,
+                  refundTxBuilder,
+                  settlementTxBuilder,
+                  finalizationTxBuilder
+                ) = mkTxBuilders(
+                  knownPeers,
+                  autonomousBlocks,
+                  useYaci,
+                  yaciBFApiUri,
+                  pp
+                )
+                val cardanoActor = Actor.create(cardano)
+                val nodeStateActor = Actor.create(nodeState)
+
+                val walletActor = Actor.create(mkWallet(ownPeer))
+
+                val actorFactory =
+                    new ConsensusActorFactory(
+                      nodeStateActor,
+                      walletActor,
+                      cardanoActor,
                       initTxBuilder,
-                      depositTxBuilder,
                       refundTxBuilder,
                       settlementTxBuilder,
                       finalizationTxBuilder
-                    ) = mkTxBuilders(
-                      knownPeers,
-                      useYaci,
-                      yaciBFApiUri,
-                      pp
                     )
-                    val cardanoActor = Actor.create(cardano)
-                    val nodeStateActor = Actor.create(nodeState)
 
-                    val walletActor = Actor.create(mkWallet(ownPeer))
+                val dispatcher: ConsensusDispatcher = DefaultConsensusDispatcher.apply()
+                dispatcher.setConsensusActorFactory(actorFactory)
+                val dispatcherActor = Actor.create(dispatcher)
+                dispatcher.setOwnActor(dispatcherActor)
 
-                    val actorFactory =
-                        new ConsensusActorFactory(
-                          nodeStateActor,
-                          walletActor,
-                          cardanoActor,
-                          initTxBuilder,
-                          refundTxBuilder,
-                          settlementTxBuilder,
-                          finalizationTxBuilder
+                val transport = SimTransport.apply(simNetwork, ownPeer)
+                val transportActor = Actor.create(transport)
+
+                // TODO: do we really need circular dependency?
+                dispatcher.setTransport(transportActor)
+                transport.setDispatcher(dispatcherActor)
+
+                val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, transport)
+                network.setDispatcher(dispatcherActor)
+                val networkActor = Actor.create(network)
+
+                // Static actors for node state
+                val multisigL1EventSource =
+                    new MultisigL1EventSource(nodeStateActor, cardanoActor)
+                nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
+
+                val blockProducer = new BlockProducer()
+                blockProducer.setNetworkRef(networkActor)
+                nodeState.setBlockProductionActor(Actor.create(blockProducer))
+
+                val metricsActor = Actor.create(NoopMetrics.apply())
+                nodeState.setMetrics(metricsActor)
+                cardano.setMetrics(metricsActor)
+
+                val depositTxBuilderActor = Actor.create(depositTxBuilder)
+                val node = Node()
+                node.depositTxBuilder = depositTxBuilderActor
+                node.network = networkActor
+                node.nodeState = nodeStateActor
+                node.wallet = walletActor
+                node.cardano = cardanoActor
+                val nodeActor = Actor.create(node)
+
+                nodeCallback(ownPeer, node)
+
+                // Run fibers
+
+                // Consensus dispatcher
+                forkDiscard {
+                    dispatcher.run()
+                }
+
+                // Network transport
+                forkDiscard {
+                    transport.run()
+                }
+
+                if hoistApi then
+                    val ownApiPort = peersApiPorts(ownPeer)
+                    log.info(s"Node own peer: $ownPeer, node client API port: $ownApiPort")
+
+                    // Client node API
+                    val serverBinding =
+                        useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(
+                          _.stop()
                         )
 
-                    val dispatcher: ConsensusDispatcher = DefaultConsensusDispatcher.apply()
-                    dispatcher.setConsensusActorFactory(actorFactory)
-                    val dispatcherActor = Actor.create(dispatcher)
-                    dispatcher.setOwnActor(dispatcherActor)
-
-                    val transport = SimTransport.apply(simNetwork, ownPeer)
-                    val transportActor = Actor.create(transport)
-
-                    // TODO: do we really need circular dependency?
-                    dispatcher.setTransport(transportActor)
-                    transport.setDispatcher(dispatcherActor)
-
-                    val network: HeadPeerNetwork = HeadPeerNetworkWS(ownPeer, knownPeers, transport)
-                    network.setDispatcher(dispatcherActor)
-                    val networkActor = Actor.create(network)
-
-                    // Static actors for node state
-                    val multisigL1EventSource =
-                        new MultisigL1EventSource(nodeStateActor, cardanoActor)
-                    nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
-
-                    val blockProducer = new BlockProducer()
-                    blockProducer.setNetworkRef(networkActor)
-                    nodeState.setBlockProductionActor(Actor.create(blockProducer))
-
-                    val metricsActor = Actor.create(NoopMetrics.apply())
-                    nodeState.setMetrics(metricsActor)
-                    cardano.setMetrics(metricsActor)
-
-                    val depositTxBuilderActor = Actor.create(depositTxBuilder)
-                    val node = Node()
-                    node.depositTxBuilder = depositTxBuilderActor
-                    node.network = networkActor
-                    node.nodeState = nodeStateActor
-                    node.wallet = walletActor
-                    node.cardano = cardanoActor
-                    val nodeActor = Actor.create(node)
-
-                    nodeCallback(ownPeer, node)
-
-                    // Run fibers
-
-                    // Consensus dispatcher
-                    forkDiscard {
-                        dispatcher.run()
-                    }
-
-                    // Network transport
-                    forkDiscard {
-                        transport.run()
-                    }
-
-                    if hoistApi then
-                        val ownApiPort = peersApiPorts(ownPeer)
-                        log.info(s"Node own peer: $ownPeer, node client API port: $ownApiPort")
-
-                        // Client node API
-                        val serverBinding =
-                            useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(
-                              _.stop()
-                            )
-
-                    never
-                }
+                never
             }
         }
 
