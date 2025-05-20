@@ -37,17 +37,34 @@ object LocalNode:
 
     private val log = Logger("LocalNode")
 
+    /** Runs a local node for `ownPeer` connected to `simNetwork`.
+      * @param simNetwork
+      * @param ownPeer
+      * @param hoistApi
+      *   whether run client API
+      * @param autonomousBlocks
+      *   whether produce block autonomously
+      * @param useYaci
+      *   whether use Yaci
+      * @param yaciBFApiUri
+      *   and its BF API
+      * @param pp
+      *   protocol parameters (only if `useYaci` == false)
+      * @param nodeCallback
+      *   a callback to signal the node is ready
+      */
     def runNode(
         simNetwork: SimNetwork,
         ownPeer: TestPeer,
         hoistApi: Boolean = false,
+        autonomousBlocks: Boolean = true,
         useYaci: Boolean = true,
         yaciBFApiUri: String = "http://localhost:8080/api/v1/",
         pp: Option[ProtocolParams] = None,
         nodeCallback: ((TestPeer, Node) => Unit)
-    ): Fork[Nothing] =
+    ): Unit =
         InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
-            forkUser {
+            forkDiscard {
                 supervised {
                     // Network peers minus own peer
                     val knownPeers = simNetwork.knownPeers.-(ownPeer).map(mkWalletId)
@@ -101,11 +118,11 @@ object LocalNode:
                     // Static actors for node state
                     val multisigL1EventSource =
                         new MultisigL1EventSource(nodeStateActor, cardanoActor)
-                    nodeState.multisigL1EventSource = Actor.create(multisigL1EventSource)
+                    nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
 
                     val blockProducer = new BlockProducer()
                     blockProducer.setNetworkRef(networkActor)
-                    nodeState.blockProductionActor = Actor.create(blockProducer)
+                    nodeState.setBlockProductionActor(Actor.create(blockProducer))
 
                     val metricsActor = Actor.create(NoopMetrics.apply())
                     nodeState.setMetrics(metricsActor)
@@ -165,6 +182,7 @@ object HydrozoaLocalApp extends OxApp:
                       simNetwork = simNetwork,
                       ownPeer = peer,
                       hoistApi = true,
+                      autonomousBlocks = false,
                       useYaci = true,
                       pp = Some(Utils.protocolParams),
                       nodeCallback = (_, _) => ()

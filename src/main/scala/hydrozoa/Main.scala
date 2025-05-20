@@ -124,11 +124,11 @@ object HydrozoaNode extends OxApp:
 
                 // Static actors for node state
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
-                nodeState.multisigL1EventSource = Actor.create(multisigL1EventSource)
+                nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
-                nodeState.blockProductionActor = Actor.create(blockProducer)
+                nodeState.setBlockProductionActor(Actor.create(blockProducer))
 
                 val metricsActor = Actor.create(PrometheusMetrics.apply())
                 nodeState.setMetrics(metricsActor)
@@ -207,7 +207,7 @@ def mkTxBuilders(
             (cardano, backendService)
 
     // Global head manager (for mocked head during Milestone 2)
-    val nodeState: NodeState = NodeState(knownPeers)
+    val nodeState: NodeState = NodeState.apply(knownPeers)
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders

@@ -6,7 +6,10 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{TransactionL2EventLabel, WithdrawalL2EventLabel}
+import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
+    TransactionL2EventLabel,
+    WithdrawalL2EventLabel
+}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
 import hydrozoa.node.state.HeadPhase.Finalized
@@ -17,19 +20,28 @@ import scala.collection.mutable
 
 /** The class that provides read-write and read-only access to the state of the node.
   */
-class NodeState(
-):
+class NodeState:
 
     val log: Logger = Logger(getClass)
 
-    var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
+    // Actors
 
-    var blockProductionActor: ActorRef[BlockProducer] = _
+    private var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
+
+    def setMultisigL1EventSource(multisigL1EventSource: ActorRef[MultisigL1EventSource]): Unit =
+        this.multisigL1EventSource = multisigL1EventSource
+
+    private var blockProductionActor: ActorRef[BlockProducer] = _
+
+    def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
+        this.blockProductionActor = blockProductionActor
 
     private var metrics: ActorRef[Metrics] = _
 
     def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
+
+    //
 
     private var ownPeer: TestPeer = _
 
