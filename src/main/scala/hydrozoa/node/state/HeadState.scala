@@ -128,6 +128,24 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def isFinalizationRequested: Boolean
     def switchToFinalizingPhase(): Unit
 
+    /** As an API (trait's) method is used only for testing. Tries to run block creation routine and
+      * consensus on the block. Returns the block, for getting the block record use
+      * `getBlockRecord`.
+      * @param finalizing
+      * @param force
+      * @return
+      */
+    def tryProduceBlock(
+        finalizing: Boolean,
+        force: Boolean = false
+    ): Either[String, Block]
+
+    /** Used only for testing. Tries to look up block's effects.
+      * @return
+      *   Block record and optional genesis if effects for block are ready.
+      */
+    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])]
+
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def stateL2: AdaSimpleLedger[THydrozoaHead]
     def finalizeHead(block: BlockRecord): Unit
@@ -188,8 +206,9 @@ class HeadStateGlobal(
 
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
-    // TODO: these events won't contain genesis events
-    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    private val genesisEventsConfirmedL2: mutable.Map[Int, (TxId, SimpleGenesis)] = mutable.Map()
+    // TODO: don't use EventL2 but rather NonGenesisL2
+    private val nonGenesisEventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
@@ -253,7 +272,7 @@ class HeadStateGlobal(
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
-        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.eventsConfirmedL2.toSeq
+        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.nonGenesisEventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
@@ -348,8 +367,13 @@ class HeadStateGlobal(
             log.info("Try to produce a block due to getting new L2 event...")
             tryProduceBlock(false)
 
-        private def tryProduceBlock(finalizing: Boolean): Unit = {
-            if self.autonomousBlocks && this.isBlockLeader && !this.isBlockPending then
+        override def tryProduceBlock(
+            finalizing: Boolean,
+            force: Boolean = false
+        ): Either[String, Block] = {
+            if (self.autonomousBlocks || force)
+                && this.isBlockLeader && !this.isBlockPending
+            then
                 log.info(s"Producing a new block...")
                 self.isBlockPending = Some(true)
                 val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
@@ -364,15 +388,26 @@ class HeadStateGlobal(
                       )
                     )
                 self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+                Right(block)
             else
-                log.info(
-                  s"Block can't be produced: " +
-                      s"autonomousBlocks=${self.autonomousBlocks} " +
-                      s"isBlockLeader=${this.isBlockLeader} " +
-                      s"isBlockPending=${this.isBlockPending} "
-                )
-
+                val msg = s"Block can't be produced: " +
+                    s"autonomousBlocks=${self.autonomousBlocks} " +
+                    s"force=$force " +
+                    s"isBlockLeader=${this.isBlockLeader} " +
+                    s"isBlockPending=${this.isBlockPending} "
+                log.info(msg)
+                Left(msg)
         }
+
+        override def getBlockRecord(
+            block: Block
+        ): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])] =
+            // TODO: shall we use Map not Buffer?
+            self.blocksConfirmedL2.find(_.block == block) match
+                case None              => None
+                case Some(blockRecord) =>
+                    val mbGenesis = self.genesisEventsConfirmedL2.get(block.blockHeader.blockNum) 
+                    Some(blockRecord, mbGenesis)
 
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
             log.info("Net treasury utxo")
@@ -415,11 +450,12 @@ class HeadStateGlobal(
             self.pendingOwnBlock = None
 
             // Next block leader
-            val nextBlockNum = blockHeader.blockNum + 1
+            val nextBlockNum = blockNum + 1
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
 
             // State
             self.blocksConfirmedL2.append(record)
+            mbGenesis.foreach(g => self.genesisEventsConfirmedL2.put(blockNum, g))
 
             val confirmedEvents = applyBlockEvents(
               blockNum,
@@ -504,7 +540,7 @@ class HeadStateGlobal(
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = self.poolEventsL2.remove(i)
-                        self.eventsConfirmedL2.append((event, blockNum))
+                        self.nonGenesisEventsConfirmedL2.append((event, blockNum))
                         // Remove possible duplicates form the pool
                         self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
                             |> self.poolEventsL2.subtractAll
@@ -584,7 +620,7 @@ class HeadStateGlobal(
             self.poolEventsL2.clear()
             self.poolDeposits.clear()
             self.blocksConfirmedL2.clear()
-            self.eventsConfirmedL2.clear()
+            self.nonGenesisEventsConfirmedL2.clear()
             self.depositHandled.clear()
             self.depositL1Effects.clear()
             self.stateL1 = None

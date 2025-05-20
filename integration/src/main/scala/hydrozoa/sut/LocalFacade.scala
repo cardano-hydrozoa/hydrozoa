@@ -3,8 +3,9 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.transport.SimNetwork
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
@@ -56,8 +57,8 @@ class LocalFacade(
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
-        randomNode.handleNextBlock(nextBlockFinal)
+    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+        randomNode.produceNextBlockLockstep(nextBlockFinal)
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")

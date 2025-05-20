@@ -1,7 +1,8 @@
 package hydrozoa.sut
 
 import hydrozoa.*
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.block.Block
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.rest.{InitRequest, NodeRestApi, SubmitRequestL2}
@@ -103,7 +104,9 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)]) = ???
+    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] = throw RuntimeException(
+      "Real Hydrozoa facade doesn't support lockstep block producing"
+    )
 
     override def shutdownSut(): Unit = ()
 

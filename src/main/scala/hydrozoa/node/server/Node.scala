@@ -7,15 +7,19 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
+import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.Open
 import ox.channels.ActorRef
+import ox.resilience.{RetryConfig, retry, retryEither}
 import scalus.prelude.Maybe
+
+import scala.concurrent.duration.DurationInt
 
 class Node:
 
@@ -155,15 +159,39 @@ class Node:
         Right(event.getEventId)
     end submitL2
 
-    /** Manually triggers next block creation procedure. This was used for model-based testing, and
-      * we will need to get it back.
-      * @param nextBlockFinal
+    /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
+      * done and effects are ready. Returns all that so it can be checked against a model.
+      *
+      * NB: This is used for model-based testing only.
+      *
+      * NB: Not exposed within API.
+      *
+      * NB: requires autonomousBlockProduction = false
+      * @param finalizing
+      *   whether the next block should be final
       * @return
       */
-    def handleNextBlock(
-        nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
-        ???
+    def produceNextBlockLockstep(finalizing: Boolean): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+
+        assert(
+          !nodeState.ask(_.autonomousBlockProduction),
+          "Autonomous block production should be turned off to use this function"
+        )
+
+        nodeState.ask(_.head.openPhase(_.tryProduceBlock(finalizing, true))) match
+            case Left(err) => Left(err)
+            case Right(block) =>
+                val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
+                    nodeState.ask(
+                      _.head
+                          .openPhase(_.getBlockRecord(block))
+                          .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
+                    )
+                }
+
+                effects match
+                    case Left(err) => Left(err)
+                    case Right(blockRecord, mbGenesis) => Right(blockRecord, mbGenesis)
 
     def stateL2(): StateL2Response =
         nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse

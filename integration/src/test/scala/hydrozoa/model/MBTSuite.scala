@@ -558,13 +558,13 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type Result = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
+        override type Result = Either[String, (BlockRecord)]
 
         override def toString: String = s"Produce block command {finalization = $finalization}"
 
         override def runState(
             state: HydrozoaState
-        ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], HydrozoaState) =
+        ): (Result, HydrozoaState) =
             log.info(".runState")
 
             // Produce block
@@ -637,19 +637,19 @@ object MBTSuite extends Commands:
                         utxosActiveL2 = l2.getUtxosActive |> unliftUtxoSet
                     )
 
-                    Right(record, utxosAdded, utxosWithdrawn) /\ newState
+                    Right(record) /\ newState
 
         override def postConditionSuccess(
-            expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
+            expectedResult: Result,
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
-            result: Either[String, (BlockRecord, UtxosSet, UtxosSet)]
+            result: Result
         ): Prop =
             log.info(".postConditionSuccess")
 
             (result, expectedResult) match
-                case (Right(blockRecord, utxoAdded, utxoWithdrawn),
-                        Right(expectedBlockRecord, expectedUtxoAdded, expectedUtxoWithdrawn)) =>
+                case (Right(blockRecord),
+                        Right(expectedBlockRecord)) =>
                     val header = blockRecord.block.blockHeader
                     val eHeader = expectedBlockRecord.block.blockHeader
 
@@ -681,7 +681,7 @@ object MBTSuite extends Commands:
                 case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
 
         override def postConditionFailure(
-            expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
+            expectedResult: Result,
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
             err: Throwable
@@ -689,9 +689,9 @@ object MBTSuite extends Commands:
             log.error(".postConditionFailure should never happen")
             false
 
-        override def run(sut: Sut): (Either[String, (BlockRecord, UtxosSet, UtxosSet)]) =
+        override def run(sut: Sut): Result =
             log.info(".run")
-            sut.produceBlock(finalization)
+            sut.produceBlock(finalization).map(_._1)
 
         override def preCondition(state: HydrozoaState): Boolean =
             log.info(".preCondition")

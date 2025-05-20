@@ -181,7 +181,7 @@ object HydrozoaLocalApp extends OxApp:
                       simNetwork = simNetwork,
                       ownPeer = peer,
                       hoistApi = true,
-                      autonomousBlocks = false,
+                      autonomousBlocks = true, // since produce block is not exposed in the API, doesn't make much sense
                       useYaci = true,
                       pp = Some(Utils.protocolParams),
                       nodeCallback = (_, _) => ()

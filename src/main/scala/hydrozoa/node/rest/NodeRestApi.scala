@@ -28,7 +28,7 @@ import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-/** Hydrozoa Node API, currently backed by Tapir HTTP server.
+/** Hydrozoa Node API, currently implemented in terms of Tapir HTTP server.
   */
 class NodeRestApi(node: ActorRef[Node]):
 
