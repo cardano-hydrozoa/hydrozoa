@@ -26,6 +26,7 @@ import hydrozoa.node.state.{*, given}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
 import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.commands.Commands
+import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, Properties}
 import scalus.prelude.Maybe
 import sttp.client4.Response
@@ -63,10 +64,11 @@ object MBTSuite extends Commands:
         println("--------------------> create SUT")
         // Reset Yaci DevKit
         if useYaci then
+            println("/// resetting Yaci dev kit")
             val response: Response[String] = quickRequest
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
-        LocalFacade.apply(state.knownPeers, useYaci)
+        LocalFacade.apply(state.knownPeers, false, useYaci)
 
     override def destroySut(sut: Sut): Unit =
         println("<-------------------- destroy SUT")
@@ -239,7 +241,7 @@ object MBTSuite extends Commands:
 
             sut.initializeHead(
               initiator,
-              otherHeadPeers.map(TestPeer.mkWalletId(_)),
+              otherHeadPeers.map(TestPeer.mkWalletId),
               1000,
               seedUtxo.txId,
               seedUtxo.outputIx
@@ -248,66 +250,57 @@ object MBTSuite extends Commands:
         override def runState(state: State): (Result, State) =
             log.info(".runState")
 
-            // Native script, head address, and token
-            val pubKeys =
-                (otherHeadPeers + initiator).map(tp =>
-                    mkWallet(tp).exportVerificationKeyBytes
+            if otherHeadPeers.isEmpty then
+                (Left("Solo node mode is not supported yet"), state)
+            else
+
+                // Native script, head address, and token
+                val pubKeys =
+                    (otherHeadPeers + initiator).map(tp =>
+                        mkWallet(tp).exportVerificationKeyBytes
+                    )
+                val (headMultisigScript, headAddress) =
+                    mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
+                val beaconTokenName = mkBeaconTokenName(seedUtxo)
+
+                // Recipe to build init initTx
+                val initTxRecipe = InitTxRecipe(
+                  headAddress,
+                  seedUtxo,
+                  1000_000_000,
+                  headMultisigScript,
+                  beaconTokenName
                 )
-            val (headMultisigScript, headAddress) =
-                mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
-            val beaconTokenName = mkBeaconTokenName(seedUtxo)
 
-            // Recipe to build init initTx
-            val initTxRecipe = InitTxRecipe(
-              headAddress,
-              seedUtxo,
-              1000_000_000,
-              headMultisigScript,
-              beaconTokenName
-            )
+                val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
+                val backendService = BackendServiceMock(l1Mock, state.pp)
+                val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+                val Right(initTx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+                log.info(s"Init initTx: ${serializeTxHex(initTx)}")
+                val txId = txHash(initTx)
+                log.info(s"Init initTx hash: $txId")
 
-            val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
-            val backendService = BackendServiceMock(l1Mock, state.pp)
-            val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
-            val Right(initTx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-            log.info(s"Init initTx: ${serializeTxHex(initTx)}")
-            val txId = txHash(initTx)
-            log.info(s"Init initTx hash: $txId")
+                l1Mock.submit(initTx.toL1Tx)
 
-            l1Mock.submit(initTx.toL1Tx)
+                val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
+                    case Right(ix, _, _, _) => UtxoIdL1(txId, ix)
+                    case Left(err) => err match
+                            case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
+                            case _: TooManyMatches => throw RuntimeException("Initialization tx contains more than one multisig outputs!")
 
-            val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
-                case Right(ix, _, _, _) => UtxoIdL1(txId, ix)
-                case Left(err) => err match
-                        case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
-                        case _: TooManyMatches => throw RuntimeException("Initialization tx contains more than one multisig outputs!")
+                val newState = state.copy(
+                  peersNetworkPhase = RunningHead,
+                  headPhase = Some(Open), // FIXME: Initializing in some impls
+                  initiator = Some(initiator),
+                  headPeers = otherHeadPeers,
+                  headAddressBech32 = Some(headAddress),
+                  headMultisigScript = Some(headMultisigScript),
+                  treasuryUtxoId = Some(treasuryUtxoId),
+                  knownTxs = l1Mock.getKnownTxs,
+                  utxosActive = l1Mock.getUtxosActive
+                )
 
-            val newState = state.copy(
-              peersNetworkPhase = RunningHead,
-              headPhase = Some(Open), // FIXME: Initializing in some impls
-              initiator = Some(initiator),
-              headPeers = otherHeadPeers,
-              headAddressBech32 = Some(headAddress),
-              headMultisigScript = Some(headMultisigScript),
-              treasuryUtxoId = Some(treasuryUtxoId),
-              knownTxs = l1Mock.getKnownTxs,
-              utxosActive = l1Mock.getUtxosActive
-            )
-
-            /*
-            TODO: Not really nice.
-            Sequential Commands:
-              1. hydrozoa.model.MBTSuite$InitializeCommand@125c082e => Failure(java.lan
-              g.AssertionError: assertion failed: Solo node mode is not supported yet.)
-              2. hydrozoa.model.MBTSuite$DepositCommand@584f5497 => Failure(scala.Match
-              Error: Left(utxo not found: 41bf95a7b9a9ed0794cd8a4987126b8c3062b7cc18f05
-              2d23c51250da7467b21#1) (of class scala.util.Left))
-            */
-
-//            if otherHeadPeers.isEmpty then
-//                (Left("Solo mode is not supported yet"), state)
-//            else
-            (Right(txId), newState)
+                (Right(txId), newState)
 
         override def preCondition(state: State): Boolean =
             log.info(".preCondition")
@@ -325,32 +318,8 @@ object MBTSuite extends Commands:
         ): Prop =
             log.info(".postConditionSuccess")
 
-            sutResult match
-                case Left(err) =>
-                    s"Unexpected negative resposne: $err" |: Prop.falsified
-                case Right(sutTxHash) =>
-                    //val reader = sutInspector.reader
-                    //val headPhase = reader.currentPhase
-//                    val headPeers = stateAfter.headPeers + stateAfter.initiator.get
-//
-//                    (s"headPeers in Initializing phase should be: $headPeers"
-//                        |: headPhase == Initializing ==> (reader
-//                            .initializingPhaseReader(_.headPeers)
-//                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
-//                    && (s"headPeers in Open phase should be: $headPeers"
-//                        |: headPhase == Open ==> (reader
-//                            .openPhaseReader(_.headPeers)
-//                            .map(w => TestPeer.valueOf(w.name)) == headPeers))
-//                    &&
-//                    (s"result should be the same" |:
-//                        sutResult == expectedResult)
+            s"results should be the same" |: cmpAndCollect(sutResult, expectedResult)
 
-                    (s"result should be the same" |:
-                        //cmpAndCollect(expectedResult, sutResult))
-
-                        cmpAndCollect(sutResult, expectedResult))
-
-        // TODO: this is more for demonstration purposes
         override def postConditionFailure(
             _expectedResult: Result,
             _stateBefore: State,
@@ -358,9 +327,7 @@ object MBTSuite extends Commands:
             err: Throwable
         ): Prop =
             log.info(".postConditionFailure")
-
-            s"Should not crash unless number of peers is too small: $err"
-            |: otherHeadPeers.isEmpty
+            s"Should not crash: $err" |: false
 
     /** ------------------------------------------------------------------------------------------
      * DepositCommand
@@ -580,7 +547,7 @@ object MBTSuite extends Commands:
             )
 
             maybeNewBlock match
-                case None => Left("Block can't be produced at the moment.") /\ state
+                case None => Left("Block can't be produced at the moment") /\ state
                 case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
 
                     val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
@@ -677,7 +644,8 @@ object MBTSuite extends Commands:
                                 blockRecord.l2Effect == expectedBlockRecord.l2Effect)
 
                     ret
-                case (Left(error), Left(expectedError)) => error == expectedError
+                case (Left(error), Left(expectedError)) =>
+                    s"errors should be the same" |: cmpAndCollect(error, expectedError)
                 case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
 
         override def postConditionFailure(
@@ -687,7 +655,7 @@ object MBTSuite extends Commands:
             err: Throwable
         ): Prop =
             log.error(".postConditionFailure should never happen")
-            false
+            s"Block production failures should not happen" |: false
 
         override def run(sut: Sut): Result =
             log.info(".run")
@@ -738,7 +706,7 @@ object MBTSuite extends Commands:
 
 object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock"):
     property("Just works, nothing bad happens") = MBTSuite.property()
-//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
+        .useSeed(Seed.fromBase64("bGr0AUfvwXSFZWTPVyXA9S5fHWn-NsCe3silG6HWbPD=").get)
 
 
 object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):

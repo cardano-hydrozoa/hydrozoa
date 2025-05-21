@@ -16,10 +16,11 @@ import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.Open
 import ox.channels.ActorRef
-import ox.resilience.{RetryConfig, retry, retryEither}
+import ox.resilience.{RetryConfig, retryEither}
 import scalus.prelude.Maybe
 
 import scala.concurrent.duration.DurationInt
+import scala.util.Try
 
 class Node:
 
@@ -40,25 +41,38 @@ class Node:
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
-        assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
-        assert(
-          !otherHeadPeers.contains(wallet.ask(_.getWalletId)),
-          "Other head peers should NOT contain own peer"
-        )
 
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
-        // Request verification keys from known peers
-        val knownVKeys = network.ask(_.reqVerificationKeys())
-        log.info(s"knownVKeys: $knownVKeys")
+        // TODO: explicit type for errors
+        Try({
+            // Check number of peers
+            if (otherHeadPeers.isEmpty)
+                val msg = "Solo node mode is not supported yet"
+                log.error(msg)
+                throw IllegalArgumentException(msg)
 
-        // ReqInit
-        val seedOutput = UtxoIdL1(txId, txIx)
-        val treasuryCoins = treasuryAda * 1_000_000
-        val reqInit = ReqInit(wallet.ask(_.getWalletId), otherHeadPeers, seedOutput, treasuryCoins)
-        val initTxId = network.ask(_.reqInit(reqInit))
+            // Check others are others indeed
+            if (otherHeadPeers.contains(wallet.ask(_.getWalletId)))
+                val msg = "Other head peers should NOT contain own peer"
+                log.error(msg)
+                throw IllegalArgumentException(msg)
 
-        Right(initTxId)
+            // TODO: we don't need keys of peers which are not going to form a head
+            // Request verification keys from known peers
+            val knownVKeys = network.ask(_.reqVerificationKeys())
+            log.info(s"knownVKeys: $knownVKeys")
+
+            // ReqInit
+            val seedOutput = UtxoIdL1(txId, txIx)
+            // TODO: unify - somewhere we ask for Ada, somewhere for Lovelace
+            val treasuryCoins = treasuryAda * 1_000_000
+            val reqInit =
+                ReqInit(wallet.ask(_.getWalletId), otherHeadPeers, seedOutput, treasuryCoins)
+            val initTxId = network.ask(_.reqInit(reqInit))
+            initTxId
+        }).toEither.left.map(_.getMessage)
+
     end initializeHead
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] =
@@ -171,7 +185,9 @@ class Node:
       *   whether the next block should be final
       * @return
       */
-    def produceNextBlockLockstep(finalizing: Boolean): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+    def produceNextBlockLockstep(
+        finalizing: Boolean
+    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
 
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
@@ -179,7 +195,7 @@ class Node:
         )
 
         nodeState.ask(_.head.openPhase(_.tryProduceBlock(finalizing, true))) match
-            case Left(err) => 
+            case Left(err) =>
                 // TODO: add third result - "block can't be produced"
                 Left(err)
             case Right(block) =>
@@ -192,7 +208,7 @@ class Node:
                 }
 
                 effects match
-                    case Left(err) => Left(err)
+                    case Left(err)                     => Left(err)
                     case Right(blockRecord, mbGenesis) => Right(blockRecord, mbGenesis)
 
     def stateL2(): StateL2Response =
@@ -201,10 +217,12 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open => 
-                        nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
+                    case Open =>
+                        nodeState
+                            .ask(_.head.openPhase(_.stateL2.getState))
+                            .toList
                             .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
-                    case _    => List.empty
+                    case _ => List.empty
     end stateL2
 
     def tryFinalize(): Either[String, String] =

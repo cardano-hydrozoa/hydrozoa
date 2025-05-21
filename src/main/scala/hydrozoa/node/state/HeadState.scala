@@ -376,19 +376,21 @@ class HeadStateGlobal(
             then
                 log.info(s"Producing a new block...")
                 self.isBlockPending = Some(true)
-                val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
-                    blockProductionActor.ask(
-                      _.produceBlock(
-                        stateL2.blockProduction,
-                        if finalizing then Seq.empty else immutablePoolEventsL2,
-                        if finalizing then UtxoSet(Map.empty) else peekDeposits,
-                        l2Tip.blockHeader,
-                        timeCurrent,
-                        finalizing
-                      )
-                    )
-                self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
-                Right(block)
+                
+                blockProductionActor.ask(
+                  _.produceBlock(
+                    stateL2.blockProduction,
+                    if finalizing then Seq.empty else immutablePoolEventsL2,
+                    if finalizing then UtxoSet(Map.empty) else peekDeposits,
+                    l2Tip.blockHeader,
+                    timeCurrent,
+                    finalizing
+                  )
+                ) match
+                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
+                        self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+                        Right(block)
+                    case Left(err) => Left(err) 
             else
                 val msg = s"Block can't be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +

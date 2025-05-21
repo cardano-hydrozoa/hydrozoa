@@ -3,9 +3,8 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.transport.SimNetwork
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
@@ -16,11 +15,10 @@ import ox.resilience.{RetryConfig, retry}
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-import scala.util.Try
 
 class LocalFacade(
     peers: Map[TestPeer, Node],
-    shutdown: () => Unit
+    shutdown: Long => Unit
 ) extends HydrozoaFacade:
 
     private val log = Logger(getClass)
@@ -58,23 +56,30 @@ class LocalFacade(
     override def produceBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
-        randomNode.produceNextBlockLockstep(nextBlockFinal)
+        val answers = peers.values.map(node =>
+            node.produceNextBlockLockstep(nextBlockFinal)
+        )
+        answers.find(a => a.isRight) match
+            case None => Left("Block can't be produced at the moment")
+            case Some(answer) => Right(answer.right.get)
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")
-        shutdown()
+        shutdown(Thread.currentThread().threadId())
+
+val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
     private val log = Logger("LocalFacade")
     def apply(
         peers: Set[TestPeer],
+        autonomousBlocks: Boolean = false,
         useYaci: Boolean = false
     ): HydrozoaFacade =
 
         InheritableMDC.init
 
         val nodes = mutable.Map.empty[TestPeer, Node]
-        var shutdownFlag = false
 
         val thread = new Thread {
             override def run(): Unit =
@@ -85,27 +90,41 @@ object LocalFacade:
                             LocalNode.runNode(
                               simNetwork = simNetwork,
                               ownPeer = peer,
+                              autonomousBlocks = autonomousBlocks,
                               useYaci = useYaci,
                               pp = Some(Utils.protocolParams),
                               nodeCallback = (p, n) => {
-                                  discard(nodes.put(p, n))
+                                  synchronized(nodes.put(p, n))
                               }
                             )
                         }
                     )
-                    repeatUntil(shutdownFlag)
+
+                    // Wait for shutdown flag
+                    retry(RetryConfig.delayForever(50.millis))(
+                      if (!shutdownFlag.contains(Thread.currentThread().threadId()))
+                          throw RuntimeException()
+                    )
+                    println(s"thread=${Thread.currentThread().threadId()} is done")
                 }
         }
 
         thread.start()
 
         // Waiting for all nodes to initialize
-        // TODO: This hangs up once in a while
         retry(RetryConfig.delayForever(100.millis))(
-          if nodes.size < peers.size then throw RuntimeException()
+          {
+              val nodeSize = synchronized(nodes.size)
+              if (nodeSize < peers.size) then
+                  // println(s"nodeSize=${nodeSize}")
+                  throw RuntimeException()
+          }
         )
 
-        new LocalFacade(nodes.toMap, () => shutdownFlag = true)
+        new LocalFacade(
+          nodes.toMap,
+          threadId => shutdownFlag.put(threadId, true)
+        )
 
-// TODO: Is there something similar in stdlib?
-def discard(_any: Any): Unit = ()
+//// TODO: Is there something similar in stdlib?
+//def discard(_any: Any): Unit = ()

@@ -37,7 +37,7 @@ class BlockProducer:
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
         finalizing: Boolean
-    ): (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
+    ): Either[String, (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
         createBlock(
           stateL2,
           poolEvents,
@@ -55,9 +55,11 @@ class BlockProducer:
                     case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))
                     case Major => networkRef.tell(_.reqMajor(ReqMajor(block)))
                     case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
-                some
+                Right(some)
             case None =>
-                throw RuntimeException("Should not happen: was not able to produce a block.")
+                val msg = "Block production procedure was unable to create a block"
+                log.warn(msg)
+                Left(msg)
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *

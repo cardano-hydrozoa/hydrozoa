@@ -63,6 +63,7 @@ object LocalNode:
         pp: Option[ProtocolParams] = None,
         nodeCallback: ((TestPeer, Node) => Unit)
     ): Unit =
+
         InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
             supervised {
                 // Network peers minus own peer
