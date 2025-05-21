@@ -290,7 +290,9 @@ object MBTSuite extends Commands:
 
                 val newState = state.copy(
                   peersNetworkPhase = RunningHead,
-                  headPhase = Some(Open), // FIXME: Initializing in some impls
+                  // Since the local facade initialize routine waits for the `Initialization` phase is over
+                  // we can directly go to `Open` phase.
+                  headPhase = Some(Open),
                   initiator = Some(initiator),
                   headPeers = otherHeadPeers,
                   headAddressBech32 = Some(headAddress),

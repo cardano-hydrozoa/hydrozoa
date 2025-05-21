@@ -34,7 +34,18 @@ class LocalFacade(
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
-        peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
+        val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
+        ret match
+            case Left(_) => ret
+            case Right(_) =>
+                // Wait till all nodes are switched to `Open` phase, makes sense only for Right
+                println(s"waiting for initialization...")
+                retry(RetryConfig.delayForever(100.millis))({
+                    val uptimes = peers.values.map(_.nodeState.ask(_.mbInitializedOn))
+                    println(s"node uptimes: $uptimes")
+                    if (!uptimes.forall(_.isDefined)) throw IllegalStateException()
+                })
+                ret
 
     override def deposit(
         depositor: TestPeer,
@@ -56,11 +67,9 @@ class LocalFacade(
     override def produceBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
-        val answers = peers.values.map(node =>
-            node.produceNextBlockLockstep(nextBlockFinal)
-        )
+        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
         answers.find(a => a.isRight) match
-            case None => Left("Block can't be produced at the moment")
+            case None         => Left("Block can't be produced at the moment")
             case Some(answer) => Right(answer.right.get)
 
     override def shutdownSut(): Unit =
