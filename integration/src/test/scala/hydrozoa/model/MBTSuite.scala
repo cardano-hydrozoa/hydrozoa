@@ -82,7 +82,7 @@ object MBTSuite extends Commands:
         networkPeers <- Gen.pick(numberOfNetworkPeers, TestPeer.values)
     yield HydrozoaState(Utils.protocolParams, networkPeers.toSet)
 
-    override def genCommand(s: State): Gen[Command] =
+    override def genCommand(s: State): Gen[Command0] =
         s.peersNetworkPhase match
             case NewlyCreated =>
                 Gen.frequency(
@@ -109,7 +109,7 @@ object MBTSuite extends Commands:
                   2 -> genInitializeCommand(s),
                   1 -> Gen.const(ShutdownCommand)
                 )
-            case Shutdown => NoOp
+            case Shutdown => NoOp0
 
     def genInitializeCommand(s: State): Gen[InitializeCommand] =
         val initiator = s.knownPeers.head
@@ -182,9 +182,29 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
+    trait Command0 extends Command:
+
+        private[MBTSuite] def runPC0(sut: Sut): (Try[String], State => Prop) = {
+            import Prop.propBoolean
+            val r = Try(run(sut))
+            (r.map(_.toString), s => preCondition(s) ==> postCondition(s, r))
+        }
+
+    case object NoOp0 extends Command0 {
+        type Result = Null
+
+        def run(sut: Sut) = null
+
+        def nextState(state: State) = state
+
+        def preCondition(state: State) = true
+
+        def postCondition(state: State, result: Try[Null]) = true
+    }
+
     /** State-like Command that uses Haskell-style `runState` instead of `nextState`.
       */
-    trait StateLikeCommand extends Command:
+    trait StateLikeCommand extends Command0:
 
         final override def nextState(state: State): State = runState(state)._2
 
@@ -460,7 +480,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Command:
+    class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Command0:
 
         private val log = Logger(getClass)
 
@@ -492,7 +512,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends Command:
+    class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends Command0:
 
         private val log = Logger(getClass)
 
@@ -672,7 +692,15 @@ object MBTSuite extends Commands:
      * Shutdown Command
      * ------------------------------------------------------------------------------------------
      */
-    object ShutdownCommand extends UnitCommand:
+
+    trait UnitCommand0 extends Command0 {
+        final type Result = Unit
+        def postCondition(state: State, success: Boolean): Prop
+        final override def postCondition(state: State, result: Try[Unit]) =
+            postCondition(state, result.isSuccess)
+    }
+
+    object ShutdownCommand extends UnitCommand0:
 
         private val log = Logger(getClass)
 
@@ -706,12 +734,237 @@ object MBTSuite extends Commands:
             case Freed        => true
             case _            => false
 
+    /** ------------------------------------------------------------------------------------------
+     * Copy-paste from Commands
+     * ------------------------------------------------------------------------------------------
+     */
+
+    final def property0(threadCount: Int = 1, maxParComb: Int = 1000000): Prop = {
+        val suts = collection.mutable.Map.empty[AnyRef, (State, Option[Sut])]
+
+        Prop.forAll(actions(threadCount, maxParComb)) { as =>
+            try {
+                val sutId = suts.synchronized {
+                    val initSuts = suts.values.collect { case (state, None) => state }
+                    val runningSuts = suts.values.collect { case (_, Some(sut)) => sut }
+                    if (canCreateNewSut(as.s, initSuts, runningSuts)) {
+                        val sutId = new AnyRef
+                        suts += (sutId -> (as.s -> None))
+                        Some(sutId)
+                    } else None
+                }
+                sutId match {
+                    case Some(id) =>
+                        val sut = newSut(as.s)
+
+                        def removeSut(): Unit = {
+                            suts.synchronized {
+                                suts -= id
+                                destroySut(sut)
+                            }
+                        }
+
+                        val doRun = suts.synchronized {
+                            if (suts.contains(id)) {
+                                suts += (id -> (as.s -> Some(sut)))
+                                true
+                            } else false
+                        }
+                        if (doRun) runActions(sut, as, removeSut())
+                        else {
+                            removeSut()
+                            Prop.undecided
+                        }
+
+                    case None => // NOT IMPLEMENTED Block until canCreateNewSut is true
+                        println("NOT IMPL")
+                        Prop.undecided
+                }
+            } catch {
+                case e: Throwable =>
+                    suts.synchronized {
+                        suts.clear()
+                    }
+                    throw e
+            }
+        }
+    }
+
+    private type Commands0 = List[Command0]
+
+    private case class Actions(
+                                  s: State,
+                                  seqCmds: Commands0,
+                                  parCmds: List[Commands0]
+                              )
+
+    private def actions(threadCount: Int, maxParComb: Int): Gen[Actions] = {
+        import Gen.{const, listOfN, sized}
+
+        def sizedCmds(s: State)(sz: Int): Gen[(State, Commands0)] = {
+            val l: List[Unit] = List.fill(sz)(())
+            l.foldLeft(const((s, Nil: Commands0))) { case (g, ()) =>
+                for {
+                    (s0, cs) <- g
+                    c <- genCommand(s0).suchThat(_.preCondition(s0))
+                } yield (c.nextState(s0), cs :+ c)
+            }
+        }
+
+        def cmdsPrecond(s: State, cmds: Commands0): (State, Boolean) = cmds match {
+            case Nil => (s, true)
+            case c :: cs if c.preCondition(s) => cmdsPrecond(c.nextState(s), cs)
+            case _ => (s, false)
+        }
+
+        def actionsPrecond(as: Actions) =
+            as.parCmds.length != 1 && as.parCmds.forall(_.nonEmpty) &&
+                initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
+                case (s, true) => as.parCmds.forall(cmdsPrecond(s, _)._2)
+                case _ => false
+            })
+
+        // Number of sequences to test (n = threadCount, m = parSz):
+        //   2^m * 3^m * ... * n^m
+        //
+        // def f(n: Long, m: Long): Long =
+        //   if(n == 1) 1
+        //   else math.round(math.pow(n,m)) * f(n-1,m)
+        //
+        //    m  1     2       3         4           5
+        // n 1   1     1       1         1           1
+        //   2   2     4       8        16          32
+        //   3   6    36     216      1296        7776
+        //   4  24   576   13824    331776     7962624
+        //   5 120 14400 1728000 207360000 24883200000
+
+        val parSz = {
+            // Nbr of combinations
+            def seqs(n: Long, m: Long): Long =
+                if (n == 1) 1 else math.round(math.pow(n.toDouble, m.toDouble)) * seqs(n - 1, m)
+
+            if (threadCount < 2) 0
+            else {
+                var parSz = 1
+                while (seqs(threadCount.toLong, parSz.toLong) < maxParComb) parSz += 1
+                parSz
+            }
+        }
+
+        val g = for {
+            s0 <- genInitialState
+            (s1, seqCmds) <- sized(sizedCmds(s0))
+            parCmds <- if (parSz <= 0) const(Nil)
+            else
+                listOfN(threadCount, sizedCmds(s1)(parSz).map(_._2))
+        } yield Actions(s0, seqCmds, parCmds)
+
+        g.suchThat(actionsPrecond)
+    }
+
+    private def runActions(sut: Sut, as: Actions, finalize: => Unit): Prop = {
+        val maxLength = as.parCmds.map(_.length).foldLeft(as.seqCmds.length)(_.max(_))
+        try {
+            val (p1, s, rs1) = runSeqCmds(sut, as.s, as.seqCmds)
+            val l1 = s"Initial State:\n  ${as.s}\nSequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}"
+            if (as.parCmds.isEmpty) p1 :| l1
+            else propAnd(
+                p1.flatMap { r => if (!r.success) finalize; Prop(_ => r) } :| l1, {
+                    try {
+                        val (p2, rs2) = runParCmds(sut, s, as.parCmds)
+                        val l2 = rs2.map(prettyCmdsRes(_, maxLength)).mkString("\n\n")
+                        p2 :| l1 :| s"Parallel Commands (starting in state = ${s})\n$l2"
+                    } finally finalize
+                }
+            )
+        } finally if (as.parCmds.isEmpty) finalize
+    }
+
+    private def runSeqCmds(sut: Sut, s0: State, cs: Commands0): (Prop, State, List[Try[String]]) =
+        cs.foldLeft((Prop.proved, s0, List[Try[String]]())) { case ((p, s, rs), c) =>
+            val (r, pf) = c.runPC0(sut)
+            (p && pf(s), c.nextState(s), rs :+ r)
+        }
+
+    private def runParCmds(sut: Sut, s: State, pcmds: List[Commands0]): (Prop, List[List[(Command0, Try[String])]]) = {
+        import concurrent.*
+        val tp = java.util.concurrent.Executors.newFixedThreadPool(pcmds.size)
+        implicit val ec: ExecutionContextExecutor = ExecutionContext.fromExecutor(tp)
+        val memo = collection.mutable.Map.empty[(State, List[Commands0]), List[State]]
+
+        def endStates(scss: (State, List[Commands0])): List[State] = {
+            val (s, css) = (scss._1, scss._2.filter(_.nonEmpty))
+            (memo.get((s, css)), css) match {
+                case (Some(states), _) => states
+                case (_, Nil) => List(s)
+                case (_, cs :: Nil) =>
+                    List(cs.init.foldLeft(s) { case (s0, c) => c.nextState(s0) })
+                case _ =>
+                    val inits = scan(css) { case (cs, x) =>
+                        (cs.head.nextState(s), cs.tail :: x)
+                    }
+                    val states = inits.distinct.flatMap(endStates).distinct
+                    memo += (s, css) -> states
+                    states
+            }
+        }
+
+        def run(endStates: List[State], cs: Commands0): Future[(Prop, List[(Command0, Try[String])])] = Future {
+            if (cs.isEmpty) (Prop.proved, Nil)
+            else blocking {
+                val rs = cs.init.map(_.runPC0(sut)._1)
+                val (r, pf) = cs.last.runPC0(sut)
+                (Prop.atLeastOne(endStates.map(pf) *), cs.zip(rs :+ r))
+            }
+        }
+
+        try {
+            val res = Future.traverse(pcmds)(run(endStates(s -> pcmds), _)) map { l =>
+                val (ps, rs) = l.unzip
+                (Prop.atLeastOne(ps *), rs)
+            }
+            Await.result(res, concurrent.duration.Duration.Inf)
+        } finally {
+            tp.shutdown()
+        }
+    }
+
+    private def prettyCmdsRes(rs: List[(Command0, Try[String])], maxLength: Int) = {
+        val maxNumberWidth = "%d".format(maxLength).length
+        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
+        val cs = rs.zipWithIndex.map {
+            case (r, i) => lineLayout.format(
+                i + 1,
+                r match {
+                    case (c, Success("()")) => c.toString
+                    case (c, Success(r)) => s"$c => $r"
+                    case (c, r) => s"$c => $r"
+                })
+        }
+        if (cs.isEmpty)
+            "  <no commands>"
+        else
+            cs.mkString("\n")
+    }
+
+    /** [1,2,3] -- [f(1,[2,3]), f(2,[1,3]), f(3,[1,2])] */
+    private def scan[T, U](xs: List[T])(f: (T, List[T]) => U): List[U] = xs match {
+        case Nil => Nil
+        case y :: ys => f(y, ys) :: scan(ys) { case (x, xs) => f(x, y :: xs) }
+    }
+
+    /** Short-circuit property AND operator. (Should maybe be in Prop module) */
+    private def propAnd(p1: => Prop, p2: => Prop) = p1.flatMap { r =>
+        if (r.success) Prop.secure(p2) else Prop(_ => r)
+    }
+
+
 object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock"):
-    property("Just works, nothing bad happens") = MBTSuite.property()
+    property("Just works, nothing bad happens") = MBTSuite.property0()
         .useSeed(Seed.fromBase64("bGr0AUfvwXSFZWTPVyXA9S5fHWn-NsCe3silG6HWbPD=").get)
 
 
 object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
-    property("Just works, nothing bad happens") = MBTSuite.property()
+    property("Just works, nothing bad happens") = MBTSuite.property0()
 //        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
