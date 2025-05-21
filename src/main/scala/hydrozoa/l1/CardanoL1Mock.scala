@@ -1,7 +1,8 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
-import com.bloxbean.cardano.client.api.model.Utxo
+import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
+import com.bloxbean.cardano.client.api.util.AssetUtil
 import hydrozoa.*
 import hydrozoa.infra.{txHash, txInputs, txOutputs}
 import hydrozoa.node.monitoring.Metrics
@@ -53,16 +54,23 @@ class CardanoL1Mock() extends CardanoL1:
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
-    // TODO: we have to support tokens here, otherwise L1 UTxOs can't be recognized
     override def utxosAtAddress(address: AddressBechL1): List[Utxo] =
         utxosActive
             .filter((_, utxo) => utxo.address == address)
             .map((utxoId, output) =>
+
+                val amounts: mutable.Set[Amount] = mutable.Set.empty
+
+                output.tokens.foreach((policyId, tokens) => tokens.foreach((tokenName, quantity) =>
+                    val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                    amounts.add(Amount.asset(unit, quantity.longValue))
+                ))
+
                 Utxo(
                   utxoId.txId.hash,
                   utxoId.outputIx.ix,
                   address.bech32,
-                  List(lovelace(output.coins.bigInteger)).asJava,
+                  (List(lovelace(output.coins.bigInteger)) ++ amounts.toList).asJava,
                   null, // no datum hashes
                   output.mbInlineDatum.getOrElse(""),
                   null // no scripts
@@ -179,7 +187,8 @@ val genesisUtxos: Set[(UtxoIdL1, Output[L1])] =
             AddressBechL1(
               address
             ),
-            BigInt("10000000000")
+            BigInt("10000000000"),
+            emptyTokens
           )
         )
     ).toSet

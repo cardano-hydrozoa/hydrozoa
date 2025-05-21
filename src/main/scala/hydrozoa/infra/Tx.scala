@@ -71,7 +71,7 @@ def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness)
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressBechL1
-): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Data)] =
+): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Tokens, Data)] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala.toList
     outputs.filter(output => output.getAddress == address.bech32) match
         case List(elem) =>
@@ -79,6 +79,7 @@ def onlyOutputToAddress(
               (
                 TxIx(outputs.indexOf(elem).toChar),
                 elem.getValue.getCoin.longValue(),
+                valueTokens(elem.getValue),
                 Interop.toScalusData(
                   elem.getInlineDatum
                 ) // FIXME: how does it indicate it's optional? Use Option.apply
@@ -185,13 +186,22 @@ def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
     inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex.toChar))).toSeq
 
+def valueTokens[L <: AnyLevel](tokens: Value): Tokens = {
+    tokens.toMap.asScala.toMap.map((k, v) =>
+        PolicyId(k) -> v.asScala.toMap.map((k, v) => TokenName(k) -> BigInt.apply(v))
+    )
+}
 def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
     val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
             val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
-            val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
+            val tokens = o.getValue
+            val tokens_ = valueTokens(tokens)
+            val coins = o.getValue.getCoin.longValue()
+            val utxo =
+                Output[L](AddressBechL1(o.getAddress), coins, tokens_)
             (utxoId, utxo)
         )
         .toSeq

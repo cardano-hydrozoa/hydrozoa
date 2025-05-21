@@ -60,16 +60,62 @@ object UtxoIdL1:
 object UtxoIdL2:
     def apply(id: TxId, ix: TxIx): UtxoId[L2] = UtxoId(id, ix)
 
+type Tokens = Map[PolicyId, Map[TokenName, BigInt]]
+
+val emptyTokens: Tokens = Map.empty
+
 // FIXME: parameterize AddressBech
 // FIXME: migrate to Value
 case class Output[L <: AnyLevel](
     address: AddressBechL1,
     coins: BigInt,
+    tokens: Tokens,
     mbInlineDatum: Option[String] = None
 )
 
+// TODO: Unsound in general
+object Output:
+    def apply[L <: AnyLevel](o: OutputNoTokens[L]): Output[L] =
+        new Output[L](o.address, o.coins, emptyTokens, o.mbInlineDatum)
+
 type OutputL1 = Output[L1]
 type OutputL2 = Output[L2]
+
+/* This is useful since I was not able to make Tapir generate schema for Output:
+
+[error] -- Error: /home/euonymos/src/cardano-hydrozoa/hydrozoa/src/main/scala/hydrozoa/node/rest/NodeRestApi.scala:215:4
+[error] 215 |    Schema.derived[StateL2Response]
+[error]     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[error]     |    method deriveSubtype is declared as `inline`, but was not inlined
+[error]     |
+[error]     |    Try increasing `-Xmax-inlines` above 32
+[error]     |---------------------------------------------------------------------------
+[error]     |Inline stack trace
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]      ---------------------------------------------------------------------------
+ */
+
+case class OutputNoTokens[L <: AnyLevel](
+    address: AddressBechL1,
+    coins: BigInt,
+    mbInlineDatum: Option[String] = None
+)
+
+// TODO: Lossy conversion
+object OutputNoTokens:
+    def apply[L <: AnyLevel](o: Output[L]): OutputNoTokens[L] =
+        new OutputNoTokens[L](o.address, o.coins, o.mbInlineDatum)
 
 // FIXME: We also need Utxo without MultisigUtxoTag
 case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
@@ -80,9 +126,10 @@ object Utxo:
         txIx: TxIx,
         address: AddressBechL1,
         coins: BigInt,
+        tokens: Tokens, // = Map.empty,
         mbInlineDatum: Option[String] = None
     ) =
-        new Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins, mbInlineDatum))
+        new Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins, tokens, mbInlineDatum))
 
 case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L]])
 

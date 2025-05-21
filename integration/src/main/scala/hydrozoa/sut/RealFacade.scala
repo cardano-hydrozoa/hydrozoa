@@ -98,7 +98,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
         response.body match
             case DecodeResult.Value(v) =>
                 v match
-                    case Right(r)  => r
+                    case Right(r)  => r.map((utxoId, output) => utxoId -> Output.apply(output))
                     case Left(err) => throw RuntimeException("error getting L2 state from head")
             case _ => throw RuntimeException("decoding error")
 

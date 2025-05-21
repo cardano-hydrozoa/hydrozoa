@@ -53,7 +53,7 @@ class LocalFacade(
         submitterNode.submitL2(request)
 
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
-        randomNode.stateL2()
+        randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
         nextBlockFinal: Boolean

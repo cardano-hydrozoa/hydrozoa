@@ -1,6 +1,11 @@
 package hydrozoa.node.rest
 
-import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.core.{
+    JsonKeyCodec,
+    JsonReader,
+    JsonValueCodec,
+    JsonWriter
+}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
@@ -175,10 +180,36 @@ given txIdSchema: Schema[TxId] =
 given txIx: Schema[TxIx] =
     Schema.derived[TxIx]
 
-type StateL2Response = List[(UtxoId[L2], Output[L2])]
+type StateL2Response = List[(UtxoId[L2], OutputNoTokens[L2])]
+
+//given policyIdCodec: JsonValueCodec[PolicyId] =
+//    JsonCodecMaker.make
+//
+//given tokenNameCodec: JsonValueCodec[TokenName] =
+//    JsonCodecMaker.make
+
+//implicit val policyIdCodec: JsonKeyCodec[PolicyId] = new JsonKeyCodec[PolicyId] {
+//    override def decodeKey(in: JsonReader): PolicyId = PolicyId(in.readKeyAsString())
+//
+//    override def encodeKey(x: PolicyId, out: JsonWriter): Unit =
+//        out.writeKey(x.policyId)
+//}
+//
+//implicit val tokenNameCodec: JsonKeyCodec[TokenName] = new JsonKeyCodec[TokenName] {
+//    override def decodeKey(in: JsonReader): TokenName = TokenName(in.readKeyAsString())
+//
+//    override def encodeKey(x: TokenName, out: JsonWriter): Unit =
+//        out.writeKey(x.tokenName)
+//}
 
 given stateL2ResponseCodec: JsonValueCodec[StateL2Response] =
     JsonCodecMaker.make
+
+given policyIdSchema: Schema[PolicyId] =
+    Schema.derived[PolicyId]
+
+given tokenNameSchema: Schema[TokenName] =
+    Schema.derived[TokenName]
 
 given stateL2ResponseSchema: Schema[StateL2Response] =
     Schema.derived[StateL2Response]

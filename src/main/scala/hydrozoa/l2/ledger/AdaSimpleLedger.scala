@@ -70,7 +70,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
         val utxoDiff = event.genesis.outputs.zipWithIndex
             .map(output =>
                 val txIn = UtxoIdL2(txId, TxIx(output._2.toChar))
-                val txOut = Output[L2](output._1.address.asL1, output._1.coins)
+                val txOut = Output[L2](output._1.address.asL1, output._1.coins, emptyTokens)
                 (txIn, txOut)
             )
             .toSet

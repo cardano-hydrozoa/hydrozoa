@@ -179,7 +179,9 @@ class Node:
         )
 
         nodeState.ask(_.head.openPhase(_.tryProduceBlock(finalizing, true))) match
-            case Left(err) => Left(err)
+            case Left(err) => 
+                // TODO: add third result - "block can't be produced"
+                Left(err)
             case Right(block) =>
                 val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
                     nodeState.ask(
@@ -199,7 +201,9 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
+                    case Open => 
+                        nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
+                            .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
                     case _    => List.empty
     end stateL2
 

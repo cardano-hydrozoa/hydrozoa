@@ -277,7 +277,7 @@ object MBTSuite extends Commands:
             l1Mock.submit(initTx.toL1Tx)
 
             val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
-                case Right(ix, _, _) => UtxoIdL1(txId, ix)
+                case Right(ix, _, _, _) => UtxoIdL1(txId, ix)
                 case Left(err) => err match
                         case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
                         case _: TooManyMatches => throw RuntimeException("Initialization tx contains more than one multisig outputs!")
@@ -617,7 +617,7 @@ object MBTSuite extends Commands:
                     val treasuryUtxoId =
                         (l1Effect |> maybeMultisigL1Tx).map(tx =>
                             val txId = txHash(tx)
-                            val Right(ix,_,_ ) = onlyOutputToAddress(tx, state.headAddressBech32.get)
+                            val Right(ix, _, _, _ ) = onlyOutputToAddress(tx, state.headAddressBech32.get)
                             Some(UtxoIdL1(txId, ix))
                          ).getOrElse(state.treasuryUtxoId)
 
