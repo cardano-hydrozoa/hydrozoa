@@ -206,9 +206,9 @@ case class SimpleGenesis(
     def volume(): Long = outputs.map(_.coins).sum.toLong
 
 object SimpleGenesis:
-    def apply(ds: DepositUtxos): SimpleGenesis =
-        SimpleGenesis(
-          ds.map.values
+    def mkGenesis(utxos: List[OutputL1]): SimpleGenesis =
+        new SimpleGenesis(
+          utxos
               .map(o =>
                   val datum = depositDatum(o) match
                       case Some(datum) => datum
@@ -216,7 +216,6 @@ object SimpleGenesis:
                           throw RuntimeException("deposit UTxO doesn't contain a proper datum")
                   SimpleOutput(datum.address |> plutusAddressAsL2, o.coins)
               )
-              .toList
         )
     def apply(address: AddressBechL2, ada: Int): SimpleGenesis =
         SimpleGenesis(List(SimpleOutput(address, ada)))

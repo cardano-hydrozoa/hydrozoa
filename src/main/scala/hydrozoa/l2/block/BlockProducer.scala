@@ -40,7 +40,7 @@ class BlockProducer:
     ): Either[String, (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
 
         val sortedPoolEvents = poolEvents
-            .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1 )
+            .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1)
 
         log.info(s"Pool events for block production: $poolEvents")
         log.info(s"Pool events for block production (sorted): $sortedPoolEvents")
@@ -131,17 +131,18 @@ def createBlock(
     // 4. If finalizing is False...
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
-        val eligibleDeposits: DepositUtxos =
+        val depositsEligible: DepositUtxos =
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
-        if eligibleDeposits.map.isEmpty then None
+        if depositsEligible.map.isEmpty then None
         else
-            val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
+            val depositsSorted = depositsEligible.map.toList.sortWith((a, b) =>
+                a._1._1.hash.compareTo(b._1._1.hash) < 0
+            )
+            val genesis: SimpleGenesis = SimpleGenesis.mkGenesis(depositsSorted.map(_._2))
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    depositsAbsorbed = eligibleDeposits.map.keySet.toList.sortWith((a, b) =>
-                        a._1.hash.compareTo(b._1.hash) < 0
-                    )
+                    depositsAbsorbed = depositsSorted.map(_._1)
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None

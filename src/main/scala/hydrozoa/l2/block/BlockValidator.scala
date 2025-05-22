@@ -175,10 +175,11 @@ object BlockValidator:
         mbGenesis =
             if depositsAbsorbed.isEmpty then None
             else
-                val depositsAbsorbedUtxos = UtxoSet.apply[L1, DepositTag](
-                  depositUtxos.map.filter((k, _) => depositsAbsorbed.contains(k))
+                val depositsAbsorbedUtxos = depositUtxos.map
+                    .filter((k, _) => depositsAbsorbed.contains(k))
+                    .toList.sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0
                 )
-                val genesis: SimpleGenesis = SimpleGenesis.apply(depositsAbsorbedUtxos)
+                val genesis: SimpleGenesis = SimpleGenesis.mkGenesis(depositsAbsorbedUtxos.map(_._2))
                 stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                     case Right(txId, utxos) => Some(txId, genesis)
                     case Left(_, _) => ??? // unreachable, submit for deposits should always succeed
