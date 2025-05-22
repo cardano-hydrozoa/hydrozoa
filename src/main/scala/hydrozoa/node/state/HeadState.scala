@@ -354,9 +354,6 @@ class HeadStateGlobal(
         def poolEventL2(event: NonGenesisL2): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
-            log.info(
-              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
-            )
             // Metrics
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
             metrics.tell(m =>
@@ -374,8 +371,7 @@ class HeadStateGlobal(
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !this.isBlockPending
             then
-                log.info(s"Producing a new block...")
-                self.isBlockPending = Some(true)
+                log.info(s"Trying to producing a new block...")
                 
                 blockProductionActor.ask(
                   _.produceBlock(
@@ -389,10 +385,11 @@ class HeadStateGlobal(
                 ) match
                     case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
                         self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+                        self.isBlockPending = Some(true)
                         Right(block)
                     case Left(err) => Left(err) 
             else
-                val msg = s"Block can't be produced: " +
+                val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
                     s"force=$force " +
                     s"isBlockLeader=${this.isBlockLeader} " +
@@ -424,9 +421,6 @@ class HeadStateGlobal(
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
             self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
-            log.info(
-              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
-            )
             updateDepositLiquidity()
             log.info("Try to produce a new block due to observing a new deposit utxo...")
             tryProduceBlock(false)

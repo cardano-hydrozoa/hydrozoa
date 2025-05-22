@@ -3,6 +3,7 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.l1.CardanoL1Mock
 import hydrozoa.l2.consensus.network.transport.SimNetwork
 import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
@@ -36,7 +37,7 @@ class LocalFacade(
     ): Either[InitializationError, TxId] =
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
-            case Left(_) => ret
+            case Left(_)  => ret
             case Right(_) =>
                 // Wait till all nodes are switched to `Open` phase, makes sense only for Right
                 println(s"waiting for initialization...")
@@ -50,7 +51,23 @@ class LocalFacade(
     override def deposit(
         depositor: TestPeer,
         depositRequest: DepositRequest
-    ): Either[DepositError, DepositResponse] = peers(depositor).deposit(depositRequest)
+    ): Either[DepositError, DepositResponse] =
+        val ret = peers(depositor).deposit(depositRequest)
+        ret match
+            case Left(_)                 => ret
+            case Right(_, depositTxHash) =>
+                // Wait till all nodes learn about the deposit utxo
+                retry(RetryConfig.delayForever(100.millis))({
+                    // println(s"waiting for deposit utxo from tx: $depositTxHash")
+                    val veracity = peers.values.map(
+                      _.nodeState.ask(
+                        _.head.openPhase(_.stateL1.depositUtxos.map.contains(depositTxHash))
+                      )
+                    )
+                    // println(veracity)
+                    if (!veracity.forall(e => e)) throw IllegalStateException()
+                })
+                ret
 
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
@@ -94,10 +111,13 @@ object LocalFacade:
             override def run(): Unit =
                 supervised {
                     val simNetwork = SimNetwork.apply(peers.toList)
+                    val cardanoL1Mock = CardanoL1Mock()
+
                     peers.foreach(peer =>
                         forkDiscard {
                             LocalNode.runNode(
                               simNetwork = simNetwork,
+                              mbCardanoL1Mock = Some(cardanoL1Mock),
                               ownPeer = peer,
                               autonomousBlocks = autonomousBlocks,
                               useYaci = useYaci,

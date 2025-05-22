@@ -197,11 +197,14 @@ def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     outputs.zipWithIndex
         .map((o, ix) =>
             val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
+            val coins = o.getValue.getCoin.longValue()
             val tokens = o.getValue
             val tokens_ = valueTokens(tokens)
-            val coins = o.getValue.getCoin.longValue()
+            val datum = o.getInlineDatum match
+                case null => None
+                case some => Some(some.serializeToHex())
             val utxo =
-                Output[L](AddressBechL1(o.getAddress), coins, tokens_)
+                Output[L](AddressBechL1(o.getAddress), coins, tokens_, datum)
             (utxoId, utxo)
         )
         .toSeq

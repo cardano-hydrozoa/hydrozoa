@@ -3,17 +3,19 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.event.MultisigL1EventSource
+import hydrozoa.l1.{BackendServiceMock, CardanoL1, CardanoL1Mock}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.l2.consensus.network.transport.{SimNetwork, SimTransport}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, HeadPeerNetworkWS}
 import hydrozoa.l2.consensus.{ConsensusDispatcher, DefaultConsensusDispatcher}
-import hydrozoa.mkTxBuilders
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.monitoring.NoopMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
+import hydrozoa.node.state.NodeState
+import hydrozoa.{mkCardanoL1, mkTxBuilders}
 import ox.*
 import ox.channels.Actor
 import ox.logback.InheritableMDC
@@ -22,7 +24,7 @@ val peersApiPorts = Map.from(
   List(
     Alice -> 8093,
     Bob -> 8094,
-    Carol -> 8095,
+    Carol -> 8095
 //    Daniella -> 8096,
 //    Erin -> 8097,
 //    Frank -> 8098,
@@ -39,6 +41,7 @@ object LocalNode:
 
     /** Runs a local node for `ownPeer` connected to `simNetwork`.
       * @param simNetwork
+      * @param mbCardanoL1Mock
       * @param ownPeer
       * @param hoistApi
       *   whether run client API
@@ -55,6 +58,7 @@ object LocalNode:
       */
     def runNode(
         simNetwork: SimNetwork,
+        mbCardanoL1Mock: Option[CardanoL1Mock] = None,
         ownPeer: TestPeer,
         hoistApi: Boolean = false,
         autonomousBlocks: Boolean = true,
@@ -63,26 +67,29 @@ object LocalNode:
         pp: Option[ProtocolParams] = None,
         nodeCallback: ((TestPeer, Node) => Unit)
     ): Unit =
-
         InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
             supervised {
                 // Network peers minus own peer
                 val knownPeers = simNetwork.knownPeers.-(ownPeer).map(mkWalletId)
 
+                val (cardano, backendService) = mbCardanoL1Mock match
+                    case Some(mock) =>
+                        val backendService = BackendServiceMock(mock, pp.get)
+                        (mock, backendService)
+                    case None => mkCardanoL1(useYaci, yaciBFApiUri, pp)
+
+                val nodeState: NodeState = NodeState.apply(knownPeers, autonomousBlocks)
+
                 val (
-                  cardano,
-                  nodeState,
                   initTxBuilder,
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
                   finalizationTxBuilder
                 ) = mkTxBuilders(
-                  knownPeers,
-                  autonomousBlocks,
-                  useYaci,
-                  yaciBFApiUri,
-                  pp
+                  backendService,
+                  nodeState,
+                  knownPeers
                 )
                 val cardanoActor = Actor.create(cardano)
                 val nodeStateActor = Actor.create(nodeState)
@@ -182,7 +189,8 @@ object HydrozoaLocalApp extends OxApp:
                       simNetwork = simNetwork,
                       ownPeer = peer,
                       hoistApi = true,
-                      autonomousBlocks = true, // since produce block is not exposed in the API, doesn't make much sense
+                      // since produce block is not exposed in the API, doesn't make much sense
+                      autonomousBlocks = true,
                       useYaci = true,
                       pp = Some(Utils.protocolParams),
                       nodeCallback = (_, _) => ()

@@ -1,6 +1,7 @@
 package hydrozoa
 
 import com.bloxbean.cardano.client.api.model.ProtocolParams
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.*
@@ -24,7 +25,7 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
 import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
 import io.prometheus.metrics.exporter.httpserver.HTTPServer
 import ox.*
-import ox.channels.Actor
+import ox.channels.{Actor, ActorRef}
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
 import sttp.client4.UriContext
@@ -57,7 +58,7 @@ object HydrozoaNode extends OxApp:
 
     private val log = Logger("main")
 
-    // TASK: regular CLI args parsing
+    // TODO: regular CLI args parsing
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
 
@@ -68,7 +69,6 @@ object HydrozoaNode extends OxApp:
 
             log.info(s"Node own peer: $ownPeer, node own port: $ownPort")
 
-            // InheritableMDC.supervisedWhere("a" -> "1", "b" -> "2") {
             supervised {
 
                 // Peers that come lexicographically before the own peer are treated as "servers"
@@ -78,20 +78,20 @@ object HydrozoaNode extends OxApp:
                 // Network peers minus own peer
                 val knownPeers = peers.keySet.-(ownPeer).map(mkWalletId)
 
+                val (cardano, backendService) = mkCardanoL1(true, yaciBFApiUri = yaciBFApiUri)
+                val cardanoActor = Actor.create(cardano)
+
+                val nodeState: NodeState = NodeState.apply(knownPeers)
+
                 val (
-                  cardano,
-                  nodeState,
                   initTxBuilder,
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
                   finalizationTxBuilder
-                ) = mkTxBuilders(
-                  knownPeers,
-                  true,
-                  yaciBFApiUri = yaciBFApiUri
-                )
-                val cardanoActor = Actor.create(cardano)
+                ) = mkTxBuilders(backendService, nodeState, knownPeers)
+
+
                 val nodeStateActor = Actor.create(nodeState)
 
                 val walletActor = Actor.create(mkWallet(ownPeer))
@@ -189,14 +189,11 @@ object HydrozoaNode extends OxApp:
         log.info(s"Started Hydrozoa node with args: ${args.mkString(", ")}")
         ExitCode.Success
 
-def mkTxBuilders(
-    knownPeers: Set[WalletId],
-    autonomousBlocks: Boolean,
+def mkCardanoL1(
     useYaci: Boolean = false,
     yaciBFApiUri: String = "http://localhost:8080/api/v1/",
     pp: Option[ProtocolParams] = None
 ) =
-
     // Cardano L1
     val (cardano, backendService) =
         if useYaci then
@@ -207,9 +204,15 @@ def mkTxBuilders(
             val cardano = CardanoL1Mock()
             val backendService = BackendServiceMock(cardano, pp.get)
             (cardano, backendService)
+    (cardano, backendService)
+end mkCardanoL1
 
-    // Global head manager (for mocked head during Milestone 2)
-    val nodeState: NodeState = NodeState.apply(knownPeers, autonomousBlocks)
+def mkTxBuilders(
+    backendService: BackendService,
+    nodeState: NodeState,
+    knownPeers: Set[WalletId]
+) =
+
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders
@@ -217,16 +220,13 @@ def mkTxBuilders(
     val depositTxBuilder: DepositTxBuilder =
         BloxBeanDepositTxBuilder(backendService, nodeStateReader)
     val refundTxBuilder: RefundTxBuilder =
-        BloxBeanRefundTxBuilder(cardano, backendService, nodeStateReader)
+        BloxBeanRefundTxBuilder(backendService, nodeStateReader)
     val settlementTxBuilder: SettlementTxBuilder =
         BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
-    // return a bunch of things
     (
-      cardano,
-      nodeState,
       initTxBuilder,
       depositTxBuilder,
       refundTxBuilder,
