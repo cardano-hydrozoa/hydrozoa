@@ -3,8 +3,9 @@ package hydrozoa.l1
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.api.util.AssetUtil
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{txHash, txInputs, txOutputs}
+import hydrozoa.infra.{serializeTxHex, txHash, txInputs, txOutputs}
 import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
@@ -14,6 +15,8 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 class CardanoL1Mock() extends CardanoL1:
+
+    private val log = Logger(getClass)
 
     override def setMetrics(metrics: ActorRef[Metrics]): Unit = ()
 
@@ -27,20 +30,20 @@ class CardanoL1Mock() extends CardanoL1:
 
     override def submit(tx: TxL1): Either[SubmissionError, TxId] =
         val txId = txHash(tx)
-        if knownTxs.contains(txId) then
+        log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
+        if knownTxs.contains(txId) then Right(txId)
+        else
+            knownTxs.put(txId, tx)
+            val setSizeBefore = utxosActive.size
+            val inputs = txInputs(tx)
+            utxosActive.subtractAll(inputs)
+            val outputs = txOutputs(tx)
+            utxosActive.addAll(outputs)
+            val setSizeAfter = utxosActive.size
+            if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
+                throw RuntimeException("")
+            assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
             Right(txId)
-            else
-                knownTxs.put(txId, tx)
-                val setSizeBefore = utxosActive.size
-                val inputs = txInputs(tx)
-                utxosActive.subtractAll(inputs)
-                val outputs = txOutputs(tx)
-                utxosActive.addAll(outputs)
-                val setSizeAfter = utxosActive.size
-                if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
-                    throw RuntimeException("")
-                assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
-                Right(txId)
 
     override def awaitTx(
         txId: TxId,
@@ -63,10 +66,12 @@ class CardanoL1Mock() extends CardanoL1:
 
                 val amounts: mutable.Set[Amount] = mutable.Set.empty
 
-                output.tokens.foreach((policyId, tokens) => tokens.foreach((tokenName, quantity) =>
-                    val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
-                    amounts.add(Amount.asset(unit, quantity.longValue))
-                ))
+                output.tokens.foreach((policyId, tokens) =>
+                    tokens.foreach((tokenName, quantity) =>
+                        val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                        amounts.add(Amount.asset(unit, quantity.longValue))
+                    )
+                )
 
                 Utxo(
                   utxoId.txId.hash,

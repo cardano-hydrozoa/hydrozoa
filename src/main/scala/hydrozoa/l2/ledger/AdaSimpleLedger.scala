@@ -1,5 +1,6 @@
 package hydrozoa.l2.ledger
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.multisig.state.{DepositUtxos, depositDatum}
@@ -155,6 +156,7 @@ case class AdaSimpleLedger[InstancePurpose <: TInstancePurpose] private (
 
 object AdaSimpleLedger:
 
+    private val log = Logger(getClass)
     // var txCounter: AtomicInteger = AtomicInteger()
 
     def apply(): AdaSimpleLedger[THydrozoaHead] = AdaSimpleLedger[THydrozoaHead](NoopVerifier)
@@ -169,17 +171,21 @@ object AdaSimpleLedger:
             case genesis: SimpleGenesis =>
                 val cardanoTx = mkCardanoTxForL2Genesis(genesis)
                 val txId = txHash(cardanoTx)
-                println(s"L2 genesis event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
+                log.trace(s"L2 genesis event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
             case transaction: SimpleTransaction =>
                 val cardanoTx = mkCardanoTxForL2Transaction(transaction)
                 val txId = txHash(cardanoTx)
-                println(s"L2 transaction event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
+                log.trace(
+                  s"L2 transaction event, txId: $txId, content: ${serializeTxHex(cardanoTx)}"
+                )
                 (cardanoTx, txId)
             case withdrawal: SimpleWithdrawal =>
                 val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal)
                 val txId = txHash(cardanoTx)
-                println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
+                log.trace(
+                  s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}"
+                )
                 (cardanoTx, txId)
 
     def mkGenesisEvent(genesis: SimpleGenesis): GenesisL2 =

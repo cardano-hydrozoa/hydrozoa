@@ -38,9 +38,16 @@ class BlockProducer:
         timeCreation: PosixTime,
         finalizing: Boolean
     ): Either[String, (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
+
+        val sortedPoolEvents = poolEvents
+            .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1 )
+
+        log.info(s"Pool events for block production: $poolEvents")
+        log.info(s"Pool events for block production (sorted): $sortedPoolEvents")
+
         createBlock(
           stateL2,
-          poolEvents,
+          sortedPoolEvents,
           depositsPending,
           prevHeader,
           timeCreation,

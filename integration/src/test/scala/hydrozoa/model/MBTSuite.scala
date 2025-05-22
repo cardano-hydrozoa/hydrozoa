@@ -25,26 +25,22 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
 import org.scalacheck.Prop.{Result, propBoolean}
+import org.scalacheck.Test.Parameters
 import org.scalacheck.commands.Commands
 import org.scalacheck.rng.Seed
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.util.Pretty
+import org.scalacheck.util.ConsoleReporter
+import org.scalacheck.{Gen, Prop, Properties, Test}
 import scalus.prelude.Maybe
 import sttp.client4.Response
 import sttp.client4.quick.*
 
+import java.util.concurrent.atomic.AtomicInteger
+import scala.collection.immutable.Set as Opt
 import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
 import scala.util.{Failure, Success, Try}
 
-/** Might be a bit of abuse of `collect`, but works - compare and report values
- * in case they don't match.
- */
-def cmpAndCollect[A](expected: A, sut: A)(using CanEqual[A, A]): Prop =
-    val r =
-        if expected == sut
-        then Result.apply(Prop.True)
-        else Result.apply(Prop.False).collect(expected).collect(sut)
-    Prop.apply(r)
 
 object MBTSuite extends Commands:
 
@@ -82,12 +78,14 @@ object MBTSuite extends Commands:
         networkPeers <- Gen.pick(numberOfNetworkPeers, TestPeer.values)
     yield HydrozoaState(Utils.protocolParams, networkPeers.toSet)
 
+    val cnt = AtomicInteger(0)
+
     override def genCommand(s: State): Gen[Command0] =
         s.peersNetworkPhase match
             case NewlyCreated =>
                 Gen.frequency(
                   10 -> genInitializeCommand(s),
-                  1 -> Gen.const(ShutdownCommand)
+                  1 -> Gen.const(ShutdownCommand(cnt.incrementAndGet()))
                 )
             case RunningHead =>
                 lazy val l2InputCommandGen = Gen.frequency(
@@ -107,9 +105,9 @@ object MBTSuite extends Commands:
             case Freed =>
                 Gen.frequency(
                   2 -> genInitializeCommand(s),
-                  1 -> Gen.const(ShutdownCommand)
+                  1 -> Gen.const(ShutdownCommand(cnt.incrementAndGet()))
                 )
-            case Shutdown => NoOp0
+            case Shutdown => NoOp0(cnt.incrementAndGet())
 
     def genInitializeCommand(s: State): Gen[InitializeCommand] =
         val initiator = s.knownPeers.head
@@ -121,7 +119,7 @@ object MBTSuite extends Commands:
             numberOfHeadPeers <- Gen.chooseNum(0, s.knownPeers.tail.size)
             headPeers <- Gen.pick(numberOfHeadPeers, s.knownPeers.tail)
             seedUtxoId <- Gen.oneOf(utxoIds)
-        yield InitializeCommand(initiator, headPeers.toSet, seedUtxoId)
+        yield InitializeCommand(cnt.incrementAndGet(), initiator, headPeers.toSet, seedUtxoId)
 
     def genDepositCommand(s: State): Gen[DepositCommand] =
 
@@ -139,7 +137,14 @@ object MBTSuite extends Commands:
                 BigInt.apply(5_000_000).min(coins),
                 BigInt.apply(100_000_000).min(coins)
             )
-        yield DepositCommand(depositor, seedUtxoId, depositAmount, recipientAddressL2, depositorAddressL1)
+        yield DepositCommand(
+            cnt.incrementAndGet(),
+            depositor,
+            seedUtxoId,
+            depositAmount,
+            recipientAddressL2,
+            depositorAddressL1
+        )
 
     def genTransactionL2(s: State): Gen[TransactionL2Command] =
         val l2 = AdaSimpleLedger.apply(s.utxosActiveL2)
@@ -165,24 +170,24 @@ object MBTSuite extends Commands:
             outputs = outputCoins
                 .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
                 .map((coins, address) => SimpleOutput(address, coins))
-        yield TransactionL2Command(SimpleTransaction(inputs.toList, outputs))
+        yield TransactionL2Command(cnt.incrementAndGet(), SimpleTransaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: State): Gen[WithdrawalL2Command] =
         for
             numberOfInputs <- Gen.choose(1, 3.min(s.utxosActiveL2.size))
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-        yield WithdrawalL2Command(SimpleWithdrawal(inputs.toList))
+        yield WithdrawalL2Command(cnt.incrementAndGet(), SimpleWithdrawal(inputs.toList))
 
     def genCreateBlock(s: State): Gen[ProduceBlockCommand] =
         for finalize <- Gen.prob(0.01)
-    yield ProduceBlockCommand(finalize)
+    yield ProduceBlockCommand(cnt.incrementAndGet(), finalize)
 
     /** ------------------------------------------------------------------------------------------
      * StateLikeCommand
      * ------------------------------------------------------------------------------------------
      */
 
-    trait Command0 extends Command:
+    trait Command0(val id: Int) extends Command:
 
         private[MBTSuite] def runPC0(sut: Sut): (Try[String], State => Prop) = {
             import Prop.propBoolean
@@ -190,7 +195,7 @@ object MBTSuite extends Commands:
             (r.map(_.toString), s => preCondition(s) ==> postCondition(s, r))
         }
 
-    case object NoOp0 extends Command0 {
+    case class NoOp0(override val id: Int) extends Command0(id) {
         type Result = Null
 
         def run(sut: Sut) = null
@@ -244,17 +249,18 @@ object MBTSuite extends Commands:
      */
 
     class InitializeCommand(
+        override val id: Int,
         initiator: TestPeer,
         otherHeadPeers: Set[TestPeer],
         seedUtxo: UtxoIdL1
-    ) extends StateLikeCommand:
+    ) extends StateLikeCommand with Command0(id):
 
         private val log = Logger(getClass)
 
         override type Result = Either[InitializationError, TxId]
 
         override def toString: String =
-            s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
+            s"($id) Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 
         override def run(sut: Sut): Result =
             log.info(".run")
@@ -340,7 +346,7 @@ object MBTSuite extends Commands:
         ): Prop =
             log.info(".postConditionSuccess")
 
-            s"results should be the same" |: cmpAndCollect(sutResult, expectedResult)
+            s"results should be the same" |: cmpLabel(this.id, sutResult, expectedResult)
 
         override def postConditionFailure(
             _expectedResult: Result,
@@ -357,19 +363,20 @@ object MBTSuite extends Commands:
      */
 
     class DepositCommand(
+        override val id: Int,
         depositor: TestPeer,
         fundUtxo: UtxoIdL1,
         amount: BigInt,
         address: AddressBechL2,
         refundAddress: AddressBechL1
-    ) extends StateLikeCommand:
+    ) extends StateLikeCommand with Command0(id):
 
         private val log = Logger(getClass)
 
         override type Result = Either[DepositError, DepositResponse]
 
         override def toString: String =
-            s"Deposit command { depositor = $depositor, amount = $amount, fund utxo = $fundUtxo, address = $address, refund address = $refundAddress}"
+            s"($id) Deposit command { depositor = $depositor, amount = $amount, fund utxo = $fundUtxo, address = $address, refund address = $refundAddress}"
 
         override def runState(
             state: HydrozoaState
@@ -479,13 +486,13 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Command0:
+    class TransactionL2Command(override val id: Int, simpleTransaction: SimpleTransaction) extends Command0(id):
 
         private val log = Logger(getClass)
 
         override type Result = Unit
 
-        override def toString: String = s"Transaction L2 command { $simpleTransaction }"
+        override def toString: String = s"($id) Transaction L2 command { $simpleTransaction }"
 
         override def run(sut: Sut): Unit =
             log.info(".run")
@@ -511,13 +518,13 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends Command0:
+    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: SimpleWithdrawal) extends Command0(id):
 
         private val log = Logger(getClass)
 
         override type Result = Unit
 
-        override def toString: String = s"Withdrawal L2 command { $simpleWithdrawal }"
+        override def toString: String = s"($id) Withdrawal L2 command { $simpleWithdrawal }"
 
         override def run(sut: Sut): Unit =
             log.info(".run")
@@ -542,13 +549,13 @@ object MBTSuite extends Commands:
      * Produce Block Command
      * ------------------------------------------------------------------------------------------
      */
-    class ProduceBlockCommand(finalization: Boolean) extends StateLikeCommand:
+    class ProduceBlockCommand(override val id: Int, finalization: Boolean) extends StateLikeCommand with Command0(id):
 
         private val log = Logger(getClass)
 
-        override type Result = Either[String, (BlockRecord)]
+        override type Result = Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])]
 
-        override def toString: String = s"Produce block command {finalization = $finalization}"
+        override def toString: String = s"($id) Produce block command {finalization = $finalization}"
 
         override def runState(
             state: HydrozoaState
@@ -558,9 +565,17 @@ object MBTSuite extends Commands:
             // Produce block
             val l2 = AdaSimpleLedger.apply[TBlockProduction](state.utxosActiveL2)
 
+            // TODO: verify sorting
+            // TODO: move to the block producer?
+            val sortedPoolEvents = state.poolEvents
+                    .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1 )
+
+            log.info(s"Model pool events for block production: ${state.poolEvents}")
+            log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents}")
+
             val maybeNewBlock = createBlock(
                 l2,
-                state.poolEvents,
+                sortedPoolEvents,
                 state.depositUtxos,
                 state.l2Tip.blockHeader,
                 timeCurrent,
@@ -625,7 +640,7 @@ object MBTSuite extends Commands:
                         utxosActiveL2 = l2.getUtxosActive |> unliftUtxoSet
                     )
 
-                    Right(record) /\ newState
+                    Right(record, mbGenesis) /\ newState
 
         override def postConditionSuccess(
             expectedResult: Result,
@@ -636,37 +651,39 @@ object MBTSuite extends Commands:
             log.info(".postConditionSuccess")
 
             (result, expectedResult) match
-                case (Right(blockRecord),
-                        Right(expectedBlockRecord)) =>
+                case (Right(blockRecord, mbGenesis),
+                        Right(expectedBlockRecord, expectedMbGenesis)) =>
                     val header = blockRecord.block.blockHeader
                     val eHeader = expectedBlockRecord.block.blockHeader
 
                     val body = blockRecord.block.blockBody
                     val eBody = expectedBlockRecord.block.blockBody
 
-                    log.info(s"blockRecord.l1Effect.mbTxHash: ${mbTxHash(blockRecord.l1Effect)}")
-                    log.info(s"blockRecord.l1Effect: ${maybeMultisigL1Tx(blockRecord.l1Effect).map(serializeTxHex)}")
+//                    log.info(s"blockRecord.l1Effect.mbTxHash: ${mbTxHash(blockRecord.l1Effect)}")
+//                    log.info(s"blockRecord.l1Effect: ${maybeMultisigL1Tx(blockRecord.l1Effect).map(serializeTxHex)}")
+//
+//                    log.info(s"expectedBlockRecord.l1Effect.mbTxHash: ${mbTxHash(expectedBlockRecord.l1Effect)}")
+//                    log.info(s"expectedBlockRecord.l1Effect: ${maybeMultisigL1Tx(expectedBlockRecord.l1Effect).map(serializeTxHex)}")
 
-                    log.info(s"expectedBlockRecord.l1Effect.mbTxHash: ${mbTxHash(expectedBlockRecord.l1Effect)}")
-                    log.info(s"expectedBlockRecord.l1Effect: ${maybeMultisigL1Tx(expectedBlockRecord.l1Effect).map(serializeTxHex)}")
 
                     val ret =
-                        ("Block number should be the same" |: header.blockNum == eHeader.blockNum)
-                            && ("Block type should be the same" |: header.blockType == eHeader.blockType)
-                            && ("Major version should be the same" |: header.versionMajor == eHeader.versionMajor)
-                            && ("Minor version should be the same" |: header.versionMinor == eHeader.versionMinor)
-                            && ("Valid events should be the same" |: body.eventsValid == eBody.eventsValid)
-                            && ("Invalid events should be the same" |: body.eventsInvalid == eBody.eventsInvalid)
-                            && ("Deposit absorbed should be the same" |: body.depositsAbsorbed.toSet.equals(eBody.depositsAbsorbed.toSet))
+                        ("Block number should be the same" |: cmpLabel(this.id, header.blockNum, eHeader.blockNum))
+                            && ("Block type should be the same" |: cmpLabel(this.id, header.blockType, eHeader.blockType))
+                            && ("Major version should be the same" |: cmpLabel(this.id, header.versionMajor, eHeader.versionMajor))
+                            && ("Minor version should be the same" |: cmpLabel(this.id, header.versionMinor, eHeader.versionMinor))
+                            && ("Valid events should be the same" |: cmpLabel(this.id, body.eventsValid, eBody.eventsValid))
+                            && ("Invalid events should be the same" |: cmpLabel(this.id, body.eventsInvalid, eBody.eventsInvalid))
+                            && ("Deposit absorbed should be the same" |: cmpLabel(this.id, body.depositsAbsorbed.toSet, eBody.depositsAbsorbed.toSet))
+                            && ("Blocks should be the same"|: cmpLabel(this.id, body, eBody))
+                            && ("Genesis should be the same" |: cmpLabel(this.id, mbGenesis, expectedMbGenesis))
                             && ("L1 effect tx hashes should be the same" |:
                                 mbTxHash(blockRecord.l1Effect).isDefined ==>
-                                    (mbTxHash(blockRecord.l1Effect).get.hash == mbTxHash(expectedBlockRecord.l1Effect).get.hash))
-                            && (s"L2 effects should be the same:\n got: ${blockRecord.l2Effect},\n expected: ${expectedBlockRecord.l2Effect}" |:
-                                blockRecord.l2Effect == expectedBlockRecord.l2Effect)
+                                    cmpLabel(this.id, mbTxHash(blockRecord.l1Effect).get.hash, mbTxHash(expectedBlockRecord.l1Effect).get.hash))
+                            && (cmpLabel(this.id, blockRecord.l2Effect, expectedBlockRecord.l2Effect) :| "L2 effects should be the same")
 
                     ret
                 case (Left(error), Left(expectedError)) =>
-                    s"errors should be the same" |: cmpAndCollect(error, expectedError)
+                    s"errors should be the same" |: cmpLabel(this.id, error, expectedError)
                 case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
 
         override def postConditionFailure(
@@ -680,7 +697,7 @@ object MBTSuite extends Commands:
 
         override def run(sut: Sut): Result =
             log.info(".run")
-            sut.produceBlock(finalization).map(_._1)
+            sut.produceBlock(finalization)
 
         override def preCondition(state: HydrozoaState): Boolean =
             log.info(".preCondition")
@@ -699,11 +716,11 @@ object MBTSuite extends Commands:
             postCondition(state, result.isSuccess)
     }
 
-    object ShutdownCommand extends UnitCommand0:
+    class ShutdownCommand(override val id: Int) extends UnitCommand0 with Command0(id):
 
         private val log = Logger(getClass)
 
-        override def toString: String = "Shutdown command"
+        override def toString: String = s"($id) Shutdown command"
 
         override def postCondition(state: HydrozoaState, success: Boolean): Prop =
             log.info(".postCondition")
@@ -842,15 +859,18 @@ object MBTSuite extends Commands:
 
     private def runActions(sut: Sut, as: Actions, finalize: => Unit): Prop = {
         val maxLength = as.seqCmds.length
-        val (p1, s, rs1) = runSeqCmds(sut, as.s, as.seqCmds)
-        val l1 = s"Initial State:\n  ${as.s}\nSequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}"
+        val (p1, s, rs1, lastCmd) = runSeqCmds(sut, as.s, as.seqCmds)
+        val l1 = s"Initial State:\n  ${as.s}\n" +
+            s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}\n" +
+            s"Last executed command: $lastCmd"
         p1 :| l1
     }
 
-    private def runSeqCmds(sut: Sut, s0: State, cs: Commands0): (Prop, State, List[Try[String]]) =
-        cs.foldLeft((Prop.proved, s0, List[Try[String]]())) { case ((p, s, rs), c) =>
+    // Added the last succeded command (last `Int`)
+    private def runSeqCmds(sut: Sut, s0: State, cs: Commands0): (Prop, State, List[Try[String]], Int) =
+        cs.foldLeft((Prop.proved, s0, List[Try[String]](), 0)) { case ((p, s, rs, lastCmd), c) =>
             val (r, pf) = c.runPC0(sut)
-            (p && pf(s), c.nextState(s), rs :+ r)
+            (p && pf(s), c.nextState(s), rs :+ r, lastCmd + 1)
         }
 
     private def prettyCmdsRes(rs: List[(Command0, Try[String])], maxLength: Int) = {
@@ -877,12 +897,250 @@ object MBTSuite extends Commands:
  * ------------------------------------------------------------------------------------------
  */
 
-object HydrozoaOneNodeWithL1Mock extends Properties("Hydrozoa One node mode with L1 mock"):
+class Properties0(override val name: String) extends Properties(name):
+    override def main(args: Array[String]): Unit =
+        CmdLineParser.parseParams(args) match {
+            case (applyCmdParams, Nil) =>
+                val params = applyCmdParams(overrideParameters(Test.Parameters.default))
+                val res = Test.checkProperties(params, this)
+                val numFailed = res.count(!_._2.passed)
+                if (numFailed > 0) {
+                    Console.out.println(s"Found $numFailed failing properties.")
+                    System.exit(1)
+                } else {
+                    System.exit(0)
+                }
+            case (_, os) =>
+                Console.out.println("Incorrect options:\n  " + os.mkString(", "))
+                CmdLineParser.printHelp()
+                System.exit(-1)
+        }
+
+trait CmdLineParser {
+
+    trait Opt[+T] {
+        val default: T
+        val names: Set[String]
+        val help: String
+    }
+
+    trait Flag extends Opt[Unit]
+
+    trait IntOpt extends Opt[Int]
+
+    trait FloatOpt extends Opt[Float]
+
+    trait StrOpt extends Opt[String]
+
+    trait OpStrOpt extends Opt[Option[String]]
+
+    abstract class OpStrOptCompat extends OpStrOpt {
+        val default: Option[String] = None
+    }
+
+    class OptMap(private val opts: Map[Opt[?], Any] = Map.empty) {
+        def apply(flag: Flag): Boolean = opts.contains(flag)
+
+        def apply[T](opt: Opt[T]): T = opts.get(opt) match {
+            case None => opt.default
+            case Some(v) => v.asInstanceOf[T]
+        }
+
+        def set[T](o: (Opt[T], T)) = new OptMap(opts + o)
+    }
+
+    val opts: Set[Opt[?]]
+
+    private def getOpt(s: String) = {
+        if (s == null || s.length == 0 || s.charAt(0) != '-') None
+        else opts.find(_.names.contains(s.drop(1)))
+    }
+
+    private def getStr(s: String) = Some(s)
+
+    private def getInt(s: String) =
+        if (s != null && s.length > 0 && s.forall(_.isDigit)) Some(s.toInt)
+        else None
+
+    private def getFloat(s: String) =
+        if (s != null && s.matches("[0987654321]+\\.?[0987654321]*")) Some(s.toFloat)
+        else None
+
+    def printHelp(): Unit = {
+        Console.out.println("Available options:")
+        opts.foreach { opt =>
+            Console.out.println("  " + opt.names.map("-" + _).mkString(", ") + ": " + opt.help)
+        }
+    }
+
+    /** Parses a command line and returns a tuple of the parsed options, and any unrecognized strings
+     */
+    def parseArgs[T](args: Array[String]): (OptMap, List[String]) = {
+
+        def parse(
+                     as: List[String],
+                     om: OptMap,
+                     us: List[String]
+                 ): (OptMap, List[String]) =
+            as match {
+                case Nil => (om, us)
+                case a :: Nil =>
+                    getOpt(a) match {
+                        case Some(o: Flag) =>
+                            parse(Nil, om.set((o, ())), us)
+                        case _ =>
+                            (om, us :+ a)
+                    }
+                case a1 :: a2 :: as => getOpt(a1) match {
+                    case Some(o: Flag) =>
+                        parse(a2 :: as, om.set((o, ())), us)
+                    case otherwise =>
+                        (otherwise match {
+                            case Some(o: IntOpt) => getInt(a2).map(v => parse(as, om.set(o -> v), us))
+                            case Some(o: FloatOpt) => getFloat(a2).map(v => parse(as, om.set(o -> v), us))
+                            case Some(o: StrOpt) => getStr(a2).map(v => parse(as, om.set(o -> v), us))
+                            case Some(o: OpStrOpt) => getStr(a2).map(v => parse(as, om.set(o -> Option(v)), us))
+                            case _ => None
+                        }).getOrElse(parse(a2 :: as, om, us :+ a1))
+                }
+            }
+
+        parse(args.toList, new OptMap(), Nil)
+    }
+}
+
+
+object CmdLineParser extends CmdLineParser{
+    object OptMinSuccess extends IntOpt {
+        val default = Parameters.default.minSuccessfulTests
+        val names: Set[String] = Set("minSuccessfulTests", "s")
+        val help = "Number of tests that must succeed in order to pass a property"
+    }
+
+    object OptMaxDiscardRatio extends FloatOpt {
+        val default = Parameters.default.maxDiscardRatio
+        val names: Set[String] = Set("maxDiscardRatio", "r")
+        val help =
+            "The maximum ratio between discarded and succeeded tests " +
+                "allowed before ScalaCheck stops testing a property. At " +
+                "least minSuccessfulTests will always be tested, though."
+    }
+
+    object OptMinSize extends IntOpt {
+        val default = Parameters.default.minSize
+        val names: Set[String] = Set("minSize", "n")
+        val help = "Minimum data generation size"
+    }
+
+    object OptMaxSize extends IntOpt {
+        val default = Parameters.default.maxSize
+        val names: Set[String] = Set("maxSize", "x")
+        val help = "Maximum data generation size"
+    }
+
+    object OptWorkers extends IntOpt {
+        val default = Parameters.default.workers
+        val names: Set[String] = Set("workers", "w")
+        val help = "Number of threads to execute in parallel for testing"
+    }
+
+    object OptVerbosity extends IntOpt {
+        val default = 1
+        val names: Set[String] = Set("verbosity", "v")
+        val help = "Verbosity level"
+    }
+
+    object OptPropFilter extends OpStrOptCompat {
+        override val default = Parameters.default.propFilter
+        val names: Set[String] = Set("propFilter", "f")
+        val help = "Regular expression to filter properties on"
+    }
+
+    object OptInitialSeed extends OpStrOptCompat {
+        override val default: None.type = None
+        val names: Set[String] = Set("initialSeed")
+        val help = "Use Base-64 seed for all properties"
+    }
+
+    object OptDisableLegacyShrinking extends Flag {
+        val default = ()
+        val names: Set[String] = Set("disableLegacyShrinking")
+        val help = "Disable legacy shrinking using Shrink instances"
+    }
+
+    object OptMaxRNGSpins extends IntOpt {
+        val default = 1
+        val names: Set[String] = Set("maxRNGSpins")
+        val help = "Maximum number of RNG spins to perform between checks"
+    }
+
+    val opts: Set[Opt[?]] = Set[Opt[?]](
+        OptMinSuccess,
+        OptMaxDiscardRatio,
+        OptMinSize,
+        OptMaxSize,
+        OptWorkers,
+        OptVerbosity,
+        OptPropFilter,
+        OptInitialSeed,
+        OptDisableLegacyShrinking,
+        OptMaxRNGSpins
+    )
+
+    def parseParams(args: Array[String]): (Parameters => Parameters, List[String]) = {
+        val (optMap, us) = parseArgs(args)
+        val minSuccess0: Int = optMap(OptMinSuccess)
+        val minSize0: Int = optMap(OptMinSize)
+        val maxSize0: Int = optMap(OptMaxSize)
+        val workers0: Int = optMap(OptWorkers)
+        val verbosity0 = optMap(OptVerbosity)
+        val discardRatio0: Float = optMap(OptMaxDiscardRatio)
+        val propFilter0: Option[String] = optMap(OptPropFilter)
+        val initialSeed0: Option[Seed] =
+            optMap(OptInitialSeed).flatMap { str =>
+                Seed.fromBase64(str) match {
+                    case Success(seed) =>
+                        Some(seed)
+                    case Failure(_) =>
+                        println(s"WARNING: ignoring invalid Base-64 seed ($str)")
+                        None
+                }
+            }
+
+        val useLegacyShrinking0: Boolean = !optMap(OptDisableLegacyShrinking)
+        val maxRNGSpins: Int = optMap(OptMaxRNGSpins)
+        val params = { (p: Parameters) =>
+            p.withMinSuccessfulTests(minSuccess0)
+                .withMinSize(minSize0)
+                .withMaxSize(maxSize0)
+                .withWorkers(workers0)
+                .withTestCallback(ConsoleReporter(verbosity0, 100000))
+                .withMaxDiscardRatio(discardRatio0)
+                .withPropFilter(propFilter0)
+                .withInitialSeed(initialSeed0)
+                .withLegacyShrinking(useLegacyShrinking0)
+                .withMaxRNGSpins(maxRNGSpins)
+        }
+        (params, us)
+    }
+}
+
+def cmpLabel[A](id: Int, actual: A, expected: A)(using CanEqual[A, A]): Prop =
+    val r =
+        if actual == expected
+        then Result.apply(Prop.True)
+        else Result.apply(Prop.False)
+            .label(s"Expected: $expected")
+            .label(s"Got: $actual")
+            .label(s"Failed command's ID: $id")
+    Prop.apply(r)
+
+object HydrozoaOneNodeWithL1Mock extends Properties0("Hydrozoa One node mode with L1 mock"):
     property("Just works, nothing bad happens") = MBTSuite.property0()
         .useSeed(Seed.fromBase64("bGr0AUfvwXSFZWTPVyXA9S5fHWn-NsCe3silG6HWbPD=").get)
 
 
-object HydrozoaOneNodeWithYaci extends Properties("Hydrozoa One node mode with Yaci"):
+object HydrozoaOneNodeWithYaci extends Properties0("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
     property("Just works, nothing bad happens") = MBTSuite.property0()
 //        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)

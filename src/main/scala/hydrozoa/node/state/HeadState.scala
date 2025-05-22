@@ -372,7 +372,7 @@ class HeadStateGlobal(
                 && this.isBlockLeader && !this.isBlockPending
             then
                 log.info(s"Trying to producing a new block...")
-                
+
                 blockProductionActor.ask(
                   _.produceBlock(
                     stateL2.blockProduction,
@@ -384,10 +384,12 @@ class HeadStateGlobal(
                   )
                 ) match
                     case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
-                        self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+                        self.pendingOwnBlock = Some(
+                          OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                        )
                         self.isBlockPending = Some(true)
                         Right(block)
-                    case Left(err) => Left(err) 
+                    case Left(err) => Left(err)
             else
                 val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
@@ -403,9 +405,9 @@ class HeadStateGlobal(
         ): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])] =
             // TODO: shall we use Map not Buffer?
             self.blocksConfirmedL2.find(_.block == block) match
-                case None              => None
+                case None => None
                 case Some(blockRecord) =>
-                    val mbGenesis = self.genesisEventsConfirmedL2.get(block.blockHeader.blockNum) 
+                    val mbGenesis = self.genesisEventsConfirmedL2.get(block.blockHeader.blockNum)
                     Some(blockRecord, mbGenesis)
 
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
@@ -571,9 +573,13 @@ class HeadStateGlobal(
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
             // 3. Remove invalid events
+            log.info(s"Pool events before removing: ${self.poolEventsL2.size}")
+
             log.info(s"Removing invalid events: $eventsInvalid")
             self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
+
+            log.info(s"Pool events after removing: ${self.poolEventsL2.size}")
 
             // Metrics - FIXME: factor out
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
