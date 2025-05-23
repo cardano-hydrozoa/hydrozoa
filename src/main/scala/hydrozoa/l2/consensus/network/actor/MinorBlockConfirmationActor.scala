@@ -29,8 +29,7 @@ private class MinorBlockConfirmationActor(
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if acks.keySet == headPeers
-        then
+        if (req != null && acks.keySet == headPeers)
             // Create effects
             // TODO: Should become a resolution vote at some point
             val l1Effect: L1BlockEffect = ()

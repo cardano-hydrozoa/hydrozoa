@@ -113,6 +113,13 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
     def poolEventL2(event: NonGenesisL2): Unit
+
+    /** Used only for testing. Checks whether an non-genesis event is in the pool.
+      * @param txId
+      * @return
+      */
+    def isL2EventInPool(txId: TxId): Boolean
+
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
@@ -127,6 +134,24 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def requestFinalization(): Unit
     def isFinalizationRequested: Boolean
     def switchToFinalizingPhase(): Unit
+
+    /** As an API (trait's) method is used only for testing. Tries to run block creation routine and
+      * consensus on the block. Returns the block, for getting the block record use
+      * `getBlockRecord`.
+      * @param finalizing
+      * @param force
+      * @return
+      */
+    def tryProduceBlock(
+        finalizing: Boolean,
+        force: Boolean = false
+    ): Either[String, Block]
+
+    /** Used only for testing. Tries to look up block's effects.
+      * @return
+      *   Block record and optional genesis if effects for block are ready.
+      */
+    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def stateL2: AdaSimpleLedger[THydrozoaHead]
@@ -146,7 +171,8 @@ class HeadStateGlobal(
     val beaconTokenName: TokenName,
     val seedAddress: AddressBechL1,
     val initTx: InitTx, // Block #0 L1-effect
-    val initializedOn: Long
+    val initializedOn: Long,
+    val autonomousBlocks: Boolean
 ) extends HeadStateReader
     with HeadState {
     self =>
@@ -187,8 +213,9 @@ class HeadStateGlobal(
 
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
-    // TODO: these events won't contain genesis events
-    private val eventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
+    private val genesisEventsConfirmedL2: mutable.Map[Int, (TxId, SimpleGenesis)] = mutable.Map()
+    // TODO: don't use EventL2 but rather NonGenesisL2
+    private val nonGenesisEventsConfirmedL2: mutable.Buffer[(EventL2, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
@@ -252,7 +279,7 @@ class HeadStateGlobal(
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
         def immutablePoolEventsL2: Seq[NonGenesisL2] = self.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
-        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.eventsConfirmedL2.toSeq
+        def immutableEventsConfirmedL2: Seq[(EventL2, Int)] = self.nonGenesisEventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
@@ -310,7 +337,7 @@ class HeadStateGlobal(
               s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
             )
 
-    def nodeRoundRobinTurn: Int =
+    private def nodeRoundRobinTurn: Int =
         /* Let's say we have three peers: Alice, Bob, and Carol.
            And their VKH happen to give the same order.
            Then on Alice this function will return 1, so Alice's turns will be 1,4,7,...
@@ -334,9 +361,6 @@ class HeadStateGlobal(
         def poolEventL2(event: NonGenesisL2): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
-            log.info(
-              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
-            )
             // Metrics
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
             metrics.tell(m =>
@@ -344,13 +368,21 @@ class HeadStateGlobal(
                 m.setPoolEventsL2(WithdrawalL2EventLabel, self.poolEventsL2.size - txs)
             )
             // Try produce block
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing block due to getting new L2 event...")
-                produceBlock(false)
+            log.info("Try to produce a block due to getting new L2 event...")
+            tryProduceBlock(false)
 
-        private def produceBlock(finalizing: Boolean): Unit = {
-            self.isBlockPending = Some(true)
-            val (block, utxosActive, _, utxosWithdrawn, mbGenesis) =
+        def isL2EventInPool(txId: TxId): Boolean =
+            self.poolEventsL2.map(_.getEventId).contains(txId)
+
+        override def tryProduceBlock(
+            finalizing: Boolean,
+            force: Boolean = false
+        ): Either[String, Block] = {
+            if (self.autonomousBlocks || force)
+                && this.isBlockLeader && !this.isBlockPending
+            then
+                log.info(s"Trying to producing a new block...")
+
                 blockProductionActor.ask(
                   _.produceBlock(
                     stateL2.blockProduction,
@@ -360,9 +392,33 @@ class HeadStateGlobal(
                     timeCurrent,
                     finalizing
                   )
-                )
-            self.pendingOwnBlock = Some(OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis))
+                ) match
+                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
+                        self.pendingOwnBlock = Some(
+                          OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                        )
+                        self.isBlockPending = Some(true)
+                        Right(block)
+                    case Left(err) => Left(err)
+            else
+                val msg = s"Block is not going to be produced: " +
+                    s"autonomousBlocks=${self.autonomousBlocks} " +
+                    s"force=$force " +
+                    s"isBlockLeader=${this.isBlockLeader} " +
+                    s"isBlockPending=${this.isBlockPending} "
+                log.info(msg)
+                Left(msg)
         }
+
+        override def getBlockRecord(
+            block: Block
+        ): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])] =
+            // TODO: shall we use Map not Buffer?
+            self.blocksConfirmedL2.find(_.block == block) match
+                case None => None
+                case Some(blockRecord) =>
+                    val mbGenesis = self.genesisEventsConfirmedL2.get(block.blockHeader.blockNum)
+                    Some(blockRecord, mbGenesis)
 
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
             log.info("Net treasury utxo")
@@ -377,13 +433,9 @@ class HeadStateGlobal(
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
             self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
-            log.info(
-              s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
-            )
             updateDepositLiquidity()
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing new block due to observing a new deposit utxo...")
-                produceBlock(false)
+            log.info("Try to produce a new block due to observing a new deposit utxo...")
+            tryProduceBlock(false)
 
         private def updateDepositLiquidity(): Unit =
             val coins = self.stateL1.get.depositUtxos.map.values.map(_.coins).sum
@@ -406,11 +458,12 @@ class HeadStateGlobal(
             self.pendingOwnBlock = None
 
             // Next block leader
-            val nextBlockNum = blockHeader.blockNum + 1
+            val nextBlockNum = blockNum + 1
             self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
 
             // State
             self.blocksConfirmedL2.append(record)
+            mbGenesis.foreach(g => self.genesisEventsConfirmedL2.put(blockNum, g))
 
             val confirmedEvents = applyBlockEvents(
               blockNum,
@@ -495,7 +548,7 @@ class HeadStateGlobal(
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = self.poolEventsL2.remove(i)
-                        self.eventsConfirmedL2.append((event, blockNum))
+                        self.nonGenesisEventsConfirmedL2.append((event, blockNum))
                         // Remove possible duplicates form the pool
                         self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
                             |> self.poolEventsL2.subtractAll
@@ -530,9 +583,13 @@ class HeadStateGlobal(
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
             // 3. Remove invalid events
+            log.info(s"Pool events before removing: ${self.poolEventsL2.size}")
+
             log.info(s"Removing invalid events: $eventsInvalid")
             self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
+
+            log.info(s"Pool events after removing: ${self.poolEventsL2.size}")
 
             // Metrics - FIXME: factor out
             val txs = self.poolEventsL2.map(nonGenesisLabel(_)).count(_ == TransactionL2EventLabel)
@@ -550,9 +607,10 @@ class HeadStateGlobal(
         override def isFinalizationRequested: Boolean = self.mbIsFinalizationRequested.get
 
         override def switchToFinalizingPhase(): Unit =
-            if this.isBlockLeader && !this.isBlockPending then
-                log.info("Producing final block...")
-                produceBlock(true)
+            log.info("Try to produce the final block...")
+            tryProduceBlock(true)
+            // TODO: should be fine, though we need to test finalization
+            log.info("Putting head into Finalizing phase.")
             self.headPhase = Finalizing
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
@@ -574,7 +632,7 @@ class HeadStateGlobal(
             self.poolEventsL2.clear()
             self.poolDeposits.clear()
             self.blocksConfirmedL2.clear()
-            self.eventsConfirmedL2.clear()
+            self.nonGenesisEventsConfirmedL2.clear()
             self.depositHandled.clear()
             self.depositL1Effects.clear()
             self.stateL1 = None
@@ -672,7 +730,8 @@ object HeadStateGlobal:
           beaconTokenName = params.beaconTokenName,
           seedAddress = params.seedAddress,
           initTx = params.initTx,
-          initializedOn = params.initializedOn
+          initializedOn = params.initializedOn,
+          autonomousBlocks = params.autonomousBlocks
         )
 
 case class BlockRecord(

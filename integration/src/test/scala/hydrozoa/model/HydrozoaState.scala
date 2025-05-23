@@ -43,7 +43,7 @@ case class HydrozoaState(
         "Hydrozoa state:" +
             s"\tNetwork phase: ${peersNetworkPhase.toString}\n" +
             s"\tKnown peers: ${knownPeers.toString()}\n" +
-            s"\tPrtotocol parameters: [SKIPPED]\n" +
+            s"\tProtocol parameters: [SKIPPED]\n" +
             s"\tHead phase: ${headPhase.toString}\n" +
             s"\tInitiator: ${initiator.toString}\n" +
             s"\tHead peers: ${headPeers.toString()}\n" +

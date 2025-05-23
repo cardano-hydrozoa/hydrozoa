@@ -37,10 +37,17 @@ class BlockProducer:
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
         finalizing: Boolean
-    ): (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)]) =
+    ): Either[String, (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
+
+        // TODO: move to the block producer?
+        val poolEventsSorted = poolEvents.sortBy(_.getEventId.hash)
+
+        log.info(s"Pool events for block production: ${poolEvents.map(_.getEventId.hash)}")
+        log.info(s"Pool events for block production (sorted): ${poolEventsSorted.map(_.getEventId.hash)}")
+
         createBlock(
           stateL2,
-          poolEvents,
+          poolEventsSorted,
           depositsPending,
           prevHeader,
           timeCreation,
@@ -55,9 +62,11 @@ class BlockProducer:
                     case Minor => networkRef.tell(_.reqMinor(ReqMinor(block)))
                     case Major => networkRef.tell(_.reqMajor(ReqMajor(block)))
                     case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
-                some
+                Right(some)
             case None =>
-                throw RuntimeException("Should not happen: was not able to produce a block.")
+                val msg = "Block production procedure was unable to create a block"
+                log.warn(msg)
+                Left(msg)
 
 /** "Pure" function that produces an L2 block along with sets of added and withdrawn utxos.
   *
@@ -122,17 +131,18 @@ def createBlock(
     // 4. If finalizing is False...
     val mbGenesis = if !finalizing then
         // TODO: check deposits timing
-        val eligibleDeposits: DepositUtxos =
+        val depositsEligible: DepositUtxos =
             UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
-        if eligibleDeposits.map.isEmpty then None
+        if depositsEligible.map.isEmpty then None
         else
-            val genesis: SimpleGenesis = SimpleGenesis.apply(eligibleDeposits)
+            val depositsSorted = depositsEligible.map.toList.sortWith((a, b) =>
+                a._1._1.hash.compareTo(b._1._1.hash) < 0
+            )
+            val genesis: SimpleGenesis = SimpleGenesis.mkGenesis(depositsSorted.map(_._2))
             stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
                 case Right(txId, utxos) =>
                     utxosAdded.addAll(utxos)
-                    depositsAbsorbed = eligibleDeposits.map.keySet.toList.sortWith((a, b) =>
-                        a._1.hash.compareTo(b._1.hash) < 0
-                    )
+                    depositsAbsorbed = depositsSorted.map(_._1)
                     Some(txId, genesis)
                 case Left(_, _) => ??? // unreachable, submit for deposits always succeeds
     else None

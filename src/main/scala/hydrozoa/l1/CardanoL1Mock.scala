@@ -1,9 +1,11 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
-import com.bloxbean.cardano.client.api.model.Utxo
+import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
+import com.bloxbean.cardano.client.api.util.AssetUtil
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{txHash, txInputs, txOutputs}
+import hydrozoa.infra.{serializeTxHex, txHash, txInputs, txOutputs}
 import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
@@ -13,6 +15,8 @@ import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 class CardanoL1Mock() extends CardanoL1:
+
+    private val log = Logger(getClass)
 
     override def setMetrics(metrics: ActorRef[Metrics]): Unit = ()
 
@@ -24,20 +28,22 @@ class CardanoL1Mock() extends CardanoL1:
 
     def getUtxosActive: Map[UtxoIdL1, Output[L1]] = Map.from(utxosActive)
 
-    override def submit(tx: TxL1): Either[SubmissionError, TxId] = {
+    override def submit(tx: TxL1): Either[SubmissionError, TxId] =
         val txId = txHash(tx)
-        knownTxs.put(txId, tx)
-        val setSizeBefore = utxosActive.size
-        val inputs = txInputs(tx)
-        utxosActive.subtractAll(inputs)
-        val outputs = txOutputs(tx)
-        utxosActive.addAll(outputs)
-        val setSizeAfter = utxosActive.size
-        if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
-            throw RuntimeException("")
-        assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
-        Right(txId)
-    }
+        log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
+        if knownTxs.contains(txId) then Right(txId)
+        else
+            knownTxs.put(txId, tx)
+            val setSizeBefore = utxosActive.size
+            val inputs = txInputs(tx)
+            utxosActive.subtractAll(inputs)
+            val outputs = txOutputs(tx)
+            utxosActive.addAll(outputs)
+            val setSizeAfter = utxosActive.size
+            if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
+                throw RuntimeException("")
+            assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
+            Right(txId)
 
     override def awaitTx(
         txId: TxId,
@@ -53,22 +59,38 @@ class CardanoL1Mock() extends CardanoL1:
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
-    // TODO: we have to support tokens here, otherwise L1 UTxOs can't be recognized
     override def utxosAtAddress(address: AddressBechL1): List[Utxo] =
         utxosActive
             .filter((_, utxo) => utxo.address == address)
             .map((utxoId, output) =>
+
+                val amounts: mutable.Set[Amount] = mutable.Set.empty
+
+                output.tokens.foreach((policyId, tokens) =>
+                    tokens.foreach((tokenName, quantity) =>
+                        val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                        amounts.add(Amount.asset(unit, quantity.longValue))
+                    )
+                )
+
                 Utxo(
                   utxoId.txId.hash,
                   utxoId.outputIx.ix,
                   address.bech32,
-                  List(lovelace(output.coins.bigInteger)).asJava,
+                  (List(lovelace(output.coins.bigInteger)) ++ amounts.toList).asJava,
                   null, // no datum hashes
                   output.mbInlineDatum.getOrElse(""),
                   null // no scripts
                 )
             )
             .toList
+
+    override def utxoIdsAdaAtAddress(address: AddressBechL1): Map[UtxoIdL1, BigInt] =
+        utxosActive
+            .filter((_, utxo) => utxo.address == address)
+            .view
+            .mapValues(_.coins)
+            .toMap
 
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =
@@ -172,7 +194,8 @@ val genesisUtxos: Set[(UtxoIdL1, Output[L1])] =
             AddressBechL1(
               address
             ),
-            BigInt("10000000000")
+            BigInt("10000000000"),
+            emptyTokens
           )
         )
     ).toSet

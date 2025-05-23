@@ -2,6 +2,7 @@ package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result, Utxo}
+import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
 import com.fasterxml.jackson.databind.JsonNode
@@ -10,6 +11,7 @@ import hydrozoa.infra.{ResultUtils, toResult}
 
 import java.math.BigInteger
 import java.util
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 class BackendServiceMock(cardanoL1: CardanoL1Mock, pp: ProtocolParams) extends BackendService:
@@ -100,15 +102,26 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
             .map(mkUtxo(txHash, outputIndex))
         opt.toResult(s"utxo not found: $txHash#$outputIndex")
 
-    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo = Utxo
-        .builder()
-        .txHash(txHash)
-        .outputIndex(outputIndex)
-        .address(output.address.bech32)
-        .amount(
-          List(Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).asJava
+    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo =
+
+        val amounts: mutable.Set[Amount] = mutable.Set.empty
+
+        output.tokens.foreach((policyId, tokens) =>
+            tokens.foreach((tokenName, quantity) =>
+                val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                amounts.add(Amount.asset(unit, quantity.longValue))
+            )
         )
-        .build()
+
+        Utxo
+            .builder()
+            .txHash(txHash)
+            .outputIndex(outputIndex)
+            .address(output.address.bech32)
+            .amount(
+              (amounts.toSet + Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).toList.asJava
+            )
+            .build()
 
 class EpochServiceMock(pp: ProtocolParams) extends EpochService:
     override def getLatestEpoch: Result[EpochContent] = ???

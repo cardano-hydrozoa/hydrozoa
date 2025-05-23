@@ -44,7 +44,7 @@ case class BlockBody(
     eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
     eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
     depositsAbsorbed: Seq[UtxoId[L1]]
-)
+) derives CanEqual
 
 object BlockBody:
     def empty: BlockBody = BlockBody(Seq.empty, Seq.empty, Seq.empty)

@@ -3,12 +3,13 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.l1.CardanoL1Mock
 import hydrozoa.l2.consensus.network.transport.SimNetwork
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.BlockRecord
+import hydrozoa.node.state.{BlockRecord, WalletId}
 import ox.*
 import ox.logback.InheritableMDC
 import ox.resilience.{RetryConfig, retry}
@@ -18,7 +19,7 @@ import scala.concurrent.duration.DurationInt
 
 class LocalFacade(
     peers: Map[TestPeer, Node],
-    fork: CancellableFork[Nothing]
+    shutdown: Long => Unit
 ) extends HydrozoaFacade:
 
     private val log = Logger(getClass)
@@ -29,72 +30,140 @@ class LocalFacade(
 
     override def initializeHead(
         initiator: TestPeer,
+        otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TxId,
         txIx: TxIx
-    ): Either[InitializationError, TxId] = peers(initiator).initializeHead(ada, txId, txIx)
+    ): Either[InitializationError, TxId] =
+        val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
+        ret match
+            case Left(_)  => ret
+            case Right(_) =>
+                // Wait till all nodes are switched to `Open` phase, makes sense only for Right
+                println(s"waiting for initialization...")
+                retry(RetryConfig.delayForever(100.millis))({
+                    val uptimes = peers.values.map(_.nodeState.ask(_.mbInitializedOn))
+                    println(s"node uptimes: $uptimes")
+                    if (!uptimes.forall(_.isDefined)) throw IllegalStateException()
+                })
+                ret
 
     override def deposit(
         depositor: TestPeer,
         depositRequest: DepositRequest
-    ): Either[DepositError, DepositResponse] = peers(depositor).deposit(depositRequest)
+    ): Either[DepositError, DepositResponse] =
+        val ret = peers(depositor).deposit(depositRequest)
+        ret match
+            case Left(_)                 => ret
+            case Right(_, depositTxHash) =>
+                // Wait till all nodes learn about the deposit utxo
+                retry(RetryConfig.delayForever(100.millis))({
+                    // println(s"waiting for deposit utxo from tx: $depositTxHash")
+                    val veracity = peers.values.map(
+                      _.nodeState.ask(
+                        _.head.openPhase(_.stateL1.depositUtxos.map.contains(depositTxHash))
+                      )
+                    )
+                    // println(veracity)
+                    if (!veracity.forall(e => e)) throw IllegalStateException()
+                })
+                ret
 
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
-    ): Either[InitializationError, TxId] =
+    ): Either[String, TxId] =
         val request = event match
             case tx: SimpleTransaction => Transaction(tx)
             case wd: SimpleWithdrawal  => Withdrawal(wd)
-        val submitterNode = peers.values.toList(event.toString.length % peers.size)
-        submitterNode.submitL2(request)
+        val ret = randomNode.submitL2(request)
+        ret match
+            case Left(_) => ret
+            case Right(txId) =>
+                // Wait till all nodes learn about the submitted event
+                retry(RetryConfig.delayForever(100.millis))({
+                    // println(s"waiting for L2 event id: $txId to propagate over all nodes")
+                    val veracity = peers.values.map(_.nodeState.ask(_.head.openPhase(_.isL2EventInPool(txId))))
+                    // println(s"$veracity")
+                    if (!veracity.forall(e => e)) throw IllegalStateException()
+                })
+                ret
 
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
-        randomNode.stateL2()
+        randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
-        randomNode.handleNextBlock(nextBlockFinal)
+    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
+        answers.find(a => a.isRight) match
+            case None         => Left("Block can't be produced at the moment")
+            case Some(answer) => Right(answer.right.get)
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")
-        fork.cancelNow()
+        shutdown(Thread.currentThread().threadId())
+
+val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
     private val log = Logger("LocalFacade")
     def apply(
-        peers: Set[TestPeer]
-    )(using Ox): HydrozoaFacade =
+        peers: Set[TestPeer],
+        autonomousBlocks: Boolean = false,
+        useYaci: Boolean = false
+    ): HydrozoaFacade =
 
         InheritableMDC.init
 
         val nodes = mutable.Map.empty[TestPeer, Node]
 
-        val f = forkCancellable {
-            supervised {
-                val simNetwork = SimNetwork.apply(peers.toList)
+        val thread = new Thread {
+            override def run(): Unit =
+                supervised {
+                    val simNetwork = SimNetwork.apply(peers.toList)
+                    val cardanoL1Mock = CardanoL1Mock()
 
-                peers.foreach(peer =>
-                    forkDiscard {
-                        LocalNode.runNode(
-                          simNetwork = simNetwork,
-                          ownPeer = peer,
-                          useYaci = true,
-                          pp = Some(Utils.protocolParams),
-                          nodeCallback = (p, n) => { discard(nodes.put(p, n)) }
-                        )
-                    }
-                )
-                never
-            }
+                    peers.foreach(peer =>
+                        forkDiscard {
+                            LocalNode.runNode(
+                              simNetwork = simNetwork,
+                              mbCardanoL1Mock = Some(cardanoL1Mock),
+                              ownPeer = peer,
+                              autonomousBlocks = autonomousBlocks,
+                              useYaci = useYaci,
+                              pp = Some(Utils.protocolParams),
+                              nodeCallback = (p, n) => {
+                                  synchronized(nodes.put(p, n))
+                              }
+                            )
+                        }
+                    )
+
+                    // Wait for shutdown flag
+                    retry(RetryConfig.delayForever(50.millis))(
+                      if (!shutdownFlag.contains(Thread.currentThread().threadId()))
+                          throw RuntimeException()
+                    )
+                    println(s"thread=${Thread.currentThread().threadId()} is done")
+                }
         }
+
+        thread.start()
 
         // Waiting for all nodes to initialize
         retry(RetryConfig.delayForever(100.millis))(
-          if nodes.size < peers.size then throw RuntimeException()
+          {
+              val nodeSize = synchronized(nodes.size)
+              if (nodeSize < peers.size) then
+                  // println(s"nodeSize=${nodeSize}")
+                  throw RuntimeException()
+          }
         )
 
-        new LocalFacade(nodes.toMap, f)
+        new LocalFacade(
+          nodes.toMap,
+          threadId => shutdownFlag.put(threadId, true)
+        )
 
-// TODO: Is there something similar in stdlib?
-def discard(_any: Any): Unit = ()
+//// TODO: Is there something similar in stdlib?
+//def discard(_any: Any): Unit = ()

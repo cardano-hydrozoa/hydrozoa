@@ -1,12 +1,13 @@
 package hydrozoa.sut
 
 import hydrozoa.*
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.block.Block
+import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
-import hydrozoa.node.rest.{NodeRestApi, SubmitRequestL2}
+import hydrozoa.node.rest.{InitRequest, NodeRestApi, SubmitRequestL2}
 import hydrozoa.node.server.*
-import hydrozoa.node.state.BlockRecord
+import hydrozoa.node.state.{BlockRecord, WalletId}
 import ox.par
 import sttp.client4.DefaultSyncBackend
 import sttp.model.Uri
@@ -20,13 +21,16 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
 
     override def initializeHead(
         initiator: TestPeer,
+        otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
+        val request = InitRequest(otherHeadPeers.toList, ada, txId, txIx)
+
         val response = SttpClientInterpreter()
             .toRequest(NodeRestApi.initEndpoint, baseUri = peers.get(initiator))
-            .apply(ada, txId.hash, txIx.ix)
+            .apply(request)
             .send(backend)
 
         response.body match
@@ -94,13 +98,15 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
         response.body match
             case DecodeResult.Value(v) =>
                 v match
-                    case Right(r)  => r
+                    case Right(r)  => r.map((utxoId, output) => utxoId -> Output.apply(output))
                     case Left(err) => throw RuntimeException("error getting L2 state from head")
             case _ => throw RuntimeException("decoding error")
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)]) = ???
+    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] = throw RuntimeException(
+      "Real Hydrozoa facade doesn't support lockstep block producing"
+    )
 
     override def shutdownSut(): Unit = ()
 

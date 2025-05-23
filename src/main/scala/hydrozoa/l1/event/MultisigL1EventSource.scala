@@ -48,8 +48,8 @@ class MultisigL1EventSource(
             case Some(initTx) =>
                 log.info(s"Init tx $txId appeared on-chain.")
                 onlyOutputToAddress(initTx, headAddress) match
-                    case Right(ix, coins, _) =>
-                        val utxo = Utxo[L1, TreasuryTag](txId, ix, headAddress, coins)
+                    case Right(ix, coins, tokens, _) =>
+                        val utxo = Utxo[L1, TreasuryTag](txId, ix, headAddress, coins, tokens)
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
                         nodeState.tell(s =>
                             s.head.initializingPhase(
@@ -119,11 +119,13 @@ class MultisigL1EventSource(
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
+        val tokens = valueTokens(utxo.toValue)
         Utxo[L1, TreasuryTag](
           utxoId.txId,
           utxoId.outputIx,
           utxo.getAddress |> AddressBechL1.apply,
-          coins
+          coins,
+          tokens
         )
 
     /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
@@ -132,11 +134,14 @@ class MultisigL1EventSource(
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
+        val tokens = valueTokens(utxo.toValue)
+        
         Utxo[L1, DepositTag](
           utxoId.txId,
           utxoId.outputIx,
           utxo.getAddress |> AddressBechL1.apply,
           coins,
+          tokens,
           Some(utxo.getInlineDatum)
         )
 

@@ -86,3 +86,23 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
             case Left(err) =>
                 throw RuntimeException(err)
             case Right(utxos) => utxos.asScala.toList
+
+    override def utxoIdsAdaAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, BigInt] =
+        // NB: can't be more than 100
+        backendService.getUtxoService.getUtxos(headAddress.bech32, 100, 1).toEither match
+            case Left(err) =>
+                throw RuntimeException(err)
+            case Right(utxos) =>
+                utxos.asScala
+                    .map(u =>
+                        (
+                          UtxoIdL1(TxId(u.getTxHash), TxIx(u.getOutputIndex)),
+                          BigInt.apply(
+                            u.getAmount.asScala
+                                .find(a => a.getUnit.equals("lovelace"))
+                                .get
+                                .getQuantity
+                          )
+                        )
+                    )
+                    .toMap
