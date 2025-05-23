@@ -86,43 +86,46 @@ private class InitHeadActor(
 
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
-        val headPeers = req.otherHeadPeers + req.initiator
-        if acks.keySet == headPeers
-        then
-            // All wits are here, we can sign and submit
-            val initTx = acks.values.foldLeft(txDraft)(addWitness)
-            val serializedTx = serializeTxHex(initTx)
-            log.info("Initialization tx: " + serializedTx)
-
-            cardanoActor.ask(_.submit(toL1Tx(initTx))) match
-                case Right(txHash) =>
-                    // Put the head into Initializing phase
-                    val (headPeersVKs, autonomousBlocks) =
-                        stateActor.ask(s =>
-                            (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction)
+        
+        // Request initially may absent 
+        if (req != null) 
+            val headPeers = req.otherHeadPeers + req.initiator
+            if acks.keySet == headPeers
+            then
+                // All wits are here, we can sign and submit
+                val initTx = acks.values.foldLeft(txDraft)(addWitness)
+                val serializedTx = serializeTxHex(initTx)
+                log.info("Initialization tx: " + serializedTx)
+    
+                cardanoActor.ask(_.submit(toL1Tx(initTx))) match
+                    case Right(txHash) =>
+                        // Put the head into Initializing phase
+                        val (headPeersVKs, autonomousBlocks) =
+                            stateActor.ask(s =>
+                                (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction)
+                            )
+                        val params = InitializingHeadParams(
+                          ownAck.peer,
+                          headPeersVKs,
+                          HeadParams.default,
+                          headNativeScript,
+                          headAddress,
+                          beaconTokenName,
+                          seedAddress,
+                          initTx,
+                          System.currentTimeMillis(),
+                          autonomousBlocks
                         )
-                    val params = InitializingHeadParams(
-                      ownAck.peer,
-                      headPeersVKs,
-                      HeadParams.default,
-                      headNativeScript,
-                      headAddress,
-                      beaconTokenName,
-                      seedAddress,
-                      initTx,
-                      System.currentTimeMillis(),
-                      autonomousBlocks
-                    )
-                    stateActor.tell(_.tryInitializeHead(params))
-                    TxDump.dumpInitTx(initTx)
-                    resultChannel.send(txHash)
-                    dropMyself()
-
-                case Left(err) =>
-                    val msg = s"Can't submit init tx: $err"
-                    log.error(msg)
-                    // FIXME: what should go next here?
-                    throw RuntimeException(msg)
+                        stateActor.tell(_.tryInitializeHead(params))
+                        TxDump.dumpInitTx(initTx)
+                        resultChannel.send(txHash)
+                        dropMyself()
+    
+                    case Left(err) =>
+                        val msg = s"Can't submit init tx: $err"
+                        log.error(msg)
+                        // FIXME: what should go next here?
+                        throw RuntimeException(msg)
 
     private val resultChannel: Channel[TxId] = Channel.buffered(1)
 

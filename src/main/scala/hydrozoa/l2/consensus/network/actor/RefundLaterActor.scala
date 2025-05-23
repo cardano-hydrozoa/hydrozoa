@@ -60,8 +60,7 @@ private class RefundLaterActor(
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if acks.keySet == headPeers
-        then
+        if (req != null && acks.keySet == headPeers)
             // All wits are here, we can sign and save post-dated
             // refund transaction for future's use.
             val refundTx = acks.values.foldLeft(txDraft)(addWitness)

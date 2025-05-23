@@ -39,7 +39,7 @@ private class FinalBlockConfirmationActor(
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
         val headPeers = stateActor.ask(_.head.finalizingPhase(_.headPeers))
         log.debug(s"headPeers: $headPeers")
-        if ownAck2.isEmpty && acks.keySet == headPeers then
+        if (req != null && ownAck2.isEmpty && acks.keySet == headPeers)
             // TODO: how do we check that all acks are valid?
             // Create finalization tx draft
             val recipe =
@@ -63,7 +63,7 @@ private class FinalBlockConfirmationActor(
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")
         val headPeers = stateActor.ask(_.head.finalizingPhase(_.headPeers))
-        if (acks2.keySet == headPeers) then
+        if (req != null && acks2.keySet == headPeers) then
             // Create effects
             // L1 effect
             val wits = acks2.map(_._2.finalization)
