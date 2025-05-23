@@ -71,12 +71,22 @@ class LocalFacade(
 
     override def submitL2(
         event: SimpleTransaction | SimpleWithdrawal
-    ): Either[InitializationError, TxId] =
+    ): Either[String, TxId] =
         val request = event match
             case tx: SimpleTransaction => Transaction(tx)
             case wd: SimpleWithdrawal  => Withdrawal(wd)
-        val submitterNode = peers.values.toList(event.toString.length % peers.size)
-        submitterNode.submitL2(request)
+        val ret = randomNode.submitL2(request)
+        ret match
+            case Left(_) => ret
+            case Right(txId) =>
+                // Wait till all nodes learn about the submitted event
+                retry(RetryConfig.delayForever(100.millis))({
+                    // println(s"waiting for L2 event id: $txId to propagate over all nodes")
+                    val veracity = peers.values.map(_.nodeState.ask(_.head.openPhase(_.isL2EventInPool(txId))))
+                    // println(s"$veracity")
+                    if (!veracity.forall(e => e)) throw IllegalStateException()
+                })
+                ret
 
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))

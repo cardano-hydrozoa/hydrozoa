@@ -113,6 +113,13 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
     def poolEventL2(event: NonGenesisL2): Unit
+
+    /** Used only for testing. Checks whether an non-genesis event is in the pool.
+      * @param txId
+      * @return
+      */
+    def isL2EventInPool(txId: TxId): Boolean
+
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
@@ -363,6 +370,9 @@ class HeadStateGlobal(
             // Try produce block
             log.info("Try to produce a block due to getting new L2 event...")
             tryProduceBlock(false)
+
+        def isL2EventInPool(txId: TxId): Boolean =
+            self.poolEventsL2.map(_.getEventId).contains(txId)
 
         override def tryProduceBlock(
             finalizing: Boolean,

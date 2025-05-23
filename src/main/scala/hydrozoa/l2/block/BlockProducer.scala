@@ -39,15 +39,15 @@ class BlockProducer:
         finalizing: Boolean
     ): Either[String, (Block, UtxosSetOpaque, UtxosSet, UtxosSet, Option[(TxId, SimpleGenesis)])] =
 
-        val sortedPoolEvents = poolEvents
-            .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1)
+        // TODO: move to the block producer?
+        val poolEventsSorted = poolEvents.sortBy(_.getEventId.hash)
 
-        log.info(s"Pool events for block production: $poolEvents")
-        log.info(s"Pool events for block production (sorted): $sortedPoolEvents")
+        log.info(s"Pool events for block production: ${poolEvents.map(_.getEventId.hash)}")
+        log.info(s"Pool events for block production (sorted): ${poolEventsSorted.map(_.getEventId.hash)}")
 
         createBlock(
           stateL2,
-          sortedPoolEvents,
+          poolEventsSorted,
           depositsPending,
           prevHeader,
           timeCreation,

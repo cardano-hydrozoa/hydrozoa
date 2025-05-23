@@ -565,13 +565,11 @@ object MBTSuite extends Commands:
             // Produce block
             val l2 = AdaSimpleLedger.apply[TBlockProduction](state.utxosActiveL2)
 
-            // TODO: verify sorting
             // TODO: move to the block producer?
-            val sortedPoolEvents = state.poolEvents
-                    .sortWith((e1, e2) => e1.getEventId.hash.compareTo(e2.getEventId.hash) == -1 )
+            val sortedPoolEvents = state.poolEvents.sortBy(_.getEventId.hash)
 
-            log.info(s"Model pool events for block production: ${state.poolEvents}")
-            log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents}")
+            log.info(s"Model pool events for block production: ${state.poolEvents.map(_.getEventId.hash)}")
+            log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents.map(_.getEventId.hash)}")
 
             val maybeNewBlock = createBlock(
                 l2,
@@ -585,6 +583,8 @@ object MBTSuite extends Commands:
             maybeNewBlock match
                 case None => Left("Block can't be produced at the moment") /\ state
                 case Some(block, utxosActive, utxosAdded, utxosWithdrawn, mbGenesis) =>
+
+                    log.info(s"A new block was produced by model: $block")
 
                     val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
                     val backendService = BackendServiceMock(l1Mock, state.pp)
