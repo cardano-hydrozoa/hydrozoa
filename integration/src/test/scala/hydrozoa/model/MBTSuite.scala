@@ -263,8 +263,6 @@ object MBTSuite extends Commands:
             s"($id) Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 
         override def run(sut: Sut): Result =
-            log.info(".run")
-
             sut.initializeHead(
               initiator,
               otherHeadPeers.map(TestPeer.mkWalletId),
@@ -274,8 +272,6 @@ object MBTSuite extends Commands:
             )
 
         override def runState(state: State): (Result, State) =
-            log.info(".runState")
-
             if otherHeadPeers.isEmpty then
                 (Left("Solo node mode is not supported yet"), state)
             else
@@ -331,31 +327,26 @@ object MBTSuite extends Commands:
                 (Right(txId), newState)
 
         override def preCondition(state: State): Boolean =
-            log.info(".preCondition")
-
             state.peersNetworkPhase match
                 case NewlyCreated => true
                 case Freed        => true
-                case _            => false
+                case _            =>
+                    log.error(s"Negative!")
+                    false
 
         override def postConditionSuccess(
             expectedResult: Result,
             stateBefore: State,
             stateAfter: State,
             sutResult: Result
-        ): Prop =
-            log.info(".postConditionSuccess")
-
-            s"results should be the same" |: cmpLabel(this.id, sutResult, expectedResult)
+        ): Prop = s"results should be the same" |: cmpLabel(this.id, sutResult, expectedResult)
 
         override def postConditionFailure(
             _expectedResult: Result,
             _stateBefore: State,
             _stateAfter: State,
             err: Throwable
-        ): Prop =
-            log.info(".postConditionFailure")
-            s"Should not crash: $err" |: false
+        ): Prop = s"Should never crash: $err" |: Prop.exception
 
     /** ------------------------------------------------------------------------------------------
      * DepositCommand
@@ -376,13 +367,13 @@ object MBTSuite extends Commands:
         override type Result = Either[DepositError, DepositResponse]
 
         override def toString: String =
-            s"($id) Deposit command { depositor = $depositor, amount = $amount, fund utxo = $fundUtxo, address = $address, refund address = $refundAddress}"
+            s"($id) Deposit command { depositor = $depositor, " +
+                s"amount = $amount, fund utxo = $fundUtxo, " +
+                s"address = $address, refund address = $refundAddress}"
 
         override def runState(
             state: HydrozoaState
         ): (Either[DepositError, DepositResponse], HydrozoaState) =
-            log.info(".runState")
-
             // Make the datum and the recipe
             val depositDatum = DepositDatum(
                 decodeBech32AddressL2(address),
@@ -437,8 +428,6 @@ object MBTSuite extends Commands:
             stateAfter: HydrozoaState,
             result: Either[DepositError, DepositResponse]
         ): Prop =
-            log.info(".postConditionSuccess")
-
             val expectedResponse = expectedResult.right.get
             val response = result.right.get
 
@@ -455,12 +444,9 @@ object MBTSuite extends Commands:
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
             err: Throwable
-        ): Prop =
-            log.info(".postConditionFailure")
-            s"Should not crash: $err" |: false
+        ): Prop = s"Should never crash: $err" |: Prop.exception
 
         override def run(sut: Sut): (Either[DepositError, DepositResponse]) =
-            log.info(".run")
             val request = DepositRequest(
                 fundUtxo.txId,
                 fundUtxo.outputIx,
@@ -474,12 +460,13 @@ object MBTSuite extends Commands:
             sut.deposit(depositor, request)
 
         override def preCondition(state: HydrozoaState): Boolean =
-            val preCondition = state.peersNetworkPhase == RunningHead
+            val ret = state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
                 && state.utxosActive.contains(fundUtxo)
 
-            log.info(s".preCondition: $preCondition")
-            preCondition
+            if (!ret)
+                log.error(s"Negative!")
+            ret
 
     /** ------------------------------------------------------------------------------------------
      * L2 Transaction Command
@@ -494,24 +481,21 @@ object MBTSuite extends Commands:
 
         override def toString: String = s"($id) Transaction L2 command { $simpleTransaction }"
 
-        override def run(sut: Sut): Unit =
-            log.info(".run")
-            sut.submitL2(simpleTransaction)
+        override def run(sut: Sut): Unit = sut.submitL2(simpleTransaction)
 
         override def nextState(state: HydrozoaState): HydrozoaState =
-            log.info(".nextState")
             state.copy(
                 poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkTransactionEvent(simpleTransaction))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
-            log.info(".preCondition")
-            state.peersNetworkPhase == RunningHead
+            val ret = state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
+            if (!ret)
+                log.error(s"Negative!")
+            ret
 
-        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop =
-            log.info(".postCondition")
-            true
+        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop = Prop.passed
 
     /** ------------------------------------------------------------------------------------------
      * L2 Withdrawal Command
@@ -526,24 +510,21 @@ object MBTSuite extends Commands:
 
         override def toString: String = s"($id) Withdrawal L2 command { $simpleWithdrawal }"
 
-        override def run(sut: Sut): Unit =
-            log.info(".run")
-            sut.submitL2(simpleWithdrawal)
+        override def run(sut: Sut): Unit = sut.submitL2(simpleWithdrawal)
 
         override def nextState(state: HydrozoaState): HydrozoaState =
-            log.info(".nextState")
             state.copy(
                 poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkWithdrawalEvent(simpleWithdrawal))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
-            log.info(".preCondition")
-            state.peersNetworkPhase == RunningHead
+            val ret = state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
+            if (!ret)
+                log.error(s"Negative!")
+            ret
 
-        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop =
-            log.info(".postCondition")
-            true
+        override def postCondition(state: HydrozoaState, result: Try[Unit]): Prop = Prop.passed
 
     /** ------------------------------------------------------------------------------------------
      * Produce Block Command
@@ -560,7 +541,6 @@ object MBTSuite extends Commands:
         override def runState(
             state: HydrozoaState
         ): (Result, HydrozoaState) =
-            log.info(".runState")
 
             // Produce block
             val l2 = AdaSimpleLedger.apply[TBlockProduction](state.utxosActiveL2)
@@ -648,8 +628,6 @@ object MBTSuite extends Commands:
             stateAfter: HydrozoaState,
             result: Result
         ): Prop =
-            log.info(".postConditionSuccess")
-
             (result, expectedResult) match
                 case (Right(blockRecord, mbGenesis),
                         Right(expectedBlockRecord, expectedMbGenesis)) =>
@@ -659,50 +637,60 @@ object MBTSuite extends Commands:
                     val body = blockRecord.block.blockBody
                     val eBody = expectedBlockRecord.block.blockBody
 
-//                    log.info(s"blockRecord.l1Effect.mbTxHash: ${mbTxHash(blockRecord.l1Effect)}")
-//                    log.info(s"blockRecord.l1Effect: ${maybeMultisigL1Tx(blockRecord.l1Effect).map(serializeTxHex)}")
-//
-//                    log.info(s"expectedBlockRecord.l1Effect.mbTxHash: ${mbTxHash(expectedBlockRecord.l1Effect)}")
-//                    log.info(s"expectedBlockRecord.l1Effect: ${maybeMultisigL1Tx(expectedBlockRecord.l1Effect).map(serializeTxHex)}")
-
+                    val l1EffectTxHash = mbTxHash(blockRecord.l1Effect).map(_.hash)
+                    val l1EffectHashExpected = mbTxHash(expectedBlockRecord.l1Effect).map(_.hash)
 
                     val ret =
-                        ("Block number should be the same" |: cmpLabel(this.id, header.blockNum, eHeader.blockNum))
-                            && ("Block type should be the same" |: cmpLabel(this.id, header.blockType, eHeader.blockType))
-                            && ("Major version should be the same" |: cmpLabel(this.id, header.versionMajor, eHeader.versionMajor))
-                            && ("Minor version should be the same" |: cmpLabel(this.id, header.versionMinor, eHeader.versionMinor))
-                            && ("Valid events should be the same" |: cmpLabel(this.id, body.eventsValid, eBody.eventsValid))
-                            && ("Invalid events should be the same" |: cmpLabel(this.id, body.eventsInvalid, eBody.eventsInvalid))
-                            && ("Deposit absorbed should be the same" |: cmpLabel(this.id, body.depositsAbsorbed.toSet, eBody.depositsAbsorbed.toSet))
-                            && ("Blocks should be the same"|: cmpLabel(this.id, body, eBody))
-                            && ("Genesis should be the same" |: cmpLabel(this.id, mbGenesis, expectedMbGenesis))
-                            && ("L1 effect tx hashes should be the same" |:
-                                mbTxHash(blockRecord.l1Effect).isDefined ==>
-                                    cmpLabel(this.id, mbTxHash(blockRecord.l1Effect).get.hash, mbTxHash(expectedBlockRecord.l1Effect).get.hash))
-                            && (cmpLabel(this.id, blockRecord.l2Effect, expectedBlockRecord.l2Effect) :| "L2 effects should be the same")
+                        ("Block number should be the same"
+                            |: cmpLabel(this.id, header.blockNum, eHeader.blockNum))
+                            && ("Block type should be the same"
+                            |: cmpLabel(this.id, header.blockType, eHeader.blockType))
+                            && ("Major version should be the same"
+                            |: cmpLabel(this.id, header.versionMajor, eHeader.versionMajor))
+                            && ("Minor version should be the same"
+                            |: cmpLabel(this.id, header.versionMinor, eHeader.versionMinor))
+                            && ("Valid events should be the same"
+                            |: cmpLabel(this.id, body.eventsValid, eBody.eventsValid))
+                            && ("Invalid events should be the same"
+                            |: cmpLabel(this.id, body.eventsInvalid, eBody.eventsInvalid))
+                            && ("Deposit absorbed should be the same"
+                            |: cmpLabel(this.id, body.depositsAbsorbed.toSet, eBody.depositsAbsorbed.toSet))
+                            && ("Blocks should be the same"
+                            |: cmpLabel(this.id, body, eBody))
+                            && ("Genesis should be the same"
+                            |: cmpLabel(this.id, mbGenesis, expectedMbGenesis))
+                            && ("L1 effect tx hashes should be the same"
+                            |:
+                                // NB: Implication arrow: if the lhs exepression is false, the
+                                // whole test will be considered undecidable. So we should NOT
+                                // use it. The following didn't work - most of tests went to
+                                // junk bin.
+
+                                // mbTxHash(blockRecord.l1Effect).isDefined ==>
+                                    cmpLabel(this.id, l1EffectTxHash, l1EffectHashExpected))
+                            && (cmpLabel(this.id, blockRecord.l2Effect, expectedBlockRecord.l2Effect)
+                            :| "L2 effects should be the same")
 
                     ret
                 case (Left(error), Left(expectedError)) =>
                     s"errors should be the same" |: cmpLabel(this.id, error, expectedError)
-                case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
+                case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: Prop.falsified
 
         override def postConditionFailure(
             expectedResult: Result,
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
             err: Throwable
-        ): Prop =
-            log.error(".postConditionFailure should never happen")
-            s"Block production failures should not happen" |: false
+        ): Prop = s"Block production failures should not happen" |: Prop.exception
 
-        override def run(sut: Sut): Result =
-            log.info(".run")
-            sut.produceBlock(finalization)
+        override def run(sut: Sut): Result = sut.produceBlock(finalization)
 
         override def preCondition(state: HydrozoaState): Boolean =
-            log.info(".preCondition")
-            state.peersNetworkPhase == RunningHead
+            val ret = state.peersNetworkPhase == RunningHead
                 && state.headPhase == Some(Open)
+            if (!ret)
+                log.error(s"Negative!")
+            ret
 
     /** ------------------------------------------------------------------------------------------
      * Shutdown Command
@@ -723,18 +711,13 @@ object MBTSuite extends Commands:
         override def toString: String = s"($id) Shutdown command"
 
         override def postCondition(state: HydrozoaState, success: Boolean): Prop =
-            log.info(".postCondition")
-
             val phase = state.peersNetworkPhase
             "Shutdown always possible in NewlyCreated and Freed phases" |:
                 phase == NewlyCreated || phase == Freed ==> (success == true)
 
-        override def run(sut: Sut): Unit =
-            log.info(".run")
-            sut.shutdownSut()
+        override def run(sut: Sut): Unit = sut.shutdownSut()
 
         override def nextState(state: HydrozoaState): HydrozoaState =
-            log.info(".nextState")
             state.copy(
               peersNetworkPhase = Shutdown,
               knownPeers = Set.empty,
@@ -743,12 +726,12 @@ object MBTSuite extends Commands:
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
-            log.info(".preCondition")
-
             state.peersNetworkPhase match
             case NewlyCreated => true
             case Freed        => true
-            case _            => false
+            case _            =>
+                log.error(s"Negative!")
+                false
 
     /** ------------------------------------------------------------------------------------------
      * Copy-paste from Commands
@@ -793,7 +776,6 @@ object MBTSuite extends Commands:
                             } else false
                         }
                         if (doRun) {
-                            println("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- doRun")
                             runActions(sut, as, removeSut())
                         }
                         else {
