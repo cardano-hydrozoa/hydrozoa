@@ -69,19 +69,22 @@ object SimpleL2Ledger:
 
         type SubmissionError = String
 
-        type UtxosSetOpaqueMutable = mutable.Map[LedgerUtxoId, LedgerOutput]
+        private type UtxosSetOpaqueMutable = mutable.Map[LedgerUtxoId, LedgerOutput]
         private val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
 
         override def isEmpty: Boolean = activeState.isEmpty
 
         override def getUtxosActive: LedgerUtxoSetOpaque = activeState.clone.toMap
 
+        override def getState: UtxoSetL2 =
+            UtxoSet[L2](unliftUtxoSet(activeState.clone().toMap))
+
         override def replaceUtxosActive(activeState: LedgerUtxoSetOpaque): Unit =
             this.activeState.clear()
             this.activeState.addAll(activeState)
 
-        override def getState: UtxoSetL2 =
-            UtxoSet[L2](unliftUtxoSet(activeState.clone().toMap))
+        override def addGenesisUtxos(utxoSet: UtxoSetL2): Unit =
+            liftUtxoSet(utxoSet.utxoMap) |> this.activeState.addAll
 
         override def getOutput(utxoId: UtxoIdL2): OutputL2 =
             activeState(utxoId |> liftOutputRef) |> unliftOutput
@@ -90,18 +93,6 @@ object SimpleL2Ledger:
             val ret = activeState.clone()
             activeState.clear()
             UtxoSet[L2](ret.toMap.map((k, v) => (unliftOutputRef(k), unliftOutput(v))))
-
-        override def cloneForBlockProducer()(using
-            InstancePurpose =:= HydrozoaHeadLedger
-        ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque] =
-            val ledgerForBlockProduction = new SimpleL2Ledger[BlockProducerLedger]()
-            ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
-            ledgerForBlockProduction
-
-        override def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction = tx
-
-        override def addGenesisUtxos(utxoSet: UtxoSetL2): Unit =
-            liftUtxoSet(utxoSet.utxoMap) |> this.activeState.addAll
 
         override def submit(
             event: LedgerTransaction
@@ -187,3 +178,12 @@ object SimpleL2Ledger:
                 .partitionMap(identity) match
                 case (Nil, resolved) => Right(resolved)
                 case (extraneous, _) => Left(extraneous)
+
+        override def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction = tx
+
+        override def cloneForBlockProducer()(using
+            InstancePurpose =:= HydrozoaHeadLedger
+        ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque] =
+            val ledgerForBlockProduction = new SimpleL2Ledger[BlockProducerLedger]()
+            ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
+            ledgerForBlockProduction

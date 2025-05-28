@@ -16,7 +16,7 @@ import scala.jdk.CollectionConverters.*
   * ---------------------------------------------------------------------------------------------
   */
 
-// This defined which ledger's implementation is going to be used
+// This defines the implementation to use as L2 ledger
 val HydrozoaL2Ledger = SimpleL2Ledger
 
 /** --------------------------------------------------------------------------------------------- L2
@@ -24,7 +24,7 @@ val HydrozoaL2Ledger = SimpleL2Ledger
   * ---------------------------------------------------------------------------------------------
   */
 
-// TODO: can be simplified, since inputs and outputs are isomorphic
+// TODO: can be simplified, since inputs and outputs represent the same things
 case class L2Genesis(
     depositUtxos: DepositUtxos,
     outputs: List[OutputL2]
@@ -75,14 +75,12 @@ def calculateGenesisHash(genesis: L2Genesis): TxId =
     txHash(cardanoTx)
 
 def mkGenesisOutputs(genesis: L2Genesis, genesisHash: TxId): UtxoSetL2 =
-
     val utxoDiff = genesis.outputs.zipWithIndex
         .map(output =>
             val txIn = UtxoIdL2(genesisHash, TxIx(output._2.toChar))
             val txOut = Output[L2](output._1.address.asL2, output._1.coins)
             (txIn, txOut)
         )
-
     UtxoSet.apply(utxoDiff.toMap)
 
 /** --------------------------------------------------------------------------------------------- L2
@@ -124,6 +122,7 @@ private def mkCardanoTxForL2Transaction(l2Tx: L2Transaction): TxL2 =
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     TxL2(tx.serialize)
 
+// TODO: this arguably can be considered as a ledger's function
 def calculateTxHash(tx: L2Transaction): TxId =
     val cardanoTx = mkCardanoTxForL2Transaction(tx)
     val txId = txHash(cardanoTx)
@@ -158,6 +157,7 @@ private def mkCardanoTxForL2Withdrawal(withdrawal: L2Withdrawal): TxL2 =
     val tx = Transaction.builder.era(Era.Conway).body(body).build
     Tx[L2](tx.serialize)
 
+// TODO: this arguably can be considered as a ledger's function
 def calculateWithdrawalHash(withdrawal: L2Withdrawal): TxId =
     val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal)
     val txId = txHash(cardanoTx)
