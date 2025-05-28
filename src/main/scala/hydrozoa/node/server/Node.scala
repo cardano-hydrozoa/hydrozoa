@@ -8,7 +8,7 @@ import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.HydrozoaL2Ledger
+import hydrozoa.l2.ledger.{mkTransactionEvent, mkWithdrawalEvent}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
@@ -144,8 +144,8 @@ class Node:
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
-            case Transaction(tx) => HydrozoaL2Ledger.mkTransactionEvent(tx)
-            case Withdrawal(wd)  => HydrozoaL2Ledger.mkWithdrawalEvent(wd)
+            case Transaction(tx) => mkTransactionEvent(tx)
+            case Withdrawal(wd)  => mkWithdrawalEvent(wd)
 
         network.tell(_.reqEventL2(ReqEventL2(event)))
         Right(event.getEventId)

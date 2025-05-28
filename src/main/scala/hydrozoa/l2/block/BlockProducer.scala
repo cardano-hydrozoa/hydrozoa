@@ -136,8 +136,8 @@ object BlockProducer:
             if eligibleDeposits.unTag.utxoMap.isEmpty then None
             else
                 val genesis: L2Genesis = L2Genesis.apply(eligibleDeposits)
-                val genesisHash: TxId = ??? // TODO: calculate hash based on eligibleDeposits
-                val genesisUtxos: UtxoSetL2 = ??? // TODO: build utxos from genesis
+                val genesisHash = calculateGenesisHash(genesis)
+                val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)
                 stateL2.addGenesisUtxos(genesisUtxos)
                 utxosAdded.addAll(genesisUtxos.utxoMap.toSet)
                 depositsAbsorbed = eligibleDeposits.unTag.utxoMap.keySet.toList.sortWith((a, b) =>

@@ -187,9 +187,8 @@ object BlockValidator:
                       depositUtxos.unTag.utxoMap.filter((k, _) => depositsAbsorbed.contains(k))
                     )
                 val genesis: L2Genesis = L2Genesis.apply(depositsAbsorbedUtxos)
-                val genesisHash: TxId = ??? // TODO: calculate hash based on eligibleDeposits
-                val genesisUtxos: UtxoSetL2 = ??? // TODO: build utxos from genesis
-                // FIXME: do we need to call addGenesisUtxos when validating blocks?
+                val genesisHash = calculateGenesisHash(genesis)
+                val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)
                 stateL2.addGenesisUtxos(genesisUtxos)
                 Some(genesisHash, genesis)
 

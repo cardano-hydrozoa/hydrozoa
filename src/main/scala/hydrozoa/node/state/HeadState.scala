@@ -491,13 +491,13 @@ class HeadStateGlobal(
                         // Remove possible duplicates form the pool
                         self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
                             |> self.poolEventsL2.subtractAll
-                        // Dump L2 tx
-                        TxDump.dumpL2Tx(event match
-                            case L2EventTransaction(_, transaction) =>
-                                HydrozoaL2Ledger.asTxL2(transaction)._1
-                            case L2EventWithdrawal(_, withdrawal) =>
-                                HydrozoaL2Ledger.asTxL2(withdrawal)._1
-                        )
+//                        // Dump L2 tx
+//                        TxDump.dumpL2Tx(event match
+//                            case L2EventTransaction(_, transaction) =>
+//                                HydrozoaL2Ledger.asTxL2(transaction)._1
+//                            case L2EventWithdrawal(_, withdrawal) =>
+//                                HydrozoaL2Ledger.asTxL2(withdrawal)._1
+//                        )
                         (txId, event)
 
             // 1. Handle valid events

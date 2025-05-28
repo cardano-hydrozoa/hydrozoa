@@ -71,8 +71,9 @@ case class Output[L <: AnyLevel](
 type OutputL1 = Output[L1]
 type OutputL2 = Output[L2]
 
-/** ------------------------------------------------------------------------------------------ UTxO
-  * ------------------------------------------------------------------------------------------
+/** ---------------------------------------------------------------------------------------------
+  * UTxO
+  * ---------------------------------------------------------------------------------------------
   */
 
 case class Utxo[L <: AnyLevel](ref: UtxoId[L], output: Output[L])
@@ -98,8 +99,9 @@ object TaggedUtxo:
         mbInlineDatum: Option[String] = None
     ) = new TaggedUtxo[L, T](Utxo.apply(txId, txIx, address, coins, mbInlineDatum))
 
-/** ------------------------------------------------------------------------------------------ UTxO
-  * Set ------------------------------------------------------------------------------------------
+/** ---------------------------------------------------------------------------------------------
+  * UTxO Set
+  * ---------------------------------------------------------------------------------------------
   */
 
 type UtxoMap[L <: AnyLevel] = Map[UtxoId[L], Output[L]]
@@ -128,9 +130,10 @@ object TaggedUtxoSet:
     def apply[L <: AnyLevel, F <: MultisigUtxoTag](map: UtxoMap[L]): TaggedUtxoSet[L, F] =
         new TaggedUtxoSet[L, F](UtxoSet.apply(map))
 
-    def apply[L <: AnyLevel, F <: MultisigUtxoTag]
-        (mutableUtxoSet: TaggedUtxoSetMutable[L, F]): TaggedUtxoSet[L, F] =
-            new TaggedUtxoSet[L, F](UtxoSet.apply(mutableUtxoSet.utxoMap.toMap))
+    def apply[L <: AnyLevel, F <: MultisigUtxoTag](
+        mutableUtxoSet: TaggedUtxoSetMutable[L, F]
+    ): TaggedUtxoSet[L, F] =
+        new TaggedUtxoSet[L, F](UtxoSet.apply(mutableUtxoSet.utxoMap.toMap))
 
 case class TaggedUtxoSetMutable[L <: AnyLevel, F](utxoMap: mutable.Map[UtxoId[L], Output[L]])
 

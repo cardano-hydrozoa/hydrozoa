@@ -482,7 +482,7 @@ object MBTSuite extends Commands:
         override def nextState(state: HydrozoaState): HydrozoaState =
             log.info(".nextState")
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(HydrozoaL2Ledger.mkTransactionEvent(simpleTransaction))
+                poolEvents = state.poolEvents ++ Seq(mkTransactionEvent(simpleTransaction))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
@@ -509,7 +509,7 @@ object MBTSuite extends Commands:
         override def nextState(state: HydrozoaState): HydrozoaState =
             log.info(".nextState")
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(HydrozoaL2Ledger.mkWithdrawalEvent(simpleWithdrawal))
+                poolEvents = state.poolEvents ++ Seq(mkWithdrawalEvent(simpleWithdrawal))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
