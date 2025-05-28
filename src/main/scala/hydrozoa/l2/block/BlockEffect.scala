@@ -4,7 +4,7 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, SettlementTx}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.l2.ledger.simple.UtxosSet
 import hydrozoa.node.state.L1BlockEffect
 
 /** This is used in MBT-suite, we can move it to integration subproject.

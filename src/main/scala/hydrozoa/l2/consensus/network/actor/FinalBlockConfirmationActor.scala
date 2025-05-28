@@ -8,8 +8,7 @@ import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, AckMajor, AckMajor2, Req, ReqFinal}
-import hydrozoa.l2.ledger.UtxosSet
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
+import hydrozoa.l2.ledger.simple.{UtxosSet, UtxosSetOpaque}
 import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
 import hydrozoa.{L1, UtxoSet, VerificationKeyBytes, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
@@ -70,7 +69,7 @@ private class FinalBlockConfirmationActor(
             val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(finalizationTx)
             val l1Effect: L1BlockEffect = finalizationTx
-            val l2Effect: L2BlockEffect = ()
+            val l2Effect: L2BlockEffect = None
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
             // Close the head
@@ -114,7 +113,7 @@ private class FinalBlockConfirmationActor(
                       _.head.finalizingPhase(head =>
                           (
                             head.l2Tip.blockHeader,
-                            head.stateL2.blockProduction,
+                            head.stateL2.cloneForBlockProducer(),
                           )
                       )
                     )

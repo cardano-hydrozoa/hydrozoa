@@ -2,7 +2,7 @@ package hydrozoa.l1.multisig.tx.settlement
 
 import hydrozoa.UtxoIdL1
 import hydrozoa.l1.multisig.tx.SettlementTx
-import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.l2.ledger.simple.UtxosSet
 
 trait SettlementTxBuilder {
     def mkSettlementTxDraft(

@@ -1,7 +1,8 @@
 package hydrozoa.model
 
 import com.bloxbean.cardano.client.api.model.ProtocolParams
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.simple.UtxosSet
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.mkWallet
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
@@ -28,7 +29,7 @@ trait HydrozoaSUT:
     ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector)
 
     def submitL2(
-        event: SimpleTransaction | SimpleWithdrawal
+        event: L2Transaction | L2Withdrawal
     ): (Either[String, TxId], NodeStateInspector)
 
     def shutdownSut(): Unit
@@ -62,11 +63,11 @@ class OneNodeHydrozoaSUT(
         (ret, ???)
 
     override def submitL2(
-        event: SimpleTransaction | SimpleWithdrawal
+        event: L2Transaction | L2Withdrawal
     ): (Either[InitializationError, TxId], NodeStateInspector) =
         val request = event match
-            case tx: SimpleTransaction => Transaction(tx)
-            case wd: SimpleWithdrawal  => Withdrawal(wd)
+            case tx: L2Transaction => Transaction(tx)
+            case wd: L2Withdrawal  => Withdrawal(wd)
         val ret = node.submitL2(request)
         // (ret, node.nodeStateReader)
         (ret, ???)

@@ -2,10 +2,10 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
+import hydrozoa.l2.ledger.L2EventLabel
+import L2EventLabel.{
+    L2EventTransactionLabel,
+    L2EventWithdrawalLabel
 }
 import hydrozoa.l2.merkle.RH32UtxoSetL2
 
@@ -15,12 +15,12 @@ case class Block(
 ):
     def validTransactions: Seq[TxId] =
         blockBody.eventsValid
-            .filter(_._2 == TransactionL2EventLabel)
+            .filter(_._2 == L2EventTransactionLabel)
             .map(_._1)
 
     def validWithdrawals: Seq[TxId] =
         blockBody.eventsValid
-            .filter(_._2 == WithdrawalL2EventLabel)
+            .filter(_._2 == L2EventWithdrawalLabel)
             .map(_._1)
 
 val zeroBlock =
@@ -41,9 +41,9 @@ enum BlockTypeL2 derives CanEqual:
     case Final
 
 case class BlockBody(
-    eventsValid: Seq[(TxId, NonGenesisL2EventLabel)],
-    eventsInvalid: Seq[(TxId, NonGenesisL2EventLabel)],
-    depositsAbsorbed: Seq[UtxoId[L1]]
+                        eventsValid: Seq[(TxId, L2EventLabel)],
+                        eventsInvalid: Seq[(TxId, L2EventLabel)],
+                        depositsAbsorbed: Seq[UtxoId[L1]]
 )
 
 object BlockBody:
@@ -75,17 +75,17 @@ case class BlockBuilder[
     BlockNum <: TCheck,
     VersionMajor <: TCheck
 ] private (
-    blockType: BlockTypeL2 = Minor,
-    blockNum: Int = 0,
-    timeCreation: PosixTime = timeCurrent,
-    versionMajor: Int = 0,
-    versionMinor: Int = 0,
-    // FIXME: add type tags
-    eventsValid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty, // TODO: are sets ok?
-    eventsInvalid: Set[(TxId, NonGenesisL2EventLabel)] = Set.empty,
-    depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
-    // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
-    utxosActive: Int = 42
+                                     blockType: BlockTypeL2 = Minor,
+                                     blockNum: Int = 0,
+                                     timeCreation: PosixTime = timeCurrent,
+                                     versionMajor: Int = 0,
+                                     versionMinor: Int = 0,
+                                     // FIXME: add type tags
+                                     eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
+                                     eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
+                                     depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
+                                     // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+                                     utxosActive: Int = 42
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor
@@ -116,16 +116,16 @@ case class BlockBuilder[
         copy(versionMinor = versionMinor)
 
     def withTransaction(txId: TxId): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(eventsValid = eventsValid.+((txId, TransactionL2EventLabel)))
+        copy(eventsValid = eventsValid.+((txId, L2EventTransactionLabel)))
 
     def withWithdrawal(txId: TxId)(using
         ev: BlockType <:< TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(eventsValid = eventsValid.+((txId, WithdrawalL2EventLabel)))
+        copy(eventsValid = eventsValid.+((txId, L2EventWithdrawalLabel)))
 
     def withInvalidEvent(
         txId: TxId,
-        eventType: NonGenesisL2EventLabel
+        eventType: L2EventLabel
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 

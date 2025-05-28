@@ -30,11 +30,13 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBechL1(bech32: String) derives CanEqual:
-    def asL2: AddressBechL2 = AddressBechL2(bech32)
+case class AddressBech[+L <: AnyLevel](bech32: String) derives CanEqual:
+    def asL1: AddressBech[L1] = AddressBech[L1](bech32)
+    def asL2: AddressBech[L2] = AddressBech[L2](bech32)
 
-case class AddressBechL2(bech32: String) derives CanEqual:
-    def asL1: AddressBechL1 = AddressBechL1(bech32)
+type AddressBechL1 = AddressBech[L1]
+
+type AddressBechL2 = AddressBech[L2]
 
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
@@ -63,7 +65,7 @@ object UtxoIdL2:
 // FIXME: parameterize AddressBech
 // FIXME: migrate to Value
 case class Output[L <: AnyLevel](
-    address: AddressBechL1,
+    address: AddressBech[L],
     coins: BigInt,
     mbInlineDatum: Option[String] = None
 )
@@ -78,7 +80,7 @@ object Utxo:
     def apply[L <: AnyLevel, T <: MultisigUtxoTag](
         txId: TxId,
         txIx: TxIx,
-        address: AddressBechL1,
+        address: AddressBech[L],
         coins: BigInt,
         mbInlineDatum: Option[String] = None
     ) =

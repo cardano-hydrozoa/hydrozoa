@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.finalization
 
 import hydrozoa.l1.multisig.tx.FinalizationTx
-import hydrozoa.l2.ledger.UtxosSet
+import hydrozoa.l2.ledger.simple.UtxosSet
 
 trait FinalizationTxBuilder {
     def buildFinalizationTxDraft(

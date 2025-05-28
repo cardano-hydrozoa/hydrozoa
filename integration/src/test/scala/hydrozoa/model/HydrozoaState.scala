@@ -6,7 +6,7 @@ import hydrozoa.infra.Piper
 import hydrozoa.l1.genesisUtxos
 import hydrozoa.l1.multisig.state.{DepositUtxos, MultisigHeadStateL1}
 import hydrozoa.l2.block.{Block, zeroBlock}
-import hydrozoa.l2.ledger.NonGenesisL2
+import hydrozoa.l2.ledger.L2LedgerEvent
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
@@ -15,29 +15,29 @@ import hydrozoa.node.state.*
   * need another thing here.
   */
 case class HydrozoaState(
-    peersNetworkPhase: PeersNetworkPhase,
-    knownPeers: Set[TestPeer],
-    pp: ProtocolParams,
+                            peersNetworkPhase: PeersNetworkPhase,
+                            knownPeers: Set[TestPeer],
+                            pp: ProtocolParams,
 
-    // Head
-    headPhase: Option[HeadPhase] = None,
-    initiator: Option[TestPeer] = None,
-    headPeers: Set[TestPeer] = Set.empty,
-    headAddressBech32: Option[AddressBechL1] = None,
-    headMultisigScript: Option[NativeScript] = None,
-    depositUtxos: DepositUtxos = UtxoSet.apply(),
-    treasuryUtxoId: Option[UtxoIdL1] = None,
+                            // Head
+                            headPhase: Option[HeadPhase] = None,
+                            initiator: Option[TestPeer] = None,
+                            headPeers: Set[TestPeer] = Set.empty,
+                            headAddressBech32: Option[AddressBechL1] = None,
+                            headMultisigScript: Option[NativeScript] = None,
+                            depositUtxos: DepositUtxos = UtxoSet.apply(),
+                            treasuryUtxoId: Option[UtxoIdL1] = None,
 
-    // Node
-    poolEvents: Seq[NonGenesisL2] = Seq.empty,
+                            // Node
+                            poolEvents: Seq[L2LedgerEvent] = Seq.empty,
 
-    // L1
-    knownTxs: Map[TxId, TxL1] = Map.empty,
-    utxosActive: Map[UtxoIdL1, OutputL1],
+                            // L1
+                            knownTxs: Map[TxId, TxL1] = Map.empty,
+                            utxosActive: Map[UtxoIdL1, OutputL1],
 
-    // L2
-    utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
-    l2Tip: Block = zeroBlock
+                            // L2
+                            utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
+                            l2Tip: Block = zeroBlock
 ):
     override def toString: String =
         "Hydrozoa state:" +

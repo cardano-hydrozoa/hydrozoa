@@ -3,7 +3,7 @@ package hydrozoa
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l2.ledger.SimpleWithdrawal
+import hydrozoa.l2.ledger.L2Withdrawal
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
@@ -47,11 +47,11 @@ class HappyPathSuite extends FunSuite {
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBechL2(
+                AddressBech[L2](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None,
-                AddressBechL1(
+                AddressBech[L1](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None
@@ -66,11 +66,11 @@ class HappyPathSuite extends FunSuite {
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBechL2(
+                AddressBech[L2](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None,
-                AddressBechL1(
+                AddressBech[L1](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None
@@ -84,7 +84,7 @@ class HappyPathSuite extends FunSuite {
 
             utxoL2 = major1._2.head
 
-            _ <- node.submitL2(Withdrawal(SimpleWithdrawal(utxoL2._1)))
+            _ <- node.submitL2(Withdrawal(L2Withdrawal(utxoL2._1)))
 
             major2 <- node.handleNextBlock(true)
             _ = cardano.awaitTx(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))

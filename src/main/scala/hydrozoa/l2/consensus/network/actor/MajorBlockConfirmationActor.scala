@@ -7,8 +7,8 @@ import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
+import hydrozoa.l2.ledger.simple.{SimpleHydrozoaL2Ledger, UtxosSet}
 import hydrozoa.node.state.*
 import hydrozoa.{TxId, TxKeyWitness, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
@@ -30,8 +30,8 @@ private class MajorBlockConfirmationActor(
     override type ReqType = ReqMajor
     override type AckType = AckMajor | AckMajor2
 
-    private var utxosActive: UtxosSetOpaque = _
-    private var mbGenesis: Option[(TxId, SimpleGenesis)] = _
+    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
+    private var mbGenesis: Option[(TxId, L2Genesis)] = _
     private var utxosWithdrawn: UtxosSet = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
@@ -76,7 +76,7 @@ private class MajorBlockConfirmationActor(
             val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(settlementTx)
             val l1Effect: L1BlockEffect = settlementTx
-            val l2Effect: L2BlockEffect = utxosActive
+            val l2Effect = Some(utxosActive)
             // Block record and state update by block application
             // TODO: L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
@@ -128,7 +128,7 @@ private class MajorBlockConfirmationActor(
                           _.head.openPhase(openHead =>
                               (
                                 openHead.l2Tip.blockHeader,
-                                openHead.stateL2.blockProduction,
+                                openHead.stateL2.cloneForBlockProducer(),
                                 openHead.immutablePoolEventsL2,
                                 openHead.peekDeposits
                               )

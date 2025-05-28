@@ -4,8 +4,8 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.UtxosSet
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
+import hydrozoa.l2.ledger.HydrozoaL2Ledger
+import hydrozoa.l2.ledger.simple.{UtxosSet, UtxosSetOpaque}
 import hydrozoa.node.state.*
 import ox.channels.{ActorRef, Channel, Source}
 
@@ -22,7 +22,7 @@ private class MinorBlockConfirmationActor(
     override type ReqType = ReqMinor
     override type AckType = AckMinor
 
-    private var utxosActive: UtxosSetOpaque = _
+    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
     private val acks: mutable.Map[WalletId, AckMinor] = mutable.Map.empty
     private var finalizeHead: Boolean = false
 
@@ -34,7 +34,8 @@ private class MinorBlockConfirmationActor(
             // Create effects
             // TODO: Should become a resolution vote at some point
             val l1Effect: L1BlockEffect = ()
-            val l2Effect: L2BlockEffect = utxosActive
+            // TODO: May be absent
+            val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
             stateActor.tell(nodeState =>
@@ -85,7 +86,7 @@ private class MinorBlockConfirmationActor(
                       _.head.openPhase(open =>
                           (
                             open.l2Tip.blockHeader,
-                            open.stateL2.blockProduction,
+                            open.stateL2.cloneForBlockProducer(),
                             open.immutablePoolEventsL2,
                             open.peekDeposits,
                             open.isFinalizationRequested

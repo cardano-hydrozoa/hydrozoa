@@ -71,7 +71,7 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         _order: OrderEnum
     ): Result[util.List[Utxo]] =
         val addressUtxos = cardanoL1Mock.getUtxosActive
-            .filter((_, output) => output.address == AddressBechL1(address))
+            .filter((_, output) => output.address == AddressBech[L1](address))
             .map((id, output) => mkUtxo(id.txId.hash, id.outputIx.ix)(output))
 
         addressUtxos.drop(count * (page - 1)).take(count) match

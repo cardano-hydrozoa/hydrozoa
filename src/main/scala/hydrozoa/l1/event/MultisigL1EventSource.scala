@@ -122,7 +122,7 @@ class MultisigL1EventSource(
         Utxo[L1, TreasuryTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
+          utxo.getAddress |> AddressBech[L1],
           coins
         )
 
@@ -135,7 +135,7 @@ class MultisigL1EventSource(
         Utxo[L1, DepositTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
+          utxo.getAddress |> AddressBech[L1],
           coins,
           Some(utxo.getInlineDatum)
         )

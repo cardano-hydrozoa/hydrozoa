@@ -14,7 +14,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.{
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
 
@@ -114,7 +114,7 @@ L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf3
 L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
 L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
  */
-def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
+def mkCardanoTxForL2Genesis(genesis: L2Genesis): TxL2 =
 
     val virtualOutputs = genesis.outputs.map { output =>
         TransactionOutput.builder
@@ -138,7 +138,7 @@ def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
   * @return
   *   Virtual L2 transaction that spends L1 deposit utxos and produces L2 genesis utxos.
   */
-def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
+def mkCardanoTxForL2Transaction(simpleTx: L2Transaction): TxL2 =
 
     val virtualInputs = simpleTx.inputs.map { input =>
         TransactionInput.builder
@@ -165,7 +165,7 @@ def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
 /** @param withdrawal
   * @return
   */
-def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
+def mkCardanoTxForL2Withdrawal(withdrawal: L2Withdrawal): TxL2 =
 
     val virtualInputs = withdrawal.inputs.map { input =>
         TransactionInput.builder
@@ -191,7 +191,7 @@ def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     outputs.zipWithIndex
         .map((o, ix) =>
             val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
-            val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
+            val utxo = Output[L](AddressBech[L](o.getAddress), o.getValue.getCoin.longValue())
             (utxoId, utxo)
         )
         .toSeq
