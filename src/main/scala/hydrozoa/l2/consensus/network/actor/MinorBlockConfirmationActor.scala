@@ -5,7 +5,6 @@ import hydrozoa.Wallet
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
-import hydrozoa.l2.ledger.simple.UtxosSetOpaque
 import hydrozoa.node.state.*
 import ox.channels.{ActorRef, Channel, Source}
 

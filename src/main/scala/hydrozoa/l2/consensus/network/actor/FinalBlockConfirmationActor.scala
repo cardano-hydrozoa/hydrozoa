@@ -3,14 +3,12 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.state.DepositTag
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
-import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, AckMajor, AckMajor2, Req, ReqFinal}
-import hydrozoa.l2.ledger.simple.UtxosSetOpaque
-import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
-import hydrozoa.{L1, UtxoSet, UtxoSetL2, VerificationKeyBytes, Wallet}
+import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
+import hydrozoa.node.state.*
+import hydrozoa.{UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable

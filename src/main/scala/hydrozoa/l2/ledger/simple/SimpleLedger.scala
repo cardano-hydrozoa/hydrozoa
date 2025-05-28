@@ -46,15 +46,18 @@ import scalus.ledger.api.v1 as scalus
 //        Right((txId, utxoDiff))
 //
 
-type EventHash = TxId
-
 /** This object defines types and constructors for Hydrozoa's L2 ledger and contains a class that
   * implements L2LedgerModule.
   */
 object SimpleHydrozoaL2Ledger:
 
+    opaque type LedgerUtxoId = scalus.TxOutRef
+    opaque type LedgerOutput = scalus.TxOut
+
     // Opaque, can be stored and provided back to the ledger.
-    opaque type LedgerUtxoSetOpaque = Map[OutputRefInt, OutputInt]
+    opaque type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
+
+    given CanEqual[LedgerUtxoSetOpaque, LedgerUtxoSetOpaque] = CanEqual.derived
 
     def mkLedgerForHead(): L2LedgerModule[HydrozoaHeadLedger, LedgerUtxoSetOpaque] =
         new SimpleL2Ledger()
@@ -73,7 +76,7 @@ object SimpleHydrozoaL2Ledger:
 
         type SubmissionError = String
 
-        type UtxosSetOpaqueMutable = mutable.Map[OutputRefInt, OutputInt]
+        type UtxosSetOpaqueMutable = mutable.Map[LedgerUtxoId, LedgerOutput]
         private val activeState: UtxosSetOpaqueMutable = mutable.Map.empty
 
         override def isEmpty: Boolean = activeState.isEmpty
@@ -152,7 +155,13 @@ object SimpleHydrozoaL2Ledger:
                     // FIXME: atomicity
                     withdrawnRefs.foreach(activeState.remove)
 
-                    Right(txId, (emptyUtxoSet, UtxoSet[L2, Unit](withdrawnRefsPub.zip(withdrawnOutputsPub).toMap)))
+                    Right(
+                      txId,
+                      (
+                        emptyUtxoSet,
+                        UtxoSet[L2, Unit](withdrawnRefsPub.zip(withdrawnOutputsPub).toMap)
+                      )
+                    )
 
         /** Tries to resolve output refs.
           *
@@ -163,7 +172,7 @@ object SimpleHydrozoaL2Ledger:
           */
         private def resolveInputs(
             inputs: List[UtxoIdL2]
-        ): Either[List[UtxoIdL2], List[(OutputRefInt, OutputInt, (UtxoIdL2, Output[L2]))]] =
+        ): Either[List[UtxoIdL2], List[(LedgerUtxoId, LedgerOutput, (UtxoIdL2, Output[L2]))]] =
             inputs
                 .map { e =>
                     val outputRefInt = liftOutputRef(e)
@@ -180,7 +189,7 @@ object SimpleHydrozoaL2Ledger:
 
     // TODO: review
 
-    def asTxL2(event: L2Transaction | L2Withdrawal): (TxL2, EventHash) =
+    def asTxL2(event: L2Transaction | L2Withdrawal): (TxL2, TxId) =
         event match
             case transaction: L2Transaction =>
                 val cardanoTx = mkCardanoTxForL2Transaction(transaction)
@@ -201,39 +210,34 @@ object SimpleHydrozoaL2Ledger:
         val (_, txId) = asTxL2(withdrawal)
         L2EventWithdrawal(txId, withdrawal)
 
-opaque type OutputRefInt = scalus.TxOutRef
-opaque type OutputInt = scalus.TxOut
+    //
 
-def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): UtxosSetOpaque =
-    utxoSet.map(_.bimap(liftOutputRef, liftOutput))
+    def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =
+        utxoSet.map(_.bimap(liftOutputRef, liftOutput))
 
-def liftOutputRef(UtxoIdL2: UtxoIdL2): OutputRefInt =
-    val sTxId = scalus.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
-    val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
-    scalus.TxOutRef(sTxId, sTxIx)
+    def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
+        val sTxId = scalus.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
+        val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
+        scalus.TxOutRef(sTxId, sTxIx)
 
-def unliftOutputRef(outputRef: OutputRefInt): UtxoIdL2 =
-    UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
+    def unliftOutputRef(outputRef: LedgerUtxoId): UtxoIdL2 =
+        UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
 
-def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
+    def unwrapTxIn(outputRef: LedgerUtxoId): scalus.TxOutRef = outputRef
 
-def liftOutput(output: OutputL2): OutputInt =
-    val address = decodeBech32AddressL2(output.address)
-    val value = scalus.Value.lovelace(output.coins)
-    scalus.TxOut(address = address, value = value, datumHash = Nothing)
+    def liftOutput(output: OutputL2): LedgerOutput =
+        val address = decodeBech32AddressL2(output.address)
+        val value = scalus.Value.lovelace(output.coins)
+        scalus.TxOut(address = address, value = value, datumHash = Nothing)
 
-def unliftOutput(output: OutputInt): Output[L2] =
-    val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
-    val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
-    Output[L2](plutusAddressAsL2(output.address).asL2, coins)
+    def unliftOutput(output: LedgerOutput): Output[L2] =
+        val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
+        val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
+        Output[L2](plutusAddressAsL2(output.address).asL2, coins)
 
-def unwrapTxOut(output: OutputInt): scalus.TxOut = output
+    def unwrapTxOut(output: LedgerOutput): scalus.TxOut = output
 
-type UtxosSetOpaque = Map[OutputRefInt, OutputInt]
-
-given CanEqual[UtxosSetOpaque, UtxosSetOpaque] = CanEqual.derived
-
-def checkSumInvariant(inputs: List[OutputInt], outputs: List[OutputInt]): Boolean =
-    val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
-    val after: scalus.Value = outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
-    before == after
+    def checkSumInvariant(inputs: List[LedgerOutput], outputs: List[LedgerOutput]): Boolean =
+        val before: scalus.Value = inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
+        val after: scalus.Value = outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
+        before == after
