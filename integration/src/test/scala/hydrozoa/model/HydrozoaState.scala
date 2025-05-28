@@ -6,7 +6,7 @@ import hydrozoa.infra.Piper
 import hydrozoa.l1.genesisUtxos
 import hydrozoa.l1.multisig.state.{DepositUtxos, MultisigHeadStateL1}
 import hydrozoa.l2.block.{Block, zeroBlock}
-import hydrozoa.l2.ledger.L2LedgerEvent
+import hydrozoa.l2.ledger.L2Event
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
@@ -29,7 +29,7 @@ case class HydrozoaState(
                             treasuryUtxoId: Option[UtxoIdL1] = None,
 
                             // Node
-                            poolEvents: Seq[L2LedgerEvent] = Seq.empty,
+                            poolEvents: Seq[L2Event] = Seq.empty,
 
                             // L1
                             knownTxs: Map[TxId, TxL1] = Map.empty,

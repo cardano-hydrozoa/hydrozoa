@@ -170,11 +170,11 @@ given ackRefundLaterSchema: Schema[AckRefundLater] =
   * ------------------------------------------------------------------------------------------
   */
 
-case class ReqEventL2(eventL2: L2LedgerEvent) extends Req:
+case class ReqEventL2(eventL2: L2Event) extends Req:
     type ackType = AckUnit
     type resultType = Unit
 
-given reqEventL2Codec: JsonValueCodec[L2LedgerEvent] =
+given reqEventL2Codec: JsonValueCodec[L2Event] =
     JsonCodecMaker.make
 
 given reqEventL2Schema: Schema[ReqEventL2] =
@@ -182,8 +182,8 @@ given reqEventL2Schema: Schema[ReqEventL2] =
 
 /* ReqEventK2 aux schemas */
 
-given nonGenesisL2Schema: Schema[L2LedgerEvent] =
-    Schema.derived[L2LedgerEvent]
+given nonGenesisL2Schema: Schema[L2Event] =
+    Schema.derived[L2Event]
 
 given simpleTransactionSchema: Schema[L2Transaction] =
     Schema.derived[L2Transaction]

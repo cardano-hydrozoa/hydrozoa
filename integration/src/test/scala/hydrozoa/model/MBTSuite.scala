@@ -17,7 +17,6 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
-import hydrozoa.l2.ledger.simple.UtxosSet
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkWallet, mkWalletId}
@@ -407,7 +406,7 @@ object MBTSuite extends Commands:
                 .copy(address = this.address.asL1)
 
             val newState = state.copy(
-                depositUtxos = UtxoSet(state.depositUtxos.map ++ Map.apply((depositUtxoId, depositUtxo))),
+                depositUtxos = UtxoSet(state.depositUtxos.utxoMap ++ Map.apply((depositUtxoId, depositUtxo))),
                 knownTxs = l1Mock.getKnownTxs,
                 utxosActive = l1Mock.getUtxosActive
             )
@@ -526,13 +525,13 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type RealResult = Either[String, (BlockRecord, UtxosSet, UtxosSet)]
+        override type RealResult = Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)]
 
         override def toString: String = s"Produce block command {finalization = $finalization}"
 
         override def runState(
             state: HydrozoaState
-        ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], HydrozoaState) =
+        ): (Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)], HydrozoaState) =
             log.info(".runState")
 
             // Produce block
@@ -571,8 +570,7 @@ object MBTSuite extends Commands:
                     (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
 
                     if (block.blockHeader.blockType == Final)
-
-                        l2.flush()
+                        val _ = l2.flushAndGetState
                     else
                         l2Effect.foreach(l2.replaceUtxosActive)
 
@@ -589,7 +587,7 @@ object MBTSuite extends Commands:
 
                     // Why does it typecheck?
                     //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
-                    val newDepositUtxos = state.depositUtxos.map
+                    val newDepositUtxos = state.depositUtxos.utxoMap
                         .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
 
                     val newState = state.copy(
@@ -606,10 +604,10 @@ object MBTSuite extends Commands:
                     Right(record, utxosAdded, utxosWithdrawn) /\ newState
 
         override def postConditionSuccess(
-            expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
+            expectedResult: Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)],
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
-            result: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
+            result: Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)],
             sutInspector: SutInspector
         ): Prop =
             log.info(".postConditionSuccess")
@@ -648,7 +646,7 @@ object MBTSuite extends Commands:
                 case _ => s"Block create responses are not comparable, got: $result, expected: $expectedResult" |: false
 
         override def postConditionFailure(
-            expectedResult: Either[String, (BlockRecord, UtxosSet, UtxosSet)],
+            expectedResult: Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)],
             stateBefore: HydrozoaState,
             stateAfter: HydrozoaState,
             err: Throwable
@@ -656,7 +654,7 @@ object MBTSuite extends Commands:
             log.error(".postConditionFailure should never happen")
             false
 
-        override def run(sut: HydrozoaSUT): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], SutInspector) =
+        override def run(sut: HydrozoaSUT): (Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)], SutInspector) =
             log.info(".run")
             sut.produceBlock(finalization)
 

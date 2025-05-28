@@ -1,14 +1,13 @@
 package hydrozoa.model
 
 import com.bloxbean.cardano.client.api.model.ProtocolParams
-import hydrozoa.l2.ledger.simple.UtxosSet
 import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.mkWallet
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.{BlockRecord, NodeState, WalletId}
-import hydrozoa.{TxId, TxIx, mkSimpleHydrozoaNode}
+import hydrozoa.{TxId, TxIx, UtxoSetL2, mkSimpleHydrozoaNode}
 
 /** Hydrozoa peers' network facade.
   */
@@ -26,7 +25,7 @@ trait HydrozoaSUT:
 
     def produceBlock(
         nextBlockFinal: Boolean
-    ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector)
+    ): (Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)], NodeStateInspector)
 
     def submitL2(
         event: L2Transaction | L2Withdrawal
@@ -44,9 +43,9 @@ class OneNodeHydrozoaSUT(
         txIx: TxIx
     ): (Either[InitializationError, TxId], NodeStateInspector) =
         ???
-        //val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
+        // val ret = node.initializeHead(otherHeadPeers, ada, txId, txIx)
         // (ret, node.nodeStateReader)
-        //(ret, ???)
+        // (ret, ???)
 
     override def deposit(
         depositRequest: DepositRequest
@@ -57,7 +56,7 @@ class OneNodeHydrozoaSUT(
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): (Either[String, (BlockRecord, UtxosSet, UtxosSet)], NodeStateInspector) =
+    ): (Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)], NodeStateInspector) =
         val ret = node.handleNextBlock(nextBlockFinal)
         // (ret, node.nodeStateReader)
         (ret, ???)

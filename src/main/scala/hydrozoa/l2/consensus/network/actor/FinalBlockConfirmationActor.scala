@@ -8,9 +8,9 @@ import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, AckMajor, AckMajor2, Req, ReqFinal}
-import hydrozoa.l2.ledger.simple.{UtxosSet, UtxosSetOpaque}
+import hydrozoa.l2.ledger.simple.UtxosSetOpaque
 import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
-import hydrozoa.{L1, UtxoSet, VerificationKeyBytes, Wallet}
+import hydrozoa.{L1, UtxoSet, UtxoSetL2, VerificationKeyBytes, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -28,7 +28,7 @@ private class FinalBlockConfirmationActor(
     override type ReqType = ReqFinal
     override type AckType = AckFinal | AckFinal2
 
-    private var utxosWithdrawn: UtxosSet = _
+    private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckFinal] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckFinal2] = mutable.Map.empty
     private var finalizationTxDraft: FinalizationTx = _

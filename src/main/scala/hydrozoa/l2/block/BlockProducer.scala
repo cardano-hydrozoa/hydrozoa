@@ -8,7 +8,6 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.l2.ledger.simple.UtxosSet
 import ox.channels.ActorRef
 import ox.sleep
 
@@ -26,17 +25,17 @@ class BlockProducer:
         this.networkRef = networkRef
 
     def produceBlock(
-                        stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
-                        poolEvents: Seq[L2LedgerEvent],
-                        depositsPending: DepositUtxos,
-                        prevHeader: BlockHeader,
-                        timeCreation: PosixTime,
-                        finalizing: Boolean
+        stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        poolEvents: Seq[L2Event],
+        depositsPending: DepositUtxos,
+        prevHeader: BlockHeader,
+        timeCreation: PosixTime,
+        finalizing: Boolean
     ): (
         Block,
         HydrozoaL2Ledger.LedgerUtxoSetOpaque,
-        UtxosSet,
-        UtxosSet,
+        UtxoSetL2,
+        UtxoSetL2,
         Option[(TxId, L2Genesis)]
     ) =
         BlockProducer.createBlock(
@@ -84,14 +83,14 @@ object BlockProducer:
       *   deposits to absorb, and multisig regime keep-alive is not yet needed.
       */
     def createBlock(
-                       stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
-                       poolEvents: Seq[L2LedgerEvent],
-                       depositsPending: DepositUtxos,
-                       prevHeader: BlockHeader,
-                       timeCreation: PosixTime,
-                       finalizing: Boolean
+        stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        poolEvents: Seq[L2Event],
+        depositsPending: DepositUtxos,
+        prevHeader: BlockHeader,
+        timeCreation: PosixTime,
+        finalizing: Boolean
     ): Option[
-      (Block, HydrozoaL2Ledger.LedgerUtxoSetOpaque, UtxosSet, UtxosSet, Option[(TxId, L2Genesis)])
+      (Block, HydrozoaL2Ledger.LedgerUtxoSetOpaque, UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
     ] =
 
         // 1. Initialize the variables and arguments.
@@ -113,17 +112,17 @@ object BlockProducer:
 
         // 3. For each non-genesis L2 event...
         poolEvents.foreach {
-            case tx: L2LedgerEventTransaction =>
-                stateL2.toLedgerEvent(tx.transaction) |> stateL2.submit match
+            case tx: L2EventTransaction =>
+                stateL2.toLedgerTransaction(tx.transaction) |> stateL2.submit match
                     case Right(txId, _) => txValid.add(txId)
                     case Left(txId, err) =>
                         log.debug(s"Transaction can't be submitted: $err")
                         eventsInvalid.add(txId, L2EventTransactionLabel)
-            case wd: L2LedgerEventWithdrawal =>
-                stateL2.toLedgerEvent(wd.withdrawal) |> stateL2.submit match
+            case wd: L2EventWithdrawal =>
+                stateL2.toLedgerTransaction(wd.withdrawal) |> stateL2.submit match
                     case Right(txId, (_, utxosDiff)) =>
                         wdValid.add(txId)
-                        utxosWithdrawn.addAll(utxosDiff)
+                        utxosWithdrawn.addAll(utxosDiff.utxoMap)
                     case Left(txId, err) =>
                         log.debug(s"Withdrawal can't be submitted: $err")
                         eventsInvalid.add(txId, L2EventWithdrawalLabel)
@@ -133,15 +132,15 @@ object BlockProducer:
         val mbGenesis = if !finalizing then
             // TODO: check deposits timing
             val eligibleDeposits: DepositUtxos =
-                UtxoSet[L1, DepositTag](depositsPending.map.filter(_ => true))
-            if eligibleDeposits.map.isEmpty then None
+                UtxoSet[L1, DepositTag](depositsPending.utxoMap.filter(_ => true))
+            if eligibleDeposits.utxoMap.isEmpty then None
             else
                 val genesis: L2Genesis = L2Genesis.apply(eligibleDeposits)
                 val genesisHash: TxId = ??? // TODO: calculate hash based on eligibleDeposits
-                val genesisUtxos: UtxosSet = ??? // TODO: build utxos from genesis
+                val genesisUtxos: UtxoSetL2 = ??? // TODO: build utxos from genesis
                 stateL2.addGenesisUtxos(genesisUtxos)
-                utxosAdded.addAll(genesisUtxos)
-                depositsAbsorbed = eligibleDeposits.map.keySet.toList.sortWith((a, b) =>
+                utxosAdded.addAll(genesisUtxos.utxoMap.toSet)
+                depositsAbsorbed = eligibleDeposits.utxoMap.keySet.toList.sortWith((a, b) =>
                     a._1.hash.compareTo(b._1.hash) < 0
                 )
                 Some(genesisHash, genesis)
@@ -149,7 +148,7 @@ object BlockProducer:
 
         // 5. If finalizing is True...
         if (finalizing)
-            utxosWithdrawn.addAll(stateL2.flush())
+            utxosWithdrawn.addAll(stateL2.flushAndGetState.utxoMap)
 
         // 6. Set block.blockType...
         val multisigRegimeKeepAlive = false // TODO: implement
@@ -194,4 +193,10 @@ object BlockProducer:
                     .versionMinor(prevHeader.versionMinor + 1)
                     .build
 
-        Some(block, stateL2.getUtxosActive, utxosAdded.toSet, utxosWithdrawn.toSet, mbGenesis)
+        Some(
+          block,
+          stateL2.getUtxosActive,
+          UtxoSet[L2, Unit](utxosAdded.toMap),
+          UtxoSet[L2, Unit](utxosWithdrawn.toMap),
+          mbGenesis
+        )

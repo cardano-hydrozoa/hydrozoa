@@ -1,29 +1,26 @@
 package hydrozoa.l2.ledger.simple
 
 import cats.implicits.toBifunctorOps
+import cats.implicits.toBifunctorOps
+
+import hydrozoa.*
 import hydrozoa.*
 import hydrozoa.infra.*
+import hydrozoa.infra.{decodeBech32AddressL1, decodeBech32AddressL2, plutusAddressAsL2}
 import hydrozoa.l1.multisig.state.{DepositUtxos, depositDatum}
 import hydrozoa.l2.ledger.*
 
 import scala.collection.mutable
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
-import cats.implicits.toBifunctorOps
-import hydrozoa.infra.{decodeBech32AddressL1, decodeBech32AddressL2, plutusAddressAsL2}
-import hydrozoa.*
 import scalus.builtin.ByteString
+
 import scalus.prelude.AssocMap
 import scalus.prelude.Maybe.{Just, Nothing}
 import scalus.prelude.Prelude.given_Eq_ByteString
 
 import scalus.ledger.api.v1 as scalus
-
-import scala.collection.mutable
-
-// TODO: Add phantom type to reflect the purpose.
-// TODO: rename or use UtxoSet from types
-type UtxosSet = Set[(UtxoIdL2, Output[L2])]
 
 //
 //    private def handleGenesis(event: GenesisL2) =
@@ -69,11 +66,10 @@ object SimpleHydrozoaL2Ledger:
         ledger.replaceUtxosActive(utxoSet |> liftUtxoSet)
         ledger
 
-    class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
+    private class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
         extends L2LedgerModule[InstancePurpose, LedgerUtxoSetOpaque]:
 
-        override type LedgerEvent = L2Transaction | L2Withdrawal
-        override type LedgerEventHash = TxId
+        override type LedgerTransaction = L2Transaction | L2Withdrawal
 
         type SubmissionError = String
 
@@ -88,15 +84,16 @@ object SimpleHydrozoaL2Ledger:
             this.activeState.clear()
             this.activeState.addAll(activeState)
 
-        override def getState: UtxosSet = unliftUtxoSet(activeState.clone().toMap).toSet
+        override def getState: UtxoSetL2 =
+            UtxoSet[L2, Unit](unliftUtxoSet(activeState.clone().toMap))
 
         override def getOutput(utxoId: UtxoIdL2): OutputL2 =
             activeState(utxoId |> liftOutputRef) |> unliftOutput
 
-        override def flush(): UtxosSet =
+        override def flushAndGetState: UtxoSetL2 =
             val ret = activeState.clone()
             activeState.clear()
-            ret.toSet.map((k, v) => (unliftOutputRef(k), unliftOutput(v)))
+            UtxoSet[L2, Unit](ret.toMap.map((k, v) => (unliftOutputRef(k), unliftOutput(v))))
 
         override def cloneForBlockProducer()(using
             InstancePurpose =:= HydrozoaHeadLedger
@@ -105,17 +102,19 @@ object SimpleHydrozoaL2Ledger:
             ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
             ledgerForBlockProduction
 
-        override def toLedgerEvent(event: L2Transaction | L2Withdrawal): LedgerEvent = event
+        override def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction = tx
 
-        override def addGenesisUtxos(utxoSet: UtxosSet): Unit =
-            liftUtxoSet(utxoSet.toMap) |> this.activeState.addAll
+        override def addGenesisUtxos(utxoSet: UtxoSetL2): Unit =
+            liftUtxoSet(utxoSet.utxoMap) |> this.activeState.addAll
 
         override def submit(
-            event: LedgerEvent
-        ): Either[(TxId, SubmissionError), (TxId, (UtxosSet, UtxosSet))] =
+            event: LedgerTransaction
+        ): Either[(TxId, SubmissionError), (TxId, (UtxoSetL2, UtxoSetL2))] =
             event match
                 case tx: L2Transaction        => submitTransaction(tx)
                 case withdrawal: L2Withdrawal => submitWithdrawal(withdrawal)
+
+        private val emptyUtxoSet = UtxoSet[L2, Unit](Map.empty[UtxoIdL2, Output[L2]])
 
         private def submitTransaction(tx: L2Transaction) =
             val (_, txId) = asTxL2(tx)
@@ -140,8 +139,6 @@ object SimpleHydrozoaL2Ledger:
                         inputRefs.foreach(activeState.remove)
                         newUtxos.foreach(activeState.put.tupled)
 
-                        val emptyUtxoSet = Set[(UtxoIdL2, Output[L2])]()
-
                         Right((txId, (emptyUtxoSet, emptyUtxoSet)))
 
         private def submitWithdrawal(withdrawal: L2Withdrawal) =
@@ -154,8 +151,8 @@ object SimpleHydrozoaL2Ledger:
                     val (withdrawnRefsPub, withdrawnOutputsPub) = withdrawnPub.unzip
                     // FIXME: atomicity
                     withdrawnRefs.foreach(activeState.remove)
-                    val emptyUtxoSet = Set[(UtxoIdL2, Output[L2])]()
-                    Right(txId, (emptyUtxoSet, withdrawnRefsPub.zip(withdrawnOutputsPub).toSet))
+
+                    Right(txId, (emptyUtxoSet, UtxoSet[L2, Unit](withdrawnRefsPub.zip(withdrawnOutputsPub).toMap)))
 
         /** Tries to resolve output refs.
           *
@@ -196,13 +193,13 @@ object SimpleHydrozoaL2Ledger:
                 println(s"L2 withdrawal event, txId: $txId, content: ${serializeTxHex(cardanoTx)}")
                 (cardanoTx, txId)
 
-    def mkTransactionEvent(tx: L2Transaction): L2LedgerEventTransaction =
+    def mkTransactionEvent(tx: L2Transaction): L2EventTransaction =
         val (_, txId) = asTxL2(tx)
-        L2LedgerEventTransaction(txId, tx)
+        L2EventTransaction(txId, tx)
 
-    def mkWithdrawalEvent(withdrawal: L2Withdrawal): L2LedgerEventWithdrawal =
+    def mkWithdrawalEvent(withdrawal: L2Withdrawal): L2EventWithdrawal =
         val (_, txId) = asTxL2(withdrawal)
-        L2LedgerEventWithdrawal(txId, withdrawal)
+        L2EventWithdrawal(txId, withdrawal)
 
 opaque type OutputRefInt = scalus.TxOutRef
 opaque type OutputInt = scalus.TxOut

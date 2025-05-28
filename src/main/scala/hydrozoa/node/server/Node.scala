@@ -9,7 +9,6 @@ import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
-import hydrozoa.l2.ledger.simple.UtxosSet
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
@@ -159,7 +158,7 @@ class Node:
       */
     def handleNextBlock(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
+    ): Either[String, (BlockRecord, UtxoSetL2, UtxoSetL2)] =
         ???
 
     def stateL2(): StateL2Response =
@@ -168,7 +167,7 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
+                    case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).utxoMap.toList
                     case _    => List.empty
     end stateL2
 

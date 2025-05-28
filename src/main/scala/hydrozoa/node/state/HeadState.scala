@@ -10,7 +10,6 @@ import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.l2.ledger.simple.{EventHash, UtxosSet, UtxosSetOpaque}
 import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
@@ -76,9 +75,9 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def stateL1: MultisigHeadStateL1
 
 sealed trait OpenPhaseReader extends MultisigRegimeReader:
-    def immutablePoolEventsL2: Seq[L2LedgerEvent]
+    def immutablePoolEventsL2: Seq[L2Event]
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
-    def immutableEventsConfirmedL2: Seq[(L2LedgerEvent, Int)]
+    def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def l2Tip: Block
     def l2LastMajor: Block
     def peekDeposits: DepositUtxos
@@ -103,18 +102,18 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
-    def poolEventL2(event: L2LedgerEvent): Unit
+    def poolEventL2(event: L2Event): Unit
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]
     def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2Genesis)] = None): Unit
     def applyBlockEvents(
-                            blockNum: Int,
-                            eventsValid: Seq[(TxId, L2EventLabel)],
-                            eventsInvalid: Seq[(TxId, L2EventLabel)],
-                            depositsAbsorbed: Seq[UtxoIdL1]
-    ): Map[TxId, L2LedgerEvent]
+        blockNum: Int,
+        eventsValid: Seq[(TxId, L2EventLabel)],
+        eventsInvalid: Seq[(TxId, L2EventLabel)],
+        depositsAbsorbed: Seq[UtxoIdL1]
+    ): Map[TxId, L2Event]
     def requestFinalization(): Unit
     def isFinalizationRequested: Boolean
     def switchToFinalizingPhase(): Unit
@@ -172,13 +171,14 @@ class HeadStateGlobal(
     private var mbIsFinalizationRequested: Option[Boolean] = None
 
     // Pool: L2 events + pending deposits
-    private val poolEventsL2: mutable.Buffer[L2LedgerEvent] = mutable.Buffer()
+    private val poolEventsL2: mutable.Buffer[L2Event] = mutable.Buffer()
     private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
 
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
-    // TODO: these events won't contain genesis events
-    private val eventsConfirmedL2: mutable.Buffer[(L2LedgerEvent, Int)] = mutable.Buffer()
+    // TODO: having two lists won't work when we are to replay events, we need order
+    // these events won't contain genesis events
+    private val eventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
@@ -241,9 +241,9 @@ class HeadStateGlobal(
         def headPeers: Set[WalletId] = self.headPeerVKs.keySet
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
-        def immutablePoolEventsL2: Seq[L2LedgerEvent] = self.poolEventsL2.toSeq
+        def immutablePoolEventsL2: Seq[L2Event] = self.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
-        def immutableEventsConfirmedL2: Seq[(L2LedgerEvent, Int)] = self.eventsConfirmedL2.toSeq
+        def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.eventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
@@ -252,7 +252,7 @@ class HeadStateGlobal(
         def peekDeposits: DepositUtxos =
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
-            self.stateL1.get.depositUtxos.map.view
+            self.stateL1.get.depositUtxos.utxoMap.view
                 .filterKeys(k => !self.depositHandled.contains(k))
                 .toMap
                 |> UtxoSet.apply[L1, DepositTag]
@@ -323,14 +323,14 @@ class HeadStateGlobal(
             self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
-        def poolEventL2(event: L2LedgerEvent): Unit =
+        def poolEventL2(event: L2Event): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
             log.info(
               s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
             // Metrics
-            val txs = self.poolEventsL2.map(nonGenesisLabel).count(_ == L2EventTransactionLabel)
+            val txs = self.poolEventsL2.map(l2EventLabel).count(_ == L2EventTransactionLabel)
             metrics.tell(m =>
                 m.setPoolEventsL2(L2EventTransactionLabel, txs)
                 m.setPoolEventsL2(L2EventWithdrawalLabel, self.poolEventsL2.size - txs)
@@ -363,12 +363,12 @@ class HeadStateGlobal(
 
         def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
             log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
-            depositIds.foreach(self.stateL1.get.depositUtxos.map.remove)
+            depositIds.foreach(self.stateL1.get.depositUtxos.utxoMap.remove)
             updateDepositLiquidity()
 
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
-            self.stateL1.get.depositUtxos.map.addAll(depositUtxos.map)
+            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.utxoMap)
             log.info(
               s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
@@ -378,7 +378,7 @@ class HeadStateGlobal(
                 produceBlock(false)
 
         private def updateDepositLiquidity(): Unit =
-            val coins = self.stateL1.get.depositUtxos.map.values.map(_.coins).sum
+            val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.coins).sum
             metrics.tell(_.setDepositsLiquidity(coins.toLong))
 
         override def stateL2
@@ -415,7 +415,7 @@ class HeadStateGlobal(
 
             // NB: this should be run before replacing utxo set
             val volumeWithdrawn = record.block.validWithdrawals.toList
-                .map(confirmedEvents(_).asInstanceOf[L2LedgerEventWithdrawal])
+                .map(confirmedEvents(_).asInstanceOf[L2EventWithdrawal])
                 .flatMap(_.withdrawal.inputs)
                 .map(stateL2.getOutput)
                 .map(_.coins)
@@ -450,7 +450,7 @@ class HeadStateGlobal(
                 mbGenesis.foreach(g => m.addInboundL1Volume(g._2.volume()))
 
                 val volumeTransacted = record.block.validTransactions.toList
-                    .map(confirmedEvents(_).asInstanceOf[L2LedgerEventTransaction])
+                    .map(confirmedEvents(_).asInstanceOf[L2EventTransaction])
                     .map(_.transaction.volume())
                     .sum
                 m.addTransactedL2Volume(volumeTransacted)
@@ -475,13 +475,13 @@ class HeadStateGlobal(
             )
 
         override def applyBlockEvents(
-                                         blockNum: Int,
-                                         eventsValid: Seq[(TxId, L2EventLabel)],
-                                         eventsInvalid: Seq[(TxId, L2EventLabel)],
-                                         depositsAbsorbed: Seq[UtxoIdL1]
-        ): Map[TxId, L2LedgerEvent] =
+            blockNum: Int,
+            eventsValid: Seq[(TxId, L2EventLabel)],
+            eventsInvalid: Seq[(TxId, L2EventLabel)],
+            depositsAbsorbed: Seq[UtxoIdL1]
+        ): Map[TxId, L2Event] =
 
-            def applyValidEvent(blockNum: Int, txId: EventHash): (EventHash, L2LedgerEvent) =
+            def applyValidEvent(blockNum: Int, txId: TxId): (TxId, L2Event) =
                 log.info(s"Marking event $txId as validated by block $blockNum")
                 self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
@@ -493,9 +493,9 @@ class HeadStateGlobal(
                             |> self.poolEventsL2.subtractAll
                         // Dump L2 tx
                         TxDump.dumpL2Tx(event match
-                            case L2LedgerEventTransaction(_, transaction) =>
+                            case L2EventTransaction(_, transaction) =>
                                 HydrozoaL2Ledger.asTxL2(transaction)._1
-                            case L2LedgerEventWithdrawal(_, withdrawal) =>
+                            case L2EventWithdrawal(_, withdrawal) =>
                                 HydrozoaL2Ledger.asTxL2(withdrawal)._1
                         )
                         (txId, event)
@@ -527,7 +527,7 @@ class HeadStateGlobal(
                 |> self.poolEventsL2.subtractAll
 
             // Metrics - FIXME: factor out
-            val txs = self.poolEventsL2.map(nonGenesisLabel).count(_ == L2EventTransactionLabel)
+            val txs = self.poolEventsL2.map(l2EventLabel).count(_ == L2EventTransactionLabel)
             metrics.tell(m =>
                 m.setPoolEventsL2(L2EventTransactionLabel, txs)
                 m.setPoolEventsL2(L2EventWithdrawalLabel, self.poolEventsL2.size - txs)
@@ -678,7 +678,7 @@ case class BlockRecord(
 case class OwnBlock(
     block: Block,
     utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque,
-    utxosWithdrawn: UtxosSet,
+    utxosWithdrawn: UtxoSetL2,
     mbGenesis: Option[(TxId, L2Genesis)]
 )
 

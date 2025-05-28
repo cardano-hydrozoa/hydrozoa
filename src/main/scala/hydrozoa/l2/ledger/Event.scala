@@ -3,33 +3,33 @@ package hydrozoa.l2.ledger
 import hydrozoa.infra.{Piper, plutusAddressAsL2}
 import hydrozoa.l1.multisig.state.{DepositUtxos, depositDatum}
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.{AddressBechL1, AddressBechL2, AnyLevel, L2, Output, OutputL2, TxId, UtxoIdL2}
+import hydrozoa.{AddressBechL1, AddressBechL2, L2, Output, OutputL2, TxId, UtxoIdL2}
 
-final case class GenesisEventL2(eventId: TxId, genesis: L2Genesis)
-
-sealed trait L2LedgerEvent:
+sealed trait L2Event:
     def getEventId: TxId
 
-final case class L2LedgerEventTransaction(
+final case class L2EventTransaction(
     eventId: TxId,
     transaction: L2Transaction
-) extends L2LedgerEvent:
+) extends L2Event:
     override def getEventId: TxId = eventId
 
-final case class L2LedgerEventWithdrawal(
+final case class L2EventWithdrawal(
     eventId: TxId,
     withdrawal: L2Withdrawal
-) extends L2LedgerEvent:
+) extends L2Event:
     override def getEventId: TxId = eventId
+
+//final case class GenesisEventL2(eventId: TxId, genesis: L2Genesis)
 
 enum L2EventLabel derives CanEqual:
     case L2EventTransactionLabel
     case L2EventWithdrawalLabel
 
-def nonGenesisLabel(e: L2LedgerEvent): L2EventLabel =
+def l2EventLabel(e: L2Event): L2EventLabel =
     e match
-        case _: L2LedgerEventTransaction => L2EventTransactionLabel
-        case _: L2LedgerEventWithdrawal  => L2EventWithdrawalLabel
+        case _: L2EventTransaction => L2EventTransactionLabel
+        case _: L2EventWithdrawal  => L2EventWithdrawalLabel
 
 case class L2Genesis(
     outputs: List[SimpleOutput]
@@ -39,7 +39,7 @@ case class L2Genesis(
 object L2Genesis:
     def apply(ds: DepositUtxos): L2Genesis =
         L2Genesis(
-          ds.map.values
+          ds.utxoMap.values
               .map(o =>
                   val datum = depositDatum(o) match
                       case Some(datum) => datum

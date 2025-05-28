@@ -35,7 +35,6 @@ case class AddressBech[+L <: AnyLevel](bech32: String) derives CanEqual:
     def asL2: AddressBech[L2] = AddressBech[L2](bech32)
 
 type AddressBechL1 = AddressBech[L1]
-
 type AddressBechL2 = AddressBech[L2]
 
 // Transaction key witness
@@ -62,8 +61,7 @@ object UtxoIdL1:
 object UtxoIdL2:
     def apply(id: TxId, ix: TxIx): UtxoId[L2] = UtxoId(id, ix)
 
-// FIXME: parameterize AddressBech
-// FIXME: migrate to Value
+// TODO: migrate to Value
 case class Output[L <: AnyLevel](
     address: AddressBech[L],
     coins: BigInt,
@@ -86,17 +84,19 @@ object Utxo:
     ) =
         new Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins, mbInlineDatum))
 
-case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L]])
+case class UtxoSetMutable[L <: AnyLevel, F](utxoMap: mutable.Map[UtxoId[L], Output[L]])
 
-case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
+case class UtxoSet[L <: AnyLevel, F](utxoMap: Map[UtxoId[L], Output[L]])
+
+type UtxoSetL1 = UtxoSet[L1, Unit]
+type UtxoSetL2 = UtxoSet[L2, Unit]
 
 object UtxoSet:
     def apply[L <: AnyLevel, F](): UtxoSet[L, F] = new UtxoSet(Map.empty)
-    def apply[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]]): UtxoSet[L, F] = new UtxoSet(
-      map
-    )
+    def apply[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]]): UtxoSet[L, F] =
+        new UtxoSet(map)
     def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
-        new UtxoSet(mutableUtxoSet.map.toMap)
+        new UtxoSet(mutableUtxoSet.utxoMap.toMap)
 
 // Policy ID
 case class PolicyId(policyId: String)

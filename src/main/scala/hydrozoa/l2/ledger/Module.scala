@@ -1,7 +1,6 @@
 package hydrozoa.l2.ledger
 
-import hydrozoa.l2.ledger.simple.UtxosSet
-import hydrozoa.{OutputL2, TxId, UtxoIdL2}
+import hydrozoa.{OutputL2, TxId, UtxoIdL2, UtxoSetL2}
 
 sealed trait LedgerPurpose
 
@@ -11,9 +10,12 @@ sealed trait MBTSuiteLedger extends LedgerPurpose
 
 trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
 
-    type LedgerEvent
-    type LedgerEventHash
+    /** Type for things, that can be submitted to the ledger.
+      */
+    type LedgerTransaction
 
+    /** Type for error responses
+      */
     type SubmissionError
 
     /** @return
@@ -34,7 +36,7 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
     def replaceUtxosActive(activeState: LedgerUtxoSetOpaque): Unit
 
     // Returns utxo state. Used only in L2 state endpoint for now.
-    def getState: UtxosSet
+    def getState: UtxoSetL2
 
     def getOutput(utxoId: UtxoIdL2): OutputL2
 
@@ -43,7 +45,7 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       * @return
       *   Clears up utxo set and returns a copy of active utxos as a non-opaque type.
       */
-    def flush(): UtxosSet
+    def flushAndGetState: UtxoSetL2
 
     /** Tries to submit an event returning the event's hash and an error in case of failure or
       * event's hash TODO: (and diff of generated/withdrawn utxos) - use wrapper for this.
@@ -53,8 +55,8 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       * @return
       */
     def submit(
-        event: LedgerEvent
-    ): Either[(TxId, SubmissionError), (TxId, (UtxosSet, UtxosSet))]
+        event: LedgerTransaction
+    ): Either[(TxId, SubmissionError), (TxId, (UtxoSetL2, UtxoSetL2))]
 
     /** Makes a copy of the current ledger for block production purposes.
       *
@@ -67,6 +69,6 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
         InstancePurpose =:= HydrozoaHeadLedger
     ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque]
 
-    def toLedgerEvent(event: L2Transaction | L2Withdrawal): LedgerEvent
+    def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction
 
-    def addGenesisUtxos(utxos: UtxosSet): Unit
+    def addGenesisUtxos(utxos: UtxoSetL2): Unit
