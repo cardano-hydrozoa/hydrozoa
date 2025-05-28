@@ -3,15 +3,12 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.state.DepositTag
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
-import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, AckMajor, AckMajor2, Req, ReqFinal}
-import hydrozoa.l2.ledger.UtxosSet
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.node.state.{BlockRecord, L1BlockEffect, L2BlockEffect, NodeState, WalletId}
-import hydrozoa.{L1, UtxoSet, VerificationKeyBytes, Wallet}
+import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
+import hydrozoa.node.state.*
+import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -29,7 +26,7 @@ private class FinalBlockConfirmationActor(
     override type ReqType = ReqFinal
     override type AckType = AckFinal | AckFinal2
 
-    private var utxosWithdrawn: UtxosSet = _
+    private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckFinal] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckFinal2] = mutable.Map.empty
     private var finalizationTxDraft: FinalizationTx = _
@@ -70,7 +67,7 @@ private class FinalBlockConfirmationActor(
             val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(finalizationTx)
             val l1Effect: L1BlockEffect = finalizationTx
-            val l2Effect: L2BlockEffect = ()
+            val l2Effect: L2BlockEffect = None
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
             // Close the head
@@ -114,7 +111,7 @@ private class FinalBlockConfirmationActor(
                       _.head.finalizingPhase(head =>
                           (
                             head.l2Tip.blockHeader,
-                            head.stateL2.blockProduction,
+                            head.stateL2.cloneForBlockProducer(),
                           )
                       )
                     )
@@ -123,7 +120,7 @@ private class FinalBlockConfirmationActor(
                   prevHeader,
                   stateL2Cloned,
                   Seq.empty,
-                  UtxoSet.apply(),
+                  TaggedUtxoSet.apply(),
                   true
                 )
                 resolution match

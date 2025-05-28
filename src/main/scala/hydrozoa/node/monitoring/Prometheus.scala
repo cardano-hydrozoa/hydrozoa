@@ -1,16 +1,16 @@
 package hydrozoa.node.monitoring
 
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
+import hydrozoa.l2.ledger.L2EventLabel
+import L2EventLabel.{
+    L2EventTransactionLabel,
+    L2EventWithdrawalLabel
 }
 import io.prometheus.metrics.core.metrics.{Counter, Gauge, Histogram}
 
-def nonGenesisEventLabel(eventType: NonGenesisL2EventLabel | String): String = {
+def nonGenesisEventLabel(eventType: L2EventLabel | String): String = {
     val eventTypeLabel = eventType match
-        case TransactionL2EventLabel => "transaction"
-        case WithdrawalL2EventLabel  => "withdrawal"
+        case L2EventTransactionLabel => "transaction"
+        case L2EventWithdrawalLabel  => "withdrawal"
         case str: String             => str
     eventTypeLabel
 }
@@ -114,7 +114,7 @@ class PrometheusMetrics extends Metrics:
 
     override def observeBlockSize(
         // blockType: BlockTypeL2,
-        eventType: NonGenesisL2EventLabel | String,
+        eventType: L2EventLabel | String,
         // validity: String,
         number: Int
     ): Unit =
@@ -136,7 +136,7 @@ class PrometheusMetrics extends Metrics:
         )
         .register
 
-    override def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit =
+    override def setPoolEventsL2(eventType: L2EventLabel, number: Int): Unit =
         poolEventsL2.labelValues(nonGenesisEventLabel(eventType)).set(number)
 
     // L2 Events handled
@@ -150,7 +150,7 @@ class PrometheusMetrics extends Metrics:
         .register
 
     override def incEventsL2Handled(
-        eventType: NonGenesisL2EventLabel,
+        eventType: L2EventLabel,
         valid: Boolean,
         number: Int
     ): Unit =

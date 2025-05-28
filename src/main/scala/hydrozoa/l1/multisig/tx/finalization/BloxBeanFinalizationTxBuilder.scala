@@ -43,7 +43,7 @@ class BloxBeanFinalizationTxBuilder(
             .build
 
         val outputsToWithdraw =
-            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
+            r.utxosWithdrawn.utxoMap.map(w => toBloxBeanTransactionOutput(w._2))
 
         val coinsWithdrawn =
             outputsToWithdraw.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
@@ -74,7 +74,7 @@ class BloxBeanFinalizationTxBuilder(
         val finalizationTx = builder
             .apply(txPartial)
             // NB: .preBalanceTx should be called only once
-            .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsToWithdraw.asJava))
+            .preBalanceTx((_, t) => t.getBody.getOutputs.addAll(outputsToWithdraw.toList.asJava))
             .feePayer(seedAddress)
             .additionalSignersCount(numberOfSignatories(headNativeScript))
             .build

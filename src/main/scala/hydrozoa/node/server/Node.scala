@@ -9,7 +9,7 @@ import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{AdaSimpleLedger, SimpleGenesis}
+import hydrozoa.l2.ledger.{mkTransactionEvent, mkWithdrawalEvent}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
@@ -164,10 +164,8 @@ class Node:
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
-            case Transaction(tx) =>
-                AdaSimpleLedger.mkTransactionEvent(tx)
-            case Withdrawal(wd) =>
-                AdaSimpleLedger.mkWithdrawalEvent(wd)
+            case Transaction(tx) => mkTransactionEvent(tx)
+            case Withdrawal(wd)  => mkWithdrawalEvent(wd)
 
         network.tell(_.reqEventL2(ReqEventL2(event)))
         Right(event.getEventId)
@@ -220,6 +218,7 @@ class Node:
                     case Open =>
                         nodeState
                             .ask(_.head.openPhase(_.stateL2.getState))
+                            .utxoMap
                             .toList
                             .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
                     case _ => List.empty

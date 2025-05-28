@@ -1,10 +1,10 @@
 package hydrozoa.l2.block
 
+import hydrozoa.UtxoSetL2
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, SettlementTx}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.ledger.UtxosSet
 import hydrozoa.node.state.L1BlockEffect
 
 /** This is used in MBT-suite, we can move it to integration subproject.
@@ -14,7 +14,7 @@ object BlockEffect:
         settlementTxBuilder: SettlementTxBuilder,
         finalizationTxBuilder: FinalizationTxBuilder,
         block: Block,
-        utxosWithdrawn: UtxosSet
+        utxosWithdrawn: UtxoSetL2
     ): L1BlockEffect =
         block.blockHeader.blockType match
             case Minor => ()

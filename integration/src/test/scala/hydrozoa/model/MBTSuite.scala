@@ -14,9 +14,9 @@ import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.{BlockEffect, createBlock}
+import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.state.unliftUtxoSet
+import hydrozoa.l2.ledger.HydrozoaL2Ledger
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkWallet}
@@ -113,7 +113,7 @@ object MBTSuite extends Commands:
         val initiator = s.knownPeers.head
         val account = TestPeer.account(initiator)
         val l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
-        val utxoIds = l1.utxoIdsByAddress(AddressBechL1(account.toString))
+        val utxoIds = l1.utxoIdsByAddress(AddressBech[L1](account.toString))
 
         for
             numberOfHeadPeers <- Gen.chooseNum(0, s.knownPeers.tail.size)
@@ -126,13 +126,13 @@ object MBTSuite extends Commands:
         for
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
             depositorAccount = TestPeer.account(depositor)
-            depositorAddressL1 = AddressBechL1(depositorAccount.toString) // FIXME: extension
+            depositorAddressL1 = AddressBech[L1](depositorAccount.toString) // FIXME: extension
             l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
             (seedUtxoId, coins) <- Gen.oneOf(l1.utxoIdsAdaAtAddress(depositorAddressL1))
 
             recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
             recipientAccount = TestPeer.account(recipient)
-            recipientAddressL2 = AddressBechL2(depositorAccount.toString) // FIXME: extension
+            recipientAddressL2 = AddressBech[L2](depositorAccount.toString) // FIXME: extension
             depositAmount: BigInt <- Gen.choose(
                 BigInt.apply(5_000_000).min(coins),
                 BigInt.apply(100_000_000).min(coins)
@@ -147,7 +147,7 @@ object MBTSuite extends Commands:
         )
 
     def genTransactionL2(s: State): Gen[TransactionL2Command] =
-        val l2 = AdaSimpleLedger.apply(s.utxosActiveL2)
+        val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(s.utxosActiveL2)
 
         for
             numberOfInputs <- Gen.choose(1, 5.min(s.utxosActiveL2.size))
@@ -168,15 +168,15 @@ object MBTSuite extends Commands:
             recipients <- Gen.containerOfN[List, TestPeer](outputCoins.length, Gen.oneOf(s.headPeers))
 
             outputs = outputCoins
-                .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
-                .map((coins, address) => SimpleOutput(address, coins))
-        yield TransactionL2Command(cnt.incrementAndGet(), SimpleTransaction(inputs.toList, outputs))
+                .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
+                .map((coins, address) => Output.apply(address, coins))
+        yield TransactionL2Command(cnt.incrementAndGet(), L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: State): Gen[WithdrawalL2Command] =
         for
             numberOfInputs <- Gen.choose(1, 3.min(s.utxosActiveL2.size))
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-        yield WithdrawalL2Command(cnt.incrementAndGet(), SimpleWithdrawal(inputs.toList))
+        yield WithdrawalL2Command(cnt.incrementAndGet(), L2Withdrawal(inputs.toList))
 
     def genCreateBlock(s: State): Gen[ProduceBlockCommand] =
         for finalize <- Gen.prob(0.01)
@@ -358,8 +358,8 @@ object MBTSuite extends Commands:
         depositor: TestPeer,
         fundUtxo: UtxoIdL1,
         amount: BigInt,
-        address: AddressBechL2,
-        refundAddress: AddressBechL1
+        address: AddressBech[L2],
+        refundAddress: AddressBech[L1]
     ) extends StateLikeCommand with Command0(id):
 
         private val log = Logger(getClass)
@@ -415,7 +415,7 @@ object MBTSuite extends Commands:
                 .copy(address = this.address.asL1)
 
             val newState = state.copy(
-                depositUtxos = UtxoSet(state.depositUtxos.map ++ Map.apply((depositUtxoId, depositUtxo))),
+                depositUtxos = TaggedUtxoSet(state.depositUtxos.unTag.utxoMap ++ Map.apply((depositUtxoId, depositUtxo))),
                 knownTxs = l1Mock.getKnownTxs,
                 utxosActive = l1Mock.getUtxosActive
             )
@@ -473,7 +473,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class TransactionL2Command(override val id: Int, simpleTransaction: SimpleTransaction) extends Command0(id):
+    class TransactionL2Command(override val id: Int, simpleTransaction: L2Transaction) extends Command0(id):
 
         private val log = Logger(getClass)
 
@@ -485,7 +485,7 @@ object MBTSuite extends Commands:
 
         override def nextState(state: HydrozoaState): HydrozoaState =
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkTransactionEvent(simpleTransaction))
+                poolEvents = state.poolEvents ++ Seq(mkTransactionEvent(simpleTransaction))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
@@ -502,7 +502,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: SimpleWithdrawal) extends Command0(id):
+    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: L2Withdrawal) extends Command0(id):
 
         private val log = Logger(getClass)
 
@@ -514,7 +514,7 @@ object MBTSuite extends Commands:
 
         override def nextState(state: HydrozoaState): HydrozoaState =
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(AdaSimpleLedger.mkWithdrawalEvent(simpleWithdrawal))
+                poolEvents = state.poolEvents ++ Seq(mkWithdrawalEvent(simpleWithdrawal))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
@@ -543,7 +543,7 @@ object MBTSuite extends Commands:
         ): (Result, HydrozoaState) =
 
             // Produce block
-            val l2 = AdaSimpleLedger.apply[TBlockProduction](state.utxosActiveL2)
+            val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(state.utxosActiveL2)
 
             // TODO: move to the block producer?
             val sortedPoolEvents = state.poolEvents.sortBy(_.getEventId.hash)
@@ -551,7 +551,7 @@ object MBTSuite extends Commands:
             log.info(s"Model pool events for block production: ${state.poolEvents.map(_.getEventId.hash)}")
             log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents.map(_.getEventId.hash)}")
 
-            val maybeNewBlock = createBlock(
+            val maybeNewBlock = BlockProducer.createBlock(
                 l2,
                 sortedPoolEvents,
                 state.depositUtxos,
@@ -575,9 +575,9 @@ object MBTSuite extends Commands:
 
                     val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
                     val l2Effect: L2BlockEffect = block.blockHeader.blockType match
-                        case Minor => utxosActive
-                        case Major => utxosActive
-                        case Final => ()
+                        case Minor => Some(utxosActive)
+                        case Major => Some(utxosActive)
+                        case Final => None
 
                     val record = BlockRecord(block, l1Effect, (), l2Effect)
 
@@ -585,15 +585,12 @@ object MBTSuite extends Commands:
                     // Submit L1
                     (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
 
-                    l2Effect match
-                        case utxosActive: MinorBlockL2Effect =>
-                            l2.replaceUtxosActive(utxosActive)
-                        case utxosActive: MajorBlockL2Effect =>
-                            l2.replaceUtxosActive(utxosActive)
-                        // TODO: delete block events (both valid and invalid)
-                        case _: FinalBlockL2Effect =>
-                            l2.flush
+                    if (block.blockHeader.blockType == Final)
+                        val _ = l2.flushAndGetState
+                    else
+                        l2Effect.foreach(l2.replaceUtxosActive)
 
+                    // TODO: delete block events (both valid and invalid)
                     val blockEvents = block.blockBody.eventsValid.map(_._1) ++ block.blockBody.eventsInvalid.map(_._1)
 
                     // Possibly new treasury utxo id
@@ -606,8 +603,8 @@ object MBTSuite extends Commands:
 
                     // Why does it typecheck?
                     //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
-                    val newDepositUtxos = state.depositUtxos.map
-                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
+                    val newDepositUtxos = state.depositUtxos.unTag.utxoMap
+                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> TaggedUtxoSet.apply[L1, DepositTag]
 
                     val newState = state.copy(
                         depositUtxos = newDepositUtxos,
@@ -617,7 +614,7 @@ object MBTSuite extends Commands:
                         knownTxs = l1Mock.getKnownTxs,
                         treasuryUtxoId = treasuryUtxoId,
                         utxosActive = l1Mock.getUtxosActive,
-                        utxosActiveL2 = l2.getUtxosActive |> unliftUtxoSet
+                        utxosActiveL2 = l2.getUtxosActive |> HydrozoaL2Ledger.unliftUtxoSet
                     )
 
                     Right(record, mbGenesis) /\ newState

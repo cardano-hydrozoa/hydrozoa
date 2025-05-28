@@ -49,7 +49,7 @@ class MultisigL1EventSource(
                 log.info(s"Init tx $txId appeared on-chain.")
                 onlyOutputToAddress(initTx, headAddress) match
                     case Right(ix, coins, tokens, _) =>
-                        val utxo = Utxo[L1, TreasuryTag](txId, ix, headAddress, coins, tokens)
+                        val utxo = TaggedUtxo[L1, TreasuryTag](txId, ix, headAddress, coins, tokens)
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
                         nodeState.tell(s =>
                             s.head.initializingPhase(
@@ -120,10 +120,10 @@ class MultisigL1EventSource(
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
         val tokens = valueTokens(utxo.toValue)
-        Utxo[L1, TreasuryTag](
+        TaggedUtxo[L1, TreasuryTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
+          utxo.getAddress |> AddressBech[L1],
           coins,
           tokens
         )
@@ -135,11 +135,11 @@ class MultisigL1EventSource(
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
         val tokens = valueTokens(utxo.toValue)
-        
-        Utxo[L1, DepositTag](
+
+        TaggedUtxo[L1, DepositTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
+          utxo.getAddress |> AddressBech[L1],
           coins,
           tokens,
           Some(utxo.getInlineDatum)
@@ -165,10 +165,10 @@ class MultisigL1EventSource(
                         val (mbNewTreasury, depositsNew, depositsGone) =
                             //
                             var mbNewTreasury: Option[TreasuryUtxo] = None
-                            val depositsNew: UtxoSetMutable[L1, DepositTag] =
-                                UtxoSetMutable[L1, DepositTag](mutable.Map.empty)
+                            val depositsNew: TaggedUtxoSetMutable[L1, DepositTag] =
+                                TaggedUtxoSetMutable[L1, DepositTag](mutable.Map.empty)
                             //
-                            val knownDepositIds = currentL1State.depositUtxos.map.keySet
+                            val knownDepositIds = currentL1State.depositUtxos.utxoMap.keySet
                             val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
 
                             val utxoType_ = utxoType(treasuryTokenAmount)
@@ -182,14 +182,15 @@ class MultisigL1EventSource(
                                 utxoType_(utxo) match
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
-                                        if currentL1State.treasuryUtxo.ref != utxoId then
+                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
                                             mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
                                         existingDeposits.add(utxoId)
                                         if (!knownDepositIds.contains(utxoId)) then
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
-                                            depositsNew.map.put(depositUtxo.ref, depositUtxo.output)
+                                            depositsNew.utxoMap
+                                                .put(depositUtxo.unTag.ref, depositUtxo.unTag.output)
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )
@@ -201,7 +202,7 @@ class MultisigL1EventSource(
                         nodeState.tell(_.head.openPhase(openHead =>
                             mbNewTreasury.foreach(openHead.newTreasuryUtxo)
                             if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
-                            if depositsNew.map.nonEmpty then
-                                openHead.addDepositUtxos(depositsNew |> UtxoSet.apply)
+                            if depositsNew.utxoMap.nonEmpty then
+                                openHead.addDepositUtxos(depositsNew |> TaggedUtxoSet.apply)
                         ))
                     case _ => log.trace("Head is not in open state...")

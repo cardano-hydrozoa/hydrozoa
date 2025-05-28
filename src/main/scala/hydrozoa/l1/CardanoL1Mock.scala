@@ -191,9 +191,7 @@ val genesisUtxos: Set[(UtxoIdL1, Output[L1])] =
         (
           UtxoIdL1(TxId(txHash), TxIx(0)),
           Output[L1](
-            AddressBechL1(
-              address
-            ),
+            AddressBech[L1](address),
             BigInt("10000000000"),
             emptyTokens
           )

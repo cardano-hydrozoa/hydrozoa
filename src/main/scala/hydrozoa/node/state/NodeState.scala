@@ -6,9 +6,9 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
-    TransactionL2EventLabel,
-    WithdrawalL2EventLabel
+import hydrozoa.l2.ledger.L2EventLabel.{
+    L2EventTransactionLabel,
+    L2EventWithdrawalLabel
 }
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
@@ -92,8 +92,8 @@ class NodeState(autonomousBlocks: Boolean):
             metrics.tell(m =>
                 m.resetBlocksCounter()
                 m.clearBlockSize()
-                m.setPoolEventsL2(TransactionL2EventLabel, 0)
-                m.setPoolEventsL2(WithdrawalL2EventLabel, 0)
+                m.setPoolEventsL2(L2EventTransactionLabel, 0)
+                m.setPoolEventsL2(L2EventWithdrawalLabel, 0)
                 m.clearLiquidity()
             )
         }

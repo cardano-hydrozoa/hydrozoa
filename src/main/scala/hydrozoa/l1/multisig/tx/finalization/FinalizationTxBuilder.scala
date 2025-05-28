@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.finalization
 
+import hydrozoa.UtxoSetL2
 import hydrozoa.l1.multisig.tx.FinalizationTx
-import hydrozoa.l2.ledger.UtxosSet
 
 trait FinalizationTxBuilder {
     def buildFinalizationTxDraft(
@@ -11,5 +11,5 @@ trait FinalizationTxBuilder {
 
 case class FinalizationRecipe(
     majorVersion: Int,
-    utxosWithdrawn: UtxosSet // FIXME: add phantom type parameter
+    utxosWithdrawn: UtxoSetL2
 )

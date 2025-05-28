@@ -9,7 +9,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
     depositEndpoint,
     finalizeEndpoint,
@@ -83,12 +83,12 @@ class NodeRestApi(node: ActorRef[Node]):
               TxIx(txIx.toChar),
               depositAmount,
               deadline,
-              AddressBechL2(address),
+              AddressBech[L2](address),
               (datum match
                   case None    => None
                   case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
               ),
-              AddressBechL1(refundAddress),
+              AddressBech[L1](refundAddress),
               (refundDatum match
                   case None    => None
                   case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
@@ -153,14 +153,14 @@ object NodeRestApi:
 
 // JSON/Schema instances
 enum SubmitRequestL2:
-    case Transaction(transaction: SimpleTransaction)
-    case Withdrawal(withdrawal: SimpleWithdrawal)
+    case Transaction(transaction: L2Transaction)
+    case Withdrawal(withdrawal: L2Withdrawal)
 
 object SubmitRequestL2:
-    def apply(event: SimpleTransaction | SimpleWithdrawal): SubmitRequestL2 =
+    def apply(event: L2Transaction | L2Withdrawal): SubmitRequestL2 =
         event match
-            case tx: SimpleTransaction => Transaction(tx)
-            case wd: SimpleWithdrawal  => Withdrawal(wd)
+            case tx: L2Transaction => Transaction(tx)
+            case wd: L2Withdrawal  => Withdrawal(wd)
 
 given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
     JsonCodecMaker.make
@@ -168,11 +168,11 @@ given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
 given submitRequestL2Schema: Schema[SubmitRequestL2] =
     Schema.derived[SubmitRequestL2]
 
-given simpleTransactionSchema: Schema[SimpleTransaction] =
-    Schema.derived[SimpleTransaction]
+given simpleTransactionSchema: Schema[L2Transaction] =
+    Schema.derived[L2Transaction]
 
-given simpleTWithdrawalSchema: Schema[SimpleWithdrawal] =
-    Schema.derived[SimpleWithdrawal]
+given simpleTWithdrawalSchema: Schema[L2Withdrawal] =
+    Schema.derived[L2Withdrawal]
 
 given txIdSchema: Schema[TxId] =
     Schema.derived[TxId]

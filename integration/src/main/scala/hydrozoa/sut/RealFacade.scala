@@ -2,7 +2,7 @@ package hydrozoa.sut
 
 import hydrozoa.*
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.rest.{InitRequest, NodeRestApi, SubmitRequestL2}
@@ -61,7 +61,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case _                     => Left("decoding failed")
 
     override def submitL2(
-        event: SimpleTransaction | SimpleWithdrawal
+        event: L2Transaction | L2Withdrawal
     ): Either[InitializationError, TxId] =
 
         val lazyResponses = peers

@@ -7,7 +7,6 @@ import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l2.block.{Block, BlockBody, BlockHeader, BlockTypeL2}
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
@@ -171,11 +170,11 @@ given ackRefundLaterSchema: Schema[AckRefundLater] =
   * ------------------------------------------------------------------------------------------
   */
 
-case class ReqEventL2(eventL2: NonGenesisL2) extends Req:
+case class ReqEventL2(eventL2: L2Event) extends Req:
     type ackType = AckUnit
     type resultType = Unit
 
-given reqEventL2Codec: JsonValueCodec[NonGenesisL2] =
+given reqEventL2Codec: JsonValueCodec[L2Event] =
     JsonCodecMaker.make
 
 given reqEventL2Schema: Schema[ReqEventL2] =
@@ -183,23 +182,23 @@ given reqEventL2Schema: Schema[ReqEventL2] =
 
 /* ReqEventK2 aux schemas */
 
-given nonGenesisL2Schema: Schema[NonGenesisL2] =
-    Schema.derived[NonGenesisL2]
+given nonGenesisL2Schema: Schema[L2Event] =
+    Schema.derived[L2Event]
 
-given simpleTransactionSchema: Schema[SimpleTransaction] =
-    Schema.derived[SimpleTransaction]
+given simpleTransactionSchema: Schema[L2Transaction] =
+    Schema.derived[L2Transaction]
 
 given utxoIdL2Schema: Schema[UtxoIdL2] =
     Schema.derived[UtxoIdL2]
 
-given simpleOutputSchema: Schema[SimpleOutput] =
-    Schema.derived[SimpleOutput]
+given simpleOutputSchema: Schema[OutputL2] =
+    Schema.derived[OutputL2]
 
 given addressBechL2Schema: Schema[AddressBechL2] =
     Schema.derived[AddressBechL2]
 
-given simpleWithdrawalSchema: Schema[SimpleWithdrawal] =
-    Schema.derived[SimpleWithdrawal]
+given simpleWithdrawalSchema: Schema[L2Withdrawal] =
+    Schema.derived[L2Withdrawal]
 
 /** ------------------------------------------------------------------------------------------
   * AckUnit
@@ -244,11 +243,11 @@ given blockTypeL2Schema: Schema[BlockTypeL2] =
 given blockBodySchema: Schema[BlockBody] =
     Schema.derived[BlockBody]
 
-given txIdNonGenesisL2EventLabelPairSchema: Schema[(TxId, NonGenesisL2EventLabel)] =
-    Schema.derived[(TxId, NonGenesisL2EventLabel)]
+given txIdNonGenesisL2EventLabelPairSchema: Schema[(TxId, L2EventLabel)] =
+    Schema.derived[(TxId, L2EventLabel)]
 
-given nonGenesisL2EventLabelSchema: Schema[NonGenesisL2EventLabel] =
-    Schema.derived[NonGenesisL2EventLabel]
+given nonGenesisL2EventLabelSchema: Schema[L2EventLabel] =
+    Schema.derived[L2EventLabel]
 
 /** ------------------------------------------------------------------------------------------
   * AckMinor

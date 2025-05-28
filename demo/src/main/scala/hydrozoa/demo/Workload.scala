@@ -7,7 +7,7 @@ import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.{Piper, toEither}
 import hydrozoa.l1.CardanoL1YaciDevKit
-import hydrozoa.l2.ledger.{SimpleOutput, SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
@@ -133,7 +133,7 @@ object Workload extends OxApp:
             account = TestPeer.account(initiator)
             headPeers = s.knownPeers.filterNot(p => p == initiator)
             utxoIds: Set[UtxoIdL1] = cardanoL1YaciDevKit
-                .utxoIdsAdaAtAddress(AddressBechL1(account.toString))
+                .utxoIdsAdaAtAddress(AddressBech[L1](account.toString))
                 .keySet
 
             seedUtxoId <- Gen.oneOf(utxoIds)
@@ -143,14 +143,14 @@ object Workload extends OxApp:
         for
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
             depositorAccount = TestPeer.account(depositor)
-            depositorAddressL1 = AddressBechL1(depositorAccount.toString)
+            depositorAddressL1 = AddressBech[L1](depositorAccount.toString)
             utxos = cardanoL1YaciDevKit.utxoIdsAdaAtAddress(depositorAddressL1)
             (seedUtxoId, coins) <- Gen.oneOf(utxos)
 
             // more addresses the better
             recipient <- Gen.oneOf(TestPeer.values)
             recipientAccount = TestPeer.account(recipient)
-            recipientAddressL2 = AddressBechL2(depositorAccount.toString)
+            recipientAddressL2 = AddressBech[L2](depositorAccount.toString)
             depositAmount: BigInt <- Gen.choose(
               BigInt.apply(5_000_000).min(coins),
               BigInt.apply(100_000_000).min(coins)
@@ -186,9 +186,9 @@ object Workload extends OxApp:
             )
 
             outputs = outputCoins
-                .zip(recipients.map(account(_).toString |> AddressBechL2.apply))
-                .map((coins, address) => SimpleOutput(address, coins))
-        yield TransactionL2Command(SimpleTransaction(inputs.toList, outputs))
+                .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
+                .map((coins, address) => Output.apply(address, coins))
+        yield TransactionL2Command(L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =
         val l2state = l2State.ask(_.toMap)
@@ -196,7 +196,7 @@ object Workload extends OxApp:
         for
             numberOfInputs <- Gen.choose(1, 3.min(l2state.size))
             inputs <- Gen.pick(numberOfInputs, l2state.keySet)
-        yield WithdrawalL2Command(SimpleWithdrawal(inputs.toList))
+        yield WithdrawalL2Command(L2Withdrawal(inputs.toList))
 
     def runCommand(cmd: WorkloadCommand): Unit =
         log.info(s"Running command: $cmd")
@@ -294,7 +294,7 @@ class DepositCommand(
         // sleep(3.seconds)
         ret
 
-class TransactionL2Command(simpleTransaction: SimpleTransaction) extends WorkloadCommand:
+class TransactionL2Command(simpleTransaction: L2Transaction) extends WorkloadCommand:
 
     private val log = Logger(getClass)
 
@@ -311,7 +311,7 @@ class TransactionL2Command(simpleTransaction: SimpleTransaction) extends Workloa
     override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
         sut.ask(_.submitL2(simpleTransaction))
 
-class WithdrawalL2Command(simpleWithdrawal: SimpleWithdrawal) extends WorkloadCommand:
+class WithdrawalL2Command(simpleWithdrawal: L2Withdrawal) extends WorkloadCommand:
 
     private val log = Logger(getClass)
 
