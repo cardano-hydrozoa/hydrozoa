@@ -191,8 +191,8 @@ given simpleTransactionSchema: Schema[L2Transaction] =
 given utxoIdL2Schema: Schema[UtxoIdL2] =
     Schema.derived[UtxoIdL2]
 
-given simpleOutputSchema: Schema[OutputL2] =
-    Schema.derived[OutputL2]
+given simpleOutputSchema: Schema[OutputNoTokens[L2]] =
+    Schema.derived[OutputNoTokens[L2]]
 
 given addressBechL2Schema: Schema[AddressBechL2] =
     Schema.derived[AddressBechL2]

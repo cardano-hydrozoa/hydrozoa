@@ -107,7 +107,7 @@ type OutputL2 = Output[L2]
  */
 
 case class OutputNoTokens[L <: AnyLevel](
-    address: AddressBechL1,
+    address: AddressBech[L],
     coins: BigInt,
     mbInlineDatum: Option[String] = None
 )
@@ -119,14 +119,10 @@ case class OutputNoTokens[L <: AnyLevel](
 
 case class Utxo[L <: AnyLevel](ref: UtxoId[L], output: Output[L])
 
-
 // TODO: Lossy conversion
 object OutputNoTokens:
     def apply[L <: AnyLevel](o: Output[L]): OutputNoTokens[L] =
         new OutputNoTokens[L](o.address, o.coins, o.mbInlineDatum)
-
-// FIXME: We also need Utxo without MultisigUtxoTag
-case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
 
 object Utxo:
     def apply[L <: AnyLevel](

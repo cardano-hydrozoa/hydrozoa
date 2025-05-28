@@ -9,7 +9,7 @@ import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{mkTransactionEvent, mkWithdrawalEvent}
+import hydrozoa.l2.ledger.{L2Genesis, mkTransactionEvent, mkWithdrawalEvent}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
@@ -185,7 +185,7 @@ class Node:
       */
     def produceNextBlockLockstep(
         finalizing: Boolean
-    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
 
         assert(
           !nodeState.ask(_.autonomousBlockProduction),

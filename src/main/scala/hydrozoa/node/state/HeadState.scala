@@ -141,7 +141,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
       * @return
       *   Block record and optional genesis if effects for block are ready.
       */
-    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])]
+    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2Genesis)])]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]
@@ -404,7 +404,7 @@ class HeadStateGlobal(
 
         override def getBlockRecord(
             block: Block
-        ): Option[(BlockRecord, Option[(TxId, SimpleGenesis)])] =
+        ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
             // TODO: shall we use Map not Buffer?
             self.blocksConfirmedL2.find(_.block == block) match
                 case None => None

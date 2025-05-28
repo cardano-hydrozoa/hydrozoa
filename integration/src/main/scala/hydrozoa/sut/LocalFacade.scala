@@ -5,7 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.CardanoL1Mock
 import hydrozoa.l2.consensus.network.transport.SimNetwork
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
@@ -61,7 +61,7 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                        _.head.openPhase(_.stateL1.depositUtxos.map.contains(depositTxHash))
+                        _.head.openPhase(_.stateL1.depositUtxos.utxoMap.contains(depositTxHash))
                       )
                     )
                     // println(veracity)
@@ -70,11 +70,11 @@ class LocalFacade(
                 ret
 
     override def submitL2(
-        event: SimpleTransaction | SimpleWithdrawal
+        event: L2Transaction | L2Withdrawal
     ): Either[String, TxId] =
         val request = event match
-            case tx: SimpleTransaction => Transaction(tx)
-            case wd: SimpleWithdrawal  => Withdrawal(wd)
+            case tx: L2Transaction => Transaction(tx)
+            case wd: L2Withdrawal  => Withdrawal(wd)
         val ret = randomNode.submitL2(request)
         ret match
             case Left(_) => ret
@@ -93,7 +93,7 @@ class LocalFacade(
 
     override def produceBlock(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])] =
+    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
         val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
         answers.find(a => a.isRight) match
             case None         => Left("Block can't be produced at the moment")

@@ -187,7 +187,7 @@ object Workload extends OxApp:
 
             outputs = outputCoins
                 .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
-                .map((coins, address) => Output.apply(address, coins))
+                .map((coins, address) => OutputNoTokens.apply(address, coins))
         yield TransactionL2Command(L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =

@@ -7,7 +7,7 @@ import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
-import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import ox.channels.ActorRef
 import ox.sleep
 
@@ -31,13 +31,13 @@ class BlockProducer:
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
         finalizing: Boolean
-    ): (
-        Block,
-        HydrozoaL2Ledger.LedgerUtxoSetOpaque,
-        UtxoSetL2,
-        UtxoSetL2,
-        Option[(TxId, L2Genesis)]
-    ) =
+    ):  Either[String, (
+            Block,
+            HydrozoaL2Ledger.LedgerUtxoSetOpaque,
+            UtxoSetL2,
+            UtxoSetL2,
+            Option[(TxId, L2Genesis)])
+    ] =
 
         // TODO: move to the block producer?
         val poolEventsSorted = poolEvents.sortBy(_.getEventId.hash)
@@ -140,14 +140,14 @@ object BlockProducer:
         // 4. If finalizing is False...
         val mbGenesis = if !finalizing then
             // TODO: check deposits timing
-            val eligibleDeposits: DepositUtxos =
+            val depositsEligible: DepositUtxos =
                 TaggedUtxoSet.apply(depositsPending.unTag.utxoMap.filter(_ => true))
-            if eligibleDeposits.unTag.utxoMap.isEmpty then None
+            if depositsEligible.unTag.utxoMap.isEmpty then None
             else
-                val depositsSorted = depositsEligible.map.toList.sortWith((a, b) =>
+                val depositsSorted = depositsEligible.unTag.utxoMap.toList.sortWith((a, b) =>
                     a._1._1.hash.compareTo(b._1._1.hash) < 0
                 )
-                val genesis: L2Genesis = L2Genesis.apply(depositsSorted.map(_._2))
+                val genesis: L2Genesis = L2Genesis.apply(depositsSorted)
                 val genesisHash = calculateGenesisHash(genesis)
                 val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)
                 stateL2.addGenesisUtxos(genesisUtxos)

@@ -182,10 +182,11 @@ object BlockValidator:
         mbGenesis =
             if depositsAbsorbed.isEmpty then None
             else
-                val depositsAbsorbedUtxos: DepositUtxos =
-                    TaggedUtxoSet.apply(
-                      depositUtxos.unTag.utxoMap.filter((k, _) => depositsAbsorbed.contains(k))
-                    ).toList.sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0
+                val depositsAbsorbedUtxos =
+                    depositUtxos.unTag.utxoMap
+                        .filter((k, _) => depositsAbsorbed.contains(k))
+                        .toList
+                        .sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0)
                 val genesis: L2Genesis = L2Genesis.apply(depositsAbsorbedUtxos)
                 val genesisHash = calculateGenesisHash(genesis)
                 val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)

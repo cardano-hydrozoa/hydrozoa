@@ -2,7 +2,7 @@ package hydrozoa.sut
 
 import hydrozoa.*
 import hydrozoa.l2.block.Block
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal, UtxosSet}
+import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.{BlockRecord, WalletId}
@@ -24,11 +24,11 @@ trait HydrozoaFacade:
     ): Either[DepositError, DepositResponse]
 
     def submitL2(
-        event: SimpleTransaction | SimpleWithdrawal
+        event: L2Transaction | L2Withdrawal
     ): Either[String, TxId]
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]
 
-    def produceBlock(nextBlockFinal: Boolean): Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])]
+    def produceBlock(nextBlockFinal: Boolean): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
 
     def shutdownSut(): Unit

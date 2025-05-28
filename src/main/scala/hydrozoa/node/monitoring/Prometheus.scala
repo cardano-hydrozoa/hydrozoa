@@ -21,9 +21,9 @@ trait Metrics:
     def incBlocksMinor(): Unit
     def incBlocksMajor(): Unit
     def clearBlockSize(): Unit
-    def observeBlockSize(eventType: NonGenesisL2EventLabel | String, number: Int): Unit
-    def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit
-    def incEventsL2Handled(eventType: NonGenesisL2EventLabel, valid: Boolean, number: Int): Unit
+    def observeBlockSize(eventType: L2EventLabel | String, number: Int): Unit
+    def setPoolEventsL2(eventType: L2EventLabel, number: Int): Unit
+    def incEventsL2Handled(eventType: L2EventLabel, valid: Boolean, number: Int): Unit
     def setDepositQueueSize(size: Int): Unit
     def incAbsorbedDeposits(howMany: Int): Unit
     def clearLiquidity(): Unit
@@ -43,12 +43,12 @@ class NoopMetrics extends Metrics:
     override def incBlocksMajor(): Unit = ()
     override def clearBlockSize(): Unit = ()
     override def observeBlockSize(
-        eventType: NonGenesisL2EventLabel | String,
+        eventType: L2EventLabel | String,
         number: Int
     ): Unit = ()
-    override def setPoolEventsL2(eventType: NonGenesisL2EventLabel, number: Int): Unit = ()
+    override def setPoolEventsL2(eventType: L2EventLabel, number: Int): Unit = ()
     override def incEventsL2Handled(
-        eventType: NonGenesisL2EventLabel,
+        eventType: L2EventLabel,
         valid: Boolean,
         number: Int
     ): Unit = ()

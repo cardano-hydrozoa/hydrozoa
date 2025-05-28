@@ -52,7 +52,7 @@ object SimpleL2Ledger:
     private def unliftOutput(output: LedgerOutput): Output[L2] =
         val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
         val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
-        Output[L2](plutusAddressAsL2(output.address).asL2, coins)
+        Output[L2](plutusAddressAsL2(output.address).asL2, coins, emptyTokens)
 
     private def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =
         utxoSet.map(_.bimap(liftOutputRef, liftOutput))
@@ -124,7 +124,7 @@ object SimpleL2Ledger:
                     // Outputs
                     val newUtxos = tx.outputs.zipWithIndex.map(output =>
                         val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
-                        val txOut = liftOutput(output._1)
+                        val txOut = liftOutput(Output.apply(output._1))
                         (txIn, txOut)
                     )
 

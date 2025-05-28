@@ -169,7 +169,7 @@ object MBTSuite extends Commands:
 
             outputs = outputCoins
                 .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
-                .map((coins, address) => Output.apply(address, coins))
+                .map((coins, address) => OutputNoTokens.apply(address, coins))
         yield TransactionL2Command(cnt.incrementAndGet(), L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: State): Gen[WithdrawalL2Command] =
@@ -534,7 +534,7 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type Result = Either[String, (BlockRecord, Option[(TxId, SimpleGenesis)])]
+        override type Result = Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
 
         override def toString: String = s"($id) Produce block command {finalization = $finalization}"
 
