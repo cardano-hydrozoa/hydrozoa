@@ -8,7 +8,7 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
 import hydrozoa.node.state.*
-import hydrozoa.{UtxoSet, UtxoSetL2, Wallet}
+import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -120,7 +120,7 @@ private class FinalBlockConfirmationActor(
                   prevHeader,
                   stateL2Cloned,
                   Seq.empty,
-                  UtxoSet.apply(),
+                  TaggedUtxoSet.apply(),
                   true
                 )
                 resolution match

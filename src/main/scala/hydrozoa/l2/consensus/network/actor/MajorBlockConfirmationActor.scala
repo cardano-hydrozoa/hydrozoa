@@ -8,7 +8,7 @@ import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
-import hydrozoa.l2.ledger.simple.SimpleHydrozoaL2Ledger
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.node.state.*
 import hydrozoa.{TxId, TxKeyWitness, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}

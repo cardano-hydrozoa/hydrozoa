@@ -84,7 +84,7 @@ class HappyPathSuite extends FunSuite {
 
             utxoL2 = major1._2.utxoMap.toList.head
 
-            _ <- node.submitL2(Withdrawal(L2Withdrawal(utxoL2._1)))
+            _ <- node.submitL2(Withdrawal(L2Withdrawal(List(utxoL2._1))))
 
             major2 <- node.handleNextBlock(true)
             _ = cardano.awaitTx(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))

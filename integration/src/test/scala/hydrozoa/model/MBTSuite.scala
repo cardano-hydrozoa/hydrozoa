@@ -154,7 +154,7 @@ object MBTSuite extends Commands:
 
             outputs = outputCoins
                 .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
-                .map((coins, address) => SimpleOutput(address, coins))
+                .map((coins, address) => Output.apply(address, coins))
         yield TransactionL2Command(L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: State): Gen[WithdrawalL2Command] =
@@ -406,7 +406,7 @@ object MBTSuite extends Commands:
                 .copy(address = this.address.asL1)
 
             val newState = state.copy(
-                depositUtxos = UtxoSet(state.depositUtxos.utxoMap ++ Map.apply((depositUtxoId, depositUtxo))),
+                depositUtxos = TaggedUtxoSet(state.depositUtxos.unTag.utxoMap ++ Map.apply((depositUtxoId, depositUtxo))),
                 knownTxs = l1Mock.getKnownTxs,
                 utxosActive = l1Mock.getUtxosActive
             )
@@ -587,8 +587,8 @@ object MBTSuite extends Commands:
 
                     // Why does it typecheck?
                     //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
-                    val newDepositUtxos = state.depositUtxos.utxoMap
-                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> UtxoSet.apply[L1, DepositTag]
+                    val newDepositUtxos = state.depositUtxos.unTag.utxoMap
+                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> TaggedUtxoSet.apply[L1, DepositTag]
 
                     val newState = state.copy(
                         depositUtxos = newDepositUtxos,

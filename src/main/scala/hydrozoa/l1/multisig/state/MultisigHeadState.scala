@@ -1,6 +1,6 @@
 package hydrozoa.l1.multisig.state
 
-import hydrozoa.{L1, Utxo, UtxoSet, UtxoSetMutable}
+import hydrozoa.{L1, TaggedUtxo, TaggedUtxoSet, Utxo, UtxoSet, TaggedUtxoSetMutable}
 
 import scala.collection.mutable
 
@@ -21,11 +21,11 @@ object MultisigHeadStateL1:
     def apply(treasuryUtxo: TreasuryUtxo): MultisigHeadStateL1 =
         MultisigHeadStateL1(
           treasuryUtxo,
-          UtxoSetMutable[L1, DepositTag](mutable.Map.empty),
-          UtxoSetMutable[L1, RolloutTag](mutable.Map.empty)
+          TaggedUtxoSetMutable[L1, DepositTag](mutable.Map.empty),
+          TaggedUtxoSetMutable[L1, RolloutTag](mutable.Map.empty)
         )
 
-type TreasuryUtxo = Utxo[L1, TreasuryTag]
+type TreasuryUtxo = TaggedUtxo[L1, TreasuryTag]
 
 // tags
 sealed trait MultisigUtxoTag
@@ -35,10 +35,10 @@ sealed trait TreasuryTag extends MultisigUtxoTag
 
 // Additional stuff
 
-type DepositUtxo = Utxo[L1, DepositTag]
-type DepositUtxos = UtxoSet[L1, DepositTag]
-type DepositUtxosMutable = UtxoSetMutable[L1, DepositTag]
+type DepositUtxo = TaggedUtxo[L1, DepositTag]
+type DepositUtxos = TaggedUtxoSet[L1, DepositTag]
+type DepositUtxosMutable = TaggedUtxoSetMutable[L1, DepositTag]
 
-type RolloutUtxo = Utxo[L1, RolloutTag]
-type RolloutUtxos = UtxoSet[L1, RolloutTag]
-type RolloutUtxosMutable = UtxoSetMutable[L1, RolloutTag]
+type RolloutUtxo = TaggedUtxo[L1, RolloutTag]
+type RolloutUtxos = TaggedUtxoSet[L1, RolloutTag]
+type RolloutUtxosMutable = TaggedUtxoSetMutable[L1, RolloutTag]

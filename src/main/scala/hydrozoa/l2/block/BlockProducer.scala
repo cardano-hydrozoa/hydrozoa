@@ -132,15 +132,15 @@ object BlockProducer:
         val mbGenesis = if !finalizing then
             // TODO: check deposits timing
             val eligibleDeposits: DepositUtxos =
-                UtxoSet[L1, DepositTag](depositsPending.utxoMap.filter(_ => true))
-            if eligibleDeposits.utxoMap.isEmpty then None
+                TaggedUtxoSet.apply(depositsPending.unTag.utxoMap.filter(_ => true))
+            if eligibleDeposits.unTag.utxoMap.isEmpty then None
             else
                 val genesis: L2Genesis = L2Genesis.apply(eligibleDeposits)
                 val genesisHash: TxId = ??? // TODO: calculate hash based on eligibleDeposits
                 val genesisUtxos: UtxoSetL2 = ??? // TODO: build utxos from genesis
                 stateL2.addGenesisUtxos(genesisUtxos)
                 utxosAdded.addAll(genesisUtxos.utxoMap.toSet)
-                depositsAbsorbed = eligibleDeposits.utxoMap.keySet.toList.sortWith((a, b) =>
+                depositsAbsorbed = eligibleDeposits.unTag.utxoMap.keySet.toList.sortWith((a, b) =>
                     a._1.hash.compareTo(b._1.hash) < 0
                 )
                 Some(genesisHash, genesis)
@@ -196,7 +196,7 @@ object BlockProducer:
         Some(
           block,
           stateL2.getUtxosActive,
-          UtxoSet[L2, Unit](utxosAdded.toMap),
-          UtxoSet[L2, Unit](utxosWithdrawn.toMap),
+          UtxoSet[L2](utxosAdded.toMap),
+          UtxoSet[L2](utxosWithdrawn.toMap),
           mbGenesis
         )

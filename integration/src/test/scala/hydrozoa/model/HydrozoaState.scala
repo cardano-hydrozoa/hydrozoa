@@ -25,7 +25,7 @@ case class HydrozoaState(
                             headPeers: Set[TestPeer] = Set.empty,
                             headAddressBech32: Option[AddressBechL1] = None,
                             headMultisigScript: Option[NativeScript] = None,
-                            depositUtxos: DepositUtxos = UtxoSet.apply(),
+                            depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
                             treasuryUtxoId: Option[UtxoIdL1] = None,
 
                             // Node

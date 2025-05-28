@@ -49,7 +49,7 @@ import scalus.ledger.api.v1 as scalus
 /** This object defines types and constructors for Hydrozoa's L2 ledger and contains a class that
   * implements L2LedgerModule.
   */
-object SimpleHydrozoaL2Ledger:
+object SimpleL2Ledger:
 
     opaque type LedgerUtxoId = scalus.TxOutRef
     opaque type LedgerOutput = scalus.TxOut
@@ -88,7 +88,7 @@ object SimpleHydrozoaL2Ledger:
             this.activeState.addAll(activeState)
 
         override def getState: UtxoSetL2 =
-            UtxoSet[L2, Unit](unliftUtxoSet(activeState.clone().toMap))
+            UtxoSet[L2](unliftUtxoSet(activeState.clone().toMap))
 
         override def getOutput(utxoId: UtxoIdL2): OutputL2 =
             activeState(utxoId |> liftOutputRef) |> unliftOutput
@@ -96,7 +96,7 @@ object SimpleHydrozoaL2Ledger:
         override def flushAndGetState: UtxoSetL2 =
             val ret = activeState.clone()
             activeState.clear()
-            UtxoSet[L2, Unit](ret.toMap.map((k, v) => (unliftOutputRef(k), unliftOutput(v))))
+            UtxoSet[L2](ret.toMap.map((k, v) => (unliftOutputRef(k), unliftOutput(v))))
 
         override def cloneForBlockProducer()(using
             InstancePurpose =:= HydrozoaHeadLedger
@@ -117,7 +117,7 @@ object SimpleHydrozoaL2Ledger:
                 case tx: L2Transaction        => submitTransaction(tx)
                 case withdrawal: L2Withdrawal => submitWithdrawal(withdrawal)
 
-        private val emptyUtxoSet = UtxoSet[L2, Unit](Map.empty[UtxoIdL2, Output[L2]])
+        private val emptyUtxoSet = UtxoSet[L2](Map.empty[UtxoIdL2, Output[L2]])
 
         private def submitTransaction(tx: L2Transaction) =
             val (_, txId) = asTxL2(tx)
@@ -129,7 +129,7 @@ object SimpleHydrozoaL2Ledger:
                     // Outputs
                     val newUtxos = tx.outputs.zipWithIndex.map(output =>
                         val txIn = liftOutputRef(UtxoIdL2(txId, TxIx(output._2.toChar)))
-                        val txOut = liftOutput(output._1.toOutput)
+                        val txOut = liftOutput(output._1)
                         (txIn, txOut)
                     )
 
@@ -159,7 +159,7 @@ object SimpleHydrozoaL2Ledger:
                       txId,
                       (
                         emptyUtxoSet,
-                        UtxoSet[L2, Unit](withdrawnRefsPub.zip(withdrawnOutputsPub).toMap)
+                        UtxoSet[L2](withdrawnRefsPub.zip(withdrawnOutputsPub).toMap)
                       )
                     )
 

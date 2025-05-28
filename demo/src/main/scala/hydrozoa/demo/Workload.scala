@@ -6,7 +6,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.l2.ledger.{SimpleOutput, L2Transaction, L2Withdrawal}
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
@@ -172,7 +172,7 @@ object Workload extends OxApp:
 
             outputs = outputCoins
                 .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
-                .map((coins, address) => SimpleOutput(address, coins))
+                .map((coins, address) => Output.apply(address, coins))
         yield TransactionL2Command(L2Transaction(inputs.toList, outputs))
 
     def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =

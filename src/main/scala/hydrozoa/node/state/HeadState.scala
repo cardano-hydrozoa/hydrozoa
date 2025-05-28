@@ -233,7 +233,7 @@ class HeadStateGlobal(
         def headNativeScript: NativeScript = self.headNativeScript
         def beaconTokenName: TokenName = self.beaconTokenName
         def seedAddress: AddressBechL1 = self.seedAddress
-        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
+        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.unTag.ref
         def headBechAddress: AddressBechL1 = self.headAddress
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
@@ -255,7 +255,7 @@ class HeadStateGlobal(
             self.stateL1.get.depositUtxos.utxoMap.view
                 .filterKeys(k => !self.depositHandled.contains(k))
                 .toMap
-                |> UtxoSet.apply[L1, DepositTag]
+                |> TaggedUtxoSet.apply
 
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
             val headParams = self.headParams
@@ -296,7 +296,7 @@ class HeadStateGlobal(
             // TODO: here we decide which ledger we are using
             self.stateL2 = Some(HydrozoaL2Ledger.mkLedgerForHead())
 
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.output.coins.toLong))
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
 
             log.info(
               s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
@@ -347,7 +347,7 @@ class HeadStateGlobal(
                   _.produceBlock(
                     stateL2.cloneForBlockProducer(),
                     if finalizing then Seq.empty else immutablePoolEventsL2,
-                    if finalizing then UtxoSet(Map.empty) else peekDeposits,
+                    if finalizing then TaggedUtxoSet.apply() else peekDeposits,
                     l2Tip.blockHeader,
                     timeCurrent,
                     finalizing
@@ -359,7 +359,7 @@ class HeadStateGlobal(
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
             log.info("Net treasury utxo")
             self.stateL1.get.treasuryUtxo = treasuryUtxo
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.output.coins.toLong))
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
 
         def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
             log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
@@ -368,7 +368,7 @@ class HeadStateGlobal(
 
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
-            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.utxoMap)
+            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.unTag.utxoMap)
             log.info(
               s"isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )

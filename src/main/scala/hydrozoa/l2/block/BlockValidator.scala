@@ -166,7 +166,7 @@ object BlockValidator:
         // 5. If not finalizing, the deposits are correct
         // 5.a all absorbed deposits are known
         val depositsAbsorbed = block.blockBody.depositsAbsorbed
-        val knownDepositIds = depositUtxos.utxoMap.keySet
+        val knownDepositIds = depositUtxos.unTag.utxoMap.keySet
         val unknownDepositIds = depositsAbsorbed.toSet &~ knownDepositIds
         if unknownDepositIds.nonEmpty then return NotYetKnownDeposits(unknownDepositIds)
 
@@ -182,9 +182,10 @@ object BlockValidator:
         mbGenesis =
             if depositsAbsorbed.isEmpty then None
             else
-                val depositsAbsorbedUtxos = UtxoSet.apply[L1, DepositTag](
-                  depositUtxos.utxoMap.filter((k, _) => depositsAbsorbed.contains(k))
-                )
+                val depositsAbsorbedUtxos: DepositUtxos =
+                    TaggedUtxoSet.apply(
+                      depositUtxos.unTag.utxoMap.filter((k, _) => depositsAbsorbed.contains(k))
+                    )
                 val genesis: L2Genesis = L2Genesis.apply(depositsAbsorbedUtxos)
                 val genesisHash: TxId = ??? // TODO: calculate hash based on eligibleDeposits
                 val genesisUtxos: UtxoSetL2 = ??? // TODO: build utxos from genesis
@@ -249,4 +250,4 @@ object BlockValidator:
         then return Invalid(UnexpectedBlockVersion(expectedVersion, blockVersion))
 
         // 9. Return Valid, along with utxosActive, mbGenesis, and utxosWithdrawn.
-        Valid(stateL2.getUtxosActive, mbGenesis, UtxoSet[L2, Unit](utxosWithdrawn.toMap))
+        Valid(stateL2.getUtxosActive, mbGenesis, UtxoSet[L2](utxosWithdrawn.toMap))
