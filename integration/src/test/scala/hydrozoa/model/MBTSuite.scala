@@ -57,7 +57,7 @@ object MBTSuite extends Commands:
     ): Boolean = initSuts.isEmpty && runningSuts.isEmpty
 
     override def newSut(state: State): Sut =
-        println("--------------------> create SUT")
+        log.warn("--------------------> create SUT")
         // Reset Yaci DevKit
         if useYaci then
             println("/// resetting Yaci dev kit")
@@ -67,7 +67,7 @@ object MBTSuite extends Commands:
         LocalFacade.apply(state.knownPeers, false, useYaci)
 
     override def destroySut(sut: Sut): Unit =
-        println("<-------------------- destroy SUT")
+        log.warn("<-------------------- destroy SUT")
         sut.shutdownSut()
 
     override def initialPreCondition(state: State): Boolean =

@@ -29,21 +29,25 @@ class CardanoL1Mock() extends CardanoL1:
     def getUtxosActive: Map[UtxoIdL1, Output[L1]] = Map.from(utxosActive)
 
     override def submit(tx: TxL1): Either[SubmissionError, TxId] =
-        val txId = txHash(tx)
-        log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
-        if knownTxs.contains(txId) then Right(txId)
-        else
-            knownTxs.put(txId, tx)
-            val setSizeBefore = utxosActive.size
-            val inputs = txInputs(tx)
-            utxosActive.subtractAll(inputs)
-            val outputs = txOutputs(tx)
-            utxosActive.addAll(outputs)
-            val setSizeAfter = utxosActive.size
-            if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
-                throw RuntimeException("")
-            assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
-            Right(txId)
+        synchronized {
+            val txId = txHash(tx)
+            log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
+            if knownTxs.contains(txId) then Right(txId)
+            else
+                knownTxs.put(txId, tx)
+                val setSizeBefore = utxosActive.size
+                val inputs = txInputs(tx)
+                utxosActive.subtractAll(inputs)
+                val outputs = txOutputs(tx)
+                utxosActive.addAll(outputs)
+                val setSizeAfter = utxosActive.size
+                if (!outputs.map(_._1).toSet.subsetOf(utxosActive.keySet))
+                    throw RuntimeException("")
+                // TODO: this likely won't be needed soon, seems like
+                //   size can't be reliably calculated
+                assert(setSizeBefore - inputs.size + outputs.size == setSizeAfter)
+                Right(txId)
+        }
 
     override def awaitTx(
         txId: TxId,
