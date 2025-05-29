@@ -24,6 +24,7 @@ import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
+import org.scalacheck.Gen.resize
 import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.Test.Parameters
 import org.scalacheck.commands.Commands
@@ -828,7 +829,7 @@ object MBTSuite extends Commands:
 
         val g = for {
             s0 <- genInitialState
-            (s1, seqCmds) <- sized(sizedCmds(s0))
+            (s1, seqCmds) <- resize(100,sized(sizedCmds(s0)))
         } yield Actions(s0, seqCmds)
 
         g.suchThat(actionsPrecond)
