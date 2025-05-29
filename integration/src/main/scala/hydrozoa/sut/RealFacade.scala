@@ -1,7 +1,6 @@
 package hydrozoa.sut
 
 import hydrozoa.*
-import hydrozoa.l2.block.Block
 import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.Alice

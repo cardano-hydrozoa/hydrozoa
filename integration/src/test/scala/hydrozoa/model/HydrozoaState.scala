@@ -15,29 +15,29 @@ import hydrozoa.node.state.*
   * need another thing here.
   */
 case class HydrozoaState(
-                            peersNetworkPhase: PeersNetworkPhase,
-                            knownPeers: Set[TestPeer],
-                            pp: ProtocolParams,
+    peersNetworkPhase: PeersNetworkPhase,
+    knownPeers: Set[TestPeer],
+    pp: ProtocolParams,
 
-                            // Head
-                            headPhase: Option[HeadPhase] = None,
-                            initiator: Option[TestPeer] = None,
-                            headPeers: Set[TestPeer] = Set.empty,
-                            headAddressBech32: Option[AddressBechL1] = None,
-                            headMultisigScript: Option[NativeScript] = None,
-                            depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
-                            treasuryUtxoId: Option[UtxoIdL1] = None,
+    // Head
+    headPhase: Option[HeadPhase] = None,
+    initiator: Option[TestPeer] = None,
+    headPeers: Set[TestPeer] = Set.empty,
+    headAddressBech32: Option[AddressBechL1] = None,
+    headMultisigScript: Option[NativeScript] = None,
+    depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
+    treasuryUtxoId: Option[UtxoIdL1] = None,
 
-                            // Node
-                            poolEvents: Seq[L2Event] = Seq.empty,
+    // Node
+    poolEvents: Seq[L2Event] = Seq.empty,
 
-                            // L1
-                            knownTxs: Map[TxId, TxL1] = Map.empty,
-                            utxosActive: Map[UtxoIdL1, OutputL1],
+    // L1
+    knownTxs: Map[TxId, TxL1] = Map.empty,
+    utxosActive: Map[UtxoIdL1, OutputL1],
 
-                            // L2
-                            utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
-                            l2Tip: Block = zeroBlock
+    // L2
+    utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
+    l2Tip: Block = zeroBlock
 ):
     override def toString: String =
         "Hydrozoa state:" +

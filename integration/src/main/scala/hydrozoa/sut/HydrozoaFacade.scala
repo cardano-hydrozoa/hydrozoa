@@ -1,7 +1,6 @@
 package hydrozoa.sut
 
 import hydrozoa.*
-import hydrozoa.l2.block.Block
 import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
@@ -24,7 +23,7 @@ trait HydrozoaFacade:
     ): Either[DepositError, DepositResponse]
 
     def awaitTxL1(txId: TxId): Option[TxL1]
-    
+
     def submitL2(tx: L2Transaction | L2Withdrawal): Either[String, TxId]
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]

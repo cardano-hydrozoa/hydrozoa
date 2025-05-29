@@ -47,7 +47,7 @@ object MBTSuite extends Commands:
     var useYaci = false
     private val log = Logger(getClass)
 
-    override type State = HydrozoaState // Wrapper around a simplified head
+    override type State = HydrozoaState // Immutable simplified head's state
     override type Sut = HydrozoaFacade // Facade to a network of Hydrozoa's peers
 
     override def canCreateNewSut(
@@ -78,6 +78,7 @@ object MBTSuite extends Commands:
         networkPeers <- Gen.pick(numberOfNetworkPeers, TestPeer.values)
     yield HydrozoaState(Utils.protocolParams, networkPeers.toSet)
 
+    // This is used to numerate commands we generate
     val cnt = AtomicInteger(0)
 
     override def genCommand(s: State): Gen[Command0] =
@@ -179,6 +180,7 @@ object MBTSuite extends Commands:
         yield WithdrawalL2Command(cnt.incrementAndGet(), L2Withdrawal(inputs.toList))
 
     def genCreateBlock(s: State): Gen[ProduceBlockCommand] =
+        // TODO: take it up
         for finalize <- Gen.prob(0.01)
     yield ProduceBlockCommand(cnt.incrementAndGet(), finalize)
 
@@ -408,11 +410,7 @@ object MBTSuite extends Commands:
                 )
 
             val depositUtxoId = UtxoIdL1(depositTxHash, index)
-            val ret = Right(DepositResponse(refundTxDraft, depositUtxoId))
-
             val depositUtxo: OutputL1 = l1Mock.utxoById(depositUtxoId).get
-                // FIXME: temporarily, use the whole deposit datum
-                .copy(address = this.address.asL1)
 
             val newState = state.copy(
                 depositUtxos = TaggedUtxoSet(state.depositUtxos.unTag.utxoMap ++ Map.apply((depositUtxoId, depositUtxo))),
@@ -420,6 +418,7 @@ object MBTSuite extends Commands:
                 utxosActive = l1Mock.getUtxosActive
             )
 
+            val ret = Right(DepositResponse(refundTxDraft, depositUtxoId))
             (ret, newState)
 
         override def postConditionSuccess(
@@ -551,13 +550,15 @@ object MBTSuite extends Commands:
             log.info(s"Model pool events for block production: ${state.poolEvents.map(_.getEventId.hash)}")
             log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents.map(_.getEventId.hash)}")
 
+            val finalizing = state.headPhase.get == Finalizing
+
             val maybeNewBlock = BlockProducer.createBlock(
                 l2,
-                sortedPoolEvents,
-                state.depositUtxos,
+                if finalizing then Seq.empty else sortedPoolEvents,
+                if finalizing then TaggedUtxoSet.apply() else state.depositUtxos,
                 state.l2Tip.blockHeader,
                 timeCurrent,
-                (state.headPhase.get == Finalizing)
+                finalizing
             )
 
             maybeNewBlock match
@@ -660,8 +661,8 @@ object MBTSuite extends Commands:
                             |:
                                 // NB: Implication arrow: if the lhs exepression is false, the
                                 // whole test will be considered undecidable. So we should NOT
-                                // use it. The following didn't work - most of tests went to
-                                // junk bin.
+                                // use it. The following didn't work - most tests went to
+                                // the junk bin.
 
                                 // mbTxHash(blockRecord.l1Effect).isDefined ==>
                                     cmpLabel(this.id, l1EffectTxHash, l1EffectHashExpected))
@@ -743,8 +744,6 @@ object MBTSuite extends Commands:
             as.seqCmds.foreach(println)
             println("----------------------------------------")
 
-//            Prop.passed
-
             try {
                 val sutId = suts.synchronized {
                     val initSuts = suts.values.collect { case (state, None) => state }
@@ -822,11 +821,10 @@ object MBTSuite extends Commands:
         }
 
         def actionsPrecond(as: Actions): Boolean =
-            true
-//            initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
-//                case (s, true) => true
-//                case _ => false
-//            })
+            initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
+                case (s, true) => true
+                case _ => false
+            })
 
         val g = for {
             s0 <- genInitialState
@@ -1121,5 +1119,6 @@ object HydrozoaOneNodeWithL1Mock extends Properties0("Hydrozoa One node mode wit
 
 object HydrozoaOneNodeWithYaci extends Properties0("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
+    // It doesn't work in fact, since Yaci hangs up once in a while
     property("Just works, nothing bad happens") = MBTSuite.property0()
 //        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)
