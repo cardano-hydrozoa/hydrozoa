@@ -45,7 +45,7 @@ private class FinalBlockConfirmationActor(
                 finalizationTxBuilder.buildFinalizationTxDraft(recipe)
             val serializedTx = serializeTxHex(finalizationTxDraft)
             log.info(
-              s"Finalization tx for block ${req.block.blockHeader.blockNum} is $serializedTx"
+              s"Finalization tx for final block ${req.block.blockHeader.blockNum} is $serializedTx"
             )
             // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =

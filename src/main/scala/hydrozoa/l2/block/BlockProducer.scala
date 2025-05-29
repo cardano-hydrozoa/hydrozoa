@@ -64,7 +64,7 @@ class BlockProducer:
                     case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
                 Right(some)
             case None =>
-                val msg = "Block production procedure was unable to create a block"
+                val msg = s"Block production procedure was unable to create a block number ${prevHeader.blockNum+1}"
                 log.warn(msg)
                 Left(msg)
 

@@ -75,17 +75,17 @@ case class BlockBuilder[
     BlockNum <: TCheck,
     VersionMajor <: TCheck
 ] private (
-                                     blockType: BlockTypeL2 = Minor,
-                                     blockNum: Int = 0,
-                                     timeCreation: PosixTime = timeCurrent,
-                                     versionMajor: Int = 0,
-                                     versionMinor: Int = 0,
-                                     // FIXME: add type tags
-                                     eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
-                                     eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
-                                     depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
-                                     // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
-                                     utxosActive: Int = 42
+     blockType: BlockTypeL2 = Minor,
+     blockNum: Int = 0,
+     timeCreation: PosixTime = timeCurrent,
+     versionMajor: Int = 0,
+     versionMinor: Int = 0,
+     // FIXME: add type tags
+     eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
+     eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
+     depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
+     // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
+     utxosActive: Int = 42
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor

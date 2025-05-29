@@ -60,11 +60,11 @@ private class MinorBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         // Block validation (the leader can skip validation since its own block).
-        val (utxosActive, _, _, isFinalizationRequested) =
+        val (utxosActive, _, _, isNextBlockFinal) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
                 val (ownBlock, isFinalizationRequested) = stateActor.ask(
-                  _.head.openPhase(open => (open.pendingOwnBlock, open.isFinalizationRequested))
+                  _.head.openPhase(open => (open.pendingOwnBlock, open.isNextBlockFinal))
                 )
                 (
                   ownBlock.utxosActive,
@@ -87,7 +87,7 @@ private class MinorBlockConfirmationActor(
                             open.stateL2.cloneForBlockProducer(),
                             open.immutablePoolEventsL2,
                             open.peekDeposits,
-                            open.isFinalizationRequested
+                            open.isNextBlockFinal
                           )
                       )
                     )
@@ -116,7 +116,7 @@ private class MinorBlockConfirmationActor(
         // FIXME: how do we decide whether we want to wrap up the head?
         // Answer: User API should provide a method for that, so with the next
         // acknowledgment the node can indicate they want to finalize the head.
-        val ownAck: AckType = AckMinor(me, signature, isFinalizationRequested)
+        val ownAck: AckType = AckMinor(me, signature, isNextBlockFinal)
         deliver(ownAck)
         Seq(ownAck)
 

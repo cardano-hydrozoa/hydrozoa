@@ -41,8 +41,8 @@ private class MajorBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
-        val (headPeers, isFinalizationRequested) =
-            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isFinalizationRequested)))
+        val (headPeers, isNextBlockFinal) =
+            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isNextBlockFinal)))
         log.debug(s"headPeers: $headPeers")
         if req != null && ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
@@ -59,7 +59,7 @@ private class MajorBlockConfirmationActor(
             // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
-            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isFinalizationRequested)
+            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isNextBlockFinal)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
             deliverAck2(ownAck2)

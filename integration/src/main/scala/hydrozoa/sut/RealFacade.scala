@@ -60,8 +60,10 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case DecodeResult.Value(v) => v
             case _                     => Left("decoding failed")
 
+    override def awaitTxL1(txId: TxId): Option[TxL1] = ???
+
     override def submitL2(
-        event: L2Transaction | L2Withdrawal
+        tx: L2Transaction | L2Withdrawal
     ): Either[InitializationError, TxId] =
 
         val lazyResponses = peers
@@ -72,12 +74,12 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
                           NodeRestApi.submitL2Endpoint,
                           baseUri = Some(p._2)
                         )
-                        .apply(SubmitRequestL2.apply(event))
+                        .apply(SubmitRequestL2.apply(tx))
                         .send(backend)
             )
             .toList
 
-        val randomNode = Seq(lazyResponses(event.toString.length % lazyResponses.size))
+        val randomNode = Seq(lazyResponses(tx.toString.length % lazyResponses.size))
 
         val results = par(randomNode)
 

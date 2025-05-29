@@ -11,7 +11,7 @@ import hydrozoa.infra.*
 import hydrozoa.l1.multisig.state.given_FromData_DepositDatum
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
-import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.NodeState
 
 import java.math.BigInteger
@@ -77,8 +77,10 @@ class MultisigL1EventSource(
                             while loop do
                                 sleep(100.millis)
                                 loop = nodeState.ask(_.mbInitializedOn.isDefined)
-                                // TODO: we might want to continue during Finalizing phase
-                                    && nodeState.ask(_.head.currentPhase == Open)
+                                    && (
+                                        nodeState.ask(_.head.currentPhase == Open)
+                                          ||  nodeState.ask(_.head.currentPhase == Finalizing)
+                                    )
 
                             log.info("Leaving L1 source supervised scope")
                         }
@@ -155,7 +157,7 @@ class MultisigL1EventSource(
             case Some(_) =>
                 nodeState.ask(_.head.currentPhase) match
                     case Open =>
-                        log.trace("Polling head address...")
+                        log.trace("Polling head address, phase=Open...")
                         val utxos = cardano.ask(_.utxosAtAddress(headAddress))
                         // FIXME: no guarantees head is still open
                         val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
@@ -200,9 +202,44 @@ class MultisigL1EventSource(
 
                         // FIXME: no guarantees head is still open
                         nodeState.tell(_.head.openPhase(openHead =>
-                            mbNewTreasury.foreach(openHead.newTreasuryUtxo)
+                            mbNewTreasury.foreach(openHead.setNewTreasuryUtxo)
                             if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
                             if depositsNew.utxoMap.nonEmpty then
                                 openHead.addDepositUtxos(depositsNew |> TaggedUtxoSet.apply)
                         ))
-                    case _ => log.trace("Head is not in open state...")
+                    case Finalizing =>
+                        log.trace("Polling head address, phase=Finalizing...")
+                        val utxos = cardano.ask(_.utxosAtAddress(headAddress))
+                        // FIXME: no guarantees head is still finalizing
+                        val currentL1State = nodeState.ask(_.head.finalizingPhase(_.stateL1))
+                        // beacon token -> treasury
+                        // rollout token -> rollout
+                        // otherwise -> maybe deposit
+                        val mbNewTreasury =
+                            //
+                            var mbNewTreasury: Option[TreasuryUtxo] = None
+                            val utxoType_ = utxoType(treasuryTokenAmount)
+
+                            utxos.foreach(utxo =>
+                                val utxoId = UtxoId[L1]
+                                    .apply(
+                                        utxo.getTxHash |> TxId.apply,
+                                        utxo.getOutputIndex |> TxIx.apply
+                                    )
+                                utxoType_(utxo) match
+                                    case MultisigUtxoType.Treasury(utxo) =>
+                                        // log.debug(s"UTXO type: treasury $utxoId")
+                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
+                                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
+                                    case MultisigUtxoType.Unknown(utxo) =>
+                                        log.debug(s"UTXO type: unknown: $utxoId")
+                                    case other => 
+                                        log.info(s"UTxO of type $other are ignored in Finalizing mode")
+                            )
+                            mbNewTreasury
+
+                        // FIXME: no guarantees head is still finalizing
+                        nodeState.tell(_.head.finalizingPhase(finalizingHead =>
+                            mbNewTreasury.foreach(finalizingHead.newTreasuryUtxo)
+                        ))
+                    case other => log.warn(s"Unsupported phase: $other")

@@ -23,12 +23,14 @@ trait HydrozoaFacade:
         r: DepositRequest
     ): Either[DepositError, DepositResponse]
 
-    def submitL2(
-        event: L2Transaction | L2Withdrawal
-    ): Either[String, TxId]
+    def awaitTxL1(txId: TxId): Option[TxL1]
+    
+    def submitL2(tx: L2Transaction | L2Withdrawal): Either[String, TxId]
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]
 
-    def produceBlock(nextBlockFinal: Boolean): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
+    def produceBlock(
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
 
     def shutdownSut(): Unit

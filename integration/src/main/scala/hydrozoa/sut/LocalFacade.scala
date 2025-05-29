@@ -35,15 +35,16 @@ class LocalFacade(
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
+        log.info("SUT: initializing head...")
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
             case Left(_)  => ret
             case Right(_) =>
                 // Wait till all nodes are switched to `Open` phase, makes sense only for Right
-                println(s"waiting for initialization...")
+                log.info(s"waiting for initialization...")
                 retry(RetryConfig.delayForever(100.millis))({
                     val uptimes = peers.values.map(_.nodeState.ask(_.mbInitializedOn))
-                    println(s"node uptimes: $uptimes")
+                    log.info(s"node uptimes: $uptimes")
                     if (!uptimes.forall(_.isDefined)) throw IllegalStateException()
                 })
                 ret
@@ -52,6 +53,7 @@ class LocalFacade(
         depositor: TestPeer,
         depositRequest: DepositRequest
     ): Either[DepositError, DepositResponse] =
+        log.info("SUT: depositing into head...")
         val ret = peers(depositor).deposit(depositRequest)
         ret match
             case Left(_)                 => ret
@@ -69,20 +71,25 @@ class LocalFacade(
                 })
                 ret
 
+    override def awaitTxL1(txId: TxId): Option[TxL1] = randomNode.awaitTxL1(txId)
+    
     override def submitL2(
-        event: L2Transaction | L2Withdrawal
+        tx: L2Transaction | L2Withdrawal
     ): Either[String, TxId] =
-        val request = event match
+        log.info("SUT: submitting L2 transaction/withdrawal...")
+
+        val request = tx match
             case tx: L2Transaction => Transaction(tx)
             case wd: L2Withdrawal  => Withdrawal(wd)
         val ret = randomNode.submitL2(request)
         ret match
-            case Left(_) => ret
+            case Left(_)     => ret
             case Right(txId) =>
                 // Wait till all nodes learn about the submitted event
                 retry(RetryConfig.delayForever(100.millis))({
                     // println(s"waiting for L2 event id: $txId to propagate over all nodes")
-                    val veracity = peers.values.map(_.nodeState.ask(_.head.openPhase(_.isL2EventInPool(txId))))
+                    val veracity =
+                        peers.values.map(_.nodeState.ask(_.head.openPhase(_.isL2EventInPool(txId))))
                     // println(s"$veracity")
                     if (!veracity.forall(e => e)) throw IllegalStateException()
                 })
@@ -94,6 +101,10 @@ class LocalFacade(
     override def produceBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
+        log.info("SUT: producing a block in a lockstep manner...")
+
+        // Note: this is not ideal, you may see errors in logs like
+        // "Block production procedure was unable to create a block number N+1".
         val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
         answers.find(a => a.isRight) match
             case None         => Left("Block can't be produced at the moment")
@@ -106,7 +117,9 @@ class LocalFacade(
 val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
+
     private val log = Logger("LocalFacade")
+
     def apply(
         peers: Set[TestPeer],
         autonomousBlocks: Boolean = false,
@@ -165,5 +178,3 @@ object LocalFacade:
           threadId => shutdownFlag.put(threadId, true)
         )
 
-//// TODO: Is there something similar in stdlib?
-//def discard(_any: Any): Unit = ()

@@ -14,9 +14,9 @@ import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
-import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
-import ox.resilience.{RetryConfig, retryEither}
+import ox.resilience.{RetryConfig, retry, retryEither}
 import scalus.prelude.Maybe
 
 import scala.concurrent.duration.DurationInt
@@ -162,6 +162,8 @@ class Node:
     def submitL1(hex: String): Either[String, TxId] =
         cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
+    def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
+    
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
             case Transaction(tx) => mkTransactionEvent(tx)
@@ -179,12 +181,12 @@ class Node:
       * NB: Not exposed within API.
       *
       * NB: requires autonomousBlockProduction = false
-      * @param finalizing
+      * @param nextBlockFinal
       *   whether the next block should be final
       * @return
       */
     def produceNextBlockLockstep(
-        finalizing: Boolean
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
 
         assert(
@@ -192,17 +194,24 @@ class Node:
           "Autonomous block production should be turned off to use this function"
         )
 
-        nodeState.ask(_.head.openPhase(_.tryProduceBlock(finalizing, true))) match
-            case Left(err) =>
-                // TODO: add third result - "block can't be produced"
-                Left(err)
+        log.info("Calling tryProduceBlock in lockstep...")
+        val errorOrBlock = nodeState.ask(_.head.currentPhase) match
+            case Open =>
+                nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true))) match
+                    case Left(err)    => Left(err)
+                    case Right(block) => Right(block)
+            case Finalizing =>
+                nodeState.ask(_.head.finalizingPhase(_.tryProduceFinalBlock(true))) match
+                    case Left(err)    => Left(err)
+                    case Right(block) => Right(block)
+            case other => Left(s"Node should be in Open or Finalizing pase, but it's in $other")
+
+        errorOrBlock match
+            case Left(err)    => Left(err)
             case Right(block) =>
                 val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
-                    nodeState.ask(
-                      _.head
-                          .openPhase(_.getBlockRecord(block))
-                          .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
-                    )
+                    nodeState.ask(_.head.getBlockRecord(block))
+                      .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
                 }
 
                 effects match
