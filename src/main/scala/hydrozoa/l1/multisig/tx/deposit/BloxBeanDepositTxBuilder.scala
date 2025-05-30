@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import hydrozoa.infra.{mkBuilder, toEither}
-import hydrozoa.l1.multisig.state.given_ToData_DepositDatum
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{TxIx, TxL1}
 import scalus.bloxbean.*

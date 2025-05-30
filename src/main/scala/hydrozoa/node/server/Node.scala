@@ -15,7 +15,8 @@ import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.Open
 import ox.channels.ActorRef
-import scalus.prelude.Maybe
+import scalus.prelude.Option
+import scalus.prelude.Option.asScalus
 
 class Node:
 
@@ -100,10 +101,10 @@ class Node:
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
           decodeBech32AddressL2(r.address),
-          Maybe.fromOption(r.datum.map(datumByteString)),
+          (r.datum.map(datumByteString)).asScalus,
           BigInt.apply(0), // deadline,
           decodeBech32AddressL1(r.refundAddress),
-          Maybe.fromOption(r.datum.map(datumByteString))
+          (r.datum.map(datumByteString)).asScalus
         )
 
         val depositTxRecipe =

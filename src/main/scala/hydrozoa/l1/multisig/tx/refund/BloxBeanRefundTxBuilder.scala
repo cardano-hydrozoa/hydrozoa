@@ -8,6 +8,7 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
+
 import hydrozoa.TxL1
 import hydrozoa.infra.{
     addressToBloxbean,
@@ -17,12 +18,12 @@ import hydrozoa.infra.{
     txOutputToUtxo
 }
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.state.{DepositDatum, given_FromData_DepositDatum}
+import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
-import scalus.prelude.Maybe.{Just, Nothing}
+import scalus.prelude.Option.{Some, None}
 
 import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
@@ -77,12 +78,12 @@ class BloxBeanRefundTxBuilder(
             .collectFrom(List(depositUtxo).asJava)
 
         datum.refundDatum match
-            case Nothing =>
+            case None =>
                 txPartial.payToAddress(
                   refundAddress.toBech32,
                   lovelace(depositOutput.getValue.getCoin)
                 )
-            case Just(refundDatum) =>
+            case Some(refundDatum) =>
                 txPartial.payToContract(
                   refundAddress.toBech32,
                   lovelace(depositOutput.getValue.getCoin),

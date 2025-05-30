@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.{NativeScript, ScriptAll}
 import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
-import hydrozoa.l1.multisig.state.{given_ToData_MultisigTreasuryDatum, mkInitMultisigTreasuryDatum}
+import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.{AddressBechL1, TxL1}
 import scalus.bloxbean.*

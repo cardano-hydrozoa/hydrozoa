@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.8.5"
+val scalusVersion = "0.10.0"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.5"

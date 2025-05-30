@@ -6,9 +6,8 @@ import hydrozoa.infra.{decodeBech32AddressL1, decodeBech32AddressL2, plutusAddre
 import scala.collection.mutable
 
 import scalus.builtin.ByteString
-import scalus.prelude.Maybe.Nothing
+import scalus.prelude.Option.{Some, None}
 import scalus.prelude.AssocMap
-import scalus.prelude.Maybe.Just
 import scalus.prelude.Prelude.given_Eq_ByteString
 import scalus.ledger.api.v1 as scalus
 
@@ -31,15 +30,15 @@ def unwrapTxIn(outputRef: OutputRefInt): scalus.TxOutRef = outputRef
 def liftOutput_(output: OutputL2): OutputInt =
     val address = decodeBech32AddressL1(output.address)
     val value = scalus.Value.lovelace(output.coins)
-    scalus.TxOut(address = address, value = value, datumHash = Nothing)
+    scalus.TxOut(address = address, value = value, datumHash = None)
 
 // FIXME: remove, use liftOutput_
 def liftOutput(bech32: hydrozoa.AddressBechL2, coins: BigInt): OutputInt =
     liftOutput_(Output(bech32.asL1, coins))
 
 def unliftOutput(output: OutputInt): Output[L2] =
-    val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
-    val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
+    val Some(e) = AssocMap.get(output.value)(ByteString.empty)
+    val Some(coins) = AssocMap.get(e)(ByteString.empty)
     Output[L2](plutusAddressAsL2(output.address).asL1, coins)
 
 def unliftUtxoSet(utxosSetOpaque: UtxosSetOpaque): Map[UtxoIdL2, OutputL2] =

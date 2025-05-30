@@ -27,7 +27,7 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.Commands
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, Properties}
-import scalus.prelude.Maybe
+import scalus.prelude.Option as ScalusOption
 import sttp.client4.Response
 import sttp.client4.quick.*
 
@@ -368,10 +368,10 @@ object MBTSuite extends Commands:
             // Make the datum and the recipe
             val depositDatum = DepositDatum(
                 decodeBech32AddressL2(address),
-                Maybe.Nothing,
+                ScalusOption.None,
                 BigInt.apply(0),
                 decodeBech32AddressL1(refundAddress),
-                Maybe.Nothing
+                ScalusOption.None
             )
 
             val depositTxRecipe = DepositTxRecipe(fundUtxo, ???, depositDatum)
