@@ -21,7 +21,7 @@ import scala.util.Try
 case class MultisigTreasuryDatum(
     utxosActive: ByteString,
     versionMajor: BigInt,
-    params: ByteString
+    params: L2ConsensusParamsH32
 )
 
 type L2ConsensusParamsH32 = ByteString
