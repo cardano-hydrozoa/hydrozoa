@@ -68,26 +68,26 @@ ThisBuild / testFrameworks += new TestFramework("munit.Framework")
 
 // Integration tests
 lazy val integration = (project in file("integration"))
-    .dependsOn(core) // your current subproject
+    .dependsOn(core)
     .settings(
       Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
       // test dependencies
       libraryDependencies ++= Seq(
+        "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25",
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-      ),
+      )
     )
 
 // Demo workload
 lazy val demo = (project in file("demo"))
-    .dependsOn(core) // your current subproject
+    .dependsOn(core, integration)
     .settings(
-        Compile / mainClass := Some("hydrozoa.demo.Workload"),
-        publish / skip := true,
-        libraryDependencies ++= Seq(
-            "org.scalacheck" %% "scalacheck" % "1.18.1",
-            "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25"
-        )
+      Compile / mainClass := Some("hydrozoa.demo.Workload"),
+      publish / skip := true,
+      libraryDependencies ++= Seq(
+        "org.scalacheck" %% "scalacheck" % "1.18.1"
+      )
     )

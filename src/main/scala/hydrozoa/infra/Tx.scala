@@ -14,7 +14,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.{
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.l2.ledger.{SimpleGenesis, SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
 
@@ -71,7 +71,7 @@ def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness)
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressBechL1
-): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Data)] =
+): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Tokens, Data)] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala.toList
     outputs.filter(output => output.getAddress == address.bech32) match
         case List(elem) =>
@@ -79,6 +79,7 @@ def onlyOutputToAddress(
               (
                 TxIx(outputs.indexOf(elem).toChar),
                 elem.getValue.getCoin.longValue(),
+                valueTokens(elem.getValue),
                 Interop.toScalusData(
                   elem.getInlineDatum
                 ) // FIXME: how does it indicate it's optional? Use Option.apply
@@ -104,94 +105,29 @@ def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOu
         .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
         .build
 
-// ----------------------------------------------------------------------------
-// Cardano L2 transactions for the simplified ledger
-// ----------------------------------------------------------------------------
-
-/*
-FIXME: this approach doesn't work apparently - we are getting the same txHash for different genesis
-L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
-L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
-L2 genesis event, txId: TxId(1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf), content: 84a300d9010280018182581d704b6fdbf4d4257b3cd64979acac907bc8a079ecf28f0d527b0e2614f11a05f5e1000200a0f5f6
- */
-def mkCardanoTxForL2Genesis(genesis: SimpleGenesis): TxL2 =
-
-    val virtualOutputs = genesis.outputs.map { output =>
-        TransactionOutput.builder
-            .address(output.address.bech32)
-            .value(Value.builder.coin(output.coins.bigInteger).build)
-            .build
-    }
-
-    val body = TransactionBody.builder
-        .outputs(virtualOutputs.asJava)
-//        // FIXME: this is make-shift hack to make genesis events unique
-//        .fee(
-//          BigInteger.valueOf(number.longValue)
-//        )
-        .build
-
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    TxL2(tx.serialize)
-
-/** @param simpleTx
-  * @return
-  *   Virtual L2 transaction that spends L1 deposit utxos and produces L2 genesis utxos.
-  */
-def mkCardanoTxForL2Transaction(simpleTx: SimpleTransaction): TxL2 =
-
-    val virtualInputs = simpleTx.inputs.map { input =>
-        TransactionInput.builder
-            .transactionId(input._1.hash)
-            .index(input._2.ix.intValue)
-            .build
-    }
-
-    val virtualOutputs = simpleTx.outputs.map { output =>
-        TransactionOutput.builder
-            .address(output.address.bech32)
-            .value(Value.builder.coin(output.coins.bigInteger).build)
-            .build
-    }
-
-    val body = TransactionBody.builder
-        .inputs(virtualInputs.asJava)
-        .outputs(virtualOutputs.asJava)
-        .build
-
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    TxL2(tx.serialize)
-
-/** @param withdrawal
-  * @return
-  */
-def mkCardanoTxForL2Withdrawal(withdrawal: SimpleWithdrawal): TxL2 =
-
-    val virtualInputs = withdrawal.inputs.map { input =>
-        TransactionInput.builder
-            .transactionId(input._1.hash)
-            .index(input._2.ix.intValue)
-            .build
-    }
-
-    val body = TransactionBody.builder
-        .inputs(virtualInputs.asJava)
-        .build
-
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    Tx[L2](tx.serialize)
-
 def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
     inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex.toChar))).toSeq
 
+def valueTokens[L <: AnyLevel](tokens: Value): Tokens = {
+    tokens.toMap.asScala.toMap.map((k, v) =>
+        PolicyId(k) -> v.asScala.toMap.map((k, v) => TokenName(k) -> BigInt.apply(v))
+    )
+}
 def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
     val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
             val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
-            val utxo = Output[L](AddressBechL1(o.getAddress), o.getValue.getCoin.longValue())
+            val coins = o.getValue.getCoin.longValue()
+            val tokens = o.getValue
+            val tokens_ = valueTokens(tokens)
+            val datum = o.getInlineDatum match
+                case null => None
+                case some => Some(some.serializeToHex())
+            val utxo =
+                Output[L](AddressBech[L](o.getAddress), coins, tokens_, datum)
             (utxoId, utxo)
         )
         .toSeq

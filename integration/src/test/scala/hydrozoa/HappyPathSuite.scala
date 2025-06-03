@@ -1,100 +1,101 @@
 package hydrozoa
 
-import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
-import hydrozoa.l1.CardanoL1
-import hydrozoa.l2.ledger.SimpleWithdrawal
+import hydrozoa.l2.ledger.L2Withdrawal
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.rest.SubmitRequestL2.Withdrawal
-import hydrozoa.node.server.{DepositRequest, Node}
+import hydrozoa.node.server.DepositRequest
+import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 
 /** This integration test runs simple Hydrozoa happy-path.
   */
 class HappyPathSuite extends FunSuite {
 
-    private val knownPeers = Set(Bob, Carol, Daniella)
-    private val headPeers = knownPeers.take(2)
+    private val testPeers = Set(Alice, Bob, Carol, Daniella)
 
-    private val (log: Logger, node: Node, cardano: CardanoL1) = mkSimpleHydrozoaNode(
-      ownPeerWallet = mkWallet(Alice),
-      knownPeers = knownPeers.map(mkWallet),
-      useL1Mock = true,
-      pp = Some(Utils.protocolParams)
-    )
+    private var sut: HydrozoaFacade = _
 
-    override def beforeAll(): Unit = {
-        assume(true, "Env is presumably set up and reset.")
-    }
+    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers)
+
+    override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
     test("Hydrozoa happy-path scenario") {
+
         val result = for
 
             // 1. Initialize the head
-            initTxId <- node.initializeHead(
-              // headPeers.map(mkWalletId),
+            initTxId <- sut.initializeHead(
+              Alice,
+              testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
               TxId("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
               TxIx(0)
             )
 
-            _ = cardano.awaitTx(initTxId)
+             _ = sut.awaitTxL1(initTxId)
 
-            deposit1 <- node.deposit(
+            deposit1 <- sut.deposit(
+              Alice,
               DepositRequest(
                 initTxId,
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBechL2(
+                AddressBech[L2](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None,
-                AddressBechL1(
+                AddressBech[L1](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None
               )
             )
 
-            _ = cardano.awaitTx(deposit1.depositId.txId)
+             _ = sut.awaitTxL1(deposit1.depositId.txId)
 
-            deposit2 <- node.deposit(
+            deposit2 <- sut.deposit(
+              Alice,
               DepositRequest(
                 deposit1.depositId.txId,
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBechL2(
+                AddressBech[L2](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None,
-                AddressBechL1(
+                AddressBech[L1](
                   "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
                 ),
                 None
               )
             )
 
-            _ = cardano.awaitTx(deposit2.depositId.txId)
+            _ = sut.awaitTxL1(deposit2.depositId.txId)
 
-            major1 <- node.handleNextBlock(false)
-            _ = cardano.awaitTx(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+            major1 <- sut.produceBlock(false)
 
-            utxoL2 = major1._2.head
+             _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
 
-            _ <- node.submitL2(Withdrawal(SimpleWithdrawal(utxoL2._1)))
+            utxoL2 = sut.stateL2().head
 
-            major2 <- node.handleNextBlock(true)
-            _ = cardano.awaitTx(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+            _ <- sut.submitL2(L2Withdrawal(List(utxoL2._1)))
 
-            finalBlock <- node.handleNextBlock(false)
-            _ = cardano.awaitTx(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-        yield ()
+            major2 <- sut.produceBlock(nextBlockFinal = true)
+
+             _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+
+            finalBlock <- sut.produceBlock(false)
+
+             _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
+
+        yield finalBlock
 
         result match
             case Right(_)  => ()
             case Left(err) => fail(err)
+
     }
 }

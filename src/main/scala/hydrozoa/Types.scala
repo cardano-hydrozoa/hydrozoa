@@ -30,11 +30,12 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBechL1(bech32: String) derives CanEqual:
-    def asL2: AddressBechL2 = AddressBechL2(bech32)
+case class AddressBech[+L <: AnyLevel](bech32: String) derives CanEqual:
+    def asL1: AddressBech[L1] = AddressBech[L1](bech32)
+    def asL2: AddressBech[L2] = AddressBech[L2](bech32)
 
-case class AddressBechL2(bech32: String) derives CanEqual:
-    def asL1: AddressBechL1 = AddressBechL1(bech32)
+type AddressBechL1 = AddressBech[L1]
+type AddressBechL2 = AddressBech[L2]
 
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
@@ -60,41 +61,129 @@ object UtxoIdL1:
 object UtxoIdL2:
     def apply(id: TxId, ix: TxIx): UtxoId[L2] = UtxoId(id, ix)
 
-// FIXME: parameterize AddressBech
-// FIXME: migrate to Value
+type Tokens = Map[PolicyId, Map[TokenName, BigInt]]
+
+val emptyTokens: Tokens = Map.empty
+
+// TODO: migrate to Value
 case class Output[L <: AnyLevel](
-    address: AddressBechL1,
+    address: AddressBech[L],
     coins: BigInt,
+    tokens: Tokens,
     mbInlineDatum: Option[String] = None
 )
+
+// TODO: Unsound in general
+object Output:
+    def apply[L <: AnyLevel](o: OutputNoTokens[L]): Output[L] =
+        new Output[L](o.address, o.coins, emptyTokens, o.mbInlineDatum)
 
 type OutputL1 = Output[L1]
 type OutputL2 = Output[L2]
 
-// FIXME: We also need Utxo without MultisigUtxoTag
-case class Utxo[L <: AnyLevel, F <: MultisigUtxoTag](ref: UtxoId[L], output: Output[L])
+/* This is useful since I was not able to make Tapir generate schema for Output:
+
+[error] -- Error: /home/euonymos/src/cardano-hydrozoa/hydrozoa/src/main/scala/hydrozoa/node/rest/NodeRestApi.scala:215:4
+[error] 215 |    Schema.derived[StateL2Response]
+[error]     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[error]     |    method deriveSubtype is declared as `inline`, but was not inlined
+[error]     |
+[error]     |    Try increasing `-Xmax-inlines` above 32
+[error]     |---------------------------------------------------------------------------
+[error]     |Inline stack trace
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]     |- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+[error]     |This location contains code that was inlined from impl.scala:208
+[error]      ---------------------------------------------------------------------------
+ */
+
+case class OutputNoTokens[L <: AnyLevel](
+    address: AddressBech[L],
+    coins: BigInt,
+    mbInlineDatum: Option[String] = None
+)
+
+/** ---------------------------------------------------------------------------------------------
+  * UTxO
+  * ---------------------------------------------------------------------------------------------
+  */
+
+case class Utxo[L <: AnyLevel](ref: UtxoId[L], output: Output[L])
+
+// TODO: Lossy conversion
+object OutputNoTokens:
+    def apply[L <: AnyLevel](o: Output[L]): OutputNoTokens[L] =
+        new OutputNoTokens[L](o.address, o.coins, o.mbInlineDatum)
 
 object Utxo:
+    def apply[L <: AnyLevel](
+        txId: TxId,
+        txIx: TxIx,
+        address: AddressBech[L],
+        coins: BigInt,
+        tokens: Tokens,
+        mbInlineDatum: Option[String] = None
+    ) =
+        new Utxo[L](UtxoId[L](txId, txIx), Output(address, coins, tokens, mbInlineDatum))
+
+case class TaggedUtxo[L <: AnyLevel, F <: MultisigUtxoTag](unTag: Utxo[L])
+
+object TaggedUtxo:
     def apply[L <: AnyLevel, T <: MultisigUtxoTag](
         txId: TxId,
         txIx: TxIx,
-        address: AddressBechL1,
+        address: AddressBech[L],
         coins: BigInt,
+        tokens: Tokens, // = Map.empty,
         mbInlineDatum: Option[String] = None
-    ) =
-        new Utxo[L, T](UtxoId[L](txId, txIx), Output(address, coins, mbInlineDatum))
+    ) = new TaggedUtxo[L, T](Utxo.apply(txId, txIx, address, coins, tokens, mbInlineDatum))
 
-case class UtxoSetMutable[L <: AnyLevel, F](map: mutable.Map[UtxoId[L], Output[L]])
+/** ---------------------------------------------------------------------------------------------
+  * UTxO Set
+  * ---------------------------------------------------------------------------------------------
+  */
 
-case class UtxoSet[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]])
+type UtxoMap[L <: AnyLevel] = Map[UtxoId[L], Output[L]]
+
+case class UtxoSet[L <: AnyLevel](utxoMap: UtxoMap[L])
+
+type UtxoSetL1 = UtxoSet[L1]
+type UtxoSetL2 = UtxoSet[L2]
 
 object UtxoSet:
-    def apply[L <: AnyLevel, F](): UtxoSet[L, F] = new UtxoSet(Map.empty)
-    def apply[L <: AnyLevel, F](map: Map[UtxoId[L], Output[L]]): UtxoSet[L, F] = new UtxoSet(
-      map
-    )
-    def apply[L <: AnyLevel, F](mutableUtxoSet: UtxoSetMutable[L, F]): UtxoSet[L, F] =
-        new UtxoSet(mutableUtxoSet.map.toMap)
+    def apply[L <: AnyLevel](): UtxoSet[L] =
+        new UtxoSet(Map.empty)
+
+    def apply[L <: AnyLevel](map: UtxoMap[L]): UtxoSet[L] =
+        new UtxoSet(map)
+
+    def apply[L <: AnyLevel, F](mutableUtxoSet: TaggedUtxoSetMutable[L, F]): UtxoSet[L] =
+        new UtxoSet(mutableUtxoSet.utxoMap.toMap)
+
+case class TaggedUtxoSet[L <: AnyLevel, F <: MultisigUtxoTag](unTag: UtxoSet[L])
+
+object TaggedUtxoSet:
+    def apply[L <: AnyLevel, F <: MultisigUtxoTag](): TaggedUtxoSet[L, F] =
+        new TaggedUtxoSet[L, F](UtxoSet.apply())
+
+    def apply[L <: AnyLevel, F <: MultisigUtxoTag](map: UtxoMap[L]): TaggedUtxoSet[L, F] =
+        new TaggedUtxoSet[L, F](UtxoSet.apply(map))
+
+    def apply[L <: AnyLevel, F <: MultisigUtxoTag](
+        mutableUtxoSet: TaggedUtxoSetMutable[L, F]
+    ): TaggedUtxoSet[L, F] =
+        new TaggedUtxoSet[L, F](UtxoSet.apply(mutableUtxoSet.utxoMap.toMap))
+
+case class TaggedUtxoSetMutable[L <: AnyLevel, F](utxoMap: mutable.Map[UtxoId[L], Output[L]])
 
 // Policy ID
 case class PolicyId(policyId: String)

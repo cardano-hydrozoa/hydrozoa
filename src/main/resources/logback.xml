@@ -1,7 +1,7 @@
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %boldBlue([%thread]) %highlight(%-5level) %cyan(%logger{64}) -%kvp- %n    %msg%n</pattern>
+            <pattern>%X{node} %d{HH:mm:ss.SSS} %boldBlue([%thread]) %highlight(%-5level) %cyan(%logger{64}) -%kvp- %n    %msg%n</pattern>
         </encoder>
     </appender>
     <root level="info">
