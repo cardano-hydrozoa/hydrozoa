@@ -1,20 +1,29 @@
 package hydrozoa.l1.rulebased.onchain
 
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Resolved
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
-import scalus.Compiler.compile
 import scalus.builtin.Builtins.*
 import scalus.builtin.ToData.toData
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data, FromData, ToData}
-import scalus.ledger.api.v2.OutputDatum
+import scalus.builtin.{
+    BLS12_381_G1_Element,
+    BLS12_381_G2_Element,
+    ByteString,
+    Data,
+    FromData,
+    ToData
+}
+import scalus.ledger.api.v1.Value.+
+import scalus.ledger.api.v2.OutputDatum as TOutputDatum
+import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
 import scalus.ledger.api.v3.TxOutRef.given
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{Option, Validator, orFail, *, given}
-import scalus.uplc.Program
-import scalus.{Compile, Ignore, |>, toUplc, plutusV3, showHighlighted}
+import scalus.{Compile, Ignore, |>}
 import supranational.blst.Scalar
 
 import java.math.BigInteger
@@ -33,21 +42,11 @@ object TreasuryValidator extends Validator:
 
     // Datum
     enum TreasuryDatum:
-        case Resolved(resolvedDatum: ResolvedDatum)
         case Unresolved(unresolvedDatum: UnresolvedDatum)
+        case Resolved(resolvedDatum: ResolvedDatum)
 
     given FromData[TreasuryDatum] = FromData.derived
     given ToData[TreasuryDatum] = ToData.derived
-
-    case class ResolvedDatum(
-        headMp: CurrencySymbol,
-        utxosActive: BLSProof,
-        version: (BigInt, BigInt),
-        params: L2ConsensusParamsH32
-    )
-
-    given FromData[ResolvedDatum] = FromData.derived
-    given ToData[ResolvedDatum] = ToData.derived
 
     case class UnresolvedDatum(
         headMp: CurrencySymbol,
@@ -61,6 +60,16 @@ object TreasuryValidator extends Validator:
 
     given FromData[UnresolvedDatum] = FromData.derived
     given ToData[UnresolvedDatum] = ToData.derived
+
+    case class ResolvedDatum(
+        headMp: CurrencySymbol,
+        utxosActive: BLSProof,
+        version: (BigInt, BigInt),
+        params: L2ConsensusParamsH32
+    )
+
+    given FromData[ResolvedDatum] = FromData.derived
+    given ToData[ResolvedDatum] = ToData.derived
 
     // Redeemer
     enum TreasuryRedeemer:
@@ -81,25 +90,133 @@ object TreasuryValidator extends Validator:
 
     given ToData[WithdrawRedeemer] = ToData.derived
 
-    inline val DatumIsMissing = "Treasury datum should be present"
-    inline val WithdrawNeedsResolvedDatum = "Withdraw redeemer requires resolved datum"
-    inline val WrongNumberOfWithdrawals = "Number of outputs should match the number of utxo ids"
-    inline val BeaconTokenFailure = "Treasury should contain exactly one beacon token"
-    inline val MembershipValidationFailed = "Withdrawals membership check failed"
-    inline val BeaconTokenShouldBePreserved = "Beacon token should be preserves in treasury output"
-    inline val ValueShouldBePreserved =
+    private inline val DatumIsMissing = "Treasury datum should be present"
+    private inline val ResolveNeedsUnresolvedDatumInInput =
+        "Resolve redeemer requires unresolved datum in treasury input"
+    private inline val ResolveNeedsResolvedDatumInOutput =
+        "Resolve redeemer requires resolved datum in treasury output"
+    private inline val WithdrawNeedsResolvedDatum = "Withdraw redeemer requires resolved datum"
+    private inline val WrongNumberOfWithdrawals =
+        "Number of outputs should match the number of utxo ids"
+    private inline val BeaconTokenFailure = "Treasury should contain exactly one beacon token"
+    private inline val MembershipValidationFailed = "Withdrawals membership check failed"
+    private inline val BeaconTokenShouldBePreserved =
+        "Beacon token should be preserves in treasury output"
+    private inline val ResolveValueShouldBePreserved =
+        "Value invariant should hold: treasuryOutput = treasuryInput + voteInput"
+    private inline val WithdrawValueShouldBePreserved =
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
+    private inline val VoteUtxoNotFound = "Vote UTxo was not found"
+    private inline val VoteInputDatumShouldPresent = "Vote input datum should present"
+    private inline val ResolveVersionCheck =
+        "The version field of treasuryOutput must match (versionMajor, 0)"
+    private inline val ResolveUtxoActiveCheck = 
+        "The activeUtxo in resolved treasury must match voting results"
+    private inline val TreasuryInputOutputHeadMp =
+        "headMp in treasuryInput and treasuryOutput must match"
+    private inline val TreasuryInputOutputParams =
+        "params in treasuryInput and treasuryOutput must match"
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+        // Parse datum
         val treasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
             case None    => fail(DatumIsMissing)
 
+        extension (v: Value)
+            // Check - contains only specified amount of same tokens and no other tokens
+            private def containsExactlyOneAsset(
+                cs: CurrencySymbol,
+                tn: TokenName,
+                amount: BigInt
+            ): Boolean =
+                v.toList.filter(!_._1.isEmpty) match
+                    case List.Cons(asset, tail) =>
+                        if tail.isEmpty then
+                            if asset._1 == cs then
+                                asset._2.toList match
+                                    case List.Cons(token, tail) =>
+                                        if tail.isEmpty then token._1 == tn && token._2 == amount
+                                        else false
+                                    case _ => false
+                            else false
+                        else false
+                    case _ => false
+
         redeemer.to[TreasuryRedeemer] match
-            case Resolve                                    => false orFail "Not implemented"
+            case Resolve =>
+                // Treasury datum should be "unresolved" one
+                val unresolvedDatum = treasuryDatum match
+                    case Unresolved(d) => d
+                    case _             => fail(ResolveNeedsUnresolvedDatumInInput)
+
+                // Vote input
+                val voteInput = tx.inputs
+                    .find(e =>
+                        e.resolved.value.containsExactlyOneAsset(
+                          unresolvedDatum.headMp,
+                          unresolvedDatum.disputeId,
+                          unresolvedDatum.peersN + 1
+                        )
+                    )
+                    .getOrFail(VoteUtxoNotFound)
+                    .resolved
+
+                // Treasury input
+                val treasuryInput = tx.inputs
+                    .find(_.outRef === ownRef)
+                    .getOrFail("Own input was not found")
+                    .resolved
+
+                // Total output
+                val treasuryOutputExpected = voteInput.value + treasuryInput.value
+
+                // The only treasury output
+                val treasuryOutput = tx.outputs
+                    .filter(e => e.address === treasuryInput.address) match
+                    case List.Cons(o, tail) =>
+                        require(tail.isEmpty, "Only one treasury output should be there")
+                        o
+                    case _ => fail("Treasury output should be present")
+
+                // Check treasury output value
+                require(
+                  treasuryOutput.value === treasuryOutputExpected,
+                  ResolveValueShouldBePreserved
+                )
+
+                val treasuryOutputDatum = treasuryOutput.datum match
+                    case TOutputDatum.OutputDatum(inlineDatum) =>
+                        inlineDatum.to[TreasuryDatum] match
+                            case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
+                            case Resolved(d)   => d
+                    case _ => fail(ResolveNeedsResolvedDatumInOutput)
+
+                val voteDatum = voteInput.datum match
+                    case TOutputDatum.OutputDatum(inlineDatum) => inlineDatum.to[VoteDatum]
+                    case _                                     => fail(VoteInputDatumShouldPresent)
+
+                voteDatum.voteStatus match
+                    case NoVote            => fail("impossible")
+                    case Vote(voteDetails) =>
+                        // (a) Let versionMinor be the corresponding field in voteStatus.
+                        // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
+                        require(
+                          treasuryOutputDatum.version._1 == unresolvedDatum.versionMajor &&
+                              treasuryOutputDatum.version._2 == voteDetails.versionMinor,
+                          ResolveVersionCheck
+                        )
+                        // (c) voteStatus and treasuryOutput must match on utxosActive.
+                        require(treasuryOutputDatum.utxosActive === voteDetails.utxosActive,
+                            ResolveUtxoActiveCheck
+                        )
+
+                require(unresolvedDatum.headMp === treasuryOutputDatum.headMp, TreasuryInputOutputHeadMp)
+                require(unresolvedDatum.params === treasuryOutputDatum.params, TreasuryInputOutputParams)
+                
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
-                // Check treasury datum
+                // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
                     case Resolved(d) => d
                     case _           => fail(WithdrawNeedsResolvedDatum)
@@ -158,7 +275,7 @@ object TreasuryValidator extends Validator:
 
                 // Accumulator updated commitment
                 treasuryOutput.datum match
-                    case OutputDatum.OutputDatum(inlineDatum) =>
+                    case TOutputDatum.OutputDatum(inlineDatum) =>
                         val outputResolvedDatum = inlineDatum.to[ResolvedDatum]
                         require(
                           outputResolvedDatum.utxosActive == proof,
@@ -172,8 +289,8 @@ object TreasuryValidator extends Validator:
                 val withdrawnValue =
                     tx.outputs.tail.foldLeft(Value.zero)((acc, o) => Value.plus(acc, o.value))
                 val valueIsPreserved =
-                    treasuryInput.value === Value.plus(treasuryOutput.value, withdrawnValue)
-                require(valueIsPreserved, ValueShouldBePreserved)
+                    treasuryInput.value === (treasuryOutput.value + withdrawnValue)
+                require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
             case Deinit => false orFail "SomeErr"
 
@@ -245,14 +362,14 @@ object TreasuryValidator extends Validator:
         bls12_381_finalVerify(lhs, rhs)
     }
 
-    // Builders and so on
-    @Ignore
-    val script: Program = compile(TreasuryValidator.validate)
-        .toUplc(generateErrorTraces = true)
-        .plutusV3
-
-    @Ignore
-    def showSir(): Unit = println(compile(TreasuryValidator.validate).showHighlighted)
+//    // Builders and so on
+//    @Ignore
+//    val script: Program = compile(TreasuryValidator.validate)
+//        .toUplc(generateErrorTraces = true)
+//        .plutusV3
+//
+//    @Ignore
+//    def showSir(): Unit = println(compile(TreasuryValidator.validate).showHighlighted)
 
 end TreasuryValidator
 
