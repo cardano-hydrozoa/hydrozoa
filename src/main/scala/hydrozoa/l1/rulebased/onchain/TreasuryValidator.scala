@@ -44,13 +44,13 @@ object TreasuryValidator extends Validator:
     )
 
     case class UnresolvedDatum(
-      headMp: CurrencySymbol,
-      disputeId: TokenName,
-      peers: List[VerificationKey],
-      peersN: BigInt,
-      deadlineVoting: PosixTime,
-      versionMajor: BigInt,
-      params: L2ConsensusParamsH32
+        headMp: CurrencySymbol,
+        disputeId: TokenName,
+        peers: List[VerificationKey],
+        peersN: BigInt,
+        deadlineVoting: PosixTime,
+        versionMajor: BigInt,
+        params: L2ConsensusParamsH32
     )
 
     // Redeemer
@@ -64,10 +64,10 @@ object TreasuryValidator extends Validator:
     given ToData[TreasuryRedeemer] = ToData.derived
 
     case class WithdrawRedeemer(
-                                   utxoIds: List[TxOutRef],
-                                   // membership proof for utxoIds and the updated accumulator at the same time
-                                   proof: BLSProof
-                               )
+        utxoIds: List[TxOutRef],
+        // membership proof for utxoIds and the updated accumulator at the same time
+        proof: BLSProof
+    )
 
     given FromData[WithdrawRedeemer] = FromData.derived
 
@@ -84,9 +84,11 @@ object TreasuryValidator extends Validator:
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
         redeemer.to[TreasuryRedeemer] match
-            case Resolve => false orFail Error.SomeErr1.toString
+            case Resolve          => false orFail Error.SomeErr1.toString
             case Withdraw(_proof) => false orFail SomeErr2
-            case Deinit => false orFail SomeErr2
+            case Deinit =>
+                ScalusScalar("123").getOrFail("Failed to get scalar")
+                false orFail SomeErr2
 
     // Utility functions
     /*
@@ -97,8 +99,8 @@ object TreasuryValidator extends Validator:
         binomial_poly
             .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
                 val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(ScalusScalar.zero)
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
+                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
+                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
     }
 
     @Ignore
@@ -118,9 +120,9 @@ object TreasuryValidator extends Validator:
     }
 
     def getG1Commitment(
-                           setup: List[BLS12_381_G1_Element],
-                           subset: List[ScalusScalar]
-                       ): BLS12_381_G1_Element = {
+        setup: List[BLS12_381_G1_Element],
+        subset: List[ScalusScalar]
+    ): BLS12_381_G1_Element = {
         val g1Zero = bls12_381_G1_uncompress(bls12_381_G1_compressed_zero)
 
         val subsetInG1 =
@@ -132,23 +134,23 @@ object TreasuryValidator extends Validator:
     }
 
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
-     * `acc`.
-     *
-     * @param setup
-     * The setup of the accumulator.
-     * @param acc
-     * The accumulator to check.
-     * @param subset
-     * The subset of the setup.
-     * @return
-     * True if the accumulator is valid, false otherwise.
-     */
+      * `acc`.
+      *
+      * @param setup
+      *   The setup of the accumulator.
+      * @param acc
+      *   The accumulator to check.
+      * @param subset
+      *   The subset of the setup.
+      * @return
+      *   True if the accumulator is valid, false otherwise.
+      */
     def checkMembership(
-                           setup: List[BLS12_381_G1_Element],
-                           acc: BLS12_381_G2_Element,
-                           subset: List[ScalusScalar],
-                           proof: BLS12_381_G2_Element
-                       ): Boolean = {
+        setup: List[BLS12_381_G1_Element],
+        acc: BLS12_381_G2_Element,
+        subset: List[ScalusScalar],
+        proof: BLS12_381_G2_Element
+    ): Boolean = {
         val g1 = setup !! 0
         val lhs = bls12_381_millerLoop(g1, acc)
         val rhs = bls12_381_millerLoop(getG1Commitment(setup, subset), proof)
@@ -169,9 +171,15 @@ object TreasuryValidator extends Validator:
 
 end TreasuryValidator
 
+object TreasuryScript {
+    val sir = Compiler.compile(TreasuryValidator.validate)
+    val uplc = sir.toUplcOptimized(true)
+}
+
 @main
 def main(args: String): Unit = {
     println("Hi!")
+    println(TreasuryScript.sir.showHighlighted)
     // val ret = Scalar().inverse() // works
     // println(ret.to_bendian.toString())
 

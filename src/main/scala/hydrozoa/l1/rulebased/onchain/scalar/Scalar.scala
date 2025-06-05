@@ -30,38 +30,35 @@ object Scalar:
         else None
 
     // TODO: Why doesn't it work?
-    @Ignore
-    def apply(s: String): Option[Scalar] =
-        val n = BigInt(BigInteger(s))
-        Scalar.apply(n)
+    inline def apply(inline s: String): Option[Scalar] = Scalar(BigInt(s))
 
     // Conversions
     def fromByteStringBigEndian(bytes: ByteString): Option[Scalar] =
-        Scalar.apply(byteStringToInteger(true, bytes))
+        Scalar(byteStringToInteger(true, bytes))
 
     def fromByteStringLittleEndian(bytes: ByteString): Option[Scalar] =
-        Scalar.apply(byteStringToInteger(false, bytes))
+        Scalar(byteStringToInteger(false, bytes))
 
     extension (self: Scalar)
 
         // Combining
 
         // Adds two `Scalar` elements, ensuring the result stays within the finite field range.
-        def add(addend: Scalar): Scalar =
+        infix def +(addend: Scalar): Scalar =
             new Scalar((self.unScalar + addend.unScalar) % fieldPrime)
 
         /// Multiplies two `Scalar` elements, with the result constrained within the finite field.
-        def mul(multiplier: Scalar): Scalar =
+        infix def *(multiplier: Scalar): Scalar =
             new Scalar(self.unScalar * multiplier.unScalar % fieldPrime)
 
         // Divides one `Scalar` element by another, returning `None` if the divisor is zero.
-        def div(divisor: Scalar): Option[Scalar] = {
-            if (divisor.unScalar == zero.unScalar) then None
-            else Some(self.mul(divisor.scale(fieldPrime - 2)))
+        infix def /(divisor: Scalar): Option[Scalar] = {
+            if divisor.unScalar == zero.unScalar then None
+            else Some(self * divisor.scale(fieldPrime - 2))
         }
 
         // Subtracts one `Scalar` element from another, with the result wrapped within the finite field range.
-        def sub(subtrahend: Scalar): Scalar =
+        infix def -(subtrahend: Scalar): Scalar =
             val difference = self.unScalar - subtrahend.unScalar
             new Scalar(
               if difference >= 0 then difference
@@ -77,8 +74,8 @@ object Scalar:
         def scale(e: BigInt): Scalar =
             if e < 0 then zero
             else if e == BigInt(0) then one
-            else if e % 2 == BigInt(0) then self.mul(self).scale(e / 2)
-            else self.mul(self.mul(self).scale((e - 1) / 2))
+            else if e % 2 == BigInt(0) then (self * self).scale(e / 2)
+            else self * (self * self).scale((e - 1) / 2)
 
         // A faster version of `scale` for the case where the exponent is a power of two.
         // That is, the exponent `e = 2^k` for some non-negative integer `k`.
@@ -88,7 +85,7 @@ object Scalar:
             @tailrec
             def go(self: Scalar, k: BigInt): Scalar =
                 if k == BigInt(0) then self
-                else go(self.mul(self), k - 1)
+                else go(self * self, k - 1)
 
             if k < 0 then zero
             else go(self, k)
@@ -98,7 +95,7 @@ object Scalar:
             else new Scalar(fieldPrime - self.unScalar)
 
         // Calculates the multiplicative inverse of an `Scalar` element, returning `None` if the element is zero.
-        def recip: Option[Scalar] = one.div(self)
+        def recip: Option[Scalar] = one / self
 
         // Transforming
 
