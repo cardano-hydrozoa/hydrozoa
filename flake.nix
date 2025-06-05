@@ -13,7 +13,7 @@
       (system:
       let
         pkgs = import nixpkgs { inherit system; };
-            jdk = pkgs.openjdk21;
+        jdk = pkgs.openjdk21;
         sbt = pkgs.sbt.override { jre = jdk; };
       in
       rec {
@@ -21,12 +21,12 @@
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
-            git
-            openjdk21
-            scala-cli
-            sbt
-            jetbrains.idea-community-bin
             async-profiler
+            git
+            jetbrains.idea-community-bin
+            openjdk21
+            sbt
+            scala-cli
           ];
         };
       })
