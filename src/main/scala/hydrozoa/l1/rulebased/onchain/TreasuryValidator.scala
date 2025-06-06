@@ -16,7 +16,7 @@ import scalus.builtin.{
     FromData,
     ToData
 }
-import scalus.ledger.api.v1.Value.+
+import scalus.ledger.api.v1.Value.{+, -}
 import scalus.ledger.api.v2.OutputDatum as TOutputDatum
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
@@ -110,7 +110,7 @@ object TreasuryValidator extends Validator:
     private inline val VoteInputDatumShouldPresent = "Vote input datum should present"
     private inline val ResolveVersionCheck =
         "The version field of treasuryOutput must match (versionMajor, 0)"
-    private inline val ResolveUtxoActiveCheck = 
+    private inline val ResolveUtxoActiveCheck =
         "The activeUtxo in resolved treasury must match voting results"
     private inline val TreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
@@ -124,14 +124,14 @@ object TreasuryValidator extends Validator:
             case Some(d) => d.to[TreasuryDatum]
             case None    => fail(DatumIsMissing)
 
-        extension (v: Value)
+        extension (self: Value)
             // Check - contains only specified amount of same tokens and no other tokens
             private def containsExactlyOneAsset(
                 cs: CurrencySymbol,
                 tn: TokenName,
                 amount: BigInt
             ): Boolean =
-                v.toList.filter(!_._1.isEmpty) match
+                self.toList.filter(!_._1.isEmpty) match
                     case List.Cons(asset, tail) =>
                         if tail.isEmpty then
                             if asset._1 == cs then
@@ -143,6 +143,9 @@ object TreasuryValidator extends Validator:
                             else false
                         else false
                     case _ => false
+
+            // Negate value, useful for burning operations
+            private def unary_- :Value = Value.zero - self
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
@@ -208,13 +211,20 @@ object TreasuryValidator extends Validator:
                           ResolveVersionCheck
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
-                        require(treasuryOutputDatum.utxosActive === voteDetails.utxosActive,
-                            ResolveUtxoActiveCheck
+                        require(
+                          treasuryOutputDatum.utxosActive === voteDetails.utxosActive,
+                          ResolveUtxoActiveCheck
                         )
 
-                require(unresolvedDatum.headMp === treasuryOutputDatum.headMp, TreasuryInputOutputHeadMp)
-                require(unresolvedDatum.params === treasuryOutputDatum.params, TreasuryInputOutputParams)
-                
+                require(
+                  unresolvedDatum.headMp === treasuryOutputDatum.headMp,
+                  TreasuryInputOutputHeadMp
+                )
+                require(
+                  unresolvedDatum.params === treasuryOutputDatum.params,
+                  TreasuryInputOutputParams
+                )
+
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
@@ -292,7 +302,38 @@ object TreasuryValidator extends Validator:
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
-            case Deinit => false orFail "SomeErr"
+            case Deinit =>
+                // This redeemer does not require the treasury’s active utxo set to be empty,
+                // but it implicitly requires the transaction to be multi-signed by all peers
+                // to burn the headMp tokens.
+                // Thus, the peers can use this redeemer to override the treasury’s
+                // spending validator with their multi-signature.
+
+                // Treasury datum might be "resolved" or "unresolved"
+                val headMp = treasuryDatum match
+                    case Resolved(d)   => d.headMp
+                    case Unresolved(d) => d.headMp
+
+                val treasuryInput = tx.inputs
+                    .find(_.outRef === ownRef)
+                    .getOrFail("Own input was not found")
+                    .resolved
+
+                val headTokensInput = treasuryInput.value
+                    .get(headMp)
+                    .getOrFail("Head tokens was not found in treasury input")
+
+                require(
+                  headTokensInput.size > 0,
+                  "Deinit should burn at least one token, but there are no tokens in treasury input"
+                )
+
+                // All head tokens should be burned
+                val headTokensMint = (-tx.mint)
+                    .get(headMp)
+                    .getOrFail("Head tokens was not found in mint value")
+
+                require(headTokensInput === headTokensMint, "All head tokens should be burned")
 
     // Utility functions
     /*
