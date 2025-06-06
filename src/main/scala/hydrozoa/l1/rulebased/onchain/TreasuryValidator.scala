@@ -352,8 +352,8 @@ object TreasuryValidator extends Validator:
         binomial_poly
             .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
                 val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(ScalusScalar.zero)
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
+                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
+                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
     }
 
     // TODO: move it away, this is useful only for offchain code
@@ -422,9 +422,15 @@ object TreasuryValidator extends Validator:
 
 end TreasuryValidator
 
+object TreasuryScript {
+    val sir = Compiler.compile(TreasuryValidator.validate)
+    val uplc = sir.toUplcOptimized(true)
+}
+
 @main
 def main(args: String): Unit = {
     println("Hi!")
+    println(TreasuryScript.sir.showHighlighted)
     // val ret = Scalar().inverse() // works
     // println(ret.to_bendian.toString())
 
