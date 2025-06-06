@@ -18,14 +18,15 @@ import scalus.builtin.{
     FromData,
     ToData
 }
-import scalus.ledger.api.v1.Value.{+, -}
+//import scalus.ledger.api.v1.Value.{+, -}
+import scalus.ledger.api.v1.Value.-
 import scalus.ledger.api.v2.OutputDatum as TOutputDatum
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
 import scalus.ledger.api.v3.TxOutRef.given
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{Option, Validator, orFail, *, given}
-import scalus.{Compile, Ignore, |>}
+import scalus.{Compile, Compiler, Ignore, |>, toUplcOptimized, showHighlighted}
 import supranational.blst.Scalar
 
 import java.math.BigInteger
@@ -175,7 +176,9 @@ object TreasuryValidator extends Validator:
                     .resolved
 
                 // Total output
-                val treasuryOutputExpected = voteInput.value + treasuryInput.value
+                // + stopped working after adding + from Scalar
+                // val treasuryOutputExpected = voteInput.value + treasuryInput.value
+                val treasuryOutputExpected = Value.plus(voteInput.value, treasuryInput.value)
 
                 // The only treasury output
                 val treasuryOutput = tx.outputs
@@ -250,10 +253,10 @@ object TreasuryValidator extends Validator:
                               treasuryBeaconPrefix
                             )
                         ) match
-                            case List.Cons((tokenName, amount), tail) =>
-                                require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
-                                tokenName
-                            case _ => fail(BeaconTokenFailure)
+                        case List.Cons((tokenName, amount), tail) =>
+                            require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
+                            tokenName
+                        case _ => fail(BeaconTokenFailure)
 
                 // The beacon token should be preserved
                 // By contract, we require the treasure utxo is always the head, and the tail is always withdrawals
@@ -307,7 +310,8 @@ object TreasuryValidator extends Validator:
                 val withdrawnValue =
                     tx.outputs.tail.foldLeft(Value.zero)((acc, o) => Value.plus(acc, o.value))
                 val valueIsPreserved =
-                    treasuryInput.value === (treasuryOutput.value + withdrawnValue)
+                    // treasuryInput.value === (treasuryOutput.value + withdrawnValue)
+                    treasuryInput.value === (Value.plus(treasuryOutput.value, withdrawnValue))
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
             case Deinit =>
