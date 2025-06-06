@@ -1,5 +1,7 @@
 package hydrozoa.l1.rulebased.onchain
 
+import hydrozoa.HydrozoaNode
+import hydrozoa.l1.multisig.onchain.treasuryBeaconPrefix
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
@@ -145,7 +147,7 @@ object TreasuryValidator extends Validator:
                     case _ => false
 
             // Negate value, useful for burning operations
-            private def unary_- :Value = Value.zero - self
+            private def unary_- : Value = Value.zero - self
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
@@ -241,11 +243,17 @@ object TreasuryValidator extends Validator:
                     treasuryInput.value
                         .get(headMp)
                         .getOrFail("Beacon token was not found")
-                        .toList match
-                        case List.Cons((tokenName, amount), tail) =>
-                            require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
-                            tokenName
-                        case _ => fail(BeaconTokenFailure)
+                        .toList
+                        .filter((tn, _) =>
+                            // TODO: can be done in a more efficient manner with no ues of ByteString
+                            ByteString.fromArray(tn.bytes.take(4)) == ByteString.fromArray(
+                              treasuryBeaconPrefix
+                            )
+                        ) match
+                            case List.Cons((tokenName, amount), tail) =>
+                                require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
+                                tokenName
+                            case _ => fail(BeaconTokenFailure)
 
                 // The beacon token should be preserved
                 // By contract, we require the treasure utxo is always the head, and the tail is always withdrawals
