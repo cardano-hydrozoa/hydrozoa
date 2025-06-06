@@ -2,7 +2,7 @@ package hydrozoa.l1.rulebased.onchain.scalar
 
 import scalus.builtin.Builtins.{byteStringToInteger, integerToByteString}
 import scalus.builtin.ByteString
-import scalus.prelude.Option
+import scalus.prelude.{Option, require}
 import scalus.prelude.Option.{None, Some}
 import scalus.{Compile, Ignore}
 
@@ -29,12 +29,19 @@ object Scalar:
         if n >= 0 && n < fieldPrime then Some(new Scalar(n))
         else None
 
+    def applyUnsafe(n: BigInt): Scalar =
+        require(0 <= n && n < fieldPrime, "value not in the field")
+        new Scalar(n)
+
     // TODO: Why doesn't it work?
     inline def apply(inline s: String): Option[Scalar] = Scalar(BigInt(s))
 
     // Conversions
     def fromByteStringBigEndian(bytes: ByteString): Option[Scalar] =
         Scalar(byteStringToInteger(true, bytes))
+
+    def fromByteStringBigEndianUnsafe(bytes: ByteString): Scalar =
+        Scalar.applyUnsafe(byteStringToInteger(true, bytes))
 
     def fromByteStringLittleEndian(bytes: ByteString): Option[Scalar] =
         Scalar(byteStringToInteger(false, bytes))
