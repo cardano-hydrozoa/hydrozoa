@@ -32,11 +32,15 @@ class TreasuryValidatorTest extends FunSuite:
 
         // Subset
         val subset = List(
-          Scalar(BigInt("22401154959170154123134540742828377934364533580409315286338474307961")).get
+          Scalar("22401154959170154123134540742828377934364533580409315286338474307961").get
         )
 
         // Proof
-        val proof = BLS12_381_G2_Element(ByteString.fromHex("809875352e4cd02184ecd07429198ca87364ca0c4bf895482fb8364662bce1945d33c599b47b7d2b34724f45fa17fab8141afa380d192a9134d7f1238e17475af8f6c862c1eecf9666bb5e00b17461ad33112ef2f8dd9580c178b36300cb6dd8"))
-        
+        val proof = BLS12_381_G2_Element(
+          ByteString.fromHex(
+            "809875352e4cd02184ecd07429198ca87364ca0c4bf895482fb8364662bce1945d33c599b47b7d2b34724f45fa17fab8141afa380d192a9134d7f1238e17475af8f6c862c1eecf9666bb5e00b17461ad33112ef2f8dd9580c178b36300cb6dd8"
+          )
+        )
+
         assertEquals(TreasuryValidator.checkMembership(crs_g1, accumulator, subset, proof), true)
     }

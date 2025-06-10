@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.10.1"
+val scalusVersion = "0.10.1+36-979f1eb3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -23,6 +23,8 @@ addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
 // Main application
 lazy val core = (project in file("."))
     .settings(
+      resolvers +=
+          "Sonatype OSS01 Snapshots" at "https://s01.oss.sonatype.org/content/repositories/snapshots",
       resolvers +=
           "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
@@ -77,17 +79,17 @@ lazy val integration = (project in file("integration"))
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test
-      ),
+      )
     )
 
 // Demo workload
 lazy val demo = (project in file("demo"))
     .dependsOn(core) // your current subproject
     .settings(
-        Compile / mainClass := Some("hydrozoa.demo.Workload"),
-        publish / skip := true,
-        libraryDependencies ++= Seq(
-            "org.scalacheck" %% "scalacheck" % "1.18.1",
-            "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25"
-        )
+      Compile / mainClass := Some("hydrozoa.demo.Workload"),
+      publish / skip := true,
+      libraryDependencies ++= Seq(
+        "org.scalacheck" %% "scalacheck" % "1.18.1",
+        "com.softwaremill.sttp.tapir" %% "tapir-sttp-client4" % "1.11.25"
+      )
     )

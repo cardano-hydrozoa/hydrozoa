@@ -4,9 +4,8 @@ import scalus.builtin.Builtins.{byteStringToInteger, integerToByteString}
 import scalus.builtin.ByteString
 import scalus.prelude.{Option, require}
 import scalus.prelude.Option.{None, Some}
-import scalus.{Compile, Ignore}
+import scalus.Compile
 
-import java.math.BigInteger
 import scala.annotation.tailrec
 
 case class Scalar(private val unScalar: BigInt)
@@ -20,9 +19,9 @@ object Scalar:
     )
 
     // Constants
-    def zero: Scalar = new Scalar(BigInt(0))
+    def zero: Scalar = new Scalar(0)
 
-    def one: Scalar = new Scalar(BigInt(1))
+    def one: Scalar = new Scalar(1)
 
     // Construction
     def apply(n: BigInt): Option[Scalar] =
@@ -97,7 +96,7 @@ object Scalar:
             if k < 0 then zero
             else go(self, k)
 
-        def neg: Scalar =
+        def unary_- : Scalar =
             if self.unScalar == BigInt(0) then self
             else new Scalar(fieldPrime - self.unScalar)
 

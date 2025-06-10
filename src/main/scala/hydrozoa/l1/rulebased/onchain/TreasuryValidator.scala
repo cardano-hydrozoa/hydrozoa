@@ -1,6 +1,5 @@
 package hydrozoa.l1.rulebased.onchain
 
-import hydrozoa.HydrozoaNode
 import hydrozoa.l1.multisig.onchain.treasuryBeaconPrefix
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
@@ -8,7 +7,9 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVo
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import scalus.*
 import scalus.builtin.Builtins.*
+import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{
     BLS12_381_G1_Element,
@@ -18,15 +19,14 @@ import scalus.builtin.{
     FromData,
     ToData
 }
-//import scalus.ledger.api.v1.Value.{+, -}
-import scalus.ledger.api.v1.Value.-
+import scalus.ledger.api.v1.Value.{+, -}
 import scalus.ledger.api.v2.OutputDatum as TOutputDatum
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
-import scalus.ledger.api.v3.TxOutRef.given
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{Option, Validator, orFail, *, given}
-import scalus.{Compile, Compiler, Ignore, |>, toUplcOptimized, showHighlighted}
+import scalus.prelude.crypto.bls12_381.G1
+import scalus.prelude.{*, given}
+import scalus.utils.Hex
 import supranational.blst.Scalar
 
 import java.math.BigInteger
@@ -120,6 +120,8 @@ object TreasuryValidator extends Validator:
     private inline val TreasuryInputOutputParams =
         "params in treasuryInput and treasuryOutput must match"
 
+    private inline def cip67beaconPrefix = hex"01349900"
+
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
         // Parse datum
@@ -134,17 +136,19 @@ object TreasuryValidator extends Validator:
                 tn: TokenName,
                 amount: BigInt
             ): Boolean =
-                self.toList.filter(!_._1.isEmpty) match
-                    case List.Cons(asset, tail) =>
-                        if tail.isEmpty then
-                            if asset._1 == cs then
-                                asset._2.toList match
-                                    case List.Cons(token, tail) =>
-                                        if tail.isEmpty then token._1 == tn && token._2 == amount
-                                        else false
-                                    case _ => false
-                            else false
-                        else false
+                self.toList match
+                    case List.Cons(_, tokens) =>
+                        tokens match
+                            case List.Cons((cs_, assets), tail) =>
+                                if tail.isEmpty then
+                                    if cs_ == cs then
+                                        assets.toList match
+                                            case List.Cons((tn_, amount_), tail) =>
+                                                tail.isEmpty && tn_ == tn && amount_ == amount
+                                            case _ => false
+                                    else false
+                                else false
+                            case _ => false
                     case _ => false
 
             // Negate value, useful for burning operations
@@ -176,9 +180,7 @@ object TreasuryValidator extends Validator:
                     .resolved
 
                 // Total output
-                // + stopped working after adding + from Scalar
-                // val treasuryOutputExpected = voteInput.value + treasuryInput.value
-                val treasuryOutputExpected = Value.plus(voteInput.value, treasuryInput.value)
+                val treasuryOutputExpected = voteInput.value + treasuryInput.value
 
                 // The only treasury output
                 val treasuryOutput = tx.outputs
@@ -247,11 +249,8 @@ object TreasuryValidator extends Validator:
                         .get(headMp)
                         .getOrFail("Beacon token was not found")
                         .toList
-                        .filter((tn, _) =>
-                            // TODO: can be done in a more efficient manner with no ues of ByteString
-                            ByteString.fromArray(tn.bytes.take(4)) == ByteString.fromArray(
-                              treasuryBeaconPrefix
-                            )
+                        // TODO: shold be tn.take(4)
+                        .filter((tn, _) => tn == cip67beaconPrefix
                         ) match
                         case List.Cons((tokenName, amount), tail) =>
                             require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
@@ -310,8 +309,7 @@ object TreasuryValidator extends Validator:
                 val withdrawnValue =
                     tx.outputs.tail.foldLeft(Value.zero)((acc, o) => Value.plus(acc, o.value))
                 val valueIsPreserved =
-                    // treasuryInput.value === (treasuryOutput.value + withdrawnValue)
-                    treasuryInput.value === (Value.plus(treasuryOutput.value, withdrawnValue))
+                    treasuryInput.value === (treasuryOutput.value + withdrawnValue)
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
             case Deinit =>
@@ -381,13 +379,11 @@ object TreasuryValidator extends Validator:
         setup: List[BLS12_381_G1_Element],
         subset: List[ScalusScalar]
     ): BLS12_381_G1_Element = {
-        val g1Zero = bls12_381_G1_uncompress(bls12_381_G1_compressed_zero)
-
         val subsetInG1 =
             List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
                 bls12_381_G1_scalarMul(sb.toInt, st)
 
-        subsetInG1.foldLeft(g1Zero): (a, b) =>
+        subsetInG1.foldLeft(G1.zero): (a, b) =>
             bls12_381_G1_add(a, b)
     }
 
@@ -415,15 +411,6 @@ object TreasuryValidator extends Validator:
         bls12_381_finalVerify(lhs, rhs)
     }
 
-//    // Builders and so on
-//    @Ignore
-//    val script: Program = compile(TreasuryValidator.validate)
-//        .toUplc(generateErrorTraces = true)
-//        .plutusV3
-//
-//    @Ignore
-//    def showSir(): Unit = println(compile(TreasuryValidator.validate).showHighlighted)
-
 end TreasuryValidator
 
 object TreasuryScript {
@@ -433,8 +420,9 @@ object TreasuryScript {
 
 @main
 def main(args: String): Unit = {
-    println("Hi!")
+    // println(Hex.bytesToHex(treasuryBeaconPrefix))
     println(TreasuryScript.sir.showHighlighted)
+
     // val ret = Scalar().inverse() // works
     // println(ret.to_bendian.toString())
 

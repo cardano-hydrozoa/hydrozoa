@@ -6,9 +6,10 @@ import scalus.builtin.{ByteString, FromData, ToData}
 import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
 import scalus.prelude.Validator
 import scalus.uplc.Program
-import scalus.{Ignore, plutusV3, toUplc}
+import scalus.{Compile, Ignore, plutusV3, toUplc}
 import scalus.prelude.Option
 
+@Compile
 object DisputeResolutionValidator extends Validator:
 
     // EdDSA / ed25519 signature

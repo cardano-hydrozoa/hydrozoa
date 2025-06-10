@@ -12,10 +12,15 @@ import scalus.prelude.Option
 import scalus.prelude.Option.{None, Some}
 
 class ScalarTest extends FunSuite:
+
+    private inline def s834 = new Scalar(834884848)
+
     test("apply") {
-        assertEquals(Scalar(BigInt(1)), Some(new Scalar(1)))
+        assertEquals(Scalar(1), Some(new Scalar(1)))
         assertEquals(Scalar(Scalar.fieldPrime), None)
-        assertEquals(Scalar(BigInt(834884848)), Some(new Scalar(834884848)))
+        assertEquals(Scalar(834884848), Some(s834))
+        assertEquals(Scalar(BigInt(834884848)), Some(s834))
+        assertEquals(Scalar("834884848"), Some(s834))
     }
 
     test("fromByteStringBigEndian") {
@@ -33,41 +38,40 @@ class ScalarTest extends FunSuite:
     }
 
     test("add") {
-        val s = new Scalar(834884848)
-        assertEquals(s + s, new Scalar(1669769696))
+        assertEquals(s834 + s834, new Scalar(1669769696))
         assertEquals(new Scalar(fieldPrime - 1) + new Scalar(1), Scalar.zero)
         assertEquals(new Scalar(3) + new Scalar(fieldPrime), new Scalar(3))
     }
 
     test("mul") {
-        val s = new Scalar(834884848)
-        assertEquals(s * s, new Scalar(BigInt("697032709419983104")))
-        assertEquals(Scalar.zero * new Scalar(834884848), Scalar.zero)
+        val s = s834
+        assertEquals(s * s, Scalar("697032709419983104").get)
+        assertEquals(Scalar.zero * s834, Scalar.zero)
         assertEquals(
           new Scalar(fieldPrime - 1) * new Scalar(2),
-          new Scalar(
-            BigInt("52435875175126190479447740508185965837690552500527637822603658699938581184511")
-          )
+          Scalar(
+            "52435875175126190479447740508185965837690552500527637822603658699938581184511"
+          ).get
         )
     }
 
     test("scale") {
-        val s = new Scalar(834884848)
+        val s = s834
         assertEquals(s.scale(-1), Scalar.zero)
         assertEquals(s.scale(0), Scalar.one)
         assertEquals(s.scale(1), s)
-        assertEquals(s.scale(2), new Scalar(BigInt("697032709419983104")))
-        assertEquals(s.scale(3), new Scalar(BigInt("581942047655130761945608192")))
+        assertEquals(s.scale(2), Scalar("697032709419983104").get)
+        assertEquals(s.scale(3), Scalar("581942047655130761945608192").get)
         assertEquals(
           new Scalar(fieldPrime - 4).scale(200),
-          new Scalar(
-            BigInt("12843927705572658539565969578937286576443167978938369866871449552629978143484")
-          )
+          Scalar(
+            "12843927705572658539565969578937286576443167978938369866871449552629978143484"
+          ).get
         )
     }
 
     test("scale2") {
-        val s = new Scalar(834884848)
+        val s = s834
         assertEquals(s.scale2(-1), Scalar.zero)
         assertEquals(s.scale2(0), s)
         assertEquals(s.scale2(1), s.scale(2))
@@ -77,48 +81,36 @@ class ScalarTest extends FunSuite:
     }
 
     test("div") {
-        val s = new Scalar(834884848)
+        val s = s834
         assertEquals(s / s, Some(Scalar.one))
         assertEquals(s / Scalar.zero, None)
         assertEquals(
           new Scalar(fieldPrime - 1) / new Scalar(2),
-          Some(
-            new Scalar(
-              BigInt(
-                "26217937587563095239723870254092982918845276250263818911301829349969290592256"
-              )
-            )
-          )
+          Scalar("26217937587563095239723870254092982918845276250263818911301829349969290592256")
         )
     }
 
     test("neg") {
         assertEquals(
-          new Scalar(834884848).neg,
-          new Scalar(
-            BigInt("52435875175126190479447740508185965837690552500527637822603658699937746299665")
-          )
+          -s834,
+          Scalar(
+            "52435875175126190479447740508185965837690552500527637822603658699937746299665"
+          ).get
         )
-        assertEquals(Scalar.zero.neg, Scalar.zero)
-        assertEquals(Scalar.one.neg, new Scalar(fieldPrime - 1))
+        assertEquals(-Scalar.zero, Scalar.zero)
+        assertEquals(-Scalar.one, new Scalar(fieldPrime - 1))
     }
 
     test("recip") {
         assertEquals(
-          new Scalar(834884848).recip,
-          Some(
-            new Scalar(
-              BigInt(
-                "35891248691642227249400403463796410930702563777316955162085759263735363466421"
-              )
-            )
-          )
+          s834.recip,
+          Scalar("35891248691642227249400403463796410930702563777316955162085759263735363466421")
         )
         assertEquals(Scalar.zero.recip, None)
     }
 
     test("sub") {
-        val s = new Scalar(834884848)
+        val s = s834
         assertEquals(s - s, Scalar.zero)
         assertEquals(s - new Scalar(834884847), Scalar.one)
         assertEquals(Scalar.zero - new Scalar(fieldPrime), Scalar.zero)
