@@ -35,13 +35,17 @@ import java.math.BigInteger
 object TreasuryValidator extends Validator:
 
     // TODO: we don't know exactly how to handle this
+    // most likely we want to create an utxo with the setup
+    // upon switching into rule-based mode so it will be
+    // a reference utxo with tau_token in it (or we can
+    // store utxo in the datum).
     val setup: List[BLS12_381_G1_Element] = List.empty
 
     // EdDSA / ed25519 Cardano verification key
     private type VerificationKey = ByteString
 
     // The result of `bls12_381_G2_compress` function
-    private type BLSProof = ByteString
+    private type MembershipProof = ByteString
 
     // Datum
     enum TreasuryDatum:
@@ -66,7 +70,7 @@ object TreasuryValidator extends Validator:
 
     case class ResolvedDatum(
         headMp: CurrencySymbol,
-        utxosActive: BLSProof,
+        utxosActive: MembershipProof,
         version: (BigInt, BigInt),
         params: L2ConsensusParamsH32
     )
@@ -86,11 +90,10 @@ object TreasuryValidator extends Validator:
     case class WithdrawRedeemer(
         utxoIds: List[TxOutRef],
         // membership proof for utxoIds and the updated accumulator at the same time
-        proof: BLSProof
+        proof: MembershipProof
     )
 
     given FromData[WithdrawRedeemer] = FromData.derived
-
     given ToData[WithdrawRedeemer] = ToData.derived
 
     private inline val DatumIsMissing = "Treasury datum should be present"
@@ -128,31 +131,6 @@ object TreasuryValidator extends Validator:
         val treasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
             case None    => fail(DatumIsMissing)
-
-        extension (self: Value)
-            // Check - contains only specified amount of same tokens and no other tokens
-            private def containsExactlyOneAsset(
-                cs: CurrencySymbol,
-                tn: TokenName,
-                amount: BigInt
-            ): Boolean =
-                self.toList match
-                    case List.Cons(_, tokens) =>
-                        tokens match
-                            case List.Cons((cs_, assets), tail) =>
-                                if tail.isEmpty then
-                                    if cs_ == cs then
-                                        assets.toList match
-                                            case List.Cons((tn_, amount_), tail) =>
-                                                tail.isEmpty && tn_ == tn && amount_ == amount
-                                            case _ => false
-                                    else false
-                                else false
-                            case _ => false
-                    case _ => false
-
-            // Negate value, useful for burning operations
-            private def unary_- : Value = Value.zero - self
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
@@ -208,7 +186,8 @@ object TreasuryValidator extends Validator:
                     case _                                     => fail(VoteInputDatumShouldPresent)
 
                 voteDatum.voteStatus match
-                    case NoVote            => fail("impossible")
+                    // Unreachable
+                    case NoVote            => fail()
                     case Vote(voteDetails) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
@@ -227,6 +206,7 @@ object TreasuryValidator extends Validator:
                   unresolvedDatum.headMp === treasuryOutputDatum.headMp,
                   TreasuryInputOutputHeadMp
                 )
+
                 require(
                   unresolvedDatum.params === treasuryOutputDatum.params,
                   TreasuryInputOutputParams
@@ -249,7 +229,7 @@ object TreasuryValidator extends Validator:
                         .get(headMp)
                         .getOrFail("Beacon token was not found")
                         .toList
-                        // TODO: shold be tn.take(4)
+                        // TODO: should be something like tn.take(4)
                         .filter((tn, _) => tn == cip67beaconPrefix
                         ) match
                         case List.Cons((tokenName, amount), tail) =>
@@ -410,6 +390,31 @@ object TreasuryValidator extends Validator:
         val rhs = bls12_381_millerLoop(getG1Commitment(setup, subset), proof)
         bls12_381_finalVerify(lhs, rhs)
     }
+
+    extension (self: Value)
+        // Check - contains only specified amount of same tokens and no other tokens
+        private def containsExactlyOneAsset(
+                                               cs: CurrencySymbol,
+                                               tn: TokenName,
+                                               amount: BigInt
+                                           ): Boolean =
+            self.toList match
+                case List.Cons(_, tokens) =>
+                    tokens match
+                        case List.Cons((cs_, assets), tail) =>
+                            if tail.isEmpty then
+                                if cs_ == cs then
+                                    assets.toList match
+                                        case List.Cons((tn_, amount_), tail) =>
+                                            tail.isEmpty && tn_ == tn && amount_ == amount
+                                        case _ => false
+                                else false
+                            else false
+                        case _ => false
+                case _ => false
+
+        // Negate value, useful for burning operations
+        private def unary_- : Value = Value.zero - self
 
 end TreasuryValidator
 
