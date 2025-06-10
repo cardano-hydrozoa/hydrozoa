@@ -1,7 +1,7 @@
 package hydrozoa.l1.rulebased.onchain
 
-import hydrozoa.l1.multisig.onchain.treasuryBeaconPrefix
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
+import hydrozoa.l1.rulebased.onchain.value.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
@@ -230,8 +230,7 @@ object TreasuryValidator extends Validator:
                         .getOrFail("Beacon token was not found")
                         .toList
                         // TODO: should be something like tn.take(4)
-                        .filter((tn, _) => tn == cip67beaconPrefix
-                        ) match
+                        .filter((tn, _) => tn == cip67beaconPrefix) match
                         case List.Cons((tokenName, amount), tail) =>
                             require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
                             tokenName
@@ -391,31 +390,6 @@ object TreasuryValidator extends Validator:
         bls12_381_finalVerify(lhs, rhs)
     }
 
-    extension (self: Value)
-        // Check - contains only specified amount of same tokens and no other tokens
-        private def containsExactlyOneAsset(
-                                               cs: CurrencySymbol,
-                                               tn: TokenName,
-                                               amount: BigInt
-                                           ): Boolean =
-            self.toList match
-                case List.Cons(_, tokens) =>
-                    tokens match
-                        case List.Cons((cs_, assets), tail) =>
-                            if tail.isEmpty then
-                                if cs_ == cs then
-                                    assets.toList match
-                                        case List.Cons((tn_, amount_), tail) =>
-                                            tail.isEmpty && tn_ == tn && amount_ == amount
-                                        case _ => false
-                                else false
-                            else false
-                        case _ => false
-                case _ => false
-
-        // Negate value, useful for burning operations
-        private def unary_- : Value = Value.zero - self
-
 end TreasuryValidator
 
 object TreasuryScript {
@@ -424,50 +398,5 @@ object TreasuryScript {
 }
 
 @main
-def main(args: String): Unit = {
-    // println(Hex.bytesToHex(treasuryBeaconPrefix))
+def main(args: String): Unit =
     println(TreasuryScript.sir.showHighlighted)
-
-    // val ret = Scalar().inverse() // works
-    // println(ret.to_bendian.toString())
-
-    //    val ret = Scalar(
-    //      BigInteger("1")
-    //    ).mul(
-    //      Scalar(BigInteger("0"))
-    //    )
-    //    println(BigInteger(ret.to_bendian))
-
-    //    val ret2 = TreasuryValidator.getFinalPoly(
-    //      List(
-    //        BigInt("2"),
-    //        BigInt("3")
-    //      )
-    //    )
-    //    println(ret2.map(s => BigInteger(s.to_bendian)))
-
-    //    val ret3 = TreasuryValidator.getFinalPoly0(
-    //      List(
-    //        BigInt("2"),
-    //        BigInt("3")
-    //      )
-    //    )
-    //    println(ret3)
-
-    //    val ret2 = TreasuryValidator.getFinalPoly(
-    //      List(
-    //        BigInt("23028688090729445163723509241052290199566563106418427159558324016743"),
-    //        BigInt("11615207285513499188821867516815580552008598385639274683799580493893")
-    //      )
-    //    )
-    //    println(ret2.map(s => BigInteger(s.to_bendian)))
-
-    //    val ret3 = TreasuryValidator.getFinalPolyScalus(
-    //      List(
-    //        BigInt("23028688090729445163723509241052290199566563106418427159558324016743"),
-    //        BigInt("11615207285513499188821867516815580552008598385639274683799580493893")
-    //      ).map(ScalusScalar(_).get)
-    //    )
-    //    println(ret3)
-
-}
