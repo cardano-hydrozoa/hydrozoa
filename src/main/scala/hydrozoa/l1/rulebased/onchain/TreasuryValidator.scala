@@ -1,12 +1,12 @@
 package hydrozoa.l1.rulebased.onchain
 
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
-import hydrozoa.l1.rulebased.onchain.value.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.l1.rulebased.onchain.value.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -19,14 +19,13 @@ import scalus.builtin.{
     FromData,
     ToData
 }
-import scalus.ledger.api.v1.Value.{+, -}
+import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v2.OutputDatum as TOutputDatum
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.prelude.{*, given}
-import scalus.utils.Hex
 import supranational.blst.Scalar
 
 import java.math.BigInteger

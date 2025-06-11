@@ -3,35 +3,61 @@ package hydrozoa.l1.rulebased.onchain.value
 import scalus.Compile
 import scalus.ledger.api.v1.Value.{-, zero}
 import scalus.ledger.api.v3.{CurrencySymbol, TokenName, Value}
-import scalus.prelude.List
 import scalus.prelude.List.Cons
+import scalus.prelude.{List, fail, require}
 
 @Compile
 object ValueExtensions:
-
     extension (self: Value)
-        // Check - contains only specified amount of same tokens and no other tokens
+
+        /** Check - contains only specified amount of same tokens and no other tokens
+          * @param cs
+          * @param tn
+          * @param amount
+          * @return
+          */
         def containsExactlyOneAsset(
             cs: CurrencySymbol,
             tn: TokenName,
             amount: BigInt
         ): Boolean =
-            self.toList match
-                case List.Cons(_, tokens) =>
-                    tokens match
-                        case List.Cons((cs_, assets), tail) =>
-                            if tail.isEmpty then
-                                if cs_ == cs then
-                                    assets.toList match
-                                        case List.Cons((tn_, amount_), tail) =>
-                                            tail.isEmpty && tn_ == tn && amount_ == amount
-                                        case _ => false
-                                else false
-                            else false
-                        case _ => false
+            // Split away ada which always comes first
+            val List.Cons(_, tokens) = self.toList: @unchecked
+            tokens match
+                case List.Cons((cs_, names), otherSymbols) =>
+                    if otherSymbols.isEmpty then
+                        if cs_ == cs then
+                            names.toList match
+                                case List.Cons((tn_, amount_), otherNames) =>
+                                    otherNames.isEmpty && tn_ == tn && amount_ == amount
+                                case _ => false
+                        else false
+                    else false
                 case _ => false
 
-        def onlyNonAdaToken: (CurrencySymbol, TokenName) = ???
+        /** Returns the only non-ada asset, i.e. a unique token in the value or fails.
+          * @return
+          */
+        def onlyNonAdaAsset: (CurrencySymbol, TokenName, BigInt) =
+            // Split away ada which always comes first
+            val List.Cons(_, tokens) = self.toList: @unchecked
+
+            tokens match
+                case List.Cons((cs, names), otherSymbols) =>
+                    require(
+                      otherSymbols.isEmpty,
+                      "onlyNonAdaToken: found more than one currency symbol"
+                    )
+                    names.toList match
+                        case List.Cons((tokenName, amount), otherNames) =>
+                            require(
+                              otherNames.isEmpty,
+                              "onlyNonAdaToken: found more than one token name"
+                            )
+                            (cs, tokenName, amount)
+                        // TODO: is it reachable? can the inner Map[TokenName, BigInt] be empty?
+                        case List.Nil => fail("onlyNonAdaToken: malformed value")
+                case List.Nil => fail("onlyNonAdaToken: no non-ada assets in value")
 
         // Negate value, useful for burning operations
         def unary_- : Value = Value.zero - self
