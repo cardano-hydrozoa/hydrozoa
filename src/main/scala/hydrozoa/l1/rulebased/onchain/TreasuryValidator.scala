@@ -6,7 +6,7 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVo
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
-import hydrozoa.l1.rulebased.onchain.value.ValueExtensions.{containsExactlyOneAsset, unary_-}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -122,7 +122,7 @@ object TreasuryValidator extends Validator:
     private inline val TreasuryInputOutputParams =
         "params in treasuryInput and treasuryOutput must match"
 
-    private inline def cip67beaconPrefix = hex"01349900"
+    inline def cip67beaconPrefix = hex"01349900"
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =

@@ -1,14 +1,24 @@
-package hydrozoa.l1.rulebased.onchain.value
+package hydrozoa.l1.rulebased.onchain.lib
 
 import scalus.Compile
 import scalus.ledger.api.v1.Value.{-, zero}
 import scalus.ledger.api.v3.{CurrencySymbol, TokenName, Value}
 import scalus.prelude.List.Cons
-import scalus.prelude.{List, fail, require}
+import scalus.prelude.{AssocMap, List, fail, require, given}
 
 @Compile
 object ValueExtensions:
     extension (self: Value)
+
+        def containsCurrencySymbol(cs: CurrencySymbol): Boolean =
+            // Split away ada which always comes first
+            val List.Cons(_, tokens) = self.toList: @unchecked
+            tokens.map(_._1).contains(cs)
+
+        def tokensUnder(cs: CurrencySymbol): AssocMap[TokenName, BigInt] =
+            // Split away ada which always comes first
+            val List.Cons(_, tokens) = self.toList: @unchecked
+            tokens.find(_._1 == cs).map(_._2).getOrElse(AssocMap.empty)
 
         /** Check - contains only specified amount of same tokens and no other tokens
           * @param cs
