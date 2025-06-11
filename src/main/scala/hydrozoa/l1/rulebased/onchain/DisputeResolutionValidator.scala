@@ -335,16 +335,22 @@ object DisputeResolutionValidator extends Validator:
                     import VoteStatus.{Vote, NoVote}
                     a match {
                         case NoVote => b
-                        case Vote(ad) => b match {
-                            case NoVote => a
-                            case Vote(bd) => if ad.versionMinor > bd.versionMinor then a else b
-                        }
+                        case Vote(ad) =>
+                            b match {
+                                case NoVote   => a
+                                case Vote(bd) => if ad.versionMinor > bd.versionMinor then a else b
+                            }
                     }
 
                 // The voteStatus field of continuingOutput must match the highest voteStatus
                 // of continuingInput and removedInput
                 val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
-                require(continuingOutputDatum.voteStatus === maxVote(continuingDatum.voteStatus, removedDatum.voteStatus))
+                require(
+                  continuingOutputDatum.voteStatus === maxVote(
+                    continuingDatum.voteStatus,
+                    removedDatum.voteStatus
+                  )
+                )
 
                 // The link field of removedInput and continuingOutput must match.
                 require(continuingOutputDatum.link == removedDatum.link)
@@ -353,7 +359,37 @@ object DisputeResolutionValidator extends Validator:
                 require(continuingOutputDatum.key === removedDatum.key)
                 require(continuingOutputDatum.peer === removedDatum.peer)
 
-            case DisputeRedeemer.Resolve => fail()
+            case DisputeRedeemer.Resolve =>
+                val voteInput = tx.inputs.find(_.outRef === ownRef).get
+                val (headMp, disputeId, _) = voteInput.resolved.value.onlyNonAdaAsset
+
+                // Let treasury be a spent input that holds a head beacon token of headMp and CIP-67
+                // prefix 4937.
+                val treasuryInput = tx.inputs
+                    .find { i =>
+                        i.resolved.value.tokensUnder(headMp).toList match
+                            case List.Cons((tokenName, amount), none) =>
+                                // TODO: check prefix
+                                tokenName == cip67beaconPrefix
+                                && amount == BigInt(1)
+                                && none.isEmpty
+                            case _ => fail()
+                    }
+                    .getOrFail("TBD")
+
+                val treasuryDatum =
+                    treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
+                        case Unresolved(unresolvedDatum) => unresolvedDatum
+                        case _                           => fail()
+                    }
+
+                // headMp and disputeId must match the corresponding fields of the Unresolved datum
+                // in treasury.
+                require(treasuryDatum.headMp === headMp)
+                require(treasuryDatum.disputeId === disputeId)
+
+                //
+                fail()
 
 end DisputeResolutionValidator
 
