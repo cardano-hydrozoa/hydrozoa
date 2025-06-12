@@ -267,8 +267,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
                     .find { i =>
                         i.resolved.value.get(headMp).getOrElse(AssocMap.empty).toList match
                             case List.Cons((tokenName, amount), none) =>
-                                // TODO: check prefix
-                                tokenName == cip67BeaconTokenPrefix
+                                tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
                             case _ => fail()
