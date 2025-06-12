@@ -5,11 +5,7 @@ import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
-import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
-    containsCurrencySymbol,
-    containsExactlyOneAsset,
-    onlyNonAdaAsset
-}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, onlyNonAdaAsset}
 import hydrozoa.l2.block.BlockTypeL2
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
@@ -18,19 +14,16 @@ import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v1.Credential.ScriptCredential
 import scalus.ledger.api.v1.IntervalBoundType.Finite
-import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.ledger.api.v3.ScriptPurpose.Rewarding
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{
-    !==,
     ===,
     AssocMap,
     Eq,
     List,
     Option,
     ParameterizedValidator,
-    Validator,
     fail,
     require,
     given
@@ -64,9 +57,13 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
         a match
             case VoteStatus.NoVote =>
                 b match
-                    case VoteStatus.NoVote => true
-                    case _                 => false
-            case VoteStatus.Vote(_) => false // TODO: fix
+                    case VoteStatus.NoVote  => true
+                    case VoteStatus.Vote(_) => false
+            case VoteStatus.Vote(as) =>
+                a match {
+                    case VoteStatus.NoVote   => false
+                    case VoteStatus.Vote(bs) => as === bs
+                }
 
     given FromData[VoteStatus] = FromData.derived
     given ToData[VoteStatus] = ToData.derived
@@ -76,12 +73,15 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
         versionMinor: BigInt
     )
 
+    given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
+        a.utxosActive == b.utxosActive && a.versionMinor == b.versionMinor
+
     given FromData[VoteDetails] = FromData.derived
     given ToData[VoteDetails] = ToData.derived
 
     // Redeemer
     enum DisputeRedeemer:
-        case Vote(voteRedeemer: Option[MinorBlockL1Effect])
+        case Vote(voteRedeemer: MinorBlockL1Effect)
         case Tally
         case Resolve
 
@@ -122,11 +122,38 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
     private inline val VoteAlreadyCast = "Vote is already has been cast"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
-    // private inline val OneVoteTokenInput = "Only one vote token should be in vote utxo input"
+    private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is reuired"
+    private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
+    private inline val VoteTreasuryDatum = "Treasury datum is missing"
+    private inline val VoteTreasuryDatumHeadMp = "Treasury datum headMp mismatch"
+    private inline val VoteTreasuryDatumDisputeId = "Treasury datum disputeId mismatch"
+    private inline val VoteTimeValidityCheck =
+        "The transaction validity upper bound must not exceed the deadlineVoting"
+    private inline val VoteMultisigCheck =
+        "Redeemer should contain all valid signatures for the block voted"
+    private inline val VoteMajorVersionCheck =
+        "The versionMajor field must match between treasury and voteRedeemer"
+    private inline val VoteVoteOutputExists =
+        "There should exist one continuing vote output with the same set of tokens"
+    private inline val VoteOutputDatumCheck =
+        "voteStatus field of voteOutput must be a correct Vote"
+    private inline val VoteOutputDatumAdditionalChecks =
+        "other fields of voteOutput must match voteInput"
 
     // Tally redeemer
+    private inline val TallyOnlyOne = "One (and only one) tallying per tx is required"
+    private inline val TallyRedeemerMentionsSpentUtxo =
+        "Tally redeemer should mention spent utxop in one of the fileds"
 
     // Resolve redeemer
+    private inline val ResolveTreasurySpent =
+        "Treasury that holds head beacon must be spent"
+    private inline val ResolveDatumIsUnresolved =
+        "Treasury input datum should be unresolved"
+    private inline val ResolveTreasuryVoteMatch =
+        "Treasury datum should match vote datum on (headMp, disputeId)"
+    //    private inline val Resolve
+    //    private inline val Resolve
 
     // Entry point
     override def spend(
@@ -138,8 +165,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
             case None    => fail(DatumIsMissing)
 
         redeemer.to[DisputeRedeemer] match
-            case DisputeRedeemer.Vote(mbVoteRedeemer) =>
-                // Own input
+            case DisputeRedeemer.Vote(voteRedeemer) =>
                 // There must not be any other spent input matching voteOutref on transaction hash
                 val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
                     case List.Cons(voteOutref, tail) =>
@@ -153,7 +179,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
                 // Check signature
                 require(voteDatum.peer.forall(tx.signatories.contains(_)), VoteMustBeSignedByPeer)
 
-                // Let(headMp, disputeId) be the minting policy and asset name of the only non -ADA
+                // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
                 val voteInput = voteOutref.resolved
                 val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
@@ -162,81 +188,86 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
                 // Let treasury be the only reference input matching voteOutref on tx hash.
                 val treasuryReference = tx.referenceInputs match {
                     case List.Cons(input, otherInputs) =>
-                        require(otherInputs.isEmpty)
-                        require(input.outRef.id === voteOutref.outRef.id)
+                        require(
+                          otherInputs.isEmpty && input.outRef.id === voteOutref.outRef.id,
+                          VoteOneRefInputTreasury
+                        )
                         input
-                    case List.Nil => fail()
+                    case List.Nil => fail(VoteOneRefInputTreasury)
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
                 treasuryReference.resolved.value.get(headMp).getOrElse(AssocMap.empty).toList match
                     case List.Cons((tokenName, amount), none) =>
-                        require(none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix)
-                    case _ => fail()
+                        require(
+                          none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
+                          VoteTreasuryBeacon
+                        )
+                    case _ => fail(VoteTreasuryBeacon)
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
                 val treasuryDatum =
                     treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail()
+                        case _                           => fail(VoteTreasuryDatum)
                     }
-                require(treasuryDatum.headMp === headMp)
-                require(treasuryDatum.disputeId === disputeId)
+                require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
+                require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
 
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
                 tx.validRange.to.boundType match {
-                    case Finite(toTime) => require(toTime <= treasuryDatum.deadlineVoting)
-                    case _              => fail()
+                    case Finite(toTime) =>
+                        require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
+                    case _ => fail(VoteTimeValidityCheck)
                 }
 
                 // The multisig field of voteRedeemer must have signatures of the blockHeader
                 // field of voteRedeemer for all the public keys in the peers field of treasury.
-                mbVoteRedeemer match
-                    case Some(voteRedeemer) =>
-                        val msg = voteRedeemer.blockHeader.toData |> serialiseData
-                        require(treasuryDatum.peers.length == voteRedeemer.multisig.length)
-                        List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
-                            require(verifyEd25519Signature(vk, msg, sig))
-                        )
-                        // The versionMajor field must match between treasury and voteRedeemer.
-                        require(voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor)
-                    case None => ()
+                val msg = voteRedeemer.blockHeader.toData |> serialiseData
+                require(
+                  treasuryDatum.peers.length == voteRedeemer.multisig.length,
+                  VoteMultisigCheck
+                )
+                List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                    require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
+                )
+                // The versionMajor field must match between treasury and voteRedeemer.
+                require(
+                  voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor,
+                  VoteMajorVersionCheck
+                )
 
+                // Vote output
                 val voteOutput = tx.outputs.find(o =>
                     o.value.containsExactlyOneAsset(headMp, disputeId, voteTokenAmount)
                 ) match
                     case Some(e) => e
-                    case None    => fail()
+                    case None    => fail(VoteVoteOutputExists)
 
-                require(voteOutput.address === voteInput.address)
+                require(voteOutput.address === voteInput.address, VoteVoteOutputExists)
 
                 val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
 
-                // If voteRedeemer is provided, the voteStatus field of voteOutput must be a Vote
-                // matching voteRedeemer on the utxosActive and versionMinor fields.
-                mbVoteRedeemer match
-                    case Some(voteRedeemer) =>
-                        voteOutputDatum.voteStatus match {
-                            case VoteStatus.Vote(voteDetails) =>
-                                require(
-                                  voteDetails.versionMinor == voteRedeemer.blockHeader.versionMinor
-                                )
-                                require(
-                                  voteDetails.utxosActive == voteRedeemer.blockHeader.utxosActive
-                                )
-                            case _ => fail()
-                        }
-                    // TODO: Otherwise, it must be Abstain.
-                    case None =>
-                        voteOutputDatum.voteStatus match
-                            case VoteStatus.Vote(voteDetails) => fail()
-                            case _                            => ()
+                // voteStatus field of voteOutput must be a Vote matching voteRedeemer
+                // on the utxosActive and versionMinor fields.
+                voteOutputDatum.voteStatus match {
+                    case VoteStatus.Vote(voteDetails) =>
+                        require(
+                          voteDetails.versionMinor == voteRedeemer.blockHeader.versionMinor,
+                          VoteOutputDatumCheck
+                        )
+                        require(
+                          voteDetails.utxosActive == voteRedeemer.blockHeader.utxosActive,
+                          VoteOutputDatumCheck
+                        )
+                    case _ => fail(VoteOutputDatumCheck)
+                }
 
                 // All other fields of voteInput and voteOutput must match.
-                require(voteDatum.key === voteOutputDatum.key)
-                require(voteDatum.peer === voteOutputDatum.peer)
-                require(voteDatum.link === voteOutputDatum.link)
+                require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
+                require(voteDatum.peer === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
+                require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
 
             case DisputeRedeemer.Tally =>
                 // Delegate checks to the stake validator
@@ -249,13 +280,14 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
                     purpose === Rewarding(ScriptCredential(tallyValidator))
                 ) match
                     case List.Cons((_, redeemer), none) =>
-                        require(none.isEmpty)
+                        require(none.isEmpty, TallyOnlyOne)
                         val tallyRedeemer = redeemer.to[TallyRedeemer]
                         require(
                           tallyRedeemer.removedOutRef === ownRef
-                              || tallyRedeemer.continuingOutRef === ownRef
+                              || tallyRedeemer.continuingOutRef === ownRef,
+                          TallyRedeemerMentionsSpentUtxo
                         )
-                    case _ => fail()
+                    case _ => fail(TallyOnlyOne)
 
             case DisputeRedeemer.Resolve =>
                 val voteInput = tx.inputs.find(_.outRef === ownRef).get
@@ -270,23 +302,20 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
-                            case _ => fail()
+                            case _ => fail(ResolveTreasurySpent)
                     }
-                    .getOrFail("TBD")
+                    .getOrFail(ResolveTreasurySpent)
 
                 val treasuryDatum =
                     treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail()
+                        case _                           => fail(ResolveDatumIsUnresolved)
                     }
 
                 // headMp and disputeId must match the corresponding fields of the Unresolved datum
                 // in treasury.
-                require(treasuryDatum.headMp === headMp)
-                require(treasuryDatum.disputeId === disputeId)
-
-                //
-                fail()
+                require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
+                require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
 
 end DisputeResolutionValidator
 

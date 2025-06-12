@@ -27,9 +27,9 @@ object TallyingValidator extends Validator:
 
     private inline val VotingInputsNotFound =
         "Continuing and removed inputs not found"
-    private inline val VotingInputsDontMatch =
+    private inline val VotingInputsDoNotMatch =
         "Voting inputs must match on address and tokens"
-    private inline val KeyLinkFieldsDontMatch =
+    private inline val KeyLinkFieldsDoNotMatch =
         "Key and link fields in voting inputs must match"
     private inline val NoOtherInputs =
         "No other inputs are allowed"
@@ -75,13 +75,13 @@ object TallyingValidator extends Validator:
         }
 
         // continuingInput and removedInput must match on address
-        require(continuingInput.address === removedInput.address, VotingInputsDontMatch)
+        require(continuingInput.address === removedInput.address, VotingInputsDoNotMatch)
 
         // continuingInput and removedInput must have non-ADA tokens of only one asset
         // class, which must match between them
         val (contCs, contTn, contAmount) = continuingInput.value.onlyNonAdaAsset
         val (removedCs, removedTn, removedAmount) = continuingInput.value.onlyNonAdaAsset
-        require(contCs === removedCs && contTn === removedTn, VotingInputsDontMatch)
+        require(contCs === removedCs && contTn === removedTn, VotingInputsDoNotMatch)
 
         // The key field of removedInput must be greater than the key field and equal to the
         // link field of continuingInput.
@@ -89,7 +89,7 @@ object TallyingValidator extends Validator:
         val removedDatum = removedInput.inlineDatumOfType[VoteDatum]
         require(
           removedDatum.key > continuingDatum.key && removedDatum.key == continuingDatum.link,
-          KeyLinkFieldsDontMatch
+          KeyLinkFieldsDoNotMatch
         )
 
         // There must be no other spent inputs from the same address as continuingInput
@@ -111,6 +111,12 @@ object TallyingValidator extends Validator:
         // Verify the treasury reference input
 
         // TODO: prove myself that it's not needed otherwise indeed
+        // I think the reasoning here is that if one vote is Vote we've already checked
+        // all that in Vote redeemer before.
+        // It means we might want to revert voting tokens checks in vote utxos (that we removed
+        // since I argued we always check their match to treasury) or do this checks always
+        // (i think it would be easier).
+
         // If the voteStatus of either continuingInput or removedInput is NoVote,
         // all the following must be satisfied
         if (
@@ -130,7 +136,6 @@ object TallyingValidator extends Validator:
                 }
                 .getOrFail(TreasuryReferenceInputExists)
 
-            // TODO: duplicates a part of Vote redeemer in DisputeResolutionValidator
             // headMp and disputeId must match the corresponding fields of the Unresolved
             // datum in treasury
             val treasuryDatum =
@@ -141,7 +146,6 @@ object TallyingValidator extends Validator:
             require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
             require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
 
-            // TODO: duplicates a part of Vote redeemer in DisputeResolutionValidator
             // The transaction’s time -validity upper bound must not exceed the deadlineVoting
             // field of treasury.
             tx.validRange.to.boundType match {
