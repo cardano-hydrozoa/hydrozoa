@@ -5,8 +5,10 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
-import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
+import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
+import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -20,11 +22,10 @@ import scalus.builtin.{
     ToData
 }
 import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v2.OutputDatum as TOutputDatum
-import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
+import scalus.prelude.crypto.bls12_381.G1.scale
 import scalus.prelude.{*, given}
 import supranational.blst.Scalar
 
@@ -38,6 +39,7 @@ object TreasuryValidator extends Validator:
     // upon switching into rule-based mode so it will be
     // a reference utxo with tau_token in it (or we can
     // store utxo in the datum).
+    // Proposed prefix is 7828 (ptau on the phone dialpad)
     val setup: List[BLS12_381_G1_Element] = List.empty
 
     // EdDSA / ed25519 Cardano verification key
@@ -77,7 +79,7 @@ object TreasuryValidator extends Validator:
     given FromData[ResolvedDatum] = FromData.derived
     given ToData[ResolvedDatum] = ToData.derived
 
-    // Redeemer
+    // Script redeemer
     enum TreasuryRedeemer:
         case Resolve
         case Withdraw(withdrawRedeemer: WithdrawRedeemer)
@@ -95,37 +97,59 @@ object TreasuryValidator extends Validator:
     given FromData[WithdrawRedeemer] = FromData.derived
     given ToData[WithdrawRedeemer] = ToData.derived
 
-    private inline val DatumIsMissing = "Treasury datum should be present"
+    // Common errors
+    private inline val DatumIsMissing =
+        "Treasury datum should be present"
+
+    // Resolve redeemer
     private inline val ResolveNeedsUnresolvedDatumInInput =
         "Resolve redeemer requires unresolved datum in treasury input"
     private inline val ResolveNeedsResolvedDatumInOutput =
         "Resolve redeemer requires resolved datum in treasury output"
-    private inline val WithdrawNeedsResolvedDatum = "Withdraw redeemer requires resolved datum"
-    private inline val WrongNumberOfWithdrawals =
-        "Number of outputs should match the number of utxo ids"
-    private inline val BeaconTokenFailure = "Treasury should contain exactly one beacon token"
-    private inline val MembershipValidationFailed = "Withdrawals membership check failed"
-    private inline val BeaconTokenShouldBePreserved =
-        "Beacon token should be preserves in treasury output"
     private inline val ResolveValueShouldBePreserved =
         "Value invariant should hold: treasuryOutput = treasuryInput + voteInput"
-    private inline val WithdrawValueShouldBePreserved =
-        "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
-    private inline val VoteUtxoNotFound = "Vote UTxo was not found"
-    private inline val VoteInputDatumShouldPresent = "Vote input datum should present"
+    private inline val ResolveVoteInputNotFound =
+        "Vote input was not found"
     private inline val ResolveVersionCheck =
         "The version field of treasuryOutput must match (versionMajor, 0)"
     private inline val ResolveUtxoActiveCheck =
         "The activeUtxo in resolved treasury must match voting results"
-    private inline val TreasuryInputOutputHeadMp =
+    private inline val ResolveTreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
-    private inline val TreasuryInputOutputParams =
+    private inline val ResolveTreasuryInputOutputParams =
         "params in treasuryInput and treasuryOutput must match"
+    private inline val ResolveTreasuryOutputFailure =
+        "Exactly one treasury output should present"
+    private inline val ResolveUnexpectedNoVote =
+        "Unexpected NoVot when trying to resolve"
 
-    inline def cip67beaconPrefix = hex"01349900"
+    // Withdraw redeemer
+    private inline val WithdrawNeedsResolvedDatum =
+        "Withdraw redeemer requires resolved datum"
+    private inline val WithdrawWrongNumberOfWithdrawals =
+        "Number of outputs should match the number of utxo ids"
+    private inline val WithdrawBeaconTokenFailure =
+        "Treasury should contain exactly one beacon token"
+    private inline val WithdrawMembershipValidationFailed =
+        "Withdrawals membership check failed"
+    private inline val WithdrawBeaconTokenShouldBePreserved =
+        "Beacon token should be preserves in treasury output"
+    private inline val WithdrawValueShouldBePreserved =
+        "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
+    private inline val WithdrawOutputAccumulatorUpdated =
+        "Accumulator in the output should be properly updated"
+
+    // Deinit redeemer
+    private inline val DeinitTokensNotFound =
+        "Head tokens was not found in treasury input"
+    private inline val DeinitTokensNotBurned =
+        "All head tokens should be burned"
+
+    def cip67BeaconTokenPrefix = hex"01349900"
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+
         // Parse datum
         val treasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
@@ -133,11 +157,12 @@ object TreasuryValidator extends Validator:
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
-                // Treasury datum should be "unresolved" one
+                // Treasury datum should be an "unresolved" one
                 val unresolvedDatum = treasuryDatum match
                     case Unresolved(d) => d
                     case _             => fail(ResolveNeedsUnresolvedDatumInInput)
 
+                // TODO: pass vote input's outRef in the redeemer?
                 // Vote input
                 val voteInput = tx.inputs
                     .find(e =>
@@ -147,25 +172,27 @@ object TreasuryValidator extends Validator:
                           unresolvedDatum.peersN + 1
                         )
                     )
-                    .getOrFail(VoteUtxoNotFound)
+                    .getOrFail(ResolveVoteInputNotFound)
                     .resolved
 
-                // Treasury input
+                // Treasury (own) input
+                // TODO: factor out
                 val treasuryInput = tx.inputs
                     .find(_.outRef === ownRef)
-                    .getOrFail("Own input was not found")
+                    .getOrFail("Impossible happened: own input was not found")
                     .resolved
 
-                // Total output
+                // Total expected output
                 val treasuryOutputExpected = voteInput.value + treasuryInput.value
 
+                // TODO: pass output index in redeemer?
                 // The only treasury output
                 val treasuryOutput = tx.outputs
                     .filter(e => e.address === treasuryInput.address) match
                     case List.Cons(o, tail) =>
-                        require(tail.isEmpty, "Only one treasury output should be there")
+                        require(tail.isEmpty, ResolveTreasuryOutputFailure)
                         o
-                    case _ => fail("Treasury output should be present")
+                    case _ => fail(ResolveTreasuryOutputFailure)
 
                 // Check treasury output value
                 require(
@@ -173,20 +200,15 @@ object TreasuryValidator extends Validator:
                   ResolveValueShouldBePreserved
                 )
 
-                val treasuryOutputDatum = treasuryOutput.datum match
-                    case TOutputDatum.OutputDatum(inlineDatum) =>
-                        inlineDatum.to[TreasuryDatum] match
-                            case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
-                            case Resolved(d)   => d
-                    case _ => fail(ResolveNeedsResolvedDatumInOutput)
+                val treasuryOutputDatum = treasuryOutput.inlineDatumOfType[TreasuryDatum] match
+                    case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
+                    case Resolved(d)   => d
 
-                val voteDatum = voteInput.datum match
-                    case TOutputDatum.OutputDatum(inlineDatum) => inlineDatum.to[VoteDatum]
-                    case _                                     => fail(VoteInputDatumShouldPresent)
+                val voteDatum = voteInput.inlineDatumOfType[VoteDatum]
 
+                // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    // Unreachable
-                    case NoVote            => fail()
+                    case NoVote            => fail(ResolveUnexpectedNoVote)
                     case Vote(voteDetails) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
@@ -201,14 +223,15 @@ object TreasuryValidator extends Validator:
                           ResolveUtxoActiveCheck
                         )
 
+                // 8. treasuryInput and treasuryOutput must match on all other fields.
                 require(
                   unresolvedDatum.headMp === treasuryOutputDatum.headMp,
-                  TreasuryInputOutputHeadMp
+                  ResolveTreasuryInputOutputHeadMp
                 )
 
                 require(
                   unresolvedDatum.params === treasuryOutputDatum.params,
-                  TreasuryInputOutputParams
+                  ResolveTreasuryInputOutputParams
                 )
 
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
@@ -218,40 +241,44 @@ object TreasuryValidator extends Validator:
                     case _           => fail(WithdrawNeedsResolvedDatum)
 
                 // headMp and headId
+
+                // Let headMp be the corresponding field in treasuryInput.
                 val headMp = resolvedDatum.headMp
+
+                // TODO: factor out
                 val treasuryInput = tx.inputs
                     .find(_.outRef === ownRef)
-                    .getOrFail("Own input was not found")
+                    .getOrFail("Impossible happened: own input was not found")
                     .resolved
+
+                // Let headId be the asset name of the only headMp token in treasuryInput with CIP-67
+                // prefix 4937.
                 val headId: TokenName =
                     treasuryInput.value
                         .get(headMp)
-                        .getOrFail("Beacon token was not found")
+                        .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
-                        // TODO: should be something like tn.take(4)
-                        .filter((tn, _) => tn == cip67beaconPrefix) match
-                        case List.Cons((tokenName, amount), tail) =>
-                            require(tail.isEmpty && amount == BigInt(1), BeaconTokenFailure)
+                        .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
+                        case List.Cons((tokenName, amount), none) =>
+                            require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)
                             tokenName
-                        case _ => fail(BeaconTokenFailure)
+                        case _ => fail(WithdrawBeaconTokenFailure)
 
                 // The beacon token should be preserved
-                // By contract, we require the treasure utxo is always the head, and the tail is always withdrawals
-                val treasuryOutput = tx.outputs.head
+                // By contract, we require the treasure utxo is always be the head, and the tail be withdrawals
+                val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
                 require(
                   treasuryOutput.value
                       .get(headMp)
-                      .getOrFail(BeaconTokenShouldBePreserved)
+                      .getOrFail(WithdrawBeaconTokenShouldBePreserved)
                       .get(headId)
-                      .getOrFail(BeaconTokenShouldBePreserved) == BigInt(1),
-                  BeaconTokenShouldBePreserved
+                      .getOrFail(WithdrawBeaconTokenShouldBePreserved) == BigInt(1),
+                  WithdrawBeaconTokenShouldBePreserved
                 )
 
                 // Withdrawals
-                // By contract, we require the treasure utxo is always the head, and the tail is always withdrawals
-                val withdrawalOutputs = tx.outputs.tail
                 // The number of withdrawals should match the number of utxos ids in the redeemer
-                require(withdrawalOutputs.size == utxoIds.size, WrongNumberOfWithdrawals)
+                require(withdrawalOutputs.size == utxoIds.size, WithdrawWrongNumberOfWithdrawals)
                 // Calculate the final poly for withdrawn subset
                 val withdrawnUtxos = utxoIds
                     // Joint utxo ids and outputs
@@ -263,29 +290,30 @@ object TreasuryValidator extends Validator:
                             |> blake2b_224
                             |> ScalusScalar.fromByteStringBigEndianUnsafe
                     ) |> getFinalPolyScalus
+
                 // Decompress commitments and run the membership check
                 val acc = bls12_381_G2_uncompress(resolvedDatum.utxosActive)
                 val proof_ = bls12_381_G2_uncompress(proof)
+
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
-                  MembershipValidationFailed
+                  WithdrawMembershipValidationFailed
                 )
 
                 // Accumulator updated commitment
-                treasuryOutput.datum match
-                    case TOutputDatum.OutputDatum(inlineDatum) =>
-                        val outputResolvedDatum = inlineDatum.to[ResolvedDatum]
-                        require(
-                          outputResolvedDatum.utxosActive == proof,
-                          "Accumulator should be updated properly"
-                        )
-                    case _ => fail("Treasury output datum was not found")
+                val outputResolvedDatum = treasuryOutput.inlineDatumOfType[ResolvedDatum]
 
-                // Value check
+                require(
+                  outputResolvedDatum.utxosActive == proof,
+                  WithdrawOutputAccumulatorUpdated
+                )
+
+                // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
+                // withdrawals.
                 // TODO: combine with iterating for poly calculation up above?
-                // TODO: consider fees delta?
                 val withdrawnValue =
-                    tx.outputs.tail.foldLeft(Value.zero)((acc, o) => Value.plus(acc, o.value))
+                    tx.outputs.tail.foldLeft(Value.zero)((acc, o) => acc + o.value)
+
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
@@ -294,6 +322,7 @@ object TreasuryValidator extends Validator:
                 // This redeemer does not require the treasury’s active utxo set to be empty,
                 // but it implicitly requires the transaction to be multi-signed by all peers
                 // to burn the headMp tokens.
+
                 // Thus, the peers can use this redeemer to override the treasury’s
                 // spending validator with their multi-signature.
 
@@ -302,26 +331,28 @@ object TreasuryValidator extends Validator:
                     case Resolved(d)   => d.headMp
                     case Unresolved(d) => d.headMp
 
+                // TODO: factor out
                 val treasuryInput = tx.inputs
                     .find(_.outRef === ownRef)
-                    .getOrFail("Own input was not found")
+                    .getOrFail("Impossible happened: own input was not found")
                     .resolved
 
                 val headTokensInput = treasuryInput.value
                     .get(headMp)
-                    .getOrFail("Head tokens was not found in treasury input")
+                    .getOrFail(DeinitTokensNotFound)
 
+                // TODO: this might be redundant
                 require(
-                  headTokensInput.size > 0,
-                  "Deinit should burn at least one token, but there are no tokens in treasury input"
+                  !headTokensInput.isEmpty,
+                  DeinitTokensNotFound
                 )
 
                 // All head tokens should be burned
                 val headTokensMint = (-tx.mint)
                     .get(headMp)
-                    .getOrFail("Head tokens was not found in mint value")
+                    .getOrFail(DeinitTokensNotBurned)
 
-                require(headTokensInput === headTokensMint, "All head tokens should be burned")
+                require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
 
     // Utility functions
     /*
@@ -359,7 +390,7 @@ object TreasuryValidator extends Validator:
     ): BLS12_381_G1_Element = {
         val subsetInG1 =
             List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
-                bls12_381_G1_scalarMul(sb.toInt, st)
+                st.scale(sb.toInt)
 
         subsetInG1.foldLeft(G1.zero): (a, b) =>
             bls12_381_G1_add(a, b)
