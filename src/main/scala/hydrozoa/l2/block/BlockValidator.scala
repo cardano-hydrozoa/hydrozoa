@@ -2,14 +2,13 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.Piper
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel
-import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.WithdrawalL2EventLabel
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
+import L2EventLabel.L2EventWithdrawalLabel
 
 import scala.collection.mutable
 import scala.language.strictEquality
@@ -57,11 +56,11 @@ enum ValidationFailure(msg: String):
           s"Expected block version $expectedBlockVersion, but got: $blockVersion"
         )
 
-enum ValidationResolution:
+enum ValidationResolution[LedgerUtxoSetOpaque]:
     case Valid(
-        utxosActive: UtxosSetOpaque,
-        mbGenesis: Option[(TxId, SimpleGenesis)],
-        utxosWithdrawn: UtxosSet
+        utxosActive: LedgerUtxoSetOpaque,
+        mbGenesis: Option[(TxId, L2Genesis)],
+        utxosWithdrawn: UtxoSetL2
     )
     case NotYetKnownL2Events(unknownEventIds: Set[TxId])
     case NotYetKnownDeposits(depositIds: Set[UtxoIdL1])
@@ -74,17 +73,21 @@ object BlockValidator:
     def validateBlock(
         block: Block,
         prevHeader: BlockHeader,
-        stateL2: AdaSimpleLedger[TBlockProduction],
+        stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
         // FIXME: missing in the spec, empty for final block
-        poolEventsL2: Seq[NonGenesisL2],
+        poolEventsL2: Seq[L2Event],
         // FIXME: missing in the spec, is not needed for minor and final blocks
         depositUtxos: DepositUtxos,
         // FIXME: missing in the spec, can be removed I guess
         finalizing: Boolean
-    ): ValidationResolution =
+    ): ValidationResolution[HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
+
+        // Type alias with the injected dep type
+        type MbValidationResolution =
+            Option[ValidationResolution[HydrozoaL2Ledger.LedgerUtxoSetOpaque]]
 
         // 1. Initialize the variables and arguments.
-        var mbGenesis: Option[(TxId, SimpleGenesis)] = None
+        var mbGenesis: Option[(TxId, L2Genesis)] = None
         type UtxosDiffMutable = mutable.Set[(UtxoIdL2, Output[L2])]
         val utxosWithdrawn: UtxosDiffMutable = mutable.Set()
 
@@ -105,27 +108,31 @@ object BlockValidator:
         val blockHeader = block.blockHeader
         val blockType = blockHeader.blockType
         if blockType == Minor &&
-            eventsValid.indexWhere(_._2 == WithdrawalL2EventLabel) >= 0
+            eventsValid.indexWhere(_._2 == L2EventWithdrawalLabel) >= 0
         then return Invalid(MinorBlockContainsWithdrawals)
 
         // 3.(c,d) For each non-genesis L2 event...
         val poolEventsL2Map = poolEventsL2.map(nge => (nge.getEventId, nge)).toMap
         val eventsValidWithEvents = eventsValid.map((txId, _) => poolEventsL2Map(txId))
 
-        val validEventsResolution = boundary:
-            eventsValidWithEvents.foreach {
-                case tx: TransactionL2 =>
-                    stateL2.submit(tx) match
-                        case Right(txId, _)  => ()
-                        case Left(txId, err) => break(Some(Invalid(L2EventNotValid(txId, err))))
-                case wd: WithdrawalL2 =>
-                    stateL2.submit(wd) match
-                        case Right(txId, utxosDiff) =>
-                            utxosWithdrawn.addAll(utxosDiff)
-                        case Left(txId, err) =>
-                            break(Some(Invalid(L2EventNotValid(txId, err))))
-            }
-            None
+        val validEventsResolution: MbValidationResolution =
+            boundary:
+                eventsValidWithEvents.foreach {
+                    case tx: L2EventTransaction =>
+                        stateL2.toLedgerTransaction(tx.transaction) |> stateL2.submit match
+                            case Right(txId, _) => ()
+                            // FIXME: toString()
+                            case Left(txId, err) =>
+                                break(Some(Invalid(L2EventNotValid(txId, err.toString))))
+                    case wd: L2EventWithdrawal =>
+                        stateL2.toLedgerTransaction(wd.withdrawal) |> stateL2.submit match
+                            case Right(txId, (_, utxosDiff)) =>
+                                utxosWithdrawn.addAll(utxosDiff.utxoMap)
+                            case Left(txId, err) =>
+                                // FIXME: toString()
+                                break(Some(Invalid(L2EventNotValid(txId, err.toString))))
+                }
+                None
 
         validEventsResolution match
             case Some(resolution) => return resolution
@@ -141,12 +148,12 @@ object BlockValidator:
 
         // 4.(b,c) Check all invalid events from the block are indeed invalid
         val eventsInvalidWithEvents = eventsInvalid.map((txId, _) => poolEventsL2Map(txId))
-        val invalidEventsResolution = boundary:
+        val invalidEventsResolution: MbValidationResolution = boundary:
             eventsInvalidWithEvents.foreach(invalidEvent =>
                 val txOrWd = invalidEvent match
-                    case tx: TransactionL2 => tx
-                    case wd: WithdrawalL2  => wd
-                stateL2.submit(txOrWd) match
+                    case tx: L2EventTransaction => tx.transaction
+                    case wd: L2EventWithdrawal  => wd.withdrawal
+                stateL2.toLedgerTransaction(txOrWd) |> stateL2.submit match
                     case Right(txId, _)  => break(Option(Invalid(ValidEventMarkedAsInvalid(txId))))
                     case Left(txId, err) => ()
             )
@@ -159,7 +166,7 @@ object BlockValidator:
         // 5. If not finalizing, the deposits are correct
         // 5.a all absorbed deposits are known
         val depositsAbsorbed = block.blockBody.depositsAbsorbed
-        val knownDepositIds = depositUtxos.map.keySet
+        val knownDepositIds = depositUtxos.unTag.utxoMap.keySet
         val unknownDepositIds = depositsAbsorbed.toSet &~ knownDepositIds
         if unknownDepositIds.nonEmpty then return NotYetKnownDeposits(unknownDepositIds)
 
@@ -175,13 +182,16 @@ object BlockValidator:
         mbGenesis =
             if depositsAbsorbed.isEmpty then None
             else
-                val depositsAbsorbedUtxos = UtxoSet.apply[L1, DepositTag](
-                  depositUtxos.map.filter((k, _) => depositsAbsorbed.contains(k))
-                )
-                val genesis: SimpleGenesis = SimpleGenesis.apply(depositsAbsorbedUtxos)
-                stateL2.submit(AdaSimpleLedger.mkGenesisEvent(genesis)) match
-                    case Right(txId, utxos) => Some(txId, genesis)
-                    case Left(_, _) => ??? // unreachable, submit for deposits should always succeed
+                val depositsAbsorbedUtxos =
+                    depositUtxos.unTag.utxoMap
+                        .filter((k, _) => depositsAbsorbed.contains(k))
+                        .toList
+                        .sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0)
+                val genesis: L2Genesis = L2Genesis.apply(depositsAbsorbedUtxos)
+                val genesisHash = calculateGenesisHash(genesis)
+                val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)
+                stateL2.addGenesisUtxos(genesisUtxos)
+                Some(genesisHash, genesis)
 
         // 6. If finalizing, there are no deposits in the block
 
@@ -189,7 +199,7 @@ object BlockValidator:
         then return Invalid(FinalBlockContainsDeposits(depositsAbsorbed))
 
         // and all utxos should be withdrawn
-        if finalizing then utxosWithdrawn.addAll(stateL2.flush)
+        if finalizing then utxosWithdrawn.addAll(stateL2.flushAndGetState.utxoMap)
 
         // 7. Return Invalid if block.blockType is not set according to the first among these to hold:
         // 7.a Final if finalizing is True.
@@ -240,4 +250,4 @@ object BlockValidator:
         then return Invalid(UnexpectedBlockVersion(expectedVersion, blockVersion))
 
         // 9. Return Valid, along with utxosActive, mbGenesis, and utxosWithdrawn.
-        Valid(stateL2.getUtxosActive, mbGenesis, utxosWithdrawn.toSet)
+        Valid(stateL2.getUtxosActive, mbGenesis, UtxoSet[L2](utxosWithdrawn.toMap))

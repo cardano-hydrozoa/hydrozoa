@@ -7,10 +7,10 @@ import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
-import hydrozoa.l2.ledger.state.UtxosSetOpaque
-import hydrozoa.l2.ledger.{SimpleGenesis, UtxosSet}
+import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.node.state.*
-import hydrozoa.{TxId, TxKeyWitness, Wallet}
+import hydrozoa.{TxId, TxKeyWitness, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 
@@ -30,9 +30,9 @@ private class MajorBlockConfirmationActor(
     override type ReqType = ReqMajor
     override type AckType = AckMajor | AckMajor2
 
-    private var utxosActive: UtxosSetOpaque = _
-    private var mbGenesis: Option[(TxId, SimpleGenesis)] = _
-    private var utxosWithdrawn: UtxosSet = _
+    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
+    private var mbGenesis: Option[(TxId, L2Genesis)] = _
+    private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
     private var finalizeHead: Boolean = false
@@ -41,10 +41,10 @@ private class MajorBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
-        val (headPeers, isFinalizationRequested) =
-            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isFinalizationRequested)))
+        val (headPeers, isNextBlockFinal) =
+            stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isNextBlockFinal)))
         log.debug(s"headPeers: $headPeers")
-        if ownAck2.isEmpty && acks.keySet == headPeers then
+        if req != null && ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
             // Create settlement tx draft
             val txRecipe = SettlementRecipe(
@@ -59,7 +59,7 @@ private class MajorBlockConfirmationActor(
             // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
-            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isFinalizationRequested)
+            val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isNextBlockFinal)
             this.settlementTxDraft = settlementTxDraft
             this.ownAck2 = Some(ownAck2)
             deliverAck2(ownAck2)
@@ -69,14 +69,14 @@ private class MajorBlockConfirmationActor(
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if (acks2.keySet == headPeers) then
+        if (req != null && acks2.keySet == headPeers) then
             // Create effects
             // L1 effect
             val wits = acks2.map(_._2.settlement)
             val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(settlementTx)
             val l1Effect: L1BlockEffect = settlementTx
-            val l2Effect: L2BlockEffect = utxosActive
+            val l2Effect = Some(utxosActive)
             // Block record and state update by block application
             // TODO: L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
@@ -128,7 +128,7 @@ private class MajorBlockConfirmationActor(
                           _.head.openPhase(openHead =>
                               (
                                 openHead.l2Tip.blockHeader,
-                                openHead.stateL2.blockProduction,
+                                openHead.stateL2.cloneForBlockProducer(),
                                 openHead.immutablePoolEventsL2,
                                 openHead.peekDeposits
                               )

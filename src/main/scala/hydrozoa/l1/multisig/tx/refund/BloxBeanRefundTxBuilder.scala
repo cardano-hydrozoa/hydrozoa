@@ -9,7 +9,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 
-import hydrozoa.TxL1
+import hydrozoa.{Network, TxL1}
 import hydrozoa.infra.{
     addressToBloxbean,
     mkBuilder,
@@ -21,6 +21,7 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
+import ox.channels.ActorRef
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
 import scalus.prelude.Option.{Some, None}
@@ -29,7 +30,6 @@ import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
 
 class BloxBeanRefundTxBuilder(
-    cardanoL1: CardanoL1,
     backendService: BackendService,
     reader: HeadStateReader
 ) extends RefundTxBuilder {
@@ -55,7 +55,8 @@ class BloxBeanRefundTxBuilder(
 
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress).bech32
 
-        val refundAddress = addressToBloxbean(cardanoL1.network.toBloxbean, datum.refundAddress)
+        // FIXME: network constant
+        val refundAddress = addressToBloxbean(Network(0, 42).toBloxbean, datum.refundAddress)
 
         // TODO: Not the best place
         // TODO: can be checked afterwards see https://github.com/cardano-hydrozoa/hydrozoa/issues/62

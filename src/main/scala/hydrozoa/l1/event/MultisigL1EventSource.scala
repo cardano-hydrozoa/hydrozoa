@@ -10,7 +10,7 @@ import hydrozoa.*
 import hydrozoa.infra.*
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
-import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.NodeState
 
 import java.math.BigInteger
@@ -47,8 +47,8 @@ class MultisigL1EventSource(
             case Some(initTx) =>
                 log.info(s"Init tx $txId appeared on-chain.")
                 onlyOutputToAddress(initTx, headAddress) match
-                    case Right(ix, coins, _) =>
-                        val utxo = Utxo[L1, TreasuryTag](txId, ix, headAddress, coins)
+                    case Right(ix, coins, tokens, _) =>
+                        val utxo = TaggedUtxo[L1, TreasuryTag](txId, ix, headAddress, coins, tokens)
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
                         nodeState.tell(s =>
                             s.head.initializingPhase(
@@ -76,8 +76,10 @@ class MultisigL1EventSource(
                             while loop do
                                 sleep(100.millis)
                                 loop = nodeState.ask(_.mbInitializedOn.isDefined)
-                                // TODO: we might want to continue during Finalizing phase
-                                    && nodeState.ask(_.head.currentPhase == Open)
+                                    && (
+                                        nodeState.ask(_.head.currentPhase == Open)
+                                          ||  nodeState.ask(_.head.currentPhase == Finalizing)
+                                    )
 
                             log.info("Leaving L1 source supervised scope")
                         }
@@ -118,11 +120,13 @@ class MultisigL1EventSource(
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        Utxo[L1, TreasuryTag](
+        val tokens = valueTokens(utxo.toValue)
+        TaggedUtxo[L1, TreasuryTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
-          coins
+          utxo.getAddress |> AddressBech[L1],
+          coins,
+          tokens
         )
 
     /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
@@ -131,11 +135,14 @@ class MultisigL1EventSource(
         val utxoId = UtxoId[L1]
             .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        Utxo[L1, DepositTag](
+        val tokens = valueTokens(utxo.toValue)
+
+        TaggedUtxo[L1, DepositTag](
           utxoId.txId,
           utxoId.outputIx,
-          utxo.getAddress |> AddressBechL1.apply,
+          utxo.getAddress |> AddressBech[L1],
           coins,
+          tokens,
           Some(utxo.getInlineDatum)
         )
 
@@ -149,7 +156,7 @@ class MultisigL1EventSource(
             case Some(_) =>
                 nodeState.ask(_.head.currentPhase) match
                     case Open =>
-                        log.trace("Polling head address...")
+                        log.trace("Polling head address, phase=Open...")
                         val utxos = cardano.ask(_.utxosAtAddress(headAddress))
                         // FIXME: no guarantees head is still open
                         val currentL1State = nodeState.ask(_.head.openPhase(_.stateL1))
@@ -159,10 +166,10 @@ class MultisigL1EventSource(
                         val (mbNewTreasury, depositsNew, depositsGone) =
                             //
                             var mbNewTreasury: Option[TreasuryUtxo] = None
-                            val depositsNew: UtxoSetMutable[L1, DepositTag] =
-                                UtxoSetMutable[L1, DepositTag](mutable.Map.empty)
+                            val depositsNew: TaggedUtxoSetMutable[L1, DepositTag] =
+                                TaggedUtxoSetMutable[L1, DepositTag](mutable.Map.empty)
                             //
-                            val knownDepositIds = currentL1State.depositUtxos.map.keySet
+                            val knownDepositIds = currentL1State.depositUtxos.utxoMap.keySet
                             val existingDeposits: mutable.Set[UtxoIdL1] = mutable.Set.empty
 
                             val utxoType_ = utxoType(treasuryTokenAmount)
@@ -176,14 +183,15 @@ class MultisigL1EventSource(
                                 utxoType_(utxo) match
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
-                                        if currentL1State.treasuryUtxo.ref != utxoId then
+                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
                                             mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
                                         existingDeposits.add(utxoId)
                                         if (!knownDepositIds.contains(utxoId)) then
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
-                                            depositsNew.map.put(depositUtxo.ref, depositUtxo.output)
+                                            depositsNew.utxoMap
+                                                .put(depositUtxo.unTag.ref, depositUtxo.unTag.output)
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )
@@ -193,9 +201,44 @@ class MultisigL1EventSource(
 
                         // FIXME: no guarantees head is still open
                         nodeState.tell(_.head.openPhase(openHead =>
-                            mbNewTreasury.foreach(openHead.newTreasuryUtxo)
+                            mbNewTreasury.foreach(openHead.setNewTreasuryUtxo)
                             if depositsGone.nonEmpty then openHead.removeDepositUtxos(depositsGone)
-                            if depositsNew.map.nonEmpty then
-                                openHead.addDepositUtxos(depositsNew |> UtxoSet.apply)
+                            if depositsNew.utxoMap.nonEmpty then
+                                openHead.addDepositUtxos(depositsNew |> TaggedUtxoSet.apply)
                         ))
-                    case _ => log.trace("Head is not in open state...")
+                    case Finalizing =>
+                        log.trace("Polling head address, phase=Finalizing...")
+                        val utxos = cardano.ask(_.utxosAtAddress(headAddress))
+                        // FIXME: no guarantees head is still finalizing
+                        val currentL1State = nodeState.ask(_.head.finalizingPhase(_.stateL1))
+                        // beacon token -> treasury
+                        // rollout token -> rollout
+                        // otherwise -> maybe deposit
+                        val mbNewTreasury =
+                            //
+                            var mbNewTreasury: Option[TreasuryUtxo] = None
+                            val utxoType_ = utxoType(treasuryTokenAmount)
+
+                            utxos.foreach(utxo =>
+                                val utxoId = UtxoId[L1]
+                                    .apply(
+                                        utxo.getTxHash |> TxId.apply,
+                                        utxo.getOutputIndex |> TxIx.apply
+                                    )
+                                utxoType_(utxo) match
+                                    case MultisigUtxoType.Treasury(utxo) =>
+                                        // log.debug(s"UTXO type: treasury $utxoId")
+                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
+                                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
+                                    case MultisigUtxoType.Unknown(utxo) =>
+                                        log.debug(s"UTXO type: unknown: $utxoId")
+                                    case other => 
+                                        log.info(s"UTxO of type $other are ignored in Finalizing mode")
+                            )
+                            mbNewTreasury
+
+                        // FIXME: no guarantees head is still finalizing
+                        nodeState.tell(_.head.finalizingPhase(finalizingHead =>
+                            mbNewTreasury.foreach(finalizingHead.newTreasuryUtxo)
+                        ))
+                    case other => log.warn(s"Unsupported phase: $other")

@@ -42,7 +42,7 @@ class BloxBeanSettlementTxBuilder(
                 .toSeq
 
         val outputsToWithdraw =
-            r.utxosWithdrawn.map(w => toBloxBeanTransactionOutput(w._2))
+            r.utxosWithdrawn.utxoMap.map(w => toBloxBeanTransactionOutput(w._2))
 
         val withdrawnCoins =
             outputsToWithdraw.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
@@ -80,7 +80,7 @@ class BloxBeanSettlementTxBuilder(
             // .preBalanceTx should be called only once
             .preBalanceTx((_, t) =>
                 t.getWitnessSet.getNativeScripts.add(headNativeScript)
-                t.getBody.getOutputs.addAll(outputsToWithdraw.asJava)
+                t.getBody.getOutputs.addAll(outputsToWithdraw.toList.asJava)
             )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
             .build

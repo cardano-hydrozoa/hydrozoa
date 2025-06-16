@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.address.AddressProvider.{getBaseAddress, getE
 import com.bloxbean.cardano.client.address.Credential.{fromKey, fromScript}
 import com.bloxbean.cardano.client.address.{Address, Credential}
 import com.bloxbean.cardano.client.common.model.Network
-import hydrozoa.{AddressBechL1, AddressBechL2, hydrozoaL2Network}
+import hydrozoa.{AddressBech, AddressBechL1, AddressBechL2, L2, hydrozoaL2Network}
 import scalus.bloxbean.Interop.getAddress
 import scalus.ledger.api.v1
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
@@ -20,7 +20,7 @@ def decodeBech32AddressL2(address: AddressBechL2): v1.Address =
 /** Takes Plutus Address from datum and makes a Hydrozoa L2 address.
   */
 def plutusAddressAsL2(address: v1.Address): AddressBechL2 =
-    AddressBechL2(addressToBloxbean(hydrozoaL2Network.toBloxbean, address).getAddress)
+    AddressBech[L2](addressToBloxbean(hydrozoaL2Network.toBloxbean, address).getAddress)
 
 def addressToBloxbean(network: Network, address: v1.Address): Address =
 

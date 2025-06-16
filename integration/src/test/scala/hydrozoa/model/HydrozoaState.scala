@@ -6,7 +6,7 @@ import hydrozoa.infra.Piper
 import hydrozoa.l1.genesisUtxos
 import hydrozoa.l1.multisig.state.{DepositUtxos, MultisigHeadStateL1}
 import hydrozoa.l2.block.{Block, zeroBlock}
-import hydrozoa.l2.ledger.NonGenesisL2
+import hydrozoa.l2.ledger.L2Event
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
@@ -25,11 +25,11 @@ case class HydrozoaState(
     headPeers: Set[TestPeer] = Set.empty,
     headAddressBech32: Option[AddressBechL1] = None,
     headMultisigScript: Option[NativeScript] = None,
-    depositUtxos: DepositUtxos = UtxoSet.apply(),
+    depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
     treasuryUtxoId: Option[UtxoIdL1] = None,
 
     // Node
-    poolEvents: Seq[NonGenesisL2] = Seq.empty,
+    poolEvents: Seq[L2Event] = Seq.empty,
 
     // L1
     knownTxs: Map[TxId, TxL1] = Map.empty,
@@ -43,7 +43,7 @@ case class HydrozoaState(
         "Hydrozoa state:" +
             s"\tNetwork phase: ${peersNetworkPhase.toString}\n" +
             s"\tKnown peers: ${knownPeers.toString()}\n" +
-            s"\tPrtotocol parameters: [SKIPPED]\n" +
+            s"\tProtocol parameters: [SKIPPED]\n" +
             s"\tHead phase: ${headPhase.toString}\n" +
             s"\tInitiator: ${initiator.toString}\n" +
             s"\tHead peers: ${headPeers.toString()}\n" +

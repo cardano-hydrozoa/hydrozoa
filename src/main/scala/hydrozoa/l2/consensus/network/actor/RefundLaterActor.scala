@@ -1,18 +1,12 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{Piper, addWitness, serializeTxHex, txHash}
-import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.{InitTx, PostDatedRefundTx, toL1Tx}
-import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.consensus.network.*
-import hydrozoa.node.server.TxDump
-import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
 import hydrozoa.*
-import hydrozoa.l1.multisig.state.DepositUtxo
+import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
+import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l2.consensus.network.*
+import hydrozoa.node.state.{NodeState, WalletId}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -60,8 +54,7 @@ private class RefundLaterActor(
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if acks.keySet == headPeers
-        then
+        if (req != null && acks.keySet == headPeers)
             // All wits are here, we can sign and save post-dated
             // refund transaction for future's use.
             val refundTx = acks.values.foldLeft(txDraft)(addWitness)

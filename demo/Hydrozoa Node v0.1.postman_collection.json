@@ -12,28 +12,23 @@
 			"request": {
 				"method": "PUT",
 				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"otherPeers\": [\n        {\n            \"name\": \"Bob\"\n        },\n        {\n            \"name\": \"Carol\"\n        }\n    ],\n    \"amount\": 100,\n    \"seedUtxoTxId\": {\n        \"hash\": \"6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508\"\n    },\n    \"seedUtxoTxIx\": {\n        \"ix\": 0\n    }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
 				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/init?amount=100&txId=6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508&txIx=0",
+					"raw": "{{nodeHost}}:{{nodePort}}/init",
 					"host": [
 						"{{nodeHost}}"
 					],
 					"port": "{{nodePort}}",
 					"path": [
 						"init"
-					],
-					"query": [
-						{
-							"key": "amount",
-							"value": "100"
-						},
-						{
-							"key": "txId",
-							"value": "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
-						},
-						{
-							"key": "txIx",
-							"value": "0"
-						}
 					]
 				}
 			},
