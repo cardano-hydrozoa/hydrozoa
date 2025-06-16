@@ -110,13 +110,6 @@ object TallyingValidator extends Validator:
 
         // Verify the treasury reference input
 
-        // TODO: prove myself that it's not needed otherwise indeed
-        // I think the reasoning here is that if one vote is Vote we've already checked
-        // all that in Vote redeemer before.
-        // It means we might want to revert voting tokens checks in vote utxos (that we removed
-        // since I argued we always check their match to treasury) or do this checks always
-        // (i think it would be easier).
-
         // If the voteStatus of either continuingInput or removedInput is NoVote,
         // all the following must be satisfied
         if (
@@ -143,6 +136,7 @@ object TallyingValidator extends Validator:
                     case Unresolved(unresolvedDatum) => unresolvedDatum
                     case _                           => fail(TreasuryDatumIsUnresolved)
                 }
+
             require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
             require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
 

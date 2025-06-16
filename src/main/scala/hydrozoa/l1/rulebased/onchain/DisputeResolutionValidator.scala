@@ -143,7 +143,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
     // Tally redeemer
     private inline val TallyOnlyOne = "One (and only one) tallying per tx is required"
     private inline val TallyRedeemerMentionsSpentUtxo =
-        "Tally redeemer should mention spent utxop in one of the fileds"
+        "Tally redeemer should mention spent utxo in one of the fields"
 
     // Resolve redeemer
     private inline val ResolveTreasurySpent =
