@@ -17,7 +17,6 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
-import scalus.prelude.Option
 import scalus.prelude.Option.asScalus
 
 import scala.concurrent.duration.DurationInt
