@@ -7,12 +7,13 @@ import com.bloxbean.cardano.client.crypto.VerificationKey
 import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPubkey}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
-import hydrozoa.infra.{PSStyleAssoc, Piper}
+import hydrozoa.infra.{CryptoHash, PSStyleAssoc, Piper, encodeHex}
 import hydrozoa.{
     AddressBechL1,
     TokenName,
     UtxoIdL1,
     VerificationKeyBytes,
+    CurrencySymbol as HCurrencySymbol,
     NativeScript as HNativeScript,
     Network as HNetwork
 }
@@ -29,28 +30,26 @@ import hydrozoa.{
   * @param vKeys
   *   set of participants' verification keys, should contain at least one key
   * @return
-  *   serialized native script and corresponding bech32 address
+  *   serialized native script, currency symbol, and corresponding bech32 address
   */
 def mkHeadNativeScriptAndAddress(
     vKeys: Set[VerificationKeyBytes],
     network: HNetwork
-): (HNativeScript, AddressBechL1) =
+): (HNativeScript, HCurrencySymbol, AddressBechL1) =
+
+    // Script
     val script = vKeys.toList
         .map(vkb => (getKeyHash(vkb.bytes), VerificationKey.create(vkb.bytes)))
         .sortWith((a, b) => a._1.compareTo(b._1) < 0)
         .map((_, vk) => ScriptPubkey.create(vk))
         .foldLeft(ScriptAll())((s: ScriptAll, k: ScriptPubkey) => s.addScript(k))
+
+    // Currency symbol
+    val scriptRefBytes = script.scriptRefBytes
+    val currencySymbol = CryptoHash.H28.hash_(scriptRefBytes).bytes |> HCurrencySymbol.apply
+
+    // Address
     val nw = Network(network.networkId, network.protocolMagic)
     val address = getEntAddress(script, nw).toBech32
-    HNativeScript(script.scriptRefBytes) /\ AddressBechL1(address)
 
-/** @return
-  *   treasury beacon token name
-  */
-def mkBeaconTokenName(seedOutput: UtxoIdL1): TokenName =
-    val name = H28.hash_[UtxoIdL1](
-      (seedOutput.txId.hash.getBytes.toList ++ BigInt(
-        seedOutput.outputIx.ix
-      ).toByteArray.toList).toArray
-    )
-    encodeHexString(treasuryBeaconPrefix ++ name.bytes, true) |> TokenName.apply
+    (HNativeScript(scriptRefBytes), currencySymbol, AddressBechL1(address))

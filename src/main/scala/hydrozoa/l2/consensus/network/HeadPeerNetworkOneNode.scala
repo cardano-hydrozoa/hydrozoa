@@ -47,7 +47,7 @@ class HeadPeerNetworkOneNode(
         val vKeys = (headOtherPeers + ownNode).map(_.exportVerificationKeyBytes)
 
         // Native script, head address, and token
-        val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
+        val (headNativeScript, _, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
         val beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
 
         // Recipe to build init tx

@@ -43,7 +43,7 @@ class BloxBeanRefundTxBuilder(
         val txBytes = r.depositTx.toL1Tx.bytes
         val tb = Transaction.deserialize(txBytes)
         val txHash = getTxHash(txBytes)
-        val txIxInt = r.txIx.ix.toInt
+        val txIxInt = r.txIx.ix
         val depositOutput = tb.getBody.getOutputs.get(txIxInt) // TODO: may throw
         val depositUtxo = txOutputToUtxo(txHash, txIxInt, depositOutput)
 
@@ -53,6 +53,7 @@ class BloxBeanRefundTxBuilder(
           )
         )
 
+        // TODO: include everything into the recipe
         val headAddressBech32 = reader.multisigRegime(_.headBechAddress).bech32
 
         val refundAddress = addressToBloxbean(cardanoL1.network.toBloxbean, datum.refundAddress)

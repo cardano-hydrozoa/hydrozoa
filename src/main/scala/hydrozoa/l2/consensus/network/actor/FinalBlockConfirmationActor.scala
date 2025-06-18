@@ -139,7 +139,6 @@ private class FinalBlockConfirmationActor(
 
         // Prepare own acknowledgement
         val (me) = walletActor.ask(w => (w.getWalletId))
-        // TODO: postDatedTransaction
         val ownAck = AckFinal(me, Seq.empty)
         log.debug(s"Own AckFinal: $ownAck")
         val mbAck2 = deliver(ownAck)

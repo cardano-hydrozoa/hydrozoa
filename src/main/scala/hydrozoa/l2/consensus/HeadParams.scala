@@ -1,8 +1,9 @@
 package hydrozoa.l2.consensus
 
-import hydrozoa.{Network, VerificationKeyBytes, UDiffTimeMilli}
+import hydrozoa.{Network, UDiffTimeMilli, VerificationKeyBytes}
 
-/** @param l2NetworkId
+/** TODO: spec out what makes the difference between HeadParams / L2ConsensusParams
+  * @param l2NetworkId
   * @param participants
   * @param l2ConsensusParams
   * @param minimalDepositWindow
@@ -27,9 +28,22 @@ object HeadParams:
   *   collection won't be run if it's too close to the deadline (seconds)
   */
 case class L2ConsensusParams(
+    blockLatencyTolerance: UDiffTimeMilli,
     depositMarginMaturity: UDiffTimeMilli,
-    depositMarginExpiry: UDiffTimeMilli
+    depositMarginExpiry: UDiffTimeMilli,
+    multisigRegimeKeepAlive: UDiffTimeMilli,
+    multisigRegimeTimeout: UDiffTimeMilli,
+    // TODO add to the spec
+    // TODO: should it be in consensus params or in the head params?
+    votingDuration: UDiffTimeMilli
 )
 
 object L2ConsensusParams:
-    def default = L2ConsensusParams(UDiffTimeMilli(1_000), UDiffTimeMilli(5_000))
+    def default: L2ConsensusParams = L2ConsensusParams(
+      UDiffTimeMilli(0),
+      UDiffTimeMilli(1_000),
+      UDiffTimeMilli(5_000),
+      UDiffTimeMilli(0),
+      UDiffTimeMilli(0),
+      UDiffTimeMilli(0)
+    )

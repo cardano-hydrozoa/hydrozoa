@@ -242,7 +242,7 @@ object MBTSuite extends Commands:
                 (otherHeadPeers + initiator).map(tp =>
                     mkWallet(tp).exportVerificationKeyBytes
                 )
-            val (headMultisigScript, headAddress) =
+            val (headMultisigScript, _headMp, headAddress) =
                 mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
             val beaconTokenName = mkBeaconTokenName(seedUtxo)
 

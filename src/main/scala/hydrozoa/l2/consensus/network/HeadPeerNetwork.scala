@@ -298,7 +298,7 @@ case class AckMajorCombined(
 case class AckMajor(
     peer: WalletId,
     rollouts: Seq[TxKeyWitness],
-    postDatedTransaction: TxKeyWitness
+    postDatedTransition: TxKeyWitness
 ) extends Ack
 
 given ackMajorCodec: JsonValueCodec[AckMajor] =

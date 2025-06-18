@@ -113,9 +113,12 @@ case class Network(networkId: Int, protocolMagic: Long)
 
 case class NativeScript(bytes: Array[Byte])
 
+case class CurrencySymbol(bytes: IArray[Byte])
+
 case class Datum(bytes: Array[Byte])
 
-case class TokenName(tokenName: String)
+// Shall we use bytes as in other types?
+case class TokenName(tokenNameHex: String)
 
 // UDiffTime
 opaque type UDiffTimeMilli = BigInt

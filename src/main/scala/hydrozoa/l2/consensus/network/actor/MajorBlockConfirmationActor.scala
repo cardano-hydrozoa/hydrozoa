@@ -168,7 +168,7 @@ private class MajorBlockConfirmationActor(
 
         // Prepare own acknowledgement
         val (me) = walletActor.ask(w => (w.getWalletId))
-        // TODO: postDatedTransaction
+        // TODO: postDatedTransition
         val ownAck = AckMajor(me, Seq.empty, TxKeyWitness(Array.empty, Array.empty))
         log.debug(s"Own AckMajor: $ownAck")
         val mbAck2 = deliver(ownAck)

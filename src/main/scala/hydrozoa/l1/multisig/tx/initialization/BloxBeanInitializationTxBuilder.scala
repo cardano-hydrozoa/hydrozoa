@@ -35,7 +35,7 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .toEither
 
         val beaconToken = Asset.builder
-            .name(recipe.beaconTokenName.tokenName)
+            .name(recipe.beaconTokenName.tokenNameHex)
             .value(BigInteger.valueOf(1))
             .build
 

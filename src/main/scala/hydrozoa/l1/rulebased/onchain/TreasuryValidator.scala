@@ -5,10 +5,17 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, UnresolvedDatum}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.{
+    VerificationKeyBytes,
+    CurrencySymbol as HCurrencySymbol,
+    PosixTime as HPosixTime,
+    TokenName as HTokenName
+}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -426,6 +433,24 @@ object TreasuryScript {
     val sir = Compiler.compile(TreasuryValidator.validate)
     val uplc = sir.toUplcOptimized(true)
 }
+
+def mkTreasuryDatumUnresolved(
+    headMp: HCurrencySymbol,
+    disputeId: HTokenName,
+    peers: List[VerificationKeyBytes],
+    deadlineVoting: HPosixTime,
+    versionMajor: BigInt,
+    params: L2ConsensusParamsH32
+): TreasuryDatum =
+    UnresolvedDatum(
+      headMp = ByteString.fromArray(IArray.genericWrapArray(headMp.bytes).toArray),
+      disputeId = ByteString.fromHex(disputeId.tokenNameHex),
+      peers = peers.map(_.bytes |> ByteString.fromArray),
+      peersN = peers.length,
+      deadlineVoting = deadlineVoting,
+      versionMajor = versionMajor,
+      params = params
+    ) |> Unresolved.apply
 
 @main
 def main(args: String): Unit =

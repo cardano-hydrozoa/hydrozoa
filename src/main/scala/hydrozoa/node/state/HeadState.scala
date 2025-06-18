@@ -78,6 +78,7 @@ sealed trait InitializingPhaseReader extends HeadStateReaderApi:
 trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
+    def headMintingPolicy: CurrencySymbol
     def headBechAddress: AddressBechL1
     def beaconTokenName: TokenName
     def seedAddress: AddressBechL1
@@ -142,6 +143,7 @@ class HeadStateGlobal(
     val headPeerVKs: Map[WalletId, VerificationKeyBytes],
     val headParams: HeadParams,
     val headNativeScript: NativeScript,
+    val headMintingPolicy: CurrencySymbol,
     val headAddress: AddressBechL1,
     val beaconTokenName: TokenName,
     val seedAddress: AddressBechL1,
@@ -240,6 +242,7 @@ class HeadStateGlobal(
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
         def headPeers: Set[WalletId] = self.headPeerVKs.keySet
         def headNativeScript: NativeScript = self.headNativeScript
+        def headMintingPolicy: CurrencySymbol = self.headMintingPolicy
         def beaconTokenName: TokenName = self.beaconTokenName
         def seedAddress: AddressBechL1 = self.seedAddress
         def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.ref
@@ -668,6 +671,7 @@ object HeadStateGlobal:
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
           headNativeScript = params.headNativeScript,
+          headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,
           seedAddress = params.seedAddress,

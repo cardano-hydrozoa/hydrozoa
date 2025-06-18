@@ -13,7 +13,7 @@ import hydrozoa.l2.ledger.event.NonGenesisL2EventLabel.{
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.state.HeadPhase.Finalized
-import hydrozoa.{AddressBechL1, NativeScript, TokenName, VerificationKeyBytes}
+import hydrozoa.{AddressBechL1, CurrencySymbol, NativeScript, TokenName, VerificationKeyBytes}
 import ox.channels.ActorRef
 
 import scala.collection.mutable
@@ -143,6 +143,7 @@ case class InitializingHeadParams(
     headPeerVKs: Map[WalletId, VerificationKeyBytes],
     headParams: HeadParams,
     headNativeScript: NativeScript,
+    headMintingPolicy: CurrencySymbol,
     headAddress: AddressBechL1,
     beaconTokenName: TokenName,
     seedAddress: AddressBechL1,

@@ -1,5 +1,7 @@
 package hydrozoa.l1.rulebased.onchain
 
+import hydrozoa.VerificationKeyBytes
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TallyingValidator.TallyRedeemer
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
@@ -8,7 +10,7 @@ import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, onlyNonAdaAsset}
 import hydrozoa.l2.block.BlockTypeL2
 import scalus.*
-import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
+import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
@@ -323,6 +325,23 @@ object DisputeResolutionScript {
     val sir = Compiler.compile(TallyingValidator.validate)
     val uplc = sir.toUplcOptimized(true)
 }
+
+// TODO: utxoActive
+def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
+    VoteDatum(
+      0,
+      if peersN > 0 then 1 else 0,
+      None,
+      VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
+    )
+
+def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
+    VoteDatum(
+      key = key,
+      link = if peersN > key then key + 1 else 0,
+      peer = Some(PubKeyHash(blake2b_224(ByteString.fromArray(peer.bytes)))),
+      voteStatus = VoteStatus.NoVote
+    )
 
 //@main
 //def main(args: String): Unit = {
