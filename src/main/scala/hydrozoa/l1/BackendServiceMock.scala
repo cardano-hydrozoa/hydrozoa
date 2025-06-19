@@ -108,7 +108,7 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
 
         output.tokens.foreach((policyId, tokens) =>
             tokens.foreach((tokenName, quantity) =>
-                val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenNameHex)
                 amounts.add(Amount.asset(unit, quantity.longValue))
             )
         )

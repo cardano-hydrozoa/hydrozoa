@@ -8,8 +8,8 @@ import hydrozoa.l2.ledger.*
 import scala.collection.mutable
 import scalus.builtin.ByteString
 import scalus.prelude.AssocMap
-import scalus.prelude.Maybe.{Just, Nothing}
-import scalus.prelude.Prelude.given_Eq_ByteString
+import scalus.prelude.Option.{Some as SSome, None as SNone}
+import scalus.prelude.{Option as SOption, given}
 import scalus.ledger.api.v1 as scalus
 
 /** This object defines types and constructors for Hydrozoa's L2 ledger and contains a class that
@@ -47,11 +47,11 @@ object SimpleL2Ledger:
     private def liftOutput(output: OutputL2): LedgerOutput =
         val address = decodeBech32AddressL2(output.address)
         val value = scalus.Value.lovelace(output.coins)
-        scalus.TxOut(address = address, value = value, datumHash = Nothing)
+        scalus.TxOut(address = address, value = value, datumHash = SNone)
 
     private def unliftOutput(output: LedgerOutput): Output[L2] =
-        val Just(e) = AssocMap.lookup(output.value)(ByteString.empty)
-        val Just(coins) = AssocMap.lookup(e)(ByteString.empty)
+        val SSome(e) = AssocMap.get(output.value)(ByteString.empty)
+        val SSome(coins) = AssocMap.get(e)(ByteString.empty)
         Output[L2](plutusAddressAsL2(output.address).asL2, coins, emptyTokens)
 
     private def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =

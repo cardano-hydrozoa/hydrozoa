@@ -50,4 +50,4 @@ def mkHeadNativeScriptAndAddress(
     val nw = Network(network.networkId, network.protocolMagic)
     val address = getEntAddress(script, nw).toBech32
 
-    (HNativeScript(scriptRefBytes), currencySymbol, AddressBechL1(address))
+    (HNativeScript(scriptRefBytes), currencySymbol, AddressBech[L1](address))

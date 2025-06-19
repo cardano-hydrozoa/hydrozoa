@@ -51,7 +51,7 @@ class BloxBeanFallbackTxBuilder(
 
         // Find the treasury output
         // TODO: shall we fix the order of outputs? So we can just always take the first output?
-        val Right(treasuryOutputIx, _, multisigTreasuryDatum) =
+        val Right(treasuryOutputIx, _, _, multisigTreasuryDatum) =
             onlyOutputToAddress(r.multisigTx, headAddressBech32)
         val treasuryOutput = tb.getBody.getOutputs.get(treasuryOutputIx.ix)
 

@@ -17,7 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
-import scalus.prelude.Option
+import scalus.prelude.Option as SOption
 import scalus.prelude.Option.asScalus
 
 import scala.concurrent.duration.DurationInt
@@ -208,11 +208,12 @@ class Node:
             case other => Left(s"Node should be in Open or Finalizing pase, but it's in $other")
 
         errorOrBlock match
-            case Left(err)    => Left(err)
+            case Left(err) => Left(err)
             case Right(block) =>
                 val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
-                    nodeState.ask(_.head.getBlockRecord(block))
-                      .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
+                    nodeState
+                        .ask(_.head.getBlockRecord(block))
+                        .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
                 }
 
                 effects match

@@ -72,7 +72,7 @@ class CardanoL1Mock() extends CardanoL1:
 
                 output.tokens.foreach((policyId, tokens) =>
                     tokens.foreach((tokenName, quantity) =>
-                        val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenName)
+                        val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenNameHex)
                         amounts.add(Amount.asset(unit, quantity.longValue))
                     )
                 )

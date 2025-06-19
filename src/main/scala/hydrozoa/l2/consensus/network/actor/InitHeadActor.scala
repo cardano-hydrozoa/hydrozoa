@@ -104,18 +104,19 @@ private class InitHeadActor(
                         // Put the head into Initializing phase
                         val (headPeersVKs, autonomousBlocks) =
                             stateActor.ask(s =>
-                                (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction))
-                    val params = InitializingHeadParams(
-                      ownAck.peer,
-                      headPeersVKs,
-                      HeadParams.default,
-                      headNativeScript,
-                      headMintingPolicy,
-                      headAddress,
-                      beaconTokenName,
-                      seedAddress,
-                      initTx,
-                      System.currentTimeMillis(),
+                                (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction)
+                            )
+                        val params = InitializingHeadParams(
+                          ownAck.peer,
+                          headPeersVKs,
+                          HeadParams.default,
+                          headNativeScript,
+                          headMintingPolicy,
+                          headAddress,
+                          beaconTokenName,
+                          seedAddress,
+                          initTx,
+                          System.currentTimeMillis(),
                           autonomousBlocks
                         )
                         stateActor.tell(_.tryInitializeHead(params))
