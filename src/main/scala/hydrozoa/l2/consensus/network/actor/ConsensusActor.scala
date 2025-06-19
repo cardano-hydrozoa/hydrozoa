@@ -169,6 +169,7 @@ class ConsensusActorFactory(
           stateActor,
           walletActor,
           settlementTxBuilder,
+          fallbackTxBuilder,
           cardanoActor,
           dropMyself
         )

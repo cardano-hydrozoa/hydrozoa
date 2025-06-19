@@ -30,7 +30,15 @@ class BloxBeanSettlementTxBuilder(
 
         // We use a buffer here since despite the fact inputs are a set,
         // the order matters - different orders produce different txIds.
-        val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
+
+        // Wer can't use reader.multisigRegime(_.treasuryUtxoId) since `MultisigHeadStateL1`
+        // holds information as L1 provider sees it.
+        
+        // So instead we have to use the last known settlement transaction with `lastKnownTreasuryUtxoId`.
+        
+        //val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
+        
+        val utxoIds = r.deposits.toBuffer.append(reader.openPhaseReader(_.lastKnownTreasuryUtxoId))
 
         val utxoInput: Seq[Utxo] =
             utxoIds

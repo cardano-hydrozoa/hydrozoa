@@ -89,6 +89,8 @@ class BloxBeanFallbackTxBuilder(
                 .address(r.disputeScript.bech32)
                 .value(
                   Value.builder
+                      // TODO: MinAda
+                      .coin(BigInteger.valueOf(2_000_000))
                       .multiAssets(
                         List(
                           MultiAsset
@@ -136,6 +138,7 @@ class BloxBeanFallbackTxBuilder(
                 t.getWitnessSet.getNativeScripts.add(headNativeScript)
                 val outputs = t.getBody.getOutputs
                 // NB: utxo added automagically by .mintAssets
+                // fails if treasuryScript == headAddress (should never be the case)
                 outputs.remove(1)
                 // proper set of utxos (def + voting)
                 outputs.add(defVoteUtxo)
@@ -143,6 +146,7 @@ class BloxBeanFallbackTxBuilder(
             )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
             // FIXME: Fails with "Not enough funds" (at least for fallback against init tx)
+            // TODO: When building against a settlement tx, it pulls in the old treasury utxo :-(
             // .feePayer(r.headAddressBech32.bech32)
             .feePayer(
               "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"

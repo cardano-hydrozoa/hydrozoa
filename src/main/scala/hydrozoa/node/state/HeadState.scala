@@ -9,7 +9,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
-import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
@@ -56,12 +56,11 @@ trait HeadState:
     def finalizingPhase[A](foo: FinalizingPhase => A): A
 
     /** Used only for testing. Tries to look up block's effects.
-     *
-     * @return
-     * Block record and optional genesis if effects for block are ready.
-     */
+      *
+      * @return
+      *   Block record and optional genesis if effects for block are ready.
+      */
     def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2Genesis)])]
-
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Readers hierarchy
@@ -88,6 +87,7 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def l2Tip: Block
     def l2LastMajor: Block
+    def lastKnownTreasuryUtxoId: UtxoIdL1
     def peekDeposits: DepositUtxos
     def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
     def blockLeadTurn: Int
@@ -132,6 +132,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def requestFinalization(): Unit
     def isNextBlockFinal: Boolean
     def switchToFinalizingPhase(): Unit
+
     /** As an API (trait's) method is used only for testing. Tries to run block creation routine and
       * consensus on the block. Returns the block, for getting the block record use
       * `getBlockRecord`.
@@ -258,8 +259,8 @@ class HeadStateGlobal(
             case _          => throw IllegalStateException("The head is not in Finalizing phase.")
 
     override def getBlockRecord(
-                                   block: Block
-                               ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
+        block: Block
+    ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
         // TODO: shall we use Map not Buffer?
         self.blocksConfirmedL2.find(_.block == block) match
             case None => None
@@ -291,6 +292,11 @@ class HeadStateGlobal(
             .findLast(_.block.blockHeader.blockType == Major)
             .map(_.block)
             .getOrElse(zeroBlock)
+        def lastKnownTreasuryUtxoId: UtxoIdL1 = self.blocksConfirmedL2
+                .findLast(_.block.blockHeader.blockType == Major)
+                .map(record =>
+                    UtxoIdL1.apply(txHash(maybeMultisigL1Tx(record.l1Effect).get), TxIx(0)))
+                .getOrElse(treasuryUtxoId)
         def peekDeposits: DepositUtxos =
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
@@ -425,7 +431,7 @@ class HeadStateGlobal(
         }
 
         override def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
-            log.info("Setting a new treasury utxo...")
+            log.info(s"Setting a new treasury utxo: $treasuryUtxo")
             self.stateL1.get.treasuryUtxo = treasuryUtxo
             metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
 

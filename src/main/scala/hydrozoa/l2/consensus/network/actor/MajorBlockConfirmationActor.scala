@@ -4,13 +4,14 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
+import hydrozoa.l1.multisig.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
-import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger
+import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
-import hydrozoa.{TxId, TxKeyWitness, UtxoSetL2, Wallet}
+import hydrozoa.{AddressBech, L1, TxId, TxKeyWitness, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 
@@ -21,6 +22,7 @@ private class MajorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     settlementTxBuilder: SettlementTxBuilder,
+    fallbackTxBuilder: FallbackTxBuilder,
     cardano: ActorRef[CardanoL1],
     dropMyself: () => Unit
 ) extends ConsensusActor:
@@ -46,21 +48,10 @@ private class MajorBlockConfirmationActor(
         log.debug(s"headPeers: $headPeers")
         if req != null && ownAck2.isEmpty && acks.keySet == headPeers then
             // TODO: how do we check that all acks are valid?
-            // Create settlement tx draft
-            val txRecipe = SettlementRecipe(
-              req.block.blockHeader.versionMajor,
-              req.block.blockBody.depositsAbsorbed,
-              utxosWithdrawn
-            )
-            val Right(settlementTxDraft: SettlementTx) =
-                settlementTxBuilder.mkSettlementTxDraft(txRecipe)
-            val serializedTx = serializeTxHex(settlementTxDraft)
-            log.info(s"Settlement tx for block ${req.block.blockHeader.blockNum} is $serializedTx")
-            // TxDump.dumpMultisigTx(settlementTxDraft)
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
             val ownAck2 = AckMajor2(me, settlementTxKeyWitness, isNextBlockFinal)
-            this.settlementTxDraft = settlementTxDraft
+
             this.ownAck2 = Some(ownAck2)
             deliverAck2(ownAck2)
             Some(ownAck2)
@@ -73,13 +64,14 @@ private class MajorBlockConfirmationActor(
             // Create effects
             // L1 effect
             val wits = acks2.map(_._2.settlement)
-            val settlementTx = wits.foldLeft(settlementTxDraft)(addWitnessMultisig)
+            val settlementTx = wits.foldLeft(this.settlementTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(settlementTx)
             val l1Effect: L1BlockEffect = settlementTx
             val l2Effect = Some(utxosActive)
             // Block record and state update by block application
-            // TODO: L1PostDatedBlockEffect
+            // TODO: add L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, (), l2Effect)
+            log.info(s"Major block record is: $record")
             stateActor.tell(nodeState =>
                 nodeState.head.openPhase(s =>
                     s.applyBlockRecord(record, mbGenesis)
@@ -166,11 +158,70 @@ private class MajorBlockConfirmationActor(
         this.mbGenesis = mbGenesis
         this.utxosWithdrawn = utxosWithdrawn
 
-        // Prepare own acknowledgement
-        val (me) = walletActor.ask(w => (w.getWalletId))
-        // TODO: postDatedTransition
-        val ownAck = AckMajor(me, Seq.empty, TxKeyWitness(Array.empty, Array.empty))
+        // Prepare own ack1
+        val myself = walletActor.ask(w => w.getWalletId)
+
+        // Create settlement tx draft
+        val txRecipe = SettlementRecipe(
+          req.block.blockHeader.versionMajor,
+          req.block.blockBody.depositsAbsorbed,
+          utxosWithdrawn
+        )
+        log.info(s"Settlement tx recipe: $txRecipe")
+        val Right(settlementTxDraft: SettlementTx) =
+            settlementTxBuilder.mkSettlementTxDraft(txRecipe)
+        val serializedTx = serializeTxHex(settlementTxDraft)
+        log.info(s"Settlement tx for block ${req.block.blockHeader.blockNum} is $serializedTx")
+        this.settlementTxDraft = settlementTxDraft
+        // TxDump.dumpMultisigTx(settlementTxDraft)
+
+        // Create the corresponding post-dated fallback tx
+        val (peersKeys, headAddress, headNativeScript, headMintingPolicy) =
+            stateActor.ask(state =>
+                state.head.openPhase { openHead =>
+                    val peersKeys = state.getVerificationKeys(openHead.headPeers).get
+                    val (headAddress, headNativeScript, headMintingPolicy) =
+                        (
+                          openHead.headBechAddress,
+                          openHead.headNativeScript,
+                          openHead.headMintingPolicy
+                        )
+                    (peersKeys, headAddress, headNativeScript, headMintingPolicy)
+                }
+            )
+
+        val fallbackTxRecipe = FallbackTxRecipe(
+          multisigTx = settlementTxDraft,
+          // FIXME: script
+          treasuryScript = AddressBech[L1](
+            "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
+          ),
+          // FIXME: script
+          disputeScript = AddressBech[L1](
+            "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
+          ),
+          votingDuration = 1024,
+          // Sorting
+          peers = peersKeys.toList,
+          headAddressBech32 = headAddress,
+          headNativeScript = headNativeScript,
+          headMintingPolicy = headMintingPolicy
+        )
+
+        log.error(s"FallbackTxRecipe= $fallbackTxRecipe")
+
+        val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
+
+        log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
+        log.info("Fallback tx draft hash: " + txHash(fallbackTxDraft))
+
+        val (me, fallbackTxKeyWitness) =
+            walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(fallbackTxDraft)))
+
+        // TODO: rollouts
+        val ownAck = AckMajor(myself, Seq.empty, fallbackTxKeyWitness)
         log.debug(s"Own AckMajor: $ownAck")
+
         val mbAck2 = deliver(ownAck)
         log.debug(s"Own AckMajor2: $mbAck2")
 
