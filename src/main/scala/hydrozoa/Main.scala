@@ -7,6 +7,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
+import hydrozoa.l1.multisig.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
@@ -85,12 +86,12 @@ object HydrozoaNode extends OxApp:
 
                 val (
                   initTxBuilder,
+                  fallbackTxBuilder,
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
                   finalizationTxBuilder
                 ) = mkTxBuilders(backendService, nodeState, knownPeers)
-
 
                 val nodeStateActor = Actor.create(nodeState)
 
@@ -102,6 +103,7 @@ object HydrozoaNode extends OxApp:
                       walletActor,
                       cardanoActor,
                       initTxBuilder,
+                      fallbackTxBuilder,
                       refundTxBuilder,
                       settlementTxBuilder,
                       finalizationTxBuilder
@@ -217,6 +219,8 @@ def mkTxBuilders(
 
     // Tx Builders
     val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+    val fallbackTxBuilder: FallbackTxBuilder =
+        BloxBeanFallbackTxBuilder(backendService)
     val depositTxBuilder: DepositTxBuilder =
         BloxBeanDepositTxBuilder(backendService, nodeStateReader)
     val refundTxBuilder: RefundTxBuilder =
@@ -228,6 +232,7 @@ def mkTxBuilders(
 
     (
       initTxBuilder,
+      fallbackTxBuilder,
       depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,

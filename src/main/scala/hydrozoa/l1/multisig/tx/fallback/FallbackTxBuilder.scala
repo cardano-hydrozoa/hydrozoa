@@ -40,5 +40,8 @@ case class FallbackTxRecipe(
     votingDuration: PosixTime,
 
     // Head's peers.
-    peers: List[VerificationKeyBytes]
+    peers: List[VerificationKeyBytes],
+    headAddressBech32: AddressBechL1,
+    headNativeScript: NativeScript,
+    headMintingPolicy: CurrencySymbol
 )

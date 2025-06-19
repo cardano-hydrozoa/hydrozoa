@@ -33,16 +33,12 @@ import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
 
 class BloxBeanFallbackTxBuilder(
-    backendService: BackendService,
-    reader: HeadStateReader
+    backendService: BackendService
 ) extends FallbackTxBuilder {
 
     private val builder = mkBuilder[Tx](backendService)
 
     override def buildFallbackTxDraft(r: FallbackTxRecipe): Either[String, TxL1] =
-
-        // Used as the "from" address and to find the treasury output
-        val headAddressBech32 = reader.multisigRegime(_.headBechAddress)
 
         // Parse Tx and calculate its hash - can be passed along with it since it's already known.
         val txBytes = r.multisigTx.bytes
@@ -52,7 +48,7 @@ class BloxBeanFallbackTxBuilder(
         // Find the treasury output
         // TODO: shall we fix the order of outputs? So we can just always take the first output?
         val Right(treasuryOutputIx, _, _, multisigTreasuryDatum) =
-            onlyOutputToAddress(r.multisigTx, headAddressBech32)
+            onlyOutputToAddress(r.multisigTx, r.headAddressBech32)
         val treasuryOutput = tb.getBody.getOutputs.get(treasuryOutputIx.ix)
 
         // TODO: update txOutputToUtxo to support tokens
@@ -62,9 +58,7 @@ class BloxBeanFallbackTxBuilder(
         val multisigDatum = fromData[MultisigTreasuryDatum](multisigTreasuryDatum)
 
         val headNativeScript =
-            NativeScript.deserializeScriptRef(reader.multisigRegime(_.headNativeScript).bytes)
-
-        val headMp = reader.multisigRegime(_.headMintingPolicy)
+            NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
 
         // Calculate dispute id
         val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(txHash), treasuryOutputIx))
@@ -72,7 +66,7 @@ class BloxBeanFallbackTxBuilder(
         // Treasury datum
         val treasuryDatum = Interop.toPlutusData(
           mkTreasuryDatumUnresolved(
-            headMp = headMp,
+            headMp = r.headMintingPolicy,
             disputeId = voteTokenName,
             peers = r.peers.asScalus,
             // FIXME: we are going to remove it, votingDuration should go to the timer utxo
@@ -99,7 +93,7 @@ class BloxBeanFallbackTxBuilder(
                         List(
                           MultiAsset
                               .builder()
-                              .policyId(encodeHex(headMp.bytes))
+                              .policyId(encodeHex(r.headMintingPolicy.bytes))
                               .assets(
                                 List(
                                   Asset.builder
@@ -132,7 +126,7 @@ class BloxBeanFallbackTxBuilder(
               multisigTreasuryUtxo.getAmount,
               treasuryDatum
             )
-            .from(headAddressBech32.bech32)
+            .from(r.headAddressBech32.bech32)
             .mintAssets(headNativeScript, voteTokens)
 
         val fallbackTx = builder
@@ -143,6 +137,9 @@ class BloxBeanFallbackTxBuilder(
                 t.getBody.getOutputs.addAll((List(defVoteUtxo) ++ voteUtxos).asJava)
             )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
+            // FIXME: Not enough funds
+            //.feePayer(r.headAddressBech32.bech32)
+            .feePayer("addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q")
             .build
 
         fallbackTx.serialize() |> TxL1.apply |> Right.apply

@@ -101,7 +101,7 @@ class LocalFacade(
     override def produceBlock(
         nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
-        log.info("SUT: producing a block in a lockstep manner...")
+        log.info(s"SUT: producing a block in a lockstep manner (nextBlockFinal = $nextBlockFinal...")
 
         // Note: this is not ideal, you may see errors in logs like
         // "Block production procedure was unable to create a block number N+1".
@@ -177,4 +177,3 @@ object LocalFacade:
           nodes.toMap,
           threadId => shutdownFlag.put(threadId, true)
         )
-

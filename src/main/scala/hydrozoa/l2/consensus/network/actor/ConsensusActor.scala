@@ -3,6 +3,7 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
 import hydrozoa.l1.CardanoL1
+import hydrozoa.l1.multisig.tx.fallback.FallbackTxBuilder
 import hydrozoa.l1.multisig.tx.finalization.FinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.RefundTxBuilder
@@ -59,6 +60,7 @@ class ConsensusActorFactory(
     val walletActor: ActorRef[Wallet],
     val cardanoActor: ActorRef[CardanoL1],
     val initTxBuilder: InitTxBuilder,
+    val fallbackTxBuilder: FallbackTxBuilder,
     val refundTxBuilder: RefundTxBuilder,
     val settlementTxBuilder: SettlementTxBuilder,
     val finalizationTxBuilder: FinalizationTxBuilder
@@ -153,6 +155,7 @@ class ConsensusActorFactory(
           walletActor,
           cardanoActor,
           initTxBuilder,
+          fallbackTxBuilder,
           dropMyself
         )
 

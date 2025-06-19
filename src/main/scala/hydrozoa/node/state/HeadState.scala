@@ -629,7 +629,7 @@ class HeadStateGlobal(
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !self.isBlockPending.get
             then
-                log.info(s"`Trying to produce the final block` ${l2Tip.blockHeader.blockNum + 1}...")
+                log.info(s"Trying to produce the final block ${l2Tip.blockHeader.blockNum + 1}...")
 
                 val tipHeader = l2Tip.blockHeader
                 blockProductionActor.ask(

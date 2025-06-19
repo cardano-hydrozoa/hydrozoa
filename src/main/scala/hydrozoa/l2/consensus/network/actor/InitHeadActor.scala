@@ -5,6 +5,7 @@ import hydrozoa.*
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
 import hydrozoa.l2.consensus.HeadParams
@@ -20,6 +21,7 @@ private class InitHeadActor(
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
     initTxBuilder: InitTxBuilder,
+    fallbackTxBuilder: FallbackTxBuilder,
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
@@ -63,7 +65,6 @@ private class InitHeadActor(
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         log.info("Init tx draft: " + serializeTxHex(txDraft))
-
         log.info("Init tx draft hash: " + txHash(txDraft))
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
@@ -73,12 +74,41 @@ private class InitHeadActor(
         this.ownAck = ownAck
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
-        this.headMintingPolicy = headMintingPolicy
+        this.headMintingPolicy = headMp
         this.headAddress = headAddress
         this.beaconTokenName = beaconTokenName
         this.seedAddress = seedAddress
+
+        // TODO: temporary code to test fallback tx
+        // factor out
+        val peers = req.otherHeadPeers + req.initiator
+        // FIXME: .get
+        val peersKeys = stateActor.ask(_.getVerificationKeys(peers).get)
+
+        val fallbackTxRecipe = FallbackTxRecipe(
+            multisigTx = txDraft,
+            treasuryScript = seedAddress,
+            disputeScript = seedAddress,
+            votingDuration = 1024,
+            // Sorting
+            peers = peersKeys.toList,
+            headAddressBech32 = this.headAddress,
+            headNativeScript = this.headNativeScript,
+            headMintingPolicy = this.headMintingPolicy
+        )
+
+        log.error(s"FallbackTxRecipe= $fallbackTxRecipe")
+
+        val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
+
+        log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
+        log.info("Fallback tx draft hash: " + txHash(fallbackTxDraft))
+
+        // End of temporary code
+
         deliver(ownAck)
         Seq(ownAck)
+
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
@@ -89,7 +119,7 @@ private class InitHeadActor(
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
 
-        // Request initially may absent
+        // Initially the request may be absent (if an ack comes first)
         if (req != null)
             val headPeers = req.otherHeadPeers + req.initiator
             if acks.keySet == headPeers

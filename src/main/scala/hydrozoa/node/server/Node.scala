@@ -195,7 +195,7 @@ class Node:
           "Autonomous block production should be turned off to use this function"
         )
 
-        log.info("Calling tryProduceBlock in lockstep...")
+        log.info(s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal...")
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
                 nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true))) match

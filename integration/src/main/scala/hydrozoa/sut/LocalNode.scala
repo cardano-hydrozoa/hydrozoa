@@ -82,6 +82,7 @@ object LocalNode:
 
                 val (
                   initTxBuilder,
+                  fallbackTxBuilder,
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
@@ -102,6 +103,7 @@ object LocalNode:
                       walletActor,
                       cardanoActor,
                       initTxBuilder,
+                      fallbackTxBuilder,
                       refundTxBuilder,
                       settlementTxBuilder,
                       finalizationTxBuilder
