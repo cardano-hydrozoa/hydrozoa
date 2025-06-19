@@ -1,12 +1,13 @@
 package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
-import com.bloxbean.cardano.client.api.model.{Result, Utxo}
+import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
 import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.VerificationKeyBytes
 
+import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
 extension [A](result: Result[A])
@@ -34,20 +35,24 @@ extension [A](option: Option[A])
         case Some(a) => ResultUtils.mkResult[A](a)
         case None    => Result.error(err).asInstanceOf[Result[A]]
 
-// Make an Utxo from an output reference + TransactionOutput
+// Make an Utxo from an output reference + TransactionOutput.
+// Used in BloxBean builders.
 // For now has some limitations:
 // * no datum hashes
 // * no scripts
-// * FIXME: only ada
 def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
+    val assets = mutable.Buffer[Amount]()
+    output.getValue.toMap.forEach((policy, inner) =>
+        inner.forEach((name, amount) => assets.append(Amount.asset(policy, name, amount)))
+    )
     Utxo(
       txHash,
       txIx,
       output.getAddress,
-      List(lovelace(output.getValue.getCoin)).asJava,
-      null, // no datum hashes
+      assets.toList.asJava,
+      null, // TODO: no datum hashes
       output.getInlineDatum.serializeToHex,
-      null // no scripts
+      null // TODO: no scripts
     )
 
 def encodeHex(bytes: IArray[Byte]): String =

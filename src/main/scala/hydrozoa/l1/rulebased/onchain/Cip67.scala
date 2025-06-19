@@ -18,7 +18,5 @@ def mkVoteTokenName(treasuryUtxoId: UtxoIdL1): TokenName =
         treasuryUtxoId.outputIx.ix
       ).toByteArray.toList).toArray
     )
-//    ("0x" + encodeHex(IArray.from(disputeTokenPrefix ++ name.bytes)))
-//        |> TokenName.apply
     encodeHex(IArray.from(disputeTokenPrefix ++ name.bytes))
         |> TokenName.apply

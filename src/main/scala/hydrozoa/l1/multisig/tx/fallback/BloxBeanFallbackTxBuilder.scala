@@ -134,12 +134,19 @@ class BloxBeanFallbackTxBuilder(
             // .preBalanceTx should be called only once
             .preBalanceTx((_, t) =>
                 t.getWitnessSet.getNativeScripts.add(headNativeScript)
-                t.getBody.getOutputs.addAll((List(defVoteUtxo) ++ voteUtxos).asJava)
+                val outputs = t.getBody.getOutputs
+                // NB: utxo added automagically by .mintAssets
+                outputs.remove(1)
+                // proper set of utxos (def + voting)
+                outputs.add(defVoteUtxo)
+                outputs.addAll(voteUtxos.asJava)
             )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
-            // FIXME: Not enough funds
-            //.feePayer(r.headAddressBech32.bech32)
-            .feePayer("addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q")
+            // FIXME: Fails with "Not enough funds" (at least for fallback against init tx)
+            // .feePayer(r.headAddressBech32.bech32)
+            .feePayer(
+              "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
+            )
             .build
 
         fallbackTx.serialize() |> TxL1.apply |> Right.apply

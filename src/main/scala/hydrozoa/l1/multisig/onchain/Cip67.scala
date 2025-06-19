@@ -19,5 +19,6 @@ def mkBeaconTokenName(seedUtxoId: UtxoIdL1): TokenName =
         seedUtxoId.outputIx.ix
       ).toByteArray.toList).toArray
     )
+    // FIXME: move the prefix somewhere else
     ("0x" + encodeHex(IArray.from(treasuryBeaconPrefix ++ name.bytes)))
         |> TokenName.apply

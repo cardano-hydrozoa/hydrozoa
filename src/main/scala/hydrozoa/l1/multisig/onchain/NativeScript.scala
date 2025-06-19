@@ -42,9 +42,11 @@ def mkHeadNativeScriptAndAddress(
         .map((_, vk) => ScriptPubkey.create(vk))
         .foldLeft(ScriptAll())((s: ScriptAll, k: ScriptPubkey) => s.addScript(k))
 
-    // Currency symbol
+    // Script body
     val scriptRefBytes = script.scriptRefBytes
-    val currencySymbol = CryptoHash.H28.hash_(scriptRefBytes).bytes |> HCurrencySymbol.apply
+    
+    // Currency symbol
+    val currencySymbol = IArray.from(script.getScriptHash) |> HCurrencySymbol.apply
 
     // Address
     val nw = Network(network.networkId, network.protocolMagic)
