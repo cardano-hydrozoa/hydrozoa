@@ -1,6 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.*
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
@@ -10,7 +11,6 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import hydrozoa.*
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -62,6 +62,8 @@ private class InitHeadActor(
         // Builds and balance initialization tx
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
+        log.info("Init tx draft: " + serializeTxHex(txDraft))
+
         log.info("Init tx draft hash: " + txHash(txDraft))
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
@@ -86,40 +88,46 @@ private class InitHeadActor(
 
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
-        val headPeers = req.otherHeadPeers + req.initiator
-        if acks.keySet == headPeers
-        then
-            // All wits are here, we can sign and submit
-            val initTx = acks.values.foldLeft(txDraft)(addWitness)
-            val serializedTx = serializeTxHex(initTx)
-            log.info("Initialization tx: " + serializedTx)
 
-            cardanoActor.ask(_.submit(toL1Tx(initTx))) match
-                case Right(txHash) =>
-                    // Put the head into Initializing phase
-                    val headPeersVKs = stateActor.ask(_.getVerificationKeyMap(headPeers))
+        // Request initially may absent
+        if (req != null)
+            val headPeers = req.otherHeadPeers + req.initiator
+            if acks.keySet == headPeers
+            then
+                // All wits are here, we can sign and submit
+                val initTx = acks.values.foldLeft(txDraft)(addWitness)
+                val serializedTx = serializeTxHex(initTx)
+                log.info("Initialization tx: " + serializedTx)
+
+                cardanoActor.ask(_.submit(toL1Tx(initTx))) match
+                    case Right(txHash) =>
+                        // Put the head into Initializing phase
+                        val (headPeersVKs, autonomousBlocks) =
+                            stateActor.ask(s =>
+                                (s.getVerificationKeyMap(headPeers), s.autonomousBlockProduction))
                     val params = InitializingHeadParams(
                       ownAck.peer,
                       headPeersVKs,
                       HeadParams.default,
-                      headNativeScript, 
+                      headNativeScript,
                       headMintingPolicy,
                       headAddress,
                       beaconTokenName,
                       seedAddress,
                       initTx,
-                      System.currentTimeMillis()
-                    )
-                    stateActor.tell(_.tryInitializeHead(params))
-                    TxDump.dumpInitTx(initTx)
-                    resultChannel.send(txHash)
-                    dropMyself()
+                      System.currentTimeMillis(),
+                          autonomousBlocks
+                        )
+                        stateActor.tell(_.tryInitializeHead(params))
+                        TxDump.dumpInitTx(initTx)
+                        resultChannel.send(txHash)
+                        dropMyself()
 
-                case Left(err) =>
-                    val msg = s"Can't submit init tx: $err"
-                    log.error(msg)
-                    // FIXME: what should go next here?
-                    throw RuntimeException(msg)
+                    case Left(err) =>
+                        val msg = s"Can't submit init tx: $err"
+                        log.error(msg)
+                        // FIXME: what should go next here?
+                        throw RuntimeException(msg)
 
     private val resultChannel: Channel[TxId] = Channel.buffered(1)
 

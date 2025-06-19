@@ -1,17 +1,22 @@
 package hydrozoa.node.rest
 
-import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.core.{
+    JsonKeyCodec,
+    JsonReader,
+    JsonValueCodec,
+    JsonWriter
+}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
-import hydrozoa.l2.ledger.{SimpleTransaction, SimpleWithdrawal}
+import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
     depositEndpoint,
+    finalizeEndpoint,
     initEndpoint,
     stateL2Endpoint,
     submitL1Endpoint,
-    submitL2Endpoint,
-    finalizeEndpoint
+    submitL2Endpoint
 }
 import hydrozoa.node.server.{
     DepositRequest,
@@ -20,6 +25,7 @@ import hydrozoa.node.server.{
     depositResponseCodec,
     depositResponseSchema
 }
+import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import sttp.tapir.*
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -27,7 +33,7 @@ import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-/** Hydrozoa Node API, currently backed by Tapir HTTP server.
+/** Hydrozoa Node API, currently implemented in terms of Tapir HTTP server.
   */
 class NodeRestApi(node: ActorRef[Node]):
 
@@ -50,8 +56,15 @@ class NodeRestApi(node: ActorRef[Node]):
             .port(port)
             .addEndpoints(apiEndpoints ++ swaggerEndpoints)
 
-    private def runInit(amount: Long, txId: String, txIx: Long): Either[String, String] =
-        node.ask(_.initializeHead(amount, TxId(txId), TxIx(txIx.toChar)).map(_.hash))
+    private def runInit(request: InitRequest): Either[String, String] =
+        node.ask(
+          _.initializeHead(
+            request.otherPeers.toSet,
+            request.amount,
+            request.seedUtxoTxId,
+            request.seedUtxoTxIx
+          ).map(_.hash)
+        )
 
     private def runDeposit(
         txId: String,
@@ -70,12 +83,12 @@ class NodeRestApi(node: ActorRef[Node]):
               TxIx(txIx.toChar),
               depositAmount,
               deadline,
-              AddressBechL2(address),
+              AddressBech[L2](address),
               (datum match
                   case None    => None
                   case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
               ),
-              AddressBechL1(refundAddress),
+              AddressBech[L1](refundAddress),
               (refundDatum match
                   case None    => None
                   case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
@@ -99,9 +112,7 @@ class NodeRestApi(node: ActorRef[Node]):
 object NodeRestApi:
     val initEndpoint = endpoint.put
         .in("init")
-        .in(query[Long]("amount")) // how much ADA should be deposited for fees into the treasury
-        .in(query[String]("txId"))
-        .in(query[Long]("txIx"))
+        .in(jsonBody[InitRequest])
         .out(stringBody)
         .errorOut(stringBody)
 
@@ -142,14 +153,14 @@ object NodeRestApi:
 
 // JSON/Schema instances
 enum SubmitRequestL2:
-    case Transaction(transaction: SimpleTransaction)
-    case Withdrawal(withdrawal: SimpleWithdrawal)
+    case Transaction(transaction: L2Transaction)
+    case Withdrawal(withdrawal: L2Withdrawal)
 
 object SubmitRequestL2:
-    def apply(event: SimpleTransaction | SimpleWithdrawal): SubmitRequestL2 =
+    def apply(event: L2Transaction | L2Withdrawal): SubmitRequestL2 =
         event match
-            case tx: SimpleTransaction => Transaction(tx)
-            case wd: SimpleWithdrawal  => Withdrawal(wd)
+            case tx: L2Transaction => Transaction(tx)
+            case wd: L2Withdrawal  => Withdrawal(wd)
 
 given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
     JsonCodecMaker.make
@@ -157,11 +168,11 @@ given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
 given submitRequestL2Schema: Schema[SubmitRequestL2] =
     Schema.derived[SubmitRequestL2]
 
-given simpleTransactionSchema: Schema[SimpleTransaction] =
-    Schema.derived[SimpleTransaction]
+given simpleTransactionSchema: Schema[L2Transaction] =
+    Schema.derived[L2Transaction]
 
-given simpleTWithdrawalSchema: Schema[SimpleWithdrawal] =
-    Schema.derived[SimpleWithdrawal]
+given simpleTWithdrawalSchema: Schema[L2Withdrawal] =
+    Schema.derived[L2Withdrawal]
 
 given txIdSchema: Schema[TxId] =
     Schema.derived[TxId]
@@ -169,10 +180,49 @@ given txIdSchema: Schema[TxId] =
 given txIx: Schema[TxIx] =
     Schema.derived[TxIx]
 
-type StateL2Response = List[(UtxoId[L2], Output[L2])]
+type StateL2Response = List[(UtxoId[L2], OutputNoTokens[L2])]
+
+//given policyIdCodec: JsonValueCodec[PolicyId] =
+//    JsonCodecMaker.make
+//
+//given tokenNameCodec: JsonValueCodec[TokenName] =
+//    JsonCodecMaker.make
+
+//implicit val policyIdCodec: JsonKeyCodec[PolicyId] = new JsonKeyCodec[PolicyId] {
+//    override def decodeKey(in: JsonReader): PolicyId = PolicyId(in.readKeyAsString())
+//
+//    override def encodeKey(x: PolicyId, out: JsonWriter): Unit =
+//        out.writeKey(x.policyId)
+//}
+//
+//implicit val tokenNameCodec: JsonKeyCodec[TokenName] = new JsonKeyCodec[TokenName] {
+//    override def decodeKey(in: JsonReader): TokenName = TokenName(in.readKeyAsString())
+//
+//    override def encodeKey(x: TokenName, out: JsonWriter): Unit =
+//        out.writeKey(x.tokenName)
+//}
 
 given stateL2ResponseCodec: JsonValueCodec[StateL2Response] =
     JsonCodecMaker.make
 
+given policyIdSchema: Schema[PolicyId] =
+    Schema.derived[PolicyId]
+
+given tokenNameSchema: Schema[TokenName] =
+    Schema.derived[TokenName]
+
 given stateL2ResponseSchema: Schema[StateL2Response] =
     Schema.derived[StateL2Response]
+
+case class InitRequest(
+    otherPeers: List[WalletId],
+    amount: Long,
+    seedUtxoTxId: TxId,
+    seedUtxoTxIx: TxIx
+)
+
+given initRequestCodec: JsonValueCodec[InitRequest] =
+    JsonCodecMaker.make
+
+given initRequestSchema: Schema[InitRequest] =
+    Schema.derived[InitRequest]

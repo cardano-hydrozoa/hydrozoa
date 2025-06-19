@@ -7,16 +7,21 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{AdaSimpleLedger, UtxosSet}
+import hydrozoa.l2.ledger.{L2Genesis, mkTransactionEvent, mkWithdrawalEvent}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
-import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
+import ox.resilience.{RetryConfig, retry, retryEither}
 import scalus.prelude.Option
 import scalus.prelude.Option.asScalus
+
+import scala.concurrent.duration.DurationInt
+import scala.util.Try
 
 class Node:
 
@@ -32,28 +37,43 @@ class Node:
     def nodeStateReader = nodeState
 
     def initializeHead(
-        // otherHeadPeers: Set[WalletId],
+        otherHeadPeers: Set[WalletId],
         treasuryAda: Long,
         txId: TxId,
         txIx: TxIx
     ): Either[InitializationError, TxId] =
-        // FIXME: for now others are all known peers minus own peer
-        val otherHeadPeers =
-            nodeState.ask(_.getKnownPeers).filterNot(p => p == wallet.ask(_.getWalletId))
-        assert(otherHeadPeers.nonEmpty, "Solo node mode is not supported yet.")
+
         log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
 
-        // Request verification keys from known peers
-        val knownVKeys = network.ask(_.reqVerificationKeys())
-        log.info(s"knownVKeys: $knownVKeys")
+        // TODO: explicit type for errors
+        Try({
+            // Check number of peers
+            if (otherHeadPeers.isEmpty)
+                val msg = "Solo node mode is not supported yet"
+                log.error(msg)
+                throw IllegalArgumentException(msg)
 
-        // ReqInit
-        val seedOutput = UtxoIdL1(txId, txIx)
-        val treasuryCoins = treasuryAda * 1_000_000
-        val reqInit = ReqInit(wallet.ask(_.getWalletId), otherHeadPeers, seedOutput, treasuryCoins)
-        val initTxId = network.ask(_.reqInit(reqInit))
+            // Check others are others indeed
+            if (otherHeadPeers.contains(wallet.ask(_.getWalletId)))
+                val msg = "Other head peers should NOT contain own peer"
+                log.error(msg)
+                throw IllegalArgumentException(msg)
 
-        Right(initTxId)
+            // TODO: we don't need keys of peers which are not going to form a head
+            // Request verification keys from known peers
+            val knownVKeys = network.ask(_.reqVerificationKeys())
+            log.info(s"knownVKeys: $knownVKeys")
+
+            // ReqInit
+            val seedOutput = UtxoIdL1(txId, txIx)
+            // TODO: unify - somewhere we ask for Ada, somewhere for Lovelace
+            val treasuryCoins = treasuryAda * 1_000_000
+            val reqInit =
+                ReqInit(wallet.ask(_.getWalletId), otherHeadPeers, seedOutput, treasuryCoins)
+            val initTxId = network.ask(_.reqInit(reqInit))
+            initTxId
+        }).toEither.left.map(_.getMessage)
+
     end initializeHead
 
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] =
@@ -143,26 +163,61 @@ class Node:
     def submitL1(hex: String): Either[String, TxId] =
         cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
+    def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
+
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
-            case Transaction(tx) =>
-                AdaSimpleLedger.mkTransactionEvent(tx)
-            case Withdrawal(wd) =>
-                AdaSimpleLedger.mkWithdrawalEvent(wd)
+            case Transaction(tx) => mkTransactionEvent(tx)
+            case Withdrawal(wd)  => mkWithdrawalEvent(wd)
 
         network.tell(_.reqEventL2(ReqEventL2(event)))
         Right(event.getEventId)
     end submitL2
 
-    /** Manually triggers next block creation procedure. This was used for model-based testing, and
-      * we will need to get it back.
+    /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
+      * done and effects are ready. Returns all that so it can be checked against a model.
+      *
+      * NB: This is used for model-based testing only.
+      *
+      * NB: Not exposed within API.
+      *
+      * NB: requires autonomousBlockProduction = false
       * @param nextBlockFinal
+      *   whether the next block should be final
       * @return
       */
-    def handleNextBlock(
+    def produceNextBlockLockstep(
         nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, UtxosSet, UtxosSet)] =
-        ???
+    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
+
+        assert(
+          !nodeState.ask(_.autonomousBlockProduction),
+          "Autonomous block production should be turned off to use this function"
+        )
+
+        log.info("Calling tryProduceBlock in lockstep...")
+        val errorOrBlock = nodeState.ask(_.head.currentPhase) match
+            case Open =>
+                nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true))) match
+                    case Left(err)    => Left(err)
+                    case Right(block) => Right(block)
+            case Finalizing =>
+                nodeState.ask(_.head.finalizingPhase(_.tryProduceFinalBlock(true))) match
+                    case Left(err)    => Left(err)
+                    case Right(block) => Right(block)
+            case other => Left(s"Node should be in Open or Finalizing pase, but it's in $other")
+
+        errorOrBlock match
+            case Left(err)    => Left(err)
+            case Right(block) =>
+                val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
+                    nodeState.ask(_.head.getBlockRecord(block))
+                      .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
+                }
+
+                effects match
+                    case Left(err)                     => Left(err)
+                    case Right(blockRecord, mbGenesis) => Right(blockRecord, mbGenesis)
 
     def stateL2(): StateL2Response =
         nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
@@ -170,8 +225,13 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open => nodeState.ask(_.head.openPhase(_.stateL2.getState)).toList
-                    case _    => List.empty
+                    case Open =>
+                        nodeState
+                            .ask(_.head.openPhase(_.stateL2.getState))
+                            .utxoMap
+                            .toList
+                            .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
+                    case _ => List.empty
     end stateL2
 
     def tryFinalize(): Either[String, String] =

@@ -8,9 +8,7 @@ import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPub
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
 import hydrozoa.infra.{CryptoHash, PSStyleAssoc, Piper, encodeHex}
-import hydrozoa.{
-    AddressBechL1,
-    TokenName,
+import hydrozoa.{AddressBech, AddressBechL1, L1, TokenName,
     UtxoIdL1,
     VerificationKeyBytes,
     CurrencySymbol as HCurrencySymbol,
