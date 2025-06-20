@@ -49,7 +49,7 @@ def txOutputToUtxo(txHash: String, txIx: Int, output: TransactionOutput): Utxo =
       txHash,
       txIx,
       output.getAddress,
-      assets.toList.asJava,
+      (List(Amount.lovelace(output.getValue.getCoin)) ++ assets.toList).asJava,
       null, // TODO: no datum hashes
       output.getInlineDatum.serializeToHex,
       null // TODO: no scripts
