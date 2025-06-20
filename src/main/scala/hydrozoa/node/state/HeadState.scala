@@ -430,7 +430,7 @@ class HeadStateGlobal(
                 val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
                     s"force=$force " +
-                    s"quitConsensusImmedaitely=$quitConsensusImmediately" +
+                    s"quitConsensusImmedaitely=$quitConsensusImmediately " +
                     s"isBlockLeader=${this.isBlockLeader} " +
                     s"isBlockPending=${this.isBlockPending} "
                 log.info(msg)

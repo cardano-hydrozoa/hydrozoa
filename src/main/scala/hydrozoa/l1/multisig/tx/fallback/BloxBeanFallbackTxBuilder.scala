@@ -76,9 +76,11 @@ class BloxBeanFallbackTxBuilder(
           ).toData
         )
 
+        val bbTokenName = "0x" + voteTokenName.tokenNameHex
+
         // Vote tokens and vote utxos
         val voteTokens = Asset.builder
-            .name(voteTokenName.tokenNameHex)
+            .name(bbTokenName)
             .value(BigInteger.valueOf(r.peers.length + 1))
             .build
 
@@ -99,7 +101,7 @@ class BloxBeanFallbackTxBuilder(
                               .assets(
                                 List(
                                   Asset.builder
-                                      .name(voteTokenName.tokenNameHex)
+                                      .name(bbTokenName)
                                       .value(BigInteger.ONE)
                                       .build()
                                 ).asJava

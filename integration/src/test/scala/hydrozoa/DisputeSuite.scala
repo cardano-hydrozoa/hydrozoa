@@ -16,7 +16,7 @@ class DisputeSuite extends FunSuite {
 
     private var sut: HydrozoaFacade = _
 
-    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers)
+    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers, useYaci = true)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -78,8 +78,9 @@ class DisputeSuite extends FunSuite {
             major1 <- sut.produceBlock(false, true)
 
              _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+            _ = sut.awaitTxL1(txHash(major1._1.l1PostDatedEffect.get))
 
-            utxoL2 = sut.stateL2().head
+//            utxoL2 = sut.stateL2().head
 
 //            _ <- sut.submitL2(L2Withdrawal(List(utxoL2._1)))
 //

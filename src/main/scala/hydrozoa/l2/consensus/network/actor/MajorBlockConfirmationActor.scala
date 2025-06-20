@@ -63,7 +63,7 @@ private class MajorBlockConfirmationActor(
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        
+
         if (req != null && acks.keySet == headPeers && acks2.keySet == headPeers) then
             // L1 effect
             val wits = acks2.map(_._2.settlement)
@@ -101,7 +101,8 @@ private class MajorBlockConfirmationActor(
             if (stateActor.ask(_.head.openPhase(_.isQuitConsensusImmediately))) {
                 // TODO: wait till validity range is hit
                 log.info(s"Submitting fallback tx: ${txHash(fallbackTx)}")
-                cardano.tell(_.submit(fallbackTx))
+                val fallbackResult = cardano.ask(_.submit(fallbackTx))
+                log.info(s"fallbackResult = $fallbackResult")
             }
 
             dropMyself()

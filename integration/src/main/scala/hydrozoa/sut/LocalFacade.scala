@@ -141,7 +141,7 @@ object LocalFacade:
                         forkDiscard {
                             LocalNode.runNode(
                               simNetwork = simNetwork,
-                              mbCardanoL1Mock = Some(cardanoL1Mock),
+                              mbCardanoL1Mock = if useYaci then None else Some(cardanoL1Mock),
                               ownPeer = peer,
                               autonomousBlocks = autonomousBlocks,
                               useYaci = useYaci,
