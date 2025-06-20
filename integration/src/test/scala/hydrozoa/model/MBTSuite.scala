@@ -581,7 +581,7 @@ object MBTSuite extends Commands:
                         case Major => Some(utxosActive)
                         case Final => None
 
-                    val record = BlockRecord(block, l1Effect, (), l2Effect)
+                    val record = BlockRecord(block, l1Effect, None, l2Effect)
 
                     // Calculate new state
                     // Submit L1

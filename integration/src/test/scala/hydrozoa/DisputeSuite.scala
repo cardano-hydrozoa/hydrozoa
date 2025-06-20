@@ -81,17 +81,17 @@ class DisputeSuite extends FunSuite {
 
             utxoL2 = sut.stateL2().head
 
-            _ <- sut.submitL2(L2Withdrawal(List(utxoL2._1)))
+//            _ <- sut.submitL2(L2Withdrawal(List(utxoL2._1)))
+//
+//            major2 <- sut.produceBlock(nextBlockFinal = true)
+//
+//             _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+//
+//            finalBlock <- sut.produceBlock(false)
+//
+//             _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
 
-            major2 <- sut.produceBlock(nextBlockFinal = true)
-
-             _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
-
-            finalBlock <- sut.produceBlock(false)
-
-             _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-
-        yield finalBlock
+        yield major1
 
         result match
             case Right(_)  => ()

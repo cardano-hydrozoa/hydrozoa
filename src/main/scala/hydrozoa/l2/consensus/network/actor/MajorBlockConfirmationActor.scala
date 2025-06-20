@@ -11,7 +11,7 @@ import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
-import hydrozoa.{AddressBech, L1, TxId, TxKeyWitness, UtxoSetL2, Wallet}
+import hydrozoa.{AddressBech, L1, TxId, TxKeyWitness, TxL1, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 
@@ -39,6 +39,7 @@ private class MajorBlockConfirmationActor(
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
     private var finalizeHead: Boolean = false
     private var settlementTxDraft: SettlementTx = _
+    private var fallbackTxDraft: TxL1 = _
     private var ownAck2: Option[AckMajor2] = None
 
     private def tryMakeAck2(): Option[AckType] =
@@ -62,15 +63,23 @@ private class MajorBlockConfirmationActor(
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
         if (req != null && acks2.keySet == headPeers) then
             // Create effects
+
             // L1 effect
             val wits = acks2.map(_._2.settlement)
             val settlementTx = wits.foldLeft(this.settlementTxDraft)(addWitnessMultisig)
             // val serializedTx = serializeTxHex(settlementTx)
             val l1Effect: L1BlockEffect = settlementTx
+
+            // L1 post-dated fallback effect
+            val witsFallback = acks.map(_._2.postDatedTransition)
+            val fallbackTx = witsFallback.foldLeft(this.fallbackTxDraft)(addWitnessMultisig)
+            log.info("Fallback signed tx: " + serializeTxHex(fallbackTx))
+
+            // L2 effect
             val l2Effect = Some(utxosActive)
             // Block record and state update by block application
             // TODO: add L1PostDatedBlockEffect
-            val record = BlockRecord(req.block, l1Effect, (), l2Effect)
+            val record = BlockRecord(req.block, l1Effect, Some(fallbackTx), l2Effect)
             log.info(s"Major block record is: $record")
             stateActor.tell(nodeState =>
                 nodeState.head.openPhase(s =>
@@ -214,6 +223,8 @@ private class MajorBlockConfirmationActor(
 
         log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
         log.info("Fallback tx draft hash: " + txHash(fallbackTxDraft))
+
+        this.fallbackTxDraft = fallbackTxDraft
 
         val (me, fallbackTxKeyWitness) =
             walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(fallbackTxDraft)))

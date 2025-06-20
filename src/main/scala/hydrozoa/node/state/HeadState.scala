@@ -293,10 +293,9 @@ class HeadStateGlobal(
             .map(_.block)
             .getOrElse(zeroBlock)
         def lastKnownTreasuryUtxoId: UtxoIdL1 = self.blocksConfirmedL2
-                .findLast(_.block.blockHeader.blockType == Major)
-                .map(record =>
-                    UtxoIdL1.apply(txHash(maybeMultisigL1Tx(record.l1Effect).get), TxIx(0)))
-                .getOrElse(treasuryUtxoId)
+            .findLast(_.block.blockHeader.blockType == Major)
+            .map(record => UtxoIdL1.apply(txHash(maybeMultisigL1Tx(record.l1Effect).get), TxIx(0)))
+            .getOrElse(treasuryUtxoId)
         def peekDeposits: DepositUtxos =
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
@@ -830,8 +829,9 @@ case class RefundedDeposit(
 type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
 type MinorBlockL1Effect = Unit
 
-// TODO: this is missing for final block
-type L1PostDatedBlockEffect = Unit
+// This is not defined for minor and final blocks, so we have to use Option here.
+// Probably we can do it better.
+type L1PostDatedBlockEffect = Option[TxL1]
 
 // Always None for final block, always Some for minor block,
 // None or Some for major (None in case a major block is produced

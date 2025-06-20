@@ -69,7 +69,7 @@ private class FinalBlockConfirmationActor(
             val l1Effect: L1BlockEffect = finalizationTx
             val l2Effect: L2BlockEffect = None
             // Block record and state update by block application
-            val record = BlockRecord(req.block, l1Effect, (), l2Effect)
+            val record = BlockRecord(req.block, l1Effect, None, l2Effect)
             // Close the head
             stateActor.tell(nodeState =>
                 nodeState.head.finalizingPhase(s => s.finalizeHead(record))

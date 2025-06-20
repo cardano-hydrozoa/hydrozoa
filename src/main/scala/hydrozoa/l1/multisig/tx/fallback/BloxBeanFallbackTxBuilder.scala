@@ -121,6 +121,8 @@ class BloxBeanFallbackTxBuilder(
             mkVoteOutput(datum)
         )
 
+        // FIXME: set validity range
+
         val txPartial = Tx()
             .collectFrom(List(multisigTreasuryUtxo).asJava)
             .payToContract(

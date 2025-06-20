@@ -35,7 +35,7 @@ private class MinorBlockConfirmationActor(
             // TODO: May be absent
             val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
-            val record = BlockRecord(req.block, l1Effect, (), l2Effect)
+            val record = BlockRecord(req.block, l1Effect, None, l2Effect)
             stateActor.tell(nodeState =>
                 nodeState.head.openPhase(s =>
                     s.applyBlockRecord(record)
