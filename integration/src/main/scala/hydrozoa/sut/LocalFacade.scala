@@ -72,7 +72,7 @@ class LocalFacade(
                 ret
 
     override def awaitTxL1(txId: TxId): Option[TxL1] = randomNode.awaitTxL1(txId)
-    
+
     override def submitL2(
         tx: L2Transaction | L2Withdrawal
     ): Either[String, TxId] =
@@ -102,13 +102,19 @@ class LocalFacade(
         nextBlockFinal: Boolean,
         quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
-        log.info(s"SUT: producing a block in a lockstep manner (nextBlockFinal = $nextBlockFinal...")
+        log.info(
+          s"SUT: producing a block in a lockstep manner (nextBlockFinal = $nextBlockFinal..."
+        )
 
         // Note: this is not ideal, you may see errors in logs like
         // "Block production procedure was unable to create a block number N+1".
-        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately))
+        val answers = peers.values.map(node =>
+            node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
+        )
         answers.find(a => a.isRight) match
-            case None         => Left("Block can't be produced at the moment")
+            case None =>
+                answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
+                Left("Block can't be produced at the moment")
             case Some(answer) => Right(answer.right.get)
 
     override def shutdownSut(): Unit =

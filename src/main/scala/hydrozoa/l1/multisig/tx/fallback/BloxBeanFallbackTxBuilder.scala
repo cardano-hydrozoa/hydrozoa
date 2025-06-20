@@ -1,19 +1,19 @@
 package hydrozoa.l1.multisig.tx.fallback
 
+import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.Utxo
-import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import com.bloxbean.cardano.client.transaction.util.TransactionUtil
 import hydrozoa.infra.{
+    HydrozoaBuilderBackendService,
     Piper,
+    decodeHex,
     encodeHex,
     mkBuilder,
-    numberOfSignatories,
-    onlyOutputToAddress,
-    txOutputToUtxo
+    numberOfSignatories
 }
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
 import hydrozoa.l1.rulebased.onchain.{
@@ -22,8 +22,7 @@ import hydrozoa.l1.rulebased.onchain.{
     mkVoteDatum,
     mkVoteTokenName
 }
-import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{TxId, TxL1, UtxoIdL1}
+import hydrozoa.{TxId, TxIx, TxL1, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.prelude.List.asScalus
@@ -36,32 +35,32 @@ class BloxBeanFallbackTxBuilder(
     backendService: BackendService
 ) extends FallbackTxBuilder {
 
-    private val builder = mkBuilder[Tx](backendService)
-
     override def buildFallbackTxDraft(r: FallbackTxRecipe): Either[String, TxL1] =
 
-        // Parse Tx and calculate its hash - can be passed along with it since it's already known.
-        val txBytes = r.multisigTx.bytes
-        val tb = Transaction.deserialize(txBytes)
-        val txHash = TransactionUtil.getTxHash(txBytes)
+        // Wrapped backend service that known only about the virtual treasury utxo
+        val fallbackBuilderBackendService =
+            HydrozoaBuilderBackendService(backendService, r.multisigTx)
 
-        // Find the treasury output
-        // TODO: shall we fix the order of outputs? So we can just always take the first output?
-        val Right(treasuryOutputIx, _, _, multisigTreasuryDatum) =
-            onlyOutputToAddress(r.multisigTx, r.headAddressBech32)
-        val treasuryOutput = tb.getBody.getOutputs.get(treasuryOutputIx.ix)
+        // This is not needed, since we pass it indirectly with
+        // .withUtxoSelectionStrategy
+        val builder = mkBuilder[Tx](fallbackBuilderBackendService)
 
-        // TODO: update txOutputToUtxo to support tokens
-        // This is required only due to BB's peculiarities
-        val multisigTreasuryUtxo: Utxo = txOutputToUtxo(txHash, treasuryOutputIx.ix, treasuryOutput)
+        val multisigTreasuryUtxo: Utxo = fallbackBuilderBackendService.getUtxoService
+            .getUtxos(r.headAddressBech32.bech32, 100, 1, OrderEnum.asc)
+            .getValue
+            .get(0)
 
-        val multisigDatum = fromData[MultisigTreasuryDatum](multisigTreasuryDatum)
+        val multisigDatum = fromData[MultisigTreasuryDatum](
+          Interop.toScalusData(
+            PlutusData.deserialize(decodeHex(multisigTreasuryUtxo.getInlineDatum).toArray)
+          )
+        )
 
         val headNativeScript =
             NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
 
         // Calculate dispute id
-        val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(txHash), treasuryOutputIx))
+        val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(multisigTreasuryUtxo.getTxHash), TxIx(0)))
 
         // Treasury datum
         val treasuryDatum = Interop.toPlutusData(
@@ -148,12 +147,24 @@ class BloxBeanFallbackTxBuilder(
                 outputs.add(defVoteUtxo)
                 outputs.addAll(voteUtxos.asJava)
             )
+            // Remove the change and update coins in the treasury
+            .postBalanceTx((_, t) =>
+                val outputs = t.getBody.getOutputs
+                val change = outputs.removeLast()
+                val treasury = outputs.getFirst
+                val treasuryValue = treasury.getValue
+                treasuryValue.setCoin(
+                  change.getValue.getCoin.subtract(BigInteger.valueOf(2_000_000 * (peersN + 1)))
+                )
+            )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
             // FIXME: Fails with "Not enough funds" (at least for fallback against init tx)
             // TODO: When building against a settlement tx, it pulls in the old treasury utxo :-(
-            // .feePayer(r.headAddressBech32.bech32)
-            .feePayer(
-              "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
+            .feePayer(r.headAddressBech32.bech32)
+            .withUtxoSelectionStrategy(
+              InclusiveUtxoSelectionStrategyImpl(
+                DefaultUtxoSupplier(fallbackBuilderBackendService.getUtxoService)
+              )
             )
             .build
 
