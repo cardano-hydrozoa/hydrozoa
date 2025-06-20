@@ -374,23 +374,6 @@ object TreasuryValidator extends Validator:
                 List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
     }
 
-    // TODO: move it away, this is useful only for offchain code
-    @Ignore
-    /*
-     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
-     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
-     * */
-    def getFinalPoly(binomial_poly: List[BigInt]): List[Scalar] = {
-        binomial_poly
-            .map(bi => Scalar(bi.bigInteger))
-            .foldLeft(List.single(new Scalar(BigInteger("1")))): (acc, term) =>
-                // We need to clone the whole `acc` since `mul` mutates it
-                // and final adding gets mutated `shiftedPoly`
-                val shiftedPoly: List[Scalar] = List.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
-    }
-
     def getG1Commitment(
         setup: List[BLS12_381_G1_Element],
         subset: List[ScalusScalar]

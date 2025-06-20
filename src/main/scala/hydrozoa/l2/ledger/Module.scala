@@ -27,7 +27,9 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       *   Returns an opaque copy of active utxos.
       */
     def getUtxosActive: LedgerUtxoSetOpaque
-
+    
+    def getUtxosActiveCommitment: IArray[Byte] 
+    
     // Returns utxo state. Used only in L2 state endpoint for now.
     def getState: UtxoSetL2
 
