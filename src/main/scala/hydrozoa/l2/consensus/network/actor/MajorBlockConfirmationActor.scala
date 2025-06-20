@@ -11,7 +11,7 @@ import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
-import hydrozoa.{AddressBech, L1, TxId, TxKeyWitness, TxL1, UtxoSetL2, Wallet}
+import hydrozoa.*
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 
@@ -44,10 +44,12 @@ private class MajorBlockConfirmationActor(
 
     private def tryMakeAck2(): Option[AckType] =
         log.debug(s"tryMakeAck2 - acks: ${acks.keySet}")
+
         val (headPeers, isNextBlockFinal) =
             stateActor.ask(_.head.openPhase(open => (open.headPeers, open.isNextBlockFinal)))
         log.debug(s"headPeers: $headPeers")
-        if req != null && ownAck2.isEmpty && acks.keySet == headPeers then
+        if req != null && ownAck2.isEmpty && acks.keySet == headPeers
+        then
             // TODO: how do we check that all acks are valid?
             val (me, settlementTxKeyWitness) =
                 walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(settlementTxDraft)))
@@ -61,9 +63,8 @@ private class MajorBlockConfirmationActor(
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if (req != null && acks2.keySet == headPeers) then
-            // Create effects
-
+        
+        if (req != null && acks.keySet == headPeers && acks2.keySet == headPeers) then
             // L1 effect
             val wits = acks2.map(_._2.settlement)
             val settlementTx = wits.foldLeft(this.settlementTxDraft)(addWitnessMultisig)
@@ -88,11 +89,21 @@ private class MajorBlockConfirmationActor(
                     nodeState.head.dumpState()
                 )
             )
+
             log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
             cardano.tell(_.submit(settlementTx))
+
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
+
+            // FIXME: this should be removed in the production version
+            if (stateActor.ask(_.head.openPhase(_.isQuitConsensusImmediately))) {
+                // TODO: wait till validity range is hit
+                log.info(s"Submitting fallback tx: ${txHash(fallbackTx)}")
+                cardano.tell(_.submit(fallbackTx))
+            }
+
             dropMyself()
 
     override def deliver(ack: AckType): Option[AckType] =

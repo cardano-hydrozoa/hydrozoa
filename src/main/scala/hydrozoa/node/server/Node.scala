@@ -187,7 +187,8 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean
+        nextBlockFinal: Boolean,
+        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
 
         assert(
@@ -198,7 +199,7 @@ class Node:
         log.info(s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal...")
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
-                nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true))) match
+                    nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately))) match
                     case Left(err)    => Left(err)
                     case Right(block) => Right(block)
             case Finalizing =>

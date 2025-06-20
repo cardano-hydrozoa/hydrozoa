@@ -75,7 +75,7 @@ class DisputeSuite extends FunSuite {
 
             _ = sut.awaitTxL1(deposit2.depositId.txId)
 
-            major1 <- sut.produceBlock(false)
+            major1 <- sut.produceBlock(false, true)
 
              _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
 

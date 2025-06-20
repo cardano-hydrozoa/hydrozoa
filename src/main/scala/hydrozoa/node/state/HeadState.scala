@@ -94,6 +94,7 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def isBlockLeader: Boolean
     def isBlockPending: Boolean
     def pendingOwnBlock: OwnBlock
+    def isQuitConsensusImmediately: Boolean
 
 sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
     def l2Tip: Block
@@ -142,7 +143,8 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
       */
     def tryProduceBlock(
         nextBlockFinal: Boolean,
-        force: Boolean = false
+        force: Boolean = false,
+        quitConsensusImmediately: Boolean
     ): Either[String, Block]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -200,6 +202,8 @@ class HeadStateGlobal(
 
     // Flag to store the fact of node's being asked for finalization.
     private var mbIsNextBlockFinal: Option[Boolean] = None
+
+    private var mbQuitConsensusImmediately: Option[Boolean] = None
 
     // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[L2Event] = mutable.Buffer()
@@ -317,6 +321,7 @@ class HeadStateGlobal(
         def isBlockLeader: Boolean = self.isBlockLeader.get
         def isBlockPending: Boolean = self.isBlockPending.get
         def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
+        def isQuitConsensusImmediately: Boolean = self.mbQuitConsensusImmediately.getOrElse(false)
 
     private class FinalizingPhaseReaderImpl
         extends MultisigRegimeReaderImpl
@@ -388,7 +393,8 @@ class HeadStateGlobal(
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
-            force: Boolean = false
+            force: Boolean = false,
+            quitConsensusImmediately: Boolean = false
         ): Either[String, Block] = {
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !this.isBlockPending
@@ -414,6 +420,7 @@ class HeadStateGlobal(
                         )
                         self.isBlockPending = Some(true)
                         self.mbIsNextBlockFinal = Some(nextBlockFinal)
+                        self.mbQuitConsensusImmediately = Some(quitConsensusImmediately)
                         Right(block)
                     case Left(err) =>
                         // TODO: this arguably should never happen
@@ -423,6 +430,7 @@ class HeadStateGlobal(
                 val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
                     s"force=$force " +
+                    s"quitConsensusImmedaitely=$quitConsensusImmediately" +
                     s"isBlockLeader=${this.isBlockLeader} " +
                     s"isBlockPending=${this.isBlockPending} "
                 log.info(msg)
@@ -630,7 +638,9 @@ class HeadStateGlobal(
         def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
             self.stateL2.get
 
-        override def tryProduceFinalBlock(force: Boolean): Either[String, Block] =
+        override def tryProduceFinalBlock(
+            force: Boolean
+        ): Either[String, Block] =
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !self.isBlockPending.get
             then

@@ -99,13 +99,14 @@ class LocalFacade(
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean
+        nextBlockFinal: Boolean,
+        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
         log.info(s"SUT: producing a block in a lockstep manner (nextBlockFinal = $nextBlockFinal...")
 
         // Note: this is not ideal, you may see errors in logs like
         // "Block production procedure was unable to create a block number N+1".
-        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
+        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately))
         answers.find(a => a.isRight) match
             case None         => Left("Block can't be produced at the moment")
             case Some(answer) => Right(answer.right.get)
