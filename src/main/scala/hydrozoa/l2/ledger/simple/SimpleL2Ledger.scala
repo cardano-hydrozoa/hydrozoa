@@ -6,7 +6,7 @@ import hydrozoa.*
 import hydrozoa.infra.{Piper, decodeBech32AddressL2, decodeHex, encodeHex, plutusAddressAsL2}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.merkle.infG2Point
+import hydrozoa.l2.commitment.infG2Point
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData

@@ -5,7 +5,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.ledger.L2EventLabel
 import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.infra.encodeHex
-import hydrozoa.l2.merkle.infG2
+import hydrozoa.l2.commitment.{UtxoSetCommitment, infG2}
 
 case class Block(
     blockHeader: BlockHeader,
@@ -32,9 +32,6 @@ case class BlockHeader(
     versionMinor: Int,
     utxosActive: UtxoSetCommitment
 )
-
-// Hex-encoded IArray[Byte]
-type UtxoSetCommitment = String
 
 enum BlockTypeL2 derives CanEqual:
     case Minor
@@ -137,7 +134,9 @@ case class BlockBuilder[
 //    def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
 //        copy(utxosActive = utxosActive)
 
-    def utxosActive(commitment: UtxoSetCommitment): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+    def utxosActive(
+        commitment: UtxoSetCommitment
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(utxosActive = commitment)
 
     def apply(
