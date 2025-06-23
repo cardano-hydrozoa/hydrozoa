@@ -91,5 +91,6 @@ lazy val demo = (project in file("demo"))
       publish / skip := true,
       libraryDependencies ++= Seq(
         "org.scalacheck" %% "scalacheck" % "1.18.1"
+
       )
     )

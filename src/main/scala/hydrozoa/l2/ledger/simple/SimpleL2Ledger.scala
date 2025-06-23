@@ -6,6 +6,10 @@ import hydrozoa.*
 import hydrozoa.infra.{Piper, decodeBech32AddressL2, decodeHex, encodeHex, plutusAddressAsL2}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import hydrozoa.l2.ledger.*
+import scalus.builtin.ByteString
+import scalus.prelude.Option.{None as SNone, Some as SSome}
+import scalus.prelude.{Option, AssocMap, given}
+import scalus.ledger.api.v1 as scalus
 import hydrozoa.l2.merkle.infG2Point
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{BLS12_381_G1_Element, ByteString}
@@ -18,6 +22,9 @@ import supranational.blst.{P2, Scalar}
 
 import java.math.BigInteger
 import scala.collection.mutable
+
+import scala.collection.mutable
+
 
 /** This object defines types and constructors for Hydrozoa's L2 ledger and contains a class that
   * implements L2LedgerModule.
@@ -126,7 +133,7 @@ object SimpleL2Ledger:
             val subsetInG2 =
                 SList.map2(getFinalPoly(subset), setup): (sb, st) =>
                     st.mult(sb)
-            
+
             val zero = infG2Point
             require(zero.is_inf())
 
