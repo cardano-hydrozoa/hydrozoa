@@ -16,7 +16,7 @@ class DisputeSuite extends FunSuite {
 
     private var sut: HydrozoaFacade = _
 
-    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers, useYaci = true)
+    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers, useYaci = false)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 

@@ -286,14 +286,6 @@ given reqMajorSchema: Schema[ReqMajor] =
   * ------------------------------------------------------------------------------------------
   */
 
-// FIXME: remove
-case class AckMajorCombined(
-    blockHeader: BlockHeader,
-    rollouts: Set[TxKeyWitness],
-    settlement: TxKeyWitness,
-    nextBlockFinal: Boolean
-)
-
 case class AckMajor(
     peer: WalletId,
     rollouts: Seq[TxKeyWitness],
@@ -337,13 +329,6 @@ given reqFinalSchema: Schema[ReqFinal] =
   * AckFinal, AckFinal2
   * ------------------------------------------------------------------------------------------
   */
-
-// FIXME: remove
-case class AckFinalCombined(
-    blockHeader: BlockHeader,
-    rollouts: Set[TxKeyWitness],
-    finalization: TxKeyWitness
-)
 
 case class AckFinal(
     peer: WalletId,
