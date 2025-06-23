@@ -9,7 +9,7 @@ import scalus.bloxbean.Interop.getAddress
 import scalus.ledger.api.v1
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.{StakingHash, StakingPtr}
-import scalus.prelude.Maybe.{Just, Nothing}
+import scalus.prelude.Option.{Some, None}
 
 def decodeBech32AddressL1(address: AddressBechL1): v1.Address =
     getAddress(Address(address.bech32))
@@ -27,8 +27,8 @@ def addressToBloxbean(network: Network, address: v1.Address): Address =
     val credential: Credential = credentialToBloxbean(address.credential)
 
     address.stakingCredential match
-        case Nothing => getEntAddress(credential, network)
-        case Just(stakingCredential) =>
+        case None => getEntAddress(credential, network)
+        case Some(stakingCredential) =>
             stakingCredential match
                 case StakingHash(stakingHash) =>
                     val stakingCredential: Credential = credentialToBloxbean(stakingHash)

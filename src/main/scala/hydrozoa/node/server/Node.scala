@@ -17,7 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
-import scalus.prelude.Maybe
+import scalus.prelude.Option.asScalus
 
 import scala.concurrent.duration.DurationInt
 import scala.util.Try
@@ -120,10 +120,10 @@ class Node:
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
           decodeBech32AddressL2(r.address),
-          Maybe.fromOption(r.datum.map(datumByteString)),
+          (r.datum.map(datumByteString)).asScalus,
           BigInt.apply(0), // deadline,
           decodeBech32AddressL1(r.refundAddress),
-          Maybe.fromOption(r.datum.map(datumByteString))
+          (r.datum.map(datumByteString)).asScalus
         )
 
         val depositTxRecipe =
@@ -163,7 +163,7 @@ class Node:
         cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
     def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
-    
+
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
         val event = req match
             case Transaction(tx) => mkTransactionEvent(tx)

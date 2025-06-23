@@ -10,10 +10,10 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.8.5"
+val scalusVersion = "0.10.1+36-979f1eb3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.5"
+ThisBuild / scalaVersion := "3.3.6"
 
 ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
 
@@ -23,6 +23,8 @@ addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
 // Main application
 lazy val core = (project in file("."))
     .settings(
+      resolvers +=
+          "Sonatype OSS01 Snapshots" at "https://s01.oss.sonatype.org/content/repositories/snapshots",
       resolvers +=
           "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
@@ -89,5 +91,6 @@ lazy val demo = (project in file("demo"))
       publish / skip := true,
       libraryDependencies ++= Seq(
         "org.scalacheck" %% "scalacheck" % "1.18.1"
+
       )
     )

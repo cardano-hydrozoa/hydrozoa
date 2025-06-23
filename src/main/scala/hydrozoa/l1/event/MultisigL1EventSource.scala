@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.l1.multisig.state.given_FromData_DepositDatum
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
