@@ -1,8 +1,9 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.Wallet
-import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
+import hydrozoa.{Ed25519SignatureHex, Wallet}
+import hydrozoa.infra.encodeHex
+import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
 import hydrozoa.node.state.*
@@ -110,13 +111,14 @@ private class MinorBlockConfirmationActor(
         this.utxosActive = utxosActive
 
         // Prepare own acknowledgement
-        val (me, signature) =
-            walletActor.ask(w => (w.getWalletId, "signature_stub"))
+        val msg = mkBlockHeaderSignatureMessage(req.block.blockHeader)
 
-        // FIXME: how do we decide whether we want to wrap up the head?
-        // Answer: User API should provide a method for that, so with the next
-        // acknowledgment the node can indicate they want to finalize the head.
-        val ownAck: AckType = AckMinor(me, signature, isNextBlockFinal)
+        // Sign block header
+        val (me, signature) =
+            walletActor.ask(w => (w.getWalletId, w.createEd25519Signature(msg)))
+        val signatureHex = Ed25519SignatureHex(encodeHex(signature.signature))
+
+        val ownAck: AckType = AckMinor(me, signatureHex, isNextBlockFinal)
         deliver(ownAck)
         Seq(ownAck)
 

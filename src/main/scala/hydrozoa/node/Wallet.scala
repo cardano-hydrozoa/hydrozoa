@@ -1,6 +1,5 @@
 package hydrozoa
 
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.node.state.WalletId
 
 trait WalletModule:
@@ -16,6 +15,11 @@ trait WalletModule:
         signingKey: SigningKey
     ): TxKeyWitness
 
+    def createEd25519Signature(
+        msg: IArray[Byte],
+        signingKey: SigningKey
+    ): Ed25519Signature
+
 class Wallet(
     name: String,
     walletModule: WalletModule,
@@ -29,3 +33,5 @@ class Wallet(
     def createTxKeyWitness[L <: AnyLevel](tx: Tx[L]): TxKeyWitness =
         walletModule.createTxKeyWitness(tx, verificationKey, signingKey)
     def getWalletId: WalletId = WalletId(getName)
+    def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =
+        walletModule.createEd25519Signature(msg, signingKey)

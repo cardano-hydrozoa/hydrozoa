@@ -133,7 +133,7 @@ object SimpleL2Ledger:
             val zero = infG2Point
             require(zero.is_inf())
 
-            subsetInG2.foldLeft(zero): (a, b) =>
+            subsetInG2.foldLeft(zero.dup()): (a, b) =>
                 a.add(b)
         }
 

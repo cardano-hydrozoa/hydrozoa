@@ -1,7 +1,7 @@
 package hydrozoa
 
 import hydrozoa.infra.txHash
-import hydrozoa.l2.ledger.L2Withdrawal
+import hydrozoa.l2.ledger.L2Transaction
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
@@ -16,7 +16,8 @@ class DisputeSuite extends FunSuite {
 
     private var sut: HydrozoaFacade = _
 
-    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers, useYaci = false)
+    override def beforeEach(context: BeforeEach): Unit = sut =
+        LocalFacade.apply(testPeers, useYaci = false)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -33,7 +34,7 @@ class DisputeSuite extends FunSuite {
               TxIx(0)
             )
 
-             _ = sut.awaitTxL1(initTxId)
+            _ = sut.awaitTxL1(initTxId)
 
             deposit1 <- sut.deposit(
               Alice,
@@ -53,7 +54,7 @@ class DisputeSuite extends FunSuite {
               )
             )
 
-             _ = sut.awaitTxL1(deposit1.depositId.txId)
+            _ = sut.awaitTxL1(deposit1.depositId.txId)
 
             deposit2 <- sut.deposit(
               Alice,
@@ -75,12 +76,35 @@ class DisputeSuite extends FunSuite {
 
             _ = sut.awaitTxL1(deposit2.depositId.txId)
 
-            major1 <- sut.produceBlock(false, true)
+            major1 <- sut.produceBlock(false)
+            _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
 
-             _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
-            _ = sut.awaitTxL1(txHash(major1._1.l1PostDatedEffect.get))
+            utxoL2 = sut.stateL2().head
+            _ <- sut.submitL2(
+              L2Transaction(
+                List(utxoL2._1),
+                List(
+                  OutputNoTokens(
+                    AddressBech[L2](
+                      "addr_test1qrh3nrahcd0pj6ps3g9htnlw2jjxuylgdhfn2s5rxqyrr43yzewr2766qsfeq6stl65t546cwvclpqm2rpkkxtksgxuq90xn5f"
+                    ),
+                    utxoL2._2.coins,
+                    None
+                  )
+                )
+              )
+            )
 
-//            utxoL2 = sut.stateL2().head
+            minor1_1 <- sut.produceBlock(false, true)
+            _ = println(minor1_1)
+
+//            major1 <- sut.produceBlock(false, true)
+//
+
+//            _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+//            _ = sut.awaitTxL1(txHash(major1._1.l1PostDatedEffect.get))
+
+        //            utxoL2 = sut.stateL2().head
 
 //            _ <- sut.submitL2(L2Withdrawal(List(utxoL2._1)))
 //
@@ -91,7 +115,6 @@ class DisputeSuite extends FunSuite {
 //            finalBlock <- sut.produceBlock(false)
 //
 //             _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-
         yield major1
 
         result match

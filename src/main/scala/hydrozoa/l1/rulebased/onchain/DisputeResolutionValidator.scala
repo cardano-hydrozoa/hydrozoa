@@ -99,6 +99,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
     given ToData[MinorBlockL1Effect] = ToData.derived
 
     // TODO: should we re-use Hydrozoa's type more broadly?
+    // issues: some types from scalus won't work well with Hydrozoa's transport
     case class BlockHeader(
         blockNum: BigInt,
         // TODO: should we re-use Hydrozoa's type more broadly?

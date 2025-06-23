@@ -40,6 +40,12 @@ type AddressBechL2 = AddressBech[L2]
 // Transaction key witness
 case class TxKeyWitness(signature: Array[Byte], vkey: Array[Byte])
 
+// Ed25519 signature
+case class Ed25519Signature(signature: IArray[Byte])
+
+// Ed25519 signature (hex-encoded)
+case class Ed25519SignatureHex(signature: String)
+
 // Transaction hash
 case class TxId(hash: String) derives CanEqual
 

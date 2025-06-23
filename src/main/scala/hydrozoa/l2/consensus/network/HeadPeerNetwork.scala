@@ -256,7 +256,7 @@ given nonGenesisL2EventLabelSchema: Schema[L2EventLabel] =
 
 case class AckMinor(
     peer: WalletId,
-    signature: String,
+    signature: Ed25519SignatureHex,
     nextBlockFinal: Boolean
 ) extends Ack
 
@@ -265,6 +265,9 @@ given ackMinorCodec: JsonValueCodec[AckMinor] =
 
 given ackMinorSchema: Schema[AckMinor] =
     Schema.derived[AckMinor]
+
+given ed25519SignatureHexSchema: Schema[Ed25519SignatureHex] =
+    Schema.derived[Ed25519SignatureHex]
 
 /** ------------------------------------------------------------------------------------------
   * ReqMajor
