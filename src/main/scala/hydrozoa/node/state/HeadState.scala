@@ -1,19 +1,26 @@
 package hydrozoa.node.state
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{Piper, txFees, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
+import hydrozoa.l1.rulebased.tx.vote.VoteTxRecipe
+import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
+import scalus.bloxbean.Interop
+import scalus.builtin.Data.fromData
 
 import scala.CanEqual.derived
 import scala.collection.mutable
@@ -582,6 +589,41 @@ class HeadStateGlobal(
 
                 // Build and submit a vote
                 val lastBlock = blocksConfirmedL2.lastOption.get
+                lastBlock.block.blockHeader.blockType match {
+                    // Voting is possible
+                    case Minor =>
+                        // Temporary code for building Vote tx
+                        val disputeAddress = DisputeResolutionScript.entAddress(networkL1static)
+                        val voteUtxoId =
+                            cardano
+                                .ask(_.utxosAtAddress(disputeAddress))
+                                .find(u =>
+                                    val datum = fromData[VoteDatum](
+                                      Interop.toScalusData(
+                                        PlutusData
+                                            .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
+                                      )
+                                    )
+                                    // TODO better way to get own key, which should be always defined
+                                    val value = headPeerVKs.get(ownPeer).get
+                                    val ownVk = hashVerificationKey(value)
+                                    datum.peer.isDefined &&
+                                    datum.peer.get == ownVk
+                                ) match {
+                                case Some(utxo) =>
+                                    UtxoIdL1.apply(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                                case None => throw RuntimeException("Vote UTxO was not found")
+                            }
+
+                        val recipe = VoteTxRecipe(
+                          voteUtxoId,
+                          mkOnchainBlockHeader(lastBlock.block.blockHeader),
+                          lastBlock.l1Effect.asInstanceOf[MinorBlockL1Effect]
+                        )
+                        log.info(s"Vote tx recipe: $recipe")
+                    // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
+                    case _ => throw RuntimeException("Last block is not a minor block, can't vote")
+                }
             }
 
             end runTestDispute

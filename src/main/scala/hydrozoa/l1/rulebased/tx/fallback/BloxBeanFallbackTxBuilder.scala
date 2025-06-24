@@ -87,7 +87,7 @@ class BloxBeanFallbackTxBuilder(
 
         def mkVoteOutput(datum: PlutusData) = {
             TransactionOutput.builder
-                .address(r.disputeScript.bech32)
+                .address(r.disputeAddress.bech32)
                 .value(
                   Value.builder
                       // TODO: MinAda
@@ -127,7 +127,7 @@ class BloxBeanFallbackTxBuilder(
         val txPartial = Tx()
             .collectFrom(List(multisigTreasuryUtxo).asJava)
             .payToContract(
-              r.treasuryScript.bech32,
+              r.treasuryAddress.bech32,
               multisigTreasuryUtxo.getAmount,
               treasuryDatum
             )

@@ -30,10 +30,10 @@ case class FallbackTxRecipe(
     multisigTx: TxL1,
 
     // Bech32 address of the rule-based regime's treasury script.
-    treasuryScript: AddressBechL1,
+    treasuryAddress: AddressBechL1,
 
     // Bech32 address of the rule-based regime's resolution script.
-    disputeScript: AddressBechL1,
+    disputeAddress: AddressBechL1,
 
     // Voting duration from head parameters.
     // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129

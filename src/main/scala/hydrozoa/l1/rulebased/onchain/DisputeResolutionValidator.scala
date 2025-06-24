@@ -362,11 +362,14 @@ def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
       VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
     )
 
+def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
+    PubKeyHash(blake2b_224(ByteString.fromArray(peer.bytes)))
+
 def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
     VoteDatum(
       key = key,
       link = if peersN > key then key + 1 else 0,
-      peer = Some(PubKeyHash(blake2b_224(ByteString.fromArray(peer.bytes)))),
+      peer = Some(hashVerificationKey(peer)),
       voteStatus = VoteStatus.NoVote
     )
 

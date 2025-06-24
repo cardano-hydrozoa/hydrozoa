@@ -6,7 +6,7 @@ import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.ByteString
 import scalus.builtin.ToData.toData
 
-def mkBlockHeaderSignatureMessage(bh: HBlockHeader): IArray[Byte] = {
+def mkOnchainBlockHeader(bh: HBlockHeader) = {
     // Convert block header into onchain representation
     val blockHeader: SBlockHeader = SBlockHeader(
       BigInt(bh.blockNum),
@@ -16,6 +16,11 @@ def mkBlockHeaderSignatureMessage(bh: HBlockHeader): IArray[Byte] = {
       BigInt(bh.versionMinor),
       ByteString.fromHex(bh.utxosActive)
     )
+    blockHeader
+}
+
+def mkBlockHeaderSignatureMessage(bh: HBlockHeader): IArray[Byte] = {
+    val blockHeader: SBlockHeader = mkOnchainBlockHeader(bh)
     // Serialize it to data and get bytes
     val msg = serialiseData(blockHeader.toData)
     IArray.from(msg.bytes)

@@ -1,6 +1,7 @@
 package hydrozoa.l1.rulebased.tx.vote
 
-import hydrozoa.{TxIx, TxL1}
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.BlockHeader
+import hydrozoa.{Ed25519Signature, TxIx, TxL1, UtxoIdL1}
 
 trait VoteTxBuilder {
 
@@ -11,4 +12,7 @@ trait VoteTxBuilder {
 }
 
 case class VoteTxRecipe(
+    voteUtxo: UtxoIdL1,
+    blockHeader: BlockHeader,
+    proof: Seq[Ed25519Signature]
 )

@@ -203,10 +203,10 @@ private class MajorBlockConfirmationActor(
         val fallbackTxRecipe = FallbackTxRecipe(
           multisigTx = settlementTxDraft,
           // FIXME: script
-          treasuryScript = AddressBech[L1](
+          treasuryAddress = AddressBech[L1](
             "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
           ),
-          disputeScript = DisputeResolutionScript.entAddress(networkL1static),
+          disputeAddress = DisputeResolutionScript.entAddress(networkL1static),
           votingDuration = 1024,
           // Sorting
           peers = peersKeys.toList,
