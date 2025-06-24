@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.onchain
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
@@ -13,6 +14,7 @@ import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, Validator, fail, require, given}
+import scalus.sir.SIR
 
 @Compile
 object TallyingValidator extends Validator:
@@ -192,11 +194,22 @@ object TallyingValidator extends Validator:
 end TallyingValidator
 
 object TallyingValidatorScript {
-    val sir = Compiler.compile(TallyingValidator.validate)
-    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val sir: SIR = Compiler.compile(TallyingValidator.validate)
+    private lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+
+    // TODO: can we use Scalus for that?
+    private val plutusScript: PlutusV3Script = PlutusV3Script
+        .builder()
+        .`type`("PlutusScriptV3")
+        .cborHex(script.doubleCborHex)
+        .build()
+        .asInstanceOf[PlutusV3Script]
+
+    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
 }
 
 @main
 def tallyingValidatorSir(args: String): Unit = {
     println(TallyingValidatorScript.sir.showHighlighted)
+    println(TallyingValidatorScript.scriptHash)
 }

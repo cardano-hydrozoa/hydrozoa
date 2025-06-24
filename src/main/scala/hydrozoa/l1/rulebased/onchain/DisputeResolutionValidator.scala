@@ -1,9 +1,12 @@
 package hydrozoa.l1.rulebased.onchain
 
-import hydrozoa.VerificationKeyBytes
+import com.bloxbean.cardano.client.address
+import com.bloxbean.cardano.client.address.AddressProvider
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
+import hydrozoa.infra.toBloxbean
+import hydrozoa.{AddressBech, AddressBechL1, L1, Network, VerificationKeyBytes}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TallyingValidator.TallyRedeemer
-import hydrozoa.l1.rulebased.onchain.TreasuryScript.sir
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
@@ -324,8 +327,30 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
 end DisputeResolutionValidator
 
 object DisputeResolutionScript {
-    val sir = Compiler.compile(TallyingValidator.validate)
-    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+
+    // FIXME: would be nice to calculate it on-the-fly not from the constant
+    lazy val sir =
+        Compiler.compile(
+          DisputeResolutionValidator.validate(
+            ByteString.fromHex("571337e0fb6de2617184fdc6c649f0b3d82f08c99601869288b9d2b8")
+          )
+        )
+    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+
+    // TODO: can we use Scalus for that?
+    private lazy val plutusScript: PlutusV3Script = PlutusV3Script
+        .builder()
+        .`type`("PlutusScriptV3")
+        .cborHex(script.doubleCborHex)
+        .build()
+        .asInstanceOf[PlutusV3Script]
+
+    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+
+    def entAddress(n: Network): AddressBechL1 = {
+        val address = AddressProvider.getEntAddress(plutusScript, n.toBloxbean)
+        address.getAddress |> AddressBech[L1].apply
+    }
 }
 
 // TODO: utxoActive
@@ -348,4 +373,5 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
 @main
 def disputeResolutionValidatorSir(args: String): Unit = {
     println(DisputeResolutionScript.sir.showHighlighted)
+    println(DisputeResolutionScript.scriptHash)
 }

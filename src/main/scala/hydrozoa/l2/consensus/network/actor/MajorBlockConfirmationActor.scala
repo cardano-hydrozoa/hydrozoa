@@ -12,6 +12,7 @@ import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
 import hydrozoa.*
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 
@@ -205,10 +206,7 @@ private class MajorBlockConfirmationActor(
           treasuryScript = AddressBech[L1](
             "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
           ),
-          // FIXME: script
-          disputeScript = AddressBech[L1](
-            "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
-          ),
+          disputeScript = DisputeResolutionScript.entAddress(networkL1static),
           votingDuration = 1024,
           // Sorting
           peers = peersKeys.toList,
