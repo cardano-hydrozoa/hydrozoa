@@ -23,7 +23,6 @@ private class MajorBlockConfirmationActor(
     walletActor: ActorRef[Wallet],
     settlementTxBuilder: SettlementTxBuilder,
     fallbackTxBuilder: FallbackTxBuilder,
-    cardano: ActorRef[CardanoL1],
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
@@ -78,8 +77,8 @@ private class MajorBlockConfirmationActor(
 
             // L2 effect
             val l2Effect = Some(utxosActive)
+
             // Block record and state update by block application
-            // TODO: add L1PostDatedBlockEffect
             val record = BlockRecord(req.block, l1Effect, Some(fallbackTx), l2Effect)
             log.info(s"Major block record is: $record")
             stateActor.tell(nodeState =>
@@ -90,20 +89,9 @@ private class MajorBlockConfirmationActor(
                 )
             )
 
-            log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
-            cardano.tell(_.submit(settlementTx))
-
             if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
-
-            // FIXME: this should be removed in the production version
-            if (stateActor.ask(_.head.openPhase(_.isQuitConsensusImmediately))) {
-                // TODO: wait till validity range is hit
-                log.info(s"Submitting fallback tx: ${txHash(fallbackTx)}")
-                val fallbackResult = cardano.ask(_.submit(fallbackTx))
-                log.info(s"fallbackResult = $fallbackResult")
-            }
 
             dropMyself()
 

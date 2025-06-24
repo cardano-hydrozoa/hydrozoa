@@ -83,6 +83,7 @@ object HydrozoaNode extends OxApp:
                 val cardanoActor = Actor.create(cardano)
 
                 val nodeState: NodeState = NodeState.apply(knownPeers)
+                nodeState.setCardano(cardanoActor)
 
                 val (
                   initTxBuilder,

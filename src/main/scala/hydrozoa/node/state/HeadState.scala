@@ -3,6 +3,7 @@ package hydrozoa.node.state
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{Piper, txFees, txHash, verKeyHash}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -86,6 +87,7 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def l2Tip: Block
+    def l2LastMajorRecord: BlockRecord
     def l2LastMajor: Block
     def lastKnownTreasuryUtxoId: UtxoIdL1
     def peekDeposits: DepositUtxos
@@ -186,6 +188,11 @@ class HeadStateGlobal(
     def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
+    private var cardano: ActorRef[CardanoL1] = _
+
+    def setCardano(cardano: ActorRef[CardanoL1]): Unit =
+        this.cardano = cardano
+
     override def currentPhase: HeadPhase = headPhase
 
     // Round-robin peer's turn. Having it we always can decide whether
@@ -203,6 +210,8 @@ class HeadStateGlobal(
     // Flag to store the fact of node's being asked for finalization.
     private var mbIsNextBlockFinal: Option[Boolean] = None
 
+    // TODO: handle it the same way we do `mbIsNextBlockFinal`
+    //   so all nodes can actively submit transactions
     private var mbQuitConsensusImmediately: Option[Boolean] = None
 
     // Pool: L2 events + pending deposits
@@ -292,6 +301,10 @@ class HeadStateGlobal(
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.nonGenesisEventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
+        def l2LastMajorRecord: BlockRecord = self.blocksConfirmedL2
+            .findLast(_.block.blockHeader.blockType == Major)
+            // FIXME: here a fallback tx for initialization tx should go
+            .getOrElse(???)
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
             .map(_.block)
@@ -548,6 +561,25 @@ class HeadStateGlobal(
                         mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
             })
 
+            // TODO: L1 effects submission should be carried on by a separate process
+            record.l1Effect |> maybeMultisigL1Tx match {
+                case Some(settlementTx) =>
+                    log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
+                    cardano.tell(_.submit(settlementTx))
+                case _ =>
+            }
+
+            // FIXME: this should be removed in the production version (or moved somewhere)
+            if isQuitConsensusImmediately then {
+                l2LastMajorRecord.l1PostDatedEffect.foreach { fallbackTx =>
+                    // TODO: wait till validity range is hit
+                    log.info(s"Submitting fallback tx: ${txHash(fallbackTx)}")
+                    val fallbackResult = cardano.ask(_.submit(fallbackTx))
+                    log.info(s"fallbackResult = $fallbackResult")
+                }
+            }
+
+            // Done
             log.info(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
@@ -742,6 +774,14 @@ class HeadStateGlobal(
                         m.incAbsorbedDeposits(depositsNum)
                         mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
             })
+
+            record.l1Effect |> maybeMultisigL1Tx match {
+                case Some(finalizationTx) =>
+                    // Submit finalization tx
+                    log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
+                    cardano.tell(_.submit(finalizationTx))
+                case _ => assert(false, "Impossible: finalization tx should always present")
+            }
 
             log.info("Head was closed.")
 

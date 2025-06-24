@@ -33,7 +33,7 @@ class HappyPathSuite extends FunSuite {
               TxIx(0)
             )
 
-             _ = sut.awaitTxL1(initTxId)
+            _ = sut.awaitTxL1(initTxId)
 
             deposit1 <- sut.deposit(
               Alice,
@@ -53,7 +53,7 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-             _ = sut.awaitTxL1(deposit1.depositId.txId)
+            _ = sut.awaitTxL1(deposit1.depositId.txId)
 
             deposit2 <- sut.deposit(
               Alice,
@@ -77,7 +77,7 @@ class HappyPathSuite extends FunSuite {
 
             major1 <- sut.produceBlock(false)
 
-             _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+            _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
 
             utxoL2 = sut.stateL2().head
 
@@ -85,12 +85,11 @@ class HappyPathSuite extends FunSuite {
 
             major2 <- sut.produceBlock(nextBlockFinal = true)
 
-             _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+            _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
 
             finalBlock <- sut.produceBlock(false)
 
-             _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-
+            _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
         yield finalBlock
 
         result match

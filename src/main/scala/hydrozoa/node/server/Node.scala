@@ -196,10 +196,16 @@ class Node:
           "Autonomous block production should be turned off to use this function"
         )
 
-        log.info(s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal...")
+        log.info(
+          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal, quitConsensusImmediately=$quitConsensusImmediately..."
+        )
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
-                nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately))) match
+                nodeState.ask(
+                  _.head.openPhase(
+                    _.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately)
+                  )
+                ) match
                     case Left(err)    => Left(err)
                     case Right(block) => Right(block)
             case Finalizing =>
@@ -209,7 +215,7 @@ class Node:
             case other => Left(s"Node should be in Open or Finalizing pase, but it's in $other")
 
         errorOrBlock match
-            case Left(err)    => Left(err)
+            case Left(err) => Left(err)
             case Right(block) =>
                 val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
                     nodeState

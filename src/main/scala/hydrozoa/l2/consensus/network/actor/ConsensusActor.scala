@@ -170,7 +170,6 @@ class ConsensusActorFactory(
           walletActor,
           settlementTxBuilder,
           fallbackTxBuilder,
-          cardanoActor,
           dropMyself
         )
 
@@ -179,7 +178,6 @@ class ConsensusActorFactory(
           stateActor,
           walletActor,
           finalizationTxBuilder,
-          cardanoActor,
           dropMyself
         )
 

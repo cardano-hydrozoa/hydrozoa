@@ -79,6 +79,8 @@ object LocalNode:
                     case None => mkCardanoL1(useYaci, yaciBFApiUri, pp)
 
                 val nodeState: NodeState = NodeState.apply(knownPeers, autonomousBlocks)
+                val cardanoActor = Actor.create(cardano)
+                nodeState.setCardano(cardanoActor)
 
                 val (
                   initTxBuilder,
@@ -92,7 +94,6 @@ object LocalNode:
                   nodeState,
                   knownPeers
                 )
-                val cardanoActor = Actor.create(cardano)
                 val nodeStateActor = Actor.create(nodeState)
 
                 val walletActor = Actor.create(mkWallet(ownPeer))

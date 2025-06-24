@@ -2,14 +2,12 @@ package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{Piper, sequence, txHash}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.L2EventLabel.{
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
+import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
 import hydrozoa.node.state.HeadPhase.Finalized
@@ -35,6 +33,11 @@ class NodeState(autonomousBlocks: Boolean):
 
     def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
         this.blockProductionActor = blockProductionActor
+
+    private var cardano: ActorRef[CardanoL1] = _
+
+    def setCardano(cardano: ActorRef[CardanoL1]): Unit =
+        this.cardano = cardano
 
     private var metrics: ActorRef[Metrics] = _
 
@@ -67,7 +70,7 @@ class NodeState(autonomousBlocks: Boolean):
         knownPeersVKeys.addAll(keys)
 
     def autonomousBlockProduction: Boolean = autonomousBlocks
-    
+
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 
@@ -78,6 +81,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState = Some(HeadStateGlobal(params))
             this.headState.get.setBlockProductionActor(blockProductionActor)
             this.headState.get.setMetrics(metrics)
+            this.headState.get.setCardano(cardano)
             log.info(s"Setting up L1 event sourcing...")
             val initTxId = params.initTx |> txHash
             multisigL1EventSource.tell(

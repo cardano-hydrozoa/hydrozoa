@@ -17,7 +17,6 @@ private class FinalBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     finalizationTxBuilder: FinalizationTxBuilder,
-    cardano: ActorRef[CardanoL1],
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
@@ -74,9 +73,7 @@ private class FinalBlockConfirmationActor(
             stateActor.tell(nodeState =>
                 nodeState.head.finalizingPhase(s => s.finalizeHead(record))
             )
-            // Submit finalization tx
-            log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
-            cardano.tell(_.submit(finalizationTx))
+
             // TODO: the absence of this line is a good test!
             resultChannel.send(())
             dropMyself()

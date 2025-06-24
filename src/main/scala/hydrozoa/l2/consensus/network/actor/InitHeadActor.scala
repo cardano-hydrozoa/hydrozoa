@@ -128,6 +128,7 @@ private class InitHeadActor(
                 val serializedTx = serializeTxHex(initTx)
                 log.info("Initialization tx: " + serializedTx)
 
+                // TODO: submission should be carried on by a separate thread
                 cardanoActor.ask(_.submit(toL1Tx(initTx))) match
                     case Right(txHash) =>
                         // Put the head into Initializing phase
