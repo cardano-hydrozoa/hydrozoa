@@ -193,10 +193,10 @@ end TallyingValidator
 
 object TallyingValidatorScript {
     val sir = Compiler.compile(TallyingValidator.validate)
-    val uplc = sir.toUplcOptimized(true)
+    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 }
 
-//@main
-//def main(args: String): Unit = {
-//    println(TreasuryScript.sir.showHighlighted)
-//}
+@main
+def tallyingValidatorSir(args: String): Unit = {
+    println(TallyingValidatorScript.sir.showHighlighted)
+}

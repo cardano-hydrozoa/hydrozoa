@@ -29,17 +29,24 @@ import scalus.builtin.{
     ToData
 }
 import scalus.ledger.api.v1.Value.+
+import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatumHash, OutputDatum}
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.prelude.crypto.bls12_381.G1.scale
 import scalus.prelude.{*, given}
-import supranational.blst.Scalar
-
-import java.math.BigInteger
 
 @Compile
 object TreasuryValidator extends Validator:
+
+    given [T <: scalus.ledger.api.v2.OutputDatum]: ToData[T] = (_ddd: T) =>
+        constrData(0, mkNilData())
+//        ddd match
+//            case NoOutputDatum => constrData(0, mkNilData())
+//            case OutputDatumHash(datumHash) =>
+//                constrData(1, builtin.List(datumHash.toData))
+//            case OutputDatum(datum) =>
+//                constrData(2, builtin.List(datum))
 
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
@@ -158,7 +165,7 @@ object TreasuryValidator extends Validator:
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
         // Parse datum
-        val treasuryDatum = datum match
+        val treasuryDatum: TreasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
             case None    => fail(DatumIsMissing)
 
@@ -287,7 +294,10 @@ object TreasuryValidator extends Validator:
                 // The number of withdrawals should match the number of utxos ids in the redeemer
                 require(withdrawalOutputs.size == utxoIds.size, WithdrawWrongNumberOfWithdrawals)
                 // Calculate the final poly for withdrawn subset
-                val withdrawnUtxos = utxoIds
+                // FIXME: this fails due to the same error:
+                // Caused by: java.lang.IllegalArgumentException: Expected case class type, got TypeVar(T,Some(218919)) in expression: match d with
+                // I blame this lines in Scalus, though it's not clear how to fix that since it uses
+                val withdrawnUtxos: List[ScalusScalar] = utxoIds
                     // Joint utxo ids and outputs
                     .zip(withdrawalOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars, multiply binomials
@@ -414,7 +424,7 @@ end TreasuryValidator
 
 object TreasuryScript {
     val sir = Compiler.compile(TreasuryValidator.validate)
-    val uplc = sir.toUplcOptimized(true)
+    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 }
 
 def mkTreasuryDatumUnresolved(
@@ -436,5 +446,5 @@ def mkTreasuryDatumUnresolved(
     ) |> Unresolved.apply
 
 @main
-def main(args: String): Unit =
+def treasuryValidatorSir(args: String): Unit =
     println(TreasuryScript.sir.showHighlighted)

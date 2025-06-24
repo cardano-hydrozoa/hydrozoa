@@ -1,12 +1,12 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.{Ed25519SignatureHex, Wallet}
-import hydrozoa.infra.encodeHex
+import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
 import hydrozoa.node.state.*
+import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -30,10 +30,9 @@ private class MinorBlockConfirmationActor(
         log.trace("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
         if (req != null && acks.keySet == headPeers)
-            // Create effects
-            // TODO: Should become a resolution vote at some point
-            val l1Effect: L1BlockEffect = ()
-            // TODO: May be absent
+            // Minor block effects
+            val l1Effect: L1BlockEffect =
+                acks.map(a => Ed25519Signature(decodeHex(a._2.signature.signature))).toSeq
             val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, None, l2Effect)

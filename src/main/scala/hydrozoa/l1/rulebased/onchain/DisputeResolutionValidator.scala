@@ -3,6 +3,7 @@ package hydrozoa.l1.rulebased.onchain
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TallyingValidator.TallyRedeemer
+import hydrozoa.l1.rulebased.onchain.TreasuryScript.sir
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
@@ -163,7 +164,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
         tallyValidator: ScriptHash
     )(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
         // Parse datum
-        val voteDatum = datum match
+        val voteDatum: VoteDatum = datum match
             case Some(d) => d.to[VoteDatum]
             case None    => fail(DatumIsMissing)
 
@@ -324,7 +325,7 @@ end DisputeResolutionValidator
 
 object DisputeResolutionScript {
     val sir = Compiler.compile(TallyingValidator.validate)
-    val uplc = sir.toUplcOptimized(true)
+    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 }
 
 // TODO: utxoActive
@@ -344,7 +345,7 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
       voteStatus = VoteStatus.NoVote
     )
 
-//@main
-//def main(args: String): Unit = {
-//    println(TreasuryScript.sir.showHighlighted)
-//}
+@main
+def disputeResolutionValidatorSir(args: String): Unit = {
+    println(DisputeResolutionScript.sir.showHighlighted)
+}

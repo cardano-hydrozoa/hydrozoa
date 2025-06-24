@@ -343,7 +343,7 @@ class HeadStateGlobal(
         def isBlockLeader: Boolean = self.isBlockLeader.get
         def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
 
-    private def l2Tip_ = blocksConfirmedL2.map(_.block).lastOption.getOrElse(zeroBlock)
+    private def l2Tip_ = blocksConfirmedL2.lastOption.map(_.block).getOrElse(zeroBlock)
 
     // Subclasses that implements APIs (writers)
     private final class InitializingPhaseImpl
@@ -569,15 +569,25 @@ class HeadStateGlobal(
                 case _ =>
             }
 
-            // FIXME: this should be removed in the production version (or moved somewhere)
-            if isQuitConsensusImmediately then {
-                l2LastMajorRecord.l1PostDatedEffect.foreach { fallbackTx =>
-                    // TODO: wait till validity range is hit
-                    log.info(s"Submitting fallback tx: ${txHash(fallbackTx)}")
-                    val fallbackResult = cardano.ask(_.submit(fallbackTx))
-                    log.info(s"fallbackResult = $fallbackResult")
-                }
+            def runTestDispute() = {
+
+                // Submit fallback tx
+                // TODO: wait till validity range is hit
+                val fallbackTx = l2LastMajorRecord.l1PostDatedEffect.get
+                val fallbackTxHash = txHash(fallbackTx)
+                log.info(s"Submitting fallback tx: $fallbackTxHash")
+                val fallbackResult = cardano.ask(_.submit(fallbackTx))
+                log.info(s"fallbackResult = $fallbackResult")
+                cardano.ask(_.awaitTx(fallbackTxHash))
+
+                // Build and submit a vote
+                val lastBlock = blocksConfirmedL2.lastOption.get
             }
+
+            end runTestDispute
+
+            // FIXME: this should be removed in the production version (or moved somewhere)
+            if isQuitConsensusImmediately then runTestDispute()
 
             // Done
             log.info(
@@ -843,9 +853,11 @@ object HeadStateGlobal:
           autonomousBlocks = params.autonomousBlocks
         )
 
+// TODO: we can optimize it (probably parameterized on block type)
 case class BlockRecord(
     block: Block,
     l1Effect: L1BlockEffect,
+    // Is not defined for minor blocks
     l1PostDatedEffect: L1PostDatedBlockEffect,
     l2Effect: L2BlockEffect
 )
@@ -877,7 +889,10 @@ case class RefundedDeposit(
 )
 
 type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
-type MinorBlockL1Effect = Unit
+
+// It's not an "effect", but rather its parts - all nodes signatures that
+// can be turned into a voting transaction.
+type MinorBlockL1Effect = Seq[Ed25519Signature]
 
 // This is not defined for minor and final blocks, so we have to use Option here.
 // Probably we can do it better.
