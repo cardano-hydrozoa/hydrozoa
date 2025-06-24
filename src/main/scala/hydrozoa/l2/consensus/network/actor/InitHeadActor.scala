@@ -5,9 +5,9 @@ import hydrozoa.*
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
-import hydrozoa.l1.multisig.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
+import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump

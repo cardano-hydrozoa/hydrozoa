@@ -1,4 +1,4 @@
-package hydrozoa.l1.rulebased.tx.dispute.vote
+package hydrozoa.l1.rulebased.tx.vote
 
 import hydrozoa.{TxIx, TxL1}
 

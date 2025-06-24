@@ -1,4 +1,4 @@
-package hydrozoa.l1.multisig.tx.fallback
+package hydrozoa.l1.rulebased.tx.fallback
 
 import hydrozoa.*
 

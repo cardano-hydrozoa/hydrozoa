@@ -1,4 +1,4 @@
-package hydrozoa.l1.rulebased.tx.dispute.tally
+package hydrozoa.l1.rulebased.tx.tally
 
 import hydrozoa.{TxIx, TxL1}
 

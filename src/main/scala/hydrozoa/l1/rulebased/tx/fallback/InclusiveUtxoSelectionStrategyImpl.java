@@ -1,4 +1,4 @@
-package hydrozoa.l1.multisig.tx.fallback;
+package hydrozoa.l1.rulebased.tx.fallback;
 
 import com.bloxbean.cardano.client.address.Address;
 import com.bloxbean.cardano.client.api.AddressIterator;

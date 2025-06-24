@@ -7,11 +7,11 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
-import hydrozoa.l1.multisig.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory

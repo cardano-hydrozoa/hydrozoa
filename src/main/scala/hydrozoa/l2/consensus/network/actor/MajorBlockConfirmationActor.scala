@@ -4,7 +4,6 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
-import hydrozoa.l1.multisig.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
@@ -13,6 +12,7 @@ import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
 import hydrozoa.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript
+import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 

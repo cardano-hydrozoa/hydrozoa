@@ -3,11 +3,11 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Wallet
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.tx.fallback.FallbackTxBuilder
 import hydrozoa.l1.multisig.tx.finalization.FinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.RefundTxBuilder
 import hydrozoa.l1.multisig.tx.settlement.SettlementTxBuilder
+import hydrozoa.l1.rulebased.tx.fallback.FallbackTxBuilder
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Source}

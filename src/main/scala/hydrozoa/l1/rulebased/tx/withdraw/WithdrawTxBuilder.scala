@@ -1,4 +1,4 @@
-package hydrozoa.l1.rulebased.tx.treasury.withdraw
+package hydrozoa.l1.rulebased.tx.withdraw
 
 import hydrozoa.{TxIx, TxL1}
 
