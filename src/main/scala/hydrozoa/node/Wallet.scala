@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.function.helper.SignerProviders
 import hydrozoa.node.state.WalletId
 
 trait WalletModule:

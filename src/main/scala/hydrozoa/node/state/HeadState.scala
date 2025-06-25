@@ -4,13 +4,13 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{Piper, txFees, txHash, verKeyHash}
+import hydrozoa.infra.{Piper, serializeTxHex, txFees, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
-import hydrozoa.l1.rulebased.tx.vote.VoteTxRecipe
+import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
@@ -199,6 +199,10 @@ class HeadStateGlobal(
 
     def setCardano(cardano: ActorRef[CardanoL1]): Unit =
         this.cardano = cardano
+
+    private var voteTxBuilder: VoteTxBuilder = _
+
+    def setVoteTxBuilder(builder: VoteTxBuilder): Unit = this.voteTxBuilder = builder
 
     override def currentPhase: HeadPhase = headPhase
 
@@ -615,12 +619,17 @@ class HeadStateGlobal(
                                 case None => throw RuntimeException("Vote UTxO was not found")
                             }
 
+                        
                         val recipe = VoteTxRecipe(
                           voteUtxoId,
                           mkOnchainBlockHeader(lastBlock.block.blockHeader),
-                          lastBlock.l1Effect.asInstanceOf[MinorBlockL1Effect]
+                          lastBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
+                          AddressBech[L1]("addr_test1qp0qu4cypvrwn4c7pu50zf3x9qu2drdsk545l5dnsa7a5gsr6htafuvutm36rm23hdnsw7w7r82q4tljuh55drxqt30q6vm8vs")
                         )
                         log.info(s"Vote tx recipe: $recipe")
+                        val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
+                        log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
+
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     case _ => throw RuntimeException("Last block is not a minor block, can't vote")
                 }

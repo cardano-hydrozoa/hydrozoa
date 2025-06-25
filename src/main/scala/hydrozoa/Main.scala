@@ -12,6 +12,7 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
+import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
@@ -91,7 +92,8 @@ object HydrozoaNode extends OxApp:
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
-                  finalizationTxBuilder
+                  finalizationTxBuilder,
+                  voteTxBuilder
                 ) = mkTxBuilders(backendService, nodeState, knownPeers)
 
                 val nodeStateActor = Actor.create(nodeState)
@@ -129,6 +131,7 @@ object HydrozoaNode extends OxApp:
                 // Static actors for node state
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
                 nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
+                nodeState.setVoteTxBuilder(voteTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -230,6 +233,8 @@ def mkTxBuilders(
         BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+    val voteTxBuilder: VoteTxBuilder =
+        BloxBeanVoteTxBuilder(backendService)
 
     (
       initTxBuilder,
@@ -237,7 +242,8 @@ def mkTxBuilders(
       depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,
-      finalizationTxBuilder
+      finalizationTxBuilder,
+      voteTxBuilder
     )
 
 end mkTxBuilders

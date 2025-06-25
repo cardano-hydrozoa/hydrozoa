@@ -88,12 +88,16 @@ object LocalNode:
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
-                  finalizationTxBuilder
+                  finalizationTxBuilder,
+                  voteTxBuilder
                 ) = mkTxBuilders(
                   backendService,
                   nodeState,
                   knownPeers
                 )
+
+                nodeState.setVoteTxBuilder(voteTxBuilder)
+
                 val nodeStateActor = Actor.create(nodeState)
 
                 val walletActor = Actor.create(mkWallet(ownPeer))

@@ -338,7 +338,7 @@ object DisputeResolutionScript {
     lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 
     // TODO: can we use Scalus for that?
-    private lazy val plutusScript: PlutusV3Script = PlutusV3Script
+    lazy val plutusScript: PlutusV3Script = PlutusV3Script
         .builder()
         .`type`("PlutusScriptV3")
         .cborHex(script.doubleCborHex)
