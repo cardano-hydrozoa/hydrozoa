@@ -217,10 +217,10 @@ class Node:
         errorOrBlock match
             case Left(err) => Left(err)
             case Right(block) =>
-                val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
+                val effects = retryEither(RetryConfig.delay(100, 100.millis)) {
                     nodeState
                         .ask(_.head.getBlockRecord(block))
-                        .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
+                        .toRight(s"Effects for block ${block.blockHeader.blockNum} have not bee found after 10 secs of waiting")
                 }
 
                 effects match

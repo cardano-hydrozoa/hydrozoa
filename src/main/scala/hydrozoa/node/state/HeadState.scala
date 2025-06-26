@@ -16,6 +16,8 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
@@ -619,16 +621,31 @@ class HeadStateGlobal(
                                 case None => throw RuntimeException("Vote UTxO was not found")
                             }
 
-                        
+                        val ownAddress = AddressBech[L1](
+                          account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
+                        )
+
+                        // Temporarily
+                        val ownAccount = account(TestPeer.valueOf(ownPeer.name))
+
                         val recipe = VoteTxRecipe(
                           voteUtxoId,
+                          // treasury is always the first output
+                          UtxoIdL1.apply(fallbackTxHash, TxIx(0)),
                           mkOnchainBlockHeader(lastBlock.block.blockHeader),
                           lastBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
-                          AddressBech[L1]("addr_test1qp0qu4cypvrwn4c7pu50zf3x9qu2drdsk545l5dnsa7a5gsr6htafuvutm36rm23hdnsw7w7r82q4tljuh55drxqt30q6vm8vs")
+                          ownAddress,
+                          ownAccount
                         )
                         log.info(s"Vote tx recipe: $recipe")
                         val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
+                        val voteTxHash = txHash(voteTx)
                         log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
+
+                        log.info(s"Submitting vote tx: $voteTxHash")
+                        val voteResult = cardano.ask(_.submit(voteTx))
+                        log.info(s"voteResult = $voteResult")
+                        cardano.ask(_.awaitTx(voteTxHash))
 
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     case _ => throw RuntimeException("Last block is not a minor block, can't vote")

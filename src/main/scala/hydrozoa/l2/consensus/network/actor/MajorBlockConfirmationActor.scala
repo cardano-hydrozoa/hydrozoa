@@ -207,7 +207,8 @@ private class MajorBlockConfirmationActor(
             "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
           ),
           disputeAddress = DisputeResolutionScript.entAddress(networkL1static),
-          votingDuration = 1024,
+          // FIXME: use a real value, this is Thursday, July 3, 2025 10:43:44 PM GMT-06:00
+          votingDuration = BigInt("1751604224000"),
           // Sorting
           peers = peersKeys.toList,
           headAddressBech32 = headAddress,

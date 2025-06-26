@@ -129,7 +129,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
     private inline val VoteAlreadyCast = "Vote is already has been cast"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
-    private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is reuired"
+    private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
     private inline val VoteTreasuryDatum = "Treasury datum is missing"
     private inline val VoteTreasuryDatumHeadMp = "Treasury datum headMp mismatch"
@@ -183,6 +183,7 @@ object DisputeResolutionValidator extends ParameterizedValidator[ScriptHash]:
 
                 // Check vote status
                 require(voteDatum.voteStatus === VoteStatus.NoVote, VoteAlreadyCast)
+
                 // Check signature
                 require(voteDatum.peer.forall(tx.signatories.contains(_)), VoteMustBeSignedByPeer)
 

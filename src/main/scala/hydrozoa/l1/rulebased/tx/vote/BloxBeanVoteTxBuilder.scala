@@ -1,29 +1,28 @@
 package hydrozoa.l1.rulebased.tx.vote
 
 import com.bloxbean.cardano.client.address.Address
-import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.function.TxSigner
 import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.TxL1
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.Vote
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{DisputeRedeemer, MinorBlockL1Effect, VoteDatum, VoteDetails}
-import hydrozoa.node.TestPeer
-import hydrozoa.node.TestPeer.{account, mkWallet}
-import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{TxIx, TxL1}
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{
+    DisputeRedeemer,
+    MinorBlockL1Effect,
+    VoteDatum,
+    VoteDetails
+}
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.{fromData, toData}
 import scalus.prelude.List.asScalus
 
-import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
 class BloxBeanVoteTxBuilder(
@@ -58,24 +57,37 @@ class BloxBeanVoteTxBuilder(
           DisputeRedeemer.Vote(MinorBlockL1Effect(r.blockHeader, multisig)).toData
         )
 
+        val outputAmount: List[Amount] = voteUtxo.getAmount.asScala.toList
+
+        // TODO: we want to pay fees from the vote utxo
+        // FIXME: Subtract 1 ada to allow fees be pays from the vote utxo
+//        outputAmount.foreach(a =>
+//            if a.getUnit.equals("lovelace") then
+//                a.setQuantity((a.getQuantity.subtract(BigInteger("1_000_000"))))
+//        )
+
         val txPartial = ScriptTx()
             .collectFrom(voteUtxo, redeemer)
-            .payToContract(voteUtxo.getAddress, voteUtxo.getAmount, outVoteDatum)
+            .readFrom(r.treasuryUtoxId.txId.hash, r.treasuryUtoxId.outputIx.ix)
+            .payToContract(voteUtxo.getAddress, outputAmount.asJava, outVoteDatum)
             .attachSpendingValidator(DisputeResolutionScript.plutusScript);
-
-//            .from(depositorAddress)
 
         val nodeAddress = r.nodeAddress.bech32
 
-        // FIXME: use real account, not it's Carol since DisputeSuite uses it
-        val txSigner: TxSigner = SignerProviders.signerFrom(account(TestPeer.Carol))
+        val txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
         val depositTx: Transaction = builder
             .apply(txPartial)
+            // TODO: this should be LEQ than what an unresolved treasury datum contains
+            // see MajorBlockConfirmationActor.scala:210
+            .validTo(1024)
+            .withRequiredSigners(Address(nodeAddress))
             .collateralPayer(nodeAddress)
+            // TODO: we want to pay fees from the vote utxo
+            // .feePayer(voteUtxo.getAddress)
             .feePayer(nodeAddress)
             .withSigner(txSigner)
-            .build()
+            .buildAndSign()
 
         Right(TxL1(depositTx.serialize))
 }

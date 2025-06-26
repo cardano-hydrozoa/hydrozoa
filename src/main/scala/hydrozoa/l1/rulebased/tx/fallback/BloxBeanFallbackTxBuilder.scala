@@ -85,13 +85,16 @@ class BloxBeanFallbackTxBuilder(
 
         val peersN = r.peers.length
 
+        // TODO: magic number
+        val voteUtxoAda = 4_000_000
+
         def mkVoteOutput(datum: PlutusData) = {
             TransactionOutput.builder
                 .address(r.disputeAddress.bech32)
                 .value(
                   Value.builder
                       // TODO: MinAda
-                      .coin(BigInteger.valueOf(2_000_000))
+                      .coin(BigInteger.valueOf(voteUtxoAda))
                       .multiAssets(
                         List(
                           MultiAsset
@@ -154,7 +157,7 @@ class BloxBeanFallbackTxBuilder(
                 val treasury = outputs.getFirst
                 val treasuryValue = treasury.getValue
                 treasuryValue.setCoin(
-                  change.getValue.getCoin.subtract(BigInteger.valueOf(2_000_000 * (peersN + 1)))
+                  change.getValue.getCoin.subtract(BigInteger.valueOf(voteUtxoAda * (peersN + 1)))
                 )
             )
             .additionalSignersCount(numberOfSignatories(headNativeScript))
