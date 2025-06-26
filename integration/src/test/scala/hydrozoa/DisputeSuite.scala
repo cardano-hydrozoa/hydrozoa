@@ -9,6 +9,10 @@ import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 import scala.concurrent.duration.*
 
+// Currently requires two UTxOs at the Carol's address for vote fees and collateral:
+// topup --address addr_test1vr9xuxclxgx4gw3y4h4tcz4yvfmrt3e5nd3elphhf00a67qnjjq6h --value 10
+// topup --address addr_test1vr9xuxclxgx4gw3y4h4tcz4yvfmrt3e5nd3elphhf00a67qnjjq6h --value 10
+
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
   */
