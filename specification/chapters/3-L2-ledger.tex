@@ -99,7 +99,7 @@ The rules for Hydrozoa's L2 transactions are the same as Cardano's ledger rules 
 Conveniently, we can avoid forking Cardano's ledger rules library to implement these additional rules in Hydrozoa.
 Instead, we express them as requirements for specific transaction fields to be omitted or restricted to a narrower selection of values.
 
-The hydra node software should reject (with an error message) L2 transactions that violate these requirements, while peers should ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
+The hydrozoa node software should reject (with an error message) L2 transactions that violate these requirements, while peers should ignore \code{ReqTx} messages (\cref{h:l2-consensus-transaction}) that broadcast such transactions.
 
 In the following type definition, we use these notational conventions:
 \begin{itemize}
