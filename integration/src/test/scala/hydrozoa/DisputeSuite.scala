@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
 import hydrozoa.l2.ledger.L2Transaction
 import hydrozoa.node.TestPeer
@@ -7,23 +8,62 @@ import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
-import scala.concurrent.duration.*
-
-// Currently requires two UTxOs at the Carol's address for vote fees and collateral:
-// topup --address addr_test1vr9xuxclxgx4gw3y4h4tcz4yvfmrt3e5nd3elphhf00a67qnjjq6h --value 10
-// topup --address addr_test1vr9xuxclxgx4gw3y4h4tcz4yvfmrt3e5nd3elphhf00a67qnjjq6h --value 10
+import sttp.client4.Response
+import sttp.client4.quick.*
+import sttp.model.MediaType.ApplicationJson
 
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
   */
 class DisputeSuite extends FunSuite {
 
+    private val log = Logger(getClass)
+
     private val testPeers = Set(Alice, Bob, Carol, Daniella)
 
     private var sut: HydrozoaFacade = _
 
-    override def beforeEach(context: BeforeEach): Unit = sut =
-        LocalFacade.apply(testPeers, useYaci = true)
+    override def beforeEach(context: BeforeEach): Unit =
+        def topupNodeWallets(peers: Set[TestPeer], ada: Int, count: Int) =
+            assert(count > 1)
+            assert(ada >= 1 && ada <= 100)
+            val fs: Seq[() => Unit] =
+                for
+                    p <- peers.toList
+                    _ <- List.range(1, count + 1)
+                    fs = () =>
+                        val addr = account(p).getEnterpriseAddress.toBech32
+                        val body = s"{\"address\": \"$addr\", \"adaAmount\": $ada}"
+                        log.info(body)
+                        // List.range(1, count + 1)
+                        //    .foreach(_ =>
+                        val _: Response[String] = quickRequest
+                            .post(
+                              uri"http://localhost:10000/local-cluster/api/addresses/topup"
+                            )
+                            .contentType(ApplicationJson)
+                            .body(body)
+                            .send()
+                        //    )
+                yield fs
+
+            // Yaci gets mad and fails if we run it in parallel.
+            // supervised { par(fs) }
+            fs.foreach(_())
+
+        // Reset Yaci DevKit
+        log.info("Resetting Yaci...")
+        val _: Response[String] = quickRequest
+            .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
+            .send()
+
+        // Topup nodes' wallets - every participant gets 3 utxos with 10 ada each
+        log.info("Topping up peers' wallets...")
+        topupNodeWallets(testPeers, 10, 3)
+
+        // Make SUT
+        log.info("Making a Hydrozoa head uing a local network...")
+        sut = LocalFacade.apply(testPeers, useYaci = true)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
