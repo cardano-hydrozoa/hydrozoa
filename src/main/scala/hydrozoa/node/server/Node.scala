@@ -177,7 +177,7 @@ class Node:
     /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
       * done and effects are ready. Returns all that so it can be checked against a model.
       *
-      * NB: This is used for model-based testing only.
+      * NB: This is used for testing only.
       *
       * NB: Not exposed within API.
       *

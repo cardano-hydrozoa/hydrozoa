@@ -1,5 +1,6 @@
 package hydrozoa
 
+import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.txHash
 import hydrozoa.l2.ledger.L2Withdrawal
 import hydrozoa.node.TestPeer
@@ -7,16 +8,30 @@ import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
+import sttp.client4.Response
+import sttp.client4.quick.*
 
 /** This integration test runs simple Hydrozoa happy-path.
   */
 class HappyPathSuite extends FunSuite {
 
+    private val useYaci = true;
+
+    private val log = Logger(getClass)
+
     private val testPeers = Set(Alice, Bob, Carol, Daniella)
 
     private var sut: HydrozoaFacade = _
 
-    override def beforeEach(context: BeforeEach): Unit = sut = LocalFacade.apply(testPeers)
+    override def beforeEach(context: BeforeEach): Unit =
+        if (useYaci)
+            // Reset Yaci DevKit
+            log.info("Resetting Yaci...")
+            val _: Response[String] = quickRequest
+                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
+                .send()
+
+    sut = LocalFacade.apply(testPeers, useYaci = useYaci)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -53,7 +68,7 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            _ = sut.awaitTxL1(deposit1.depositId.txId)
+            deposit1Tx = sut.awaitTxL1(deposit1.depositId.txId).toRight("Deposit tx is missing")
 
             deposit2 <- sut.deposit(
               Alice,
@@ -73,11 +88,13 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            _ = sut.awaitTxL1(deposit2.depositId.txId)
+            deposit2Tx = sut.awaitTxL1(deposit2.depositId.txId).toRight("Deposit tx is missing")
 
             major1 <- sut.produceBlock(false)
 
-            _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+            settlement1Tx = sut
+                .awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+                .toRight("Settlement tx is missing")
 
             utxoL2 = sut.stateL2().head
 
@@ -85,12 +102,25 @@ class HappyPathSuite extends FunSuite {
 
             major2 <- sut.produceBlock(nextBlockFinal = true)
 
-            _ = sut.awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+            settlement2Tx = sut
+                .awaitTxL1(txHash(major2._1.l1Effect.asInstanceOf[TxL1]))
+                .toRight("Settlement tx is missing")
 
             finalBlock <- sut.produceBlock(false)
 
-            _ = sut.awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
-        yield finalBlock
+            finalTx = sut
+                .awaitTxL1(txHash(finalBlock._1.l1Effect.asInstanceOf[TxL1]))
+                .toRight("Final tx is missing")
+        yield (
+          deposit1Tx,
+          major1,
+          settlement1Tx,
+          deposit2Tx,
+          major2,
+          settlement2Tx,
+          finalBlock,
+          finalTx
+        )
 
         result match
             case Right(_)  => ()

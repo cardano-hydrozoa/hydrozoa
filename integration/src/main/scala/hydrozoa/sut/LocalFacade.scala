@@ -103,14 +103,27 @@ class LocalFacade(
         quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
         log.info(
-          s"SUT: producing a block in a lockstep manner (nextBlockFinal = $nextBlockFinal..."
+          s"SUT: producing a block in a lockstep manner " +
+              s" nextBlockFinal = $nextBlockFinal, " +
+              s" quitConsensusImmediately = $quitConsensusImmediately"
         )
 
-        // Note: this is not ideal, you may see errors in logs like
-        // "Block production procedure was unable to create a block number N+1".
-        val answers = peers.values.map(node =>
-            node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
+        // Here we run requests to all nodes in parallel.
+        // This is important, since one of this calls will be blocked
+        // until the leader returns the block record.
+        // This is convenient, since we don't know who the leader is
+        // and also allow to propagate flags like quitConsensusImmediately
+        // to all nodes.
+        val requests = peers.values
+            .map(node =>
+                () => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
+            )
+            .toSeq
+
+        val answers = supervised(
+          par(requests)
         )
+
         answers.find(a => a.isRight) match
             case None =>
                 answers.foreach(a => log.error(s"Lockstep block answer was: $a"))

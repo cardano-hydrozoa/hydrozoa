@@ -216,7 +216,7 @@ private class MajorBlockConfirmationActor(
           headMintingPolicy = headMintingPolicy
         )
 
-        log.error(s"FallbackTxRecipe= $fallbackTxRecipe")
+        log.info(s"FallbackTxRecipe= $fallbackTxRecipe")
 
         val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
 

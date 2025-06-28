@@ -8,8 +8,8 @@ import hydrozoa.infra.{Piper, serializeTxHex, txFees, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
-import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -420,8 +420,16 @@ class HeadStateGlobal(
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
             force: Boolean = false,
+            // This is a test-only flag that forces the node to submit fallback
+            // and other role-based regime txs immediately (when applying the block record).
             quitConsensusImmediately: Boolean = false
         ): Either[String, Block] = {
+            // The testing facade calls tryProduceBlock on all nodes every time
+            // a test suite wants to produce a block.
+            // This has twofold effect:
+            // 1. Sets `quitConsensusImmediately` flag (on all nodes).
+            self.mbQuitConsensusImmediately = Some(quitConsensusImmediately)
+            // 2. The leader produces the block and starts consensus on it.
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !this.isBlockPending
             then
@@ -446,7 +454,6 @@ class HeadStateGlobal(
                         )
                         self.isBlockPending = Some(true)
                         self.mbIsNextBlockFinal = Some(nextBlockFinal)
-                        self.mbQuitConsensusImmediately = Some(quitConsensusImmediately)
                         Right(block)
                     case Left(err) =>
                         // TODO: this arguably should never happen
@@ -582,6 +589,7 @@ class HeadStateGlobal(
                 case _ =>
             }
 
+            // Test dispute routine
             def runTestDispute() = {
 
                 // Submit fallback tx
@@ -591,11 +599,18 @@ class HeadStateGlobal(
                 log.info(s"Submitting fallback tx: $fallbackTxHash")
                 val fallbackResult = cardano.ask(_.submit(fallbackTx))
                 log.info(s"fallbackResult = $fallbackResult")
+                // Since fallback is the same tx for all nodes, we can use awaitTx here.
                 cardano.ask(_.awaitTx(fallbackTxHash))
 
                 // Build and submit a vote
-                val lastBlock = blocksConfirmedL2.lastOption.get
-                lastBlock.block.blockHeader.blockType match {
+                // The idea for testing (tallying) is as follows:
+                // every node should submit a minor block they produced.
+                val turn = self.blockLeadTurn.get
+                val voteBlock = blocksConfirmedL2.clone().dropRightInPlace(turn).lastOption.get
+
+                log.info(s"voteBlock = $voteBlock")
+
+                voteBlock.block.blockHeader.blockType match {
                     // Voting is possible
                     case Minor =>
                         // Temporary code for building Vote tx
@@ -632,8 +647,8 @@ class HeadStateGlobal(
                           voteUtxoId,
                           // treasury is always the first output
                           UtxoIdL1.apply(fallbackTxHash, TxIx(0)),
-                          mkOnchainBlockHeader(lastBlock.block.blockHeader),
-                          lastBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
+                          mkOnchainBlockHeader(voteBlock.block.blockHeader),
+                          voteBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
                           ownAddress,
                           ownAccount
                         )
@@ -648,14 +663,18 @@ class HeadStateGlobal(
                         cardano.ask(_.awaitTx(voteTxHash))
 
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
-                    case _ => throw RuntimeException("Last block is not a minor block, can't vote")
+                    // (Should not happen)
+                    case _ => throw RuntimeException("Vote block is not a minor block, can't vote")
                 }
             }
 
             end runTestDispute
 
             // FIXME: this should be removed in the production version (or moved somewhere)
-            if isQuitConsensusImmediately then runTestDispute()
+            if isQuitConsensusImmediately then {
+                log.warn("Running test dispute")
+                runTestDispute()
+            }
 
             // Done
             log.info(

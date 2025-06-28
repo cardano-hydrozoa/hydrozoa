@@ -17,6 +17,8 @@ import sttp.model.MediaType.ApplicationJson
   */
 class DisputeSuite extends FunSuite {
 
+    private val useYaci = true;
+
     private val log = Logger(getClass)
 
     private val testPeers = Set(Alice, Bob, Carol, Daniella)
@@ -51,19 +53,20 @@ class DisputeSuite extends FunSuite {
             // supervised { par(fs) }
             fs.foreach(_())
 
-        // Reset Yaci DevKit
-        log.info("Resetting Yaci...")
-        val _: Response[String] = quickRequest
-            .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-            .send()
+        if (useYaci)
+            // Reset Yaci DevKit
+            log.info("Resetting Yaci...")
+            val _: Response[String] = quickRequest
+                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
+                .send()
 
-        // Topup nodes' wallets - every participant gets 3 utxos with 10 ada each
-        log.info("Topping up peers' wallets...")
-        topupNodeWallets(testPeers, 10, 3)
+            // Topup nodes' wallets - every participant gets 3 utxos with 10 ada each
+            log.info("Topping up peers' wallets...")
+            topupNodeWallets(testPeers, 10, 3)
 
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")
-        sut = LocalFacade.apply(testPeers, useYaci = true)
+        sut = LocalFacade.apply(testPeers, useYaci = useYaci)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -123,7 +126,9 @@ class DisputeSuite extends FunSuite {
 
             // Make a major block
             major1 <- sut.produceBlock(false)
-            _ = sut.awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+            major1SettlementTx = sut
+                .awaitTxL1(txHash(major1._1.l1Effect.asInstanceOf[TxL1]))
+                .toRight("No settlement tx for th major 1")
 
             // L2 tx + minor block 1.1
             utxoL2 = sut.stateL2().head
@@ -177,10 +182,28 @@ class DisputeSuite extends FunSuite {
                 )
               )
             )
-            minor1_2 <- sut.produceBlock(false, true)
+            minor1_3 <- sut.produceBlock(false)
+
+            // Another L2 tx + minor block 1.4
+            utxoL2 = sut.stateL2().head
+            _ <- sut.submitL2(
+              L2Transaction(
+                List(utxoL2._1),
+                List(
+                  OutputNoTokens(
+                    AddressBech[L2](
+                      "addr_test1qp0qu4cypvrwn4c7pu50zf3x9qu2drdsk545l5dnsa7a5gsr6htafuvutm36rm23hdnsw7w7r82q4tljuh55drxqt30q6vm8vs"
+                    ),
+                    utxoL2._2.coins,
+                    None
+                  )
+                )
+              )
+            )   
+            minor1_4 <- sut.produceBlock(false, true)
 
             _ = Thread.sleep(5000)
-        yield major1
+        yield (major1, major1SettlementTx, minor1_1, minor1_2, minor1_3, minor1_4)
 
         result match
             case Right(_)  => ()
