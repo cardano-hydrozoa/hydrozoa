@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network
 
 import hydrozoa.infra.txHash
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.onchain.{mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -47,7 +47,6 @@ class HeadPeerNetworkOneNode(
 
         // Native script, head address, and token
         val (headNativeScript, headAddress) = mkHeadNativeScriptAndAddress(vKeys, cardano.network)
-        val beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
 
         // Recipe to build init tx
         val initTxRecipe = InitTxRecipe(
@@ -55,7 +54,6 @@ class HeadPeerNetworkOneNode(
           req.seedUtxoId,
           req.treasuryCoins,
           headNativeScript,
-          beaconTokenName
         )
 
         val Right(tx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)

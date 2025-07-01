@@ -7,6 +7,7 @@ import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.{NativeScript, ScriptAll}
 import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
+import hydrozoa.l1.multisig.onchain.mkBeaconTokenName
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.{AddressBech, AddressBechL1, L1, TxL1}
@@ -35,7 +36,7 @@ class BloxBeanInitializationTxBuilder(backendService: BackendService) extends In
             .toEither
 
         val beaconToken = Asset.builder
-            .name(recipe.beaconTokenName.tokenName)
+            .name(mkBeaconTokenName(recipe.seedOutput).toString)
             .value(BigInteger.valueOf(1))
             .build
 

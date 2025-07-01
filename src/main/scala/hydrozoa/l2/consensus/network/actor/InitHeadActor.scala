@@ -44,7 +44,6 @@ private class InitHeadActor(
         val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
         val (headNativeScript, headAddress) =
             mkHeadNativeScriptAndAddress(headVKeys, cardanoActor.ask(_.network))
-        val beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
 
         log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
 
@@ -53,7 +52,6 @@ private class InitHeadActor(
           req.seedUtxoId,
           req.treasuryCoins,
           headNativeScript,
-          beaconTokenName
         )
 
         log.info(s"initTxRecipe: $initTxRecipe")
@@ -73,7 +71,7 @@ private class InitHeadActor(
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
         this.headAddress = headAddress
-        this.beaconTokenName = beaconTokenName
+        this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress
         deliver(ownAck)
         Seq(ownAck)
