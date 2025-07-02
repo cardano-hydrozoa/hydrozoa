@@ -10,6 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
+//val scalusVersion = "0.10.1+173-fb50440d-SNAPSHOT"
 val scalusVersion = "0.10.1+36-979f1eb3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
@@ -91,6 +92,5 @@ lazy val demo = (project in file("demo"))
       publish / skip := true,
       libraryDependencies ++= Seq(
         "org.scalacheck" %% "scalacheck" % "1.18.1"
-
       )
     )

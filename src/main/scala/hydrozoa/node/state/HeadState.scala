@@ -1,15 +1,27 @@
 package hydrozoa.node.state
 
+import com.bloxbean.cardano.client.account.Account
+import com.bloxbean.cardano.client.api.model
+import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{Piper, serializeTxHex, txFees, txHash, verKeyHash}
+import hydrozoa.infra.{
+    Piper,
+    encodeHex,
+    extractVoteTokenNameFromFallbackTx,
+    serializeTxHex,
+    txFees,
+    txHash,
+    verKeyHash
+}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.tx.tally.TallyTxRecipe
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -21,11 +33,14 @@ import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
+import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 
 import scala.CanEqual.derived
+import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 enum HeadPhase derives CanEqual:
     case Initializing
@@ -165,7 +180,7 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def finalizeHead(block: BlockRecord): Unit
 
 /** It's global in a sense that the same value spans over all possible states a head might be in.
-  * Probably we can split it up in the future. Doesn't expose fiels; instead implements
+  * Probably we can split it up in the future. Doesn't expose fields; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
 class HeadStateGlobal(
@@ -619,12 +634,7 @@ class HeadStateGlobal(
                             cardano
                                 .ask(_.utxosAtAddress(disputeAddress))
                                 .find(u =>
-                                    val datum = fromData[VoteDatum](
-                                      Interop.toScalusData(
-                                        PlutusData
-                                            .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
-                                      )
-                                    )
+                                    val datum = getVoteDatum(u)
                                     // TODO better way to get own key, which should be always defined
                                     val value = headPeerVKs.get(ownPeer).get
                                     val ownVk = hashVerificationKey(value)
@@ -643,10 +653,11 @@ class HeadStateGlobal(
                         // Temporarily
                         val ownAccount = account(TestPeer.valueOf(ownPeer.name))
 
+                        val unresolvedTreasuryUtxo = UtxoIdL1.apply(fallbackTxHash, TxIx(0))
                         val recipe = VoteTxRecipe(
                           voteUtxoId,
-                          // treasury is always the first output
-                          UtxoIdL1.apply(fallbackTxHash, TxIx(0)),
+                          // treasury is always the first output, though this is arguably not the best way to get it
+                          unresolvedTreasuryUtxo,
                           mkOnchainBlockHeader(voteBlock.block.blockHeader),
                           voteBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
                           ownAddress,
@@ -662,12 +673,88 @@ class HeadStateGlobal(
                         log.info(s"voteResult = $voteResult")
                         cardano.ask(_.awaitTx(voteTxHash))
 
+                        runTallying(unresolvedTreasuryUtxo, ownAccount)
+
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     // (Should not happen)
                     case _ => throw RuntimeException("Vote block is not a minor block, can't vote")
                 }
-            }
 
+                def getVoteDatum(a: model.Utxo) = {
+                    fromData[VoteDatum](
+                      Interop.toScalusData(
+                        PlutusData
+                            .deserialize(HexUtil.decodeHexString(a.getInlineDatum))
+                      )
+                    )
+                }
+
+                def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
+
+                    def getVoteUtxos: List[BBUtxo] = {
+                        val voteTokenName = extractVoteTokenNameFromFallbackTx(
+                            l2LastMajorRecord.l1PostDatedEffect.get
+                        )
+
+                        val disputeAddress = DisputeResolutionScript.entAddress(networkL1static)
+
+                        // Returns L1 state - a list of vote utxos sorted in ascending key order.
+                        // TODO: use more effective endpoint that based on vote tokens' assets.
+                        val sortedVoteUtxoIds =
+                            cardano
+                                .ask(_.utxosAtAddress(disputeAddress))
+                                .filter(u =>
+                                    val voteTokenUnit = encodeHex(
+                                        this.headMintingPolicy.bytes
+                                    ) + voteTokenName.tokenNameHex
+                                    val units = u.getAmount.asScala.map(_.getUnit)
+                                    units.contains(voteTokenUnit)
+                                )
+                                .sortWith((a, b) =>
+                                    val datumA = getVoteDatum(a)
+                                    val datumB = getVoteDatum(b)
+                                    datumA.key < datumB.key
+                                )
+
+                        log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
+                        sortedVoteUtxoIds
+                    }
+
+                    type TallyTx = TxL1
+
+                    def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
+                        case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
+                        case _ => List.empty
+
+                    // Move to Tx.scala-like module
+                    def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
+                        utxo.getTxHash |> TxId.apply,
+                        utxo.getOutputIndex |> TxIx.apply
+                    )
+
+                    def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
+                        val recipe = TallyTxRecipe(
+                            getUtxoId(voteA),
+                            getUtxoId(voteB),
+                            unresolvedTreasuryUtxo,
+                            ???
+                        )
+                        TxL1.apply(Array.emptyByteArray)
+                    }
+
+                    retry(RetryConfig.delayForever(3.seconds)) {
+                        log.info("Running tallying...")
+                        val txs = getVoteUtxos |> makeTallies
+                        if txs.isEmpty then ()
+                        else {
+                            // TODO: try to submit txs
+                            throw RuntimeException(
+                                "Some tallying txs have been submitted, the next round is needed"
+                            )
+                        }
+                    }
+                }
+            }
             end runTestDispute
 
             // FIXME: this should be removed in the production version (or moved somewhere)

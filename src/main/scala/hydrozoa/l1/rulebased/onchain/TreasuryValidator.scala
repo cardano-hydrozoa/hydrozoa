@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.onchain
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
@@ -29,7 +30,7 @@ import scalus.builtin.{
     ToData
 }
 import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatumHash, OutputDatum}
+import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum, OutputDatumHash}
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
@@ -423,8 +424,18 @@ object TreasuryValidator extends Validator:
 end TreasuryValidator
 
 object TreasuryScript {
-    val sir = Compiler.compile(TreasuryValidator.validate)
-    val uplc = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val sir = Compiler.compile(TreasuryValidator.validate)
+    // lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+
+//    // TODO: can we use Scalus for that?
+//    lazy val plutusScript: PlutusV3Script = PlutusV3Script
+//        .builder()
+//        .`type`("PlutusScriptV3")
+//        .cborHex(script.doubleCborHex)
+//        .build()
+//        .asInstanceOf[PlutusV3Script]
+//
+//    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
 }
 
 def mkTreasuryDatumUnresolved(
@@ -447,4 +458,6 @@ def mkTreasuryDatumUnresolved(
 
 @main
 def treasuryValidatorSir(args: String): Unit =
-    println(TreasuryScript.sir.showHighlighted)
+//    println(TreasuryScript.sir.showHighlighted)
+//    println(TreasuryScript.scriptHash)
+    ???

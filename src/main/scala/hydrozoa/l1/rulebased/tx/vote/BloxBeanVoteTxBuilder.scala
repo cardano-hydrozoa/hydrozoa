@@ -68,7 +68,7 @@ class BloxBeanVoteTxBuilder(
 
         val txPartial = ScriptTx()
             .collectFrom(voteUtxo, redeemer)
-            .readFrom(r.treasuryUtoxId.txId.hash, r.treasuryUtoxId.outputIx.ix)
+            .readFrom(r.treasuryUtxoId.txId.hash, r.treasuryUtxoId.outputIx.ix)
             .payToContract(voteUtxo.getAddress, outputAmount.asJava, outVoteDatum)
             .attachSpendingValidator(DisputeResolutionScript.plutusScript);
 
