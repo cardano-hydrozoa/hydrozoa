@@ -425,17 +425,17 @@ end TreasuryValidator
 
 object TreasuryScript {
     lazy val sir = Compiler.compile(TreasuryValidator.validate)
-    // lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 
-//    // TODO: can we use Scalus for that?
-//    lazy val plutusScript: PlutusV3Script = PlutusV3Script
-//        .builder()
-//        .`type`("PlutusScriptV3")
-//        .cborHex(script.doubleCborHex)
-//        .build()
-//        .asInstanceOf[PlutusV3Script]
-//
-//    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    // TODO: can we use Scalus for that?
+    lazy val plutusScript: PlutusV3Script = PlutusV3Script
+        .builder()
+        .`type`("PlutusScriptV3")
+        .cborHex(script.doubleCborHex)
+        .build()
+        .asInstanceOf[PlutusV3Script]
+
+    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
 }
 
 def mkTreasuryDatumUnresolved(
@@ -458,6 +458,6 @@ def mkTreasuryDatumUnresolved(
 
 @main
 def treasuryValidatorSir(args: String): Unit =
-//    println(TreasuryScript.sir.showHighlighted)
-//    println(TreasuryScript.scriptHash)
-    ???
+    println(TreasuryScript.sir.showHighlighted)
+    println(TreasuryScript.scriptHash)
+//    ???
