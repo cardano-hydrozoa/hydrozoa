@@ -12,6 +12,7 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
+import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
 import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
@@ -93,8 +94,9 @@ object HydrozoaNode extends OxApp:
                   refundTxBuilder,
                   settlementTxBuilder,
                   finalizationTxBuilder,
-                  voteTxBuilder
-                ) = mkTxBuilders(backendService, nodeState, knownPeers)
+                  voteTxBuilder,
+                  tallyTxBuilder
+                ) = mkTxBuilders(backendService, nodeState)
 
                 val nodeStateActor = Actor.create(nodeState)
 
@@ -132,6 +134,7 @@ object HydrozoaNode extends OxApp:
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
                 nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
                 nodeState.setVoteTxBuilder(voteTxBuilder)
+                nodeState.setTallyTxBuilder(tallyTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -215,8 +218,7 @@ end mkCardanoL1
 
 def mkTxBuilders(
     backendService: BackendService,
-    nodeState: NodeState,
-    knownPeers: Set[WalletId]
+    nodeState: NodeState
 ) =
 
     val nodeStateReader: HeadStateReader = nodeState.reader
@@ -235,6 +237,8 @@ def mkTxBuilders(
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
     val voteTxBuilder: VoteTxBuilder =
         BloxBeanVoteTxBuilder(backendService)
+    val tallyTxBuilder: TallyTxBuilder =
+        BloxBeanTallyTxBuilder(backendService)
 
     (
       initTxBuilder,
@@ -243,7 +247,8 @@ def mkTxBuilders(
       refundTxBuilder,
       settlementTxBuilder,
       finalizationTxBuilder,
-      voteTxBuilder
+      voteTxBuilder,
+      tallyTxBuilder
     )
 
 end mkTxBuilders

@@ -5,6 +5,7 @@ import hydrozoa.infra.{Piper, sequence, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
+import hydrozoa.l1.rulebased.tx.tally.TallyTxBuilder
 import hydrozoa.l1.rulebased.tx.vote.VoteTxBuilder
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
@@ -45,10 +46,15 @@ class NodeState(autonomousBlocks: Boolean):
     def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
+    // TODO: move away
     private var voteTxBuilder: VoteTxBuilder = _
-    
+
     def setVoteTxBuilder(builder: VoteTxBuilder): Unit = this.voteTxBuilder = builder
-    
+
+    private var tallyTxBuilder: TallyTxBuilder = _
+
+    def setTallyTxBuilder(builder: TallyTxBuilder): Unit = this.tallyTxBuilder = builder
+
     //
 
     private var ownPeer: TestPeer = _
@@ -88,6 +94,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState.get.setMetrics(metrics)
             this.headState.get.setCardano(cardano)
             this.headState.get.setVoteTxBuilder(voteTxBuilder)
+            this.headState.get.setTallyTxBuilder(tallyTxBuilder)
             log.info(s"Setting up L1 event sourcing...")
             val initTxId = params.initTx |> txHash
             multisigL1EventSource.tell(

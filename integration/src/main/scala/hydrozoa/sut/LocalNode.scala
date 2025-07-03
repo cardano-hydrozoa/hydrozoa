@@ -89,14 +89,12 @@ object LocalNode:
                   refundTxBuilder,
                   settlementTxBuilder,
                   finalizationTxBuilder,
-                  voteTxBuilder
-                ) = mkTxBuilders(
-                  backendService,
-                  nodeState,
-                  knownPeers
-                )
+                  voteTxBuilder,
+                  tallyTxBuilder
+                ) = mkTxBuilders(backendService, nodeState)
 
                 nodeState.setVoteTxBuilder(voteTxBuilder)
+                nodeState.setTallyTxBuilder(tallyTxBuilder)
 
                 val nodeStateActor = Actor.create(nodeState)
 

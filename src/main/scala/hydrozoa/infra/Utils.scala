@@ -5,7 +5,11 @@ import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
 import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.VerificationKeyBytes
+import com.bloxbean.cardano.client.common.model.Network as BBNetwork
+import hydrozoa.{AnyLevel, L1, Network, UtxoId, VerificationKeyBytes}
+import scalus.builtin.ByteString
+import scalus.ledger.api.v3.TxId
+import scalus.ledger.api.v3.TxOutRef
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -84,3 +88,12 @@ def sequence[A](l: List[Option[A]]): Option[List[A]] = l match {
                 }
         }
 }
+
+extension (self: UtxoId[L1])
+    def toTxOutRefV3: TxOutRef = {
+        val txId = TxId.apply(ByteString.fromHex(self.txId.hash))
+        val txIx = BigInt(self.outputIx.ix)
+        TxOutRef.apply(txId, txIx)
+    }
+
+extension (self: Network) def toBB: BBNetwork = BBNetwork(self.networkId, self.protocolMagic)

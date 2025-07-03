@@ -76,7 +76,7 @@ class BloxBeanVoteTxBuilder(
 
         val txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-        val depositTx: Transaction = builder
+        val voteTx: Transaction = builder
             .apply(txPartial)
             // TODO: this should be LEQ than what an unresolved treasury datum contains
             // see MajorBlockConfirmationActor.scala:210
@@ -89,5 +89,5 @@ class BloxBeanVoteTxBuilder(
             .withSigner(txSigner)
             .buildAndSign()
 
-        Right(TxL1(depositTx.serialize))
+        Right(TxL1(voteTx.serialize))
 }

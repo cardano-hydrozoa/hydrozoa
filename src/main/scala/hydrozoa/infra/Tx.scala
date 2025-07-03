@@ -132,6 +132,7 @@ def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
         )
         .toSeq
 
+// TODO: remove in favor of toBB
 extension (n: Network) {
     def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
 }

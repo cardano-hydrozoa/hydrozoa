@@ -33,11 +33,11 @@ class BloxBeanSettlementTxBuilder(
 
         // Wer can't use reader.multisigRegime(_.treasuryUtxoId) since `MultisigHeadStateL1`
         // holds information as L1 provider sees it.
-        
+
         // So instead we have to use the last known settlement transaction with `lastKnownTreasuryUtxoId`.
-        
-        //val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
-        
+
+        // val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
+
         val utxoIds = r.deposits.toBuffer.append(reader.openPhaseReader(_.lastKnownTreasuryUtxoId))
 
         val utxoInput: Seq[Utxo] =
@@ -56,6 +56,8 @@ class BloxBeanSettlementTxBuilder(
             outputsToWithdraw.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
 
         // FIXME: factor out this calculation
+        // TODO: this might not work as expected, since it will produce
+        //  lists like that: ada,token,...,ada,...
         val treasuryValue: List[Amount] =
             utxoInput.toList.flatMap(u => u.getAmount.asScala)
 

@@ -1,7 +1,11 @@
 package hydrozoa.l1.rulebased.onchain
 
+import com.bloxbean.cardano.client.address.AddressProvider
+import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
+import hydrozoa.infra.toBB
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
@@ -12,7 +16,12 @@ import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import hydrozoa.{
+    AddressBech,
+    AddressBechL1,
+    L1,
+    Network,
     VerificationKeyBytes,
+    networkL1static,
     CurrencySymbol as HCurrencySymbol,
     PosixTime as HPosixTime,
     TokenName as HTokenName
@@ -423,7 +432,7 @@ object TreasuryValidator extends Validator:
 
 end TreasuryValidator
 
-object TreasuryScript {
+object TreasuryValidatorScript {
     lazy val sir = Compiler.compile(TreasuryValidator.validate)
     lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
 
@@ -436,6 +445,11 @@ object TreasuryScript {
         .asInstanceOf[PlutusV3Script]
 
     lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+
+    def address(n: Network): AddressBechL1 = {
+        val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
+        address.getAddress |> AddressBech[L1].apply
+    }
 }
 
 def mkTreasuryDatumUnresolved(
@@ -458,6 +472,6 @@ def mkTreasuryDatumUnresolved(
 
 @main
 def treasuryValidatorSir(args: String): Unit =
-    println(TreasuryScript.sir.showHighlighted)
-    println(TreasuryScript.scriptHash)
+    println(TreasuryValidatorScript.sir.showHighlighted)
+    println(TreasuryValidatorScript.scriptHash)
 //    ???

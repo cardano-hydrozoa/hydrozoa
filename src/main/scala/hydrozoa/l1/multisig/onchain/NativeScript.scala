@@ -7,14 +7,8 @@ import com.bloxbean.cardano.client.crypto.VerificationKey
 import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPubkey}
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import hydrozoa.infra.CryptoHash.*
-import hydrozoa.infra.{CryptoHash, PSStyleAssoc, Piper, encodeHex}
-import hydrozoa.{AddressBech, AddressBechL1, L1, TokenName,
-    UtxoIdL1,
-    VerificationKeyBytes,
-    CurrencySymbol as HCurrencySymbol,
-    NativeScript as HNativeScript,
-    Network as HNetwork
-}
+import hydrozoa.infra.{CryptoHash, PSStyleAssoc, Piper, encodeHex, toBB}
+import hydrozoa.{AddressBech, AddressBechL1, L1, TokenName, UtxoIdL1, VerificationKeyBytes, CurrencySymbol as HCurrencySymbol, NativeScript as HNativeScript, Network as HNetwork}
 
 /** Creates `AllOf` native script from peer nodes' keys.
   *
@@ -44,12 +38,11 @@ def mkHeadNativeScriptAndAddress(
 
     // Script body
     val scriptRefBytes = script.scriptRefBytes
-    
+
     // Currency symbol
     val currencySymbol = IArray.from(script.getScriptHash) |> HCurrencySymbol.apply
 
     // Address
-    val nw = Network(network.networkId, network.protocolMagic)
-    val address = getEntAddress(script, nw).toBech32
+    val address = getEntAddress(script, network.toBB).toBech32
 
     (HNativeScript(scriptRefBytes), currencySymbol, AddressBech[L1](address))

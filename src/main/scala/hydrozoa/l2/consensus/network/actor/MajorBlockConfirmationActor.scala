@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash, Piper}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
@@ -11,7 +11,7 @@ import hydrozoa.l2.ledger.simple.SimpleL2Ledger
 import hydrozoa.l2.ledger.{HydrozoaL2Ledger, L2Genesis}
 import hydrozoa.node.state.*
 import hydrozoa.*
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
@@ -202,11 +202,8 @@ private class MajorBlockConfirmationActor(
 
         val fallbackTxRecipe = FallbackTxRecipe(
           multisigTx = settlementTxDraft,
-          // FIXME: script
-          treasuryAddress = AddressBech[L1](
-            "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
-          ),
-          disputeAddress = DisputeResolutionScript.entAddress(networkL1static),
+          treasuryAddress = TreasuryValidatorScript.address(networkL1static),
+          disputeAddress = DisputeResolutionScript.address(networkL1static),
           // FIXME: use a real value, this is Thursday, July 3, 2025 10:43:44 PM GMT-06:00
           votingDuration = BigInt("1751604224000"),
           // Sorting

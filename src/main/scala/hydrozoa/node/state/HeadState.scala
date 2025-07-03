@@ -21,7 +21,7 @@ import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
-import hydrozoa.l1.rulebased.tx.tally.TallyTxRecipe
+import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -217,9 +217,16 @@ class HeadStateGlobal(
     def setCardano(cardano: ActorRef[CardanoL1]): Unit =
         this.cardano = cardano
 
+    // TODO: remove
+
     private var voteTxBuilder: VoteTxBuilder = _
 
     def setVoteTxBuilder(builder: VoteTxBuilder): Unit = this.voteTxBuilder = builder
+
+    private var tallyTxBuilder: TallyTxBuilder = _
+
+    def setTallyTxBuilder(builder: TallyTxBuilder): Unit = this.tallyTxBuilder = builder
+    //
 
     override def currentPhase: HeadPhase = headPhase
 
@@ -629,7 +636,7 @@ class HeadStateGlobal(
                     // Voting is possible
                     case Minor =>
                         // Temporary code for building Vote tx
-                        val disputeAddress = DisputeResolutionScript.entAddress(networkL1static)
+                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
                         val voteUtxoId =
                             cardano
                                 .ask(_.utxosAtAddress(disputeAddress))
@@ -693,10 +700,10 @@ class HeadStateGlobal(
 
                     def getVoteUtxos: List[BBUtxo] = {
                         val voteTokenName = extractVoteTokenNameFromFallbackTx(
-                            l2LastMajorRecord.l1PostDatedEffect.get
+                          l2LastMajorRecord.l1PostDatedEffect.get
                         )
 
-                        val disputeAddress = DisputeResolutionScript.entAddress(networkL1static)
+                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
 
                         // Returns L1 state - a list of vote utxos sorted in ascending key order.
                         // TODO: use more effective endpoint that based on vote tokens' assets.
@@ -705,7 +712,7 @@ class HeadStateGlobal(
                                 .ask(_.utxosAtAddress(disputeAddress))
                                 .filter(u =>
                                     val voteTokenUnit = encodeHex(
-                                        this.headMintingPolicy.bytes
+                                      this.headMintingPolicy.bytes
                                     ) + voteTokenName.tokenNameHex
                                     val units = u.getAmount.asScala.map(_.getUnit)
                                     units.contains(voteTokenUnit)
@@ -721,35 +728,41 @@ class HeadStateGlobal(
                     }
 
                     type TallyTx = TxL1
+                    
+                    // Move to Tx.scala-like module
+                    def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
+                      utxo.getTxHash |> TxId.apply,
+                      utxo.getOutputIndex |> TxIx.apply
+                    )
 
                     def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
                         case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
                         case _ => List.empty
 
-                    // Move to Tx.scala-like module
-                    def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
-                        utxo.getTxHash |> TxId.apply,
-                        utxo.getOutputIndex |> TxIx.apply
-                    )
-
                     def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
                         val recipe = TallyTxRecipe(
-                            getUtxoId(voteA),
-                            getUtxoId(voteB),
-                            unresolvedTreasuryUtxo,
-                            ???
+                          getUtxoId(voteA),
+                          getUtxoId(voteB),
+                          unresolvedTreasuryUtxo,
+                          ownAccount
                         )
-                        TxL1.apply(Array.emptyByteArray)
+                        tallyTxBuilder.buildTallyTxDraft(recipe) match {
+                            case Right(tx) => tx
+                            case Left(err) =>
+                                log.error(err)
+                                throw RuntimeException(err)
+                        }
                     }
 
                     retry(RetryConfig.delayForever(3.seconds)) {
                         log.info("Running tallying...")
                         val txs = getVoteUtxos |> makeTallies
+                        log.debug(s"tallying round txs are: ${txs.map(serializeTxHex)}")
                         if txs.isEmpty then ()
                         else {
-                            // TODO: try to submit txs
+                            txs.foreach(t => cardano.ask(_.submit(t)))
                             throw RuntimeException(
-                                "Some tallying txs have been submitted, the next round is needed"
+                              "Some tallying txs have been submitted, the next round is needed"
                             )
                         }
                     }
