@@ -143,7 +143,9 @@ object LocalFacade:
     def apply(
         peers: Set[TestPeer],
         autonomousBlocks: Boolean = false,
-        useYaci: Boolean = false
+        useYaci: Boolean = false,
+        mbTreasuryScriptRefUtxoId: Option[UtxoIdL1],
+        mbDisputeScriptRefUtxoId: Option[UtxoIdL1]
     ): HydrozoaFacade =
 
         InheritableMDC.init
@@ -165,6 +167,8 @@ object LocalFacade:
                               autonomousBlocks = autonomousBlocks,
                               useYaci = useYaci,
                               pp = Some(Utils.protocolParams),
+                              mbTreasuryScriptRefUtxoId = mbTreasuryScriptRefUtxoId,
+                              mbDisputeScriptRefUtxoId = mbDisputeScriptRefUtxoId,
                               nodeCallback = (p, n) => {
                                   synchronized(nodes.put(p, n))
                               }
