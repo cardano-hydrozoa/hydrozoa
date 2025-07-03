@@ -22,8 +22,6 @@
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
             async-profiler
-            git
-            jetbrains.idea-community-bin
             openjdk21
             sbt
             scala-cli
