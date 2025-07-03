@@ -14,5 +14,4 @@ case class InitTxRecipe(
     seedOutput: UtxoIdL1,
     coins: BigInt,
     headNativeScript: NativeScript,
-    beaconTokenName: TokenName
 )

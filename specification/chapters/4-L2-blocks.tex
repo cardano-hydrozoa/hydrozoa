@@ -36,7 +36,7 @@ All L2 blocks have this type:
 Each block affirms a sequence of L2 ledger events, rejects a separate set of L2 ledger events, and absorbs a set of L1 deposits.
 The block's header contains a Merkle root hash of the active utxo set that results from applying the affirmed L2 ledger events to the latest confirmed L2 ledger state.
 
-Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are four kinds of L2 blocks in Hydrozoa:
+Depending on the types of L2 ledger events affirmed by the block and the peers' intent to continue operating the head, there are three kinds of L2 blocks in Hydrozoa:
 \begin{description}
   \item[Minor block.] A block that neither affirms any L2 withdrawals nor absorbs any L1 deposits.
     It does not affect the head's L1 utxo state in the multisig regime and only affects the L2 ledger state's active utxo set.
@@ -53,7 +53,7 @@ Blocks are numbered consecutively by \code{blockNum}, and they are versioned by 
 \begin{itemize}
   \item The notional initial block has major and minor versions set to zero.%
     \footnote{The initial block is never actually created or explicitly confirmed by the peers.
-      It is the same for all hydra heads; its only effect is initializing the empty L2 ledger state.
+      It is the same for all hydrozoa heads; its only effect is initializing the empty L2 ledger state.
       We only care about it because its major and minor versions are zero.}
   \item A minor block keeps its predecessor's major version and increments the minor version.
   \item A major block increments the major version and resets the minor version to zero.
@@ -263,9 +263,9 @@ Given a peer's head state, validate a new block as follows:%
     \begin{enumerate}
       \item If \code{y.eventId} is not in \code{eventsL2}, return \framebox{\code{NotYetKnown}}.
       \item If \code{y.eventType} is \code{Transaction}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 transactions (\codeMathTt{Tx^{L2}}).
-      If it is valid, return \framebox{\code{Invalid}}.
+      If it is incorrectly marked as valid, return \framebox{\code{Invalid}}.
       \item If \code{y.eventType} is \code{Withdrawal}, apply \code{y.event} to \code{utxosActive} using Hydrozoa's ledger rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}).
-      If it is valid, return \framebox{\code{Invalid}}.
+      If it is incorrectly marked as valid, return \framebox{\code{Invalid}}.
     \end{enumerate}
   \item If \code{finalizing} is \code{False}, for each deposit \code{d'} in \code{depositsAbsorbed}:
     \begin{enumerate}
