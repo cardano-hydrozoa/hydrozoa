@@ -12,10 +12,14 @@ import sttp.client4.Response
 import sttp.client4.quick.*
 import sttp.model.MediaType.ApplicationJson
 
+import scala.concurrent.duration.Duration
+
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
   */
 class DisputeSuite extends FunSuite {
+
+    override val munitTimeout = Duration(1, "m")
 
     private val useYaci = true;
 
