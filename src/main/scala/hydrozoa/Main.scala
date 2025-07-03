@@ -12,6 +12,7 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
+import hydrozoa.l1.rulebased.tx.resolution.{BloxBeanResolutionTxBuilder, ResolutionTxBuilder}
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
 import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
 import hydrozoa.l2.block.BlockProducer
@@ -95,7 +96,8 @@ object HydrozoaNode extends OxApp:
                   settlementTxBuilder,
                   finalizationTxBuilder,
                   voteTxBuilder,
-                  tallyTxBuilder
+                  tallyTxBuilder,
+                  resolutionTxBuilder
                 ) = mkTxBuilders(backendService, nodeState)
 
                 val nodeStateActor = Actor.create(nodeState)
@@ -135,6 +137,7 @@ object HydrozoaNode extends OxApp:
                 nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
+                nodeState.setResolutionTxBuilder(resolutionTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -239,6 +242,7 @@ def mkTxBuilders(
         BloxBeanVoteTxBuilder(backendService)
     val tallyTxBuilder: TallyTxBuilder =
         BloxBeanTallyTxBuilder(backendService)
+    val resolutionTxBuilder = BloxBeanResolutionTxBuilder(backendService)
 
     (
       initTxBuilder,
@@ -248,7 +252,8 @@ def mkTxBuilders(
       settlementTxBuilder,
       finalizationTxBuilder,
       voteTxBuilder,
-      tallyTxBuilder
+      tallyTxBuilder,
+      resolutionTxBuilder
     )
 
 end mkTxBuilders

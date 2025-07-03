@@ -90,11 +90,13 @@ object LocalNode:
                   settlementTxBuilder,
                   finalizationTxBuilder,
                   voteTxBuilder,
-                  tallyTxBuilder
+                  tallyTxBuilder,
+                  resolutionTxBuilder
                 ) = mkTxBuilders(backendService, nodeState)
 
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
+                nodeState.setResolutionTxBuilder(resolutionTxBuilder)
 
                 val nodeStateActor = Actor.create(nodeState)
 

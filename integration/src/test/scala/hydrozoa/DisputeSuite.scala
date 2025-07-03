@@ -64,9 +64,9 @@ class DisputeSuite extends FunSuite {
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
 
-            // Topup nodes' wallets - every participant gets 3 utxos with 10 ada each
+            // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
             log.info("Topping up peers' wallets...")
-            topupNodeWallets(testPeers, 10, 3)
+            topupNodeWallets(testPeers, 30, 5)
 
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")
@@ -74,7 +74,7 @@ class DisputeSuite extends FunSuite {
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
-    test("Hydrozoa happy-path scenario") {
+    test("Hydrozoa dispute scenario") {
 
         val result = for
 

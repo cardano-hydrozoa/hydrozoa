@@ -211,8 +211,8 @@ given policyIdSchema: Schema[PolicyId] =
 given tokenNameSchema: Schema[TokenName] =
     Schema.derived[TokenName]
 
-given stateL2ResponseSchema: Schema[StateL2Response] =
-    Schema.derived[StateL2Response]
+//given stateL2ResponseSchema: Schema[StateL2Response] =
+//    Schema.derived[StateL2Response]
 
 case class InitRequest(
     otherPeers: List[WalletId],

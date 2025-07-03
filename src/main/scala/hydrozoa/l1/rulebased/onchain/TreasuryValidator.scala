@@ -49,15 +49,6 @@ import scalus.prelude.{*, given}
 @Compile
 object TreasuryValidator extends Validator:
 
-    given [T <: scalus.ledger.api.v2.OutputDatum]: ToData[T] = (_ddd: T) =>
-        constrData(0, mkNilData())
-//        ddd match
-//            case NoOutputDatum => constrData(0, mkNilData())
-//            case OutputDatumHash(datumHash) =>
-//                constrData(1, builtin.List(datumHash.toData))
-//            case OutputDatum(datum) =>
-//                constrData(2, builtin.List(datum))
-
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
     // upon switching into rule-based mode so it will be
@@ -474,4 +465,4 @@ def mkTreasuryDatumUnresolved(
 def treasuryValidatorSir(args: String): Unit =
     println(TreasuryValidatorScript.sir.showHighlighted)
     println(TreasuryValidatorScript.scriptHash)
-//    ???
+    println(TreasuryValidatorScript.script.flatEncoded.length)

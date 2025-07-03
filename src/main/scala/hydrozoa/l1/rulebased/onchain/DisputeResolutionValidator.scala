@@ -476,10 +476,11 @@ object DisputeResolutionValidator extends Validator:
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
-                            case _ => fail(ResolveTreasurySpent)
+                            case _ => false
                     }
                     .getOrFail(ResolveTreasurySpent)
 
+                // TODO: This is checked by the treasury validator
                 val treasuryDatum =
                     treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
@@ -535,7 +536,7 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
     )
 
 @main
-def disputeResolutionValidatorSir(args: String): Unit = {
+def disputeResolutionValidatorSir(args: String): Unit =
     println(DisputeResolutionScript.sir.showHighlighted)
     println(DisputeResolutionScript.scriptHash)
-}
+    println(DisputeResolutionScript.script.flatEncoded.length)
