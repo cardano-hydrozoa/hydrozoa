@@ -199,7 +199,7 @@ Redeemers:
           \item Let \code{voteOutref} be the output reference of the input being spent.
           \item Let \code{voteInput} be the input being spent.
             There must not be any other spent input matching \code{voteOutref} on transaction hash.
-          \item The \code{voteStatus} field of \code{voteInput} must be empty.
+          \item The \code{voteStatus} field of \code{voteInput} must be \code{NoVote}.
           \item The transaction must be signed by the \code{peer} field of \code{voteInput}, if it is non-empty.
           \item Let (\code{headMp}, \code{disputeId}) be the minting policy and asset name of the only non-ADA tokens in \code{voteInput}.
         \end{enumerate}
