@@ -3,11 +3,9 @@ package hydrozoa.l2.block
 import hydrozoa.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.ledger.L2EventLabel
-import L2EventLabel.{
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
-import hydrozoa.l2.merkle.RH32UtxoSetL2
+import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.infra.encodeHex
+import hydrozoa.l2.commitment.{UtxoSetCommitment, infG2}
 
 case class Block(
     blockHeader: BlockHeader,
@@ -24,7 +22,7 @@ case class Block(
             .map(_._1)
 
 val zeroBlock =
-    Block(BlockHeader(0, Major, timeCurrent, 0, 0, 42), BlockBody.empty)
+    Block(BlockHeader(0, Major, timeCurrent, 0, 0, encodeHex(infG2)), BlockBody.empty)
 
 case class BlockHeader(
     blockNum: Int,
@@ -32,7 +30,7 @@ case class BlockHeader(
     timeCreation: PosixTime,
     versionMajor: Int,
     versionMinor: Int,
-    utxosActive: Int // RH32UtxoSetL2
+    utxosActive: UtxoSetCommitment
 )
 
 enum BlockTypeL2 derives CanEqual:
@@ -75,17 +73,16 @@ case class BlockBuilder[
     BlockNum <: TCheck,
     VersionMajor <: TCheck
 ] private (
-     blockType: BlockTypeL2 = Minor,
-     blockNum: Int = 0,
-     timeCreation: PosixTime = timeCurrent,
-     versionMajor: Int = 0,
-     versionMinor: Int = 0,
-     // FIXME: add type tags
-     eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
-     eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
-     depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
-     // utxosActive: RH32UtxoSetL2 = RH32UtxoSetL2.dummy
-     utxosActive: Int = 42
+    blockType: BlockTypeL2 = Minor,
+    blockNum: Int = 0,
+    timeCreation: PosixTime = timeCurrent,
+    versionMajor: Int = 0,
+    versionMinor: Int = 0,
+    // FIXME: add type tags
+    eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
+    eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
+    depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
+    utxosActive: UtxoSetCommitment = encodeHex(infG2)
 ) {
     def majorBlock(using
         ev: BlockType =:= TBlockMinor
@@ -137,8 +134,10 @@ case class BlockBuilder[
 //    def utxosActive(utxosActive: RH32UtxoSetL2): BlockBuilder[BlockType, BlockNum, VersionMajor] =
 //        copy(utxosActive = utxosActive)
 
-    def utxosActive(utxosActive: Int): BlockBuilder[BlockType, BlockNum, VersionMajor] =
-        copy(utxosActive = utxosActive)
+    def utxosActive(
+        commitment: UtxoSetCommitment
+    ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+        copy(utxosActive = commitment)
 
     def apply(
         foo: BlockBuilder[BlockType, BlockNum, VersionMajor] => BlockBuilder[

@@ -1,11 +1,12 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.Wallet
-import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
+import hydrozoa.infra.{decodeHex, encodeHex}
+import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.HydrozoaL2Ledger
 import hydrozoa.node.state.*
+import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
 import scala.collection.mutable
@@ -29,13 +30,12 @@ private class MinorBlockConfirmationActor(
         log.trace("tryMakeResult")
         val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
         if (req != null && acks.keySet == headPeers)
-            // Create effects
-            // TODO: Should become a resolution vote at some point
-            val l1Effect: L1BlockEffect = ()
-            // TODO: May be absent
+            // Minor block effects
+            val l1Effect: L1BlockEffect =
+                acks.map(a => Ed25519Signature(decodeHex(a._2.signature.signature))).toSeq
             val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
-            val record = BlockRecord(req.block, l1Effect, (), l2Effect)
+            val record = BlockRecord(req.block, l1Effect, None, l2Effect)
             stateActor.tell(nodeState =>
                 nodeState.head.openPhase(s =>
                     s.applyBlockRecord(record)
@@ -110,13 +110,14 @@ private class MinorBlockConfirmationActor(
         this.utxosActive = utxosActive
 
         // Prepare own acknowledgement
-        val (me, signature) =
-            walletActor.ask(w => (w.getWalletId, "signature_stub"))
+        val msg = mkBlockHeaderSignatureMessage(req.block.blockHeader)
 
-        // FIXME: how do we decide whether we want to wrap up the head?
-        // Answer: User API should provide a method for that, so with the next
-        // acknowledgment the node can indicate they want to finalize the head.
-        val ownAck: AckType = AckMinor(me, signature, isNextBlockFinal)
+        // Sign block header
+        val (me, signature) =
+            walletActor.ask(w => (w.getWalletId, w.createEd25519Signature(msg)))
+        val signatureHex = Ed25519SignatureHex(encodeHex(signature.signature))
+
+        val ownAck: AckType = AckMinor(me, signatureHex, isNextBlockFinal)
         deliver(ownAck)
         Seq(ownAck)
 

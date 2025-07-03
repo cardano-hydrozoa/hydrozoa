@@ -132,6 +132,7 @@ def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
         )
         .toSeq
 
+// TODO: remove in favor of toBB
 extension (n: Network) {
     def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
 }
@@ -149,3 +150,13 @@ def numberOfSignatories(nativeScript: BBNativeScript): Int =
     nativeScript match
         case scriptAll: ScriptAll => scriptAll.getScripts.size()
         case _                    => 0
+
+def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): TokenName =
+    val mint = Transaction.deserialize(fallbackTx.bytes).getBody.getMint.asScala.toList
+    assert(mint.size == 1)
+    val assets = mint.head.getAssets.asScala.toList
+    assert(assets.size == 1)
+    assets.head.getName
+        // skip leading `0x` BB adds to token names
+        .substring(2)
+        |> TokenName.apply

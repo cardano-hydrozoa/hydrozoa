@@ -21,6 +21,8 @@ trait CardanoL1 {
     ): Option[TxL1]
     def network: Network
     def lastBlockTime: PosixTime
+
+    // FIXME: BB type
     def utxosAtAddress(headAddress: AddressBechL1): List[Utxo]
 
     def utxoIdsAdaAtAddress(headAddress: AddressBechL1): Map[UtxoIdL1, BigInt]

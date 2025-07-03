@@ -1,21 +1,46 @@
 package hydrozoa.node.state
 
+import com.bloxbean.cardano.client.account.Account
+import com.bloxbean.cardano.client.api.model
+import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{Piper, txFees, txHash, verKeyHash}
+import hydrozoa.infra.{
+    Piper,
+    encodeHex,
+    extractVoteTokenNameFromFallbackTx,
+    serializeTxHex,
+    txFees,
+    txHash,
+    verKeyHash
+}
+import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
+import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
+import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.block.{Block, BlockProducer, BlockTypeL2, zeroBlock}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
-import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import ox.channels.ActorRef
+import ox.resilience.{RetryConfig, retry}
+import scalus.bloxbean.Interop
+import scalus.builtin.Data.fromData
 
 import scala.CanEqual.derived
+import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 enum HeadPhase derives CanEqual:
     case Initializing
@@ -56,12 +81,11 @@ trait HeadState:
     def finalizingPhase[A](foo: FinalizingPhase => A): A
 
     /** Used only for testing. Tries to look up block's effects.
-     *
-     * @return
-     * Block record and optional genesis if effects for block are ready.
-     */
+      *
+      * @return
+      *   Block record and optional genesis if effects for block are ready.
+      */
     def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2Genesis)])]
-
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Readers hierarchy
@@ -75,6 +99,7 @@ sealed trait InitializingPhaseReader extends HeadStateReaderApi:
 trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
     def headNativeScript: NativeScript
+    def headMintingPolicy: CurrencySymbol
     def headBechAddress: AddressBechL1
     def beaconTokenName: TokenName
     def seedAddress: AddressBechL1
@@ -86,13 +111,16 @@ sealed trait OpenPhaseReader extends MultisigRegimeReader:
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def l2Tip: Block
+    def l2LastMajorRecord: BlockRecord
     def l2LastMajor: Block
+    def lastKnownTreasuryUtxoId: UtxoIdL1
     def peekDeposits: DepositUtxos
     def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
     def blockLeadTurn: Int
     def isBlockLeader: Boolean
     def isBlockPending: Boolean
     def pendingOwnBlock: OwnBlock
+    def isQuitConsensusImmediately: Boolean
 
 sealed trait FinalizingPhaseReader extends MultisigRegimeReader:
     def l2Tip: Block
@@ -131,6 +159,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def requestFinalization(): Unit
     def isNextBlockFinal: Boolean
     def switchToFinalizingPhase(): Unit
+
     /** As an API (trait's) method is used only for testing. Tries to run block creation routine and
       * consensus on the block. Returns the block, for getting the block record use
       * `getBlockRecord`.
@@ -140,7 +169,8 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
       */
     def tryProduceBlock(
         nextBlockFinal: Boolean,
-        force: Boolean = false
+        force: Boolean = false,
+        quitConsensusImmediately: Boolean
     ): Either[String, Block]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
@@ -150,7 +180,7 @@ sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def finalizeHead(block: BlockRecord): Unit
 
 /** It's global in a sense that the same value spans over all possible states a head might be in.
-  * Probably we can split it up in the future. Doesn't expose fiels; instead implements
+  * Probably we can split it up in the future. Doesn't expose fields; instead implements
   * HeadStateReader and HeadState methods to work with specific regimes/phases.
   */
 class HeadStateGlobal(
@@ -159,6 +189,7 @@ class HeadStateGlobal(
     val headPeerVKs: Map[WalletId, VerificationKeyBytes],
     val headParams: HeadParams,
     val headNativeScript: NativeScript,
+    val headMintingPolicy: CurrencySymbol,
     val headAddress: AddressBechL1,
     val beaconTokenName: TokenName,
     val seedAddress: AddressBechL1,
@@ -181,6 +212,22 @@ class HeadStateGlobal(
     def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
+    private var cardano: ActorRef[CardanoL1] = _
+
+    def setCardano(cardano: ActorRef[CardanoL1]): Unit =
+        this.cardano = cardano
+
+    // TODO: remove
+
+    private var voteTxBuilder: VoteTxBuilder = _
+
+    def setVoteTxBuilder(builder: VoteTxBuilder): Unit = this.voteTxBuilder = builder
+
+    private var tallyTxBuilder: TallyTxBuilder = _
+
+    def setTallyTxBuilder(builder: TallyTxBuilder): Unit = this.tallyTxBuilder = builder
+    //
+
     override def currentPhase: HeadPhase = headPhase
 
     // Round-robin peer's turn. Having it we always can decide whether
@@ -197,6 +244,10 @@ class HeadStateGlobal(
 
     // Flag to store the fact of node's being asked for finalization.
     private var mbIsNextBlockFinal: Option[Boolean] = None
+
+    // TODO: handle it the same way we do `mbIsNextBlockFinal`
+    //   so all nodes can actively submit transactions
+    private var mbQuitConsensusImmediately: Option[Boolean] = None
 
     // Pool: L2 events + pending deposits
     private val poolEventsL2: mutable.Buffer[L2Event] = mutable.Buffer()
@@ -256,8 +307,8 @@ class HeadStateGlobal(
             case _          => throw IllegalStateException("The head is not in Finalizing phase.")
 
     override def getBlockRecord(
-                                   block: Block
-                               ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
+        block: Block
+    ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
         // TODO: shall we use Map not Buffer?
         self.blocksConfirmedL2.find(_.block == block) match
             case None => None
@@ -270,6 +321,7 @@ class HeadStateGlobal(
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
         def headPeers: Set[WalletId] = self.headPeerVKs.keySet
         def headNativeScript: NativeScript = self.headNativeScript
+        def headMintingPolicy: CurrencySymbol = self.headMintingPolicy
         def beaconTokenName: TokenName = self.beaconTokenName
         def seedAddress: AddressBechL1 = self.seedAddress
         def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.unTag.ref
@@ -284,10 +336,18 @@ class HeadStateGlobal(
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.nonGenesisEventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
+        def l2LastMajorRecord: BlockRecord = self.blocksConfirmedL2
+            .findLast(_.block.blockHeader.blockType == Major)
+            // FIXME: here a fallback tx for initialization tx should go
+            .getOrElse(???)
         def l2LastMajor: Block = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
             .map(_.block)
             .getOrElse(zeroBlock)
+        def lastKnownTreasuryUtxoId: UtxoIdL1 = self.blocksConfirmedL2
+            .findLast(_.block.blockHeader.blockType == Major)
+            .map(record => UtxoIdL1.apply(txHash(maybeMultisigL1Tx(record.l1Effect).get), TxIx(0)))
+            .getOrElse(treasuryUtxoId)
         def peekDeposits: DepositUtxos =
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
@@ -309,6 +369,7 @@ class HeadStateGlobal(
         def isBlockLeader: Boolean = self.isBlockLeader.get
         def isBlockPending: Boolean = self.isBlockPending.get
         def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
+        def isQuitConsensusImmediately: Boolean = self.mbQuitConsensusImmediately.getOrElse(false)
 
     private class FinalizingPhaseReaderImpl
         extends MultisigRegimeReaderImpl
@@ -317,7 +378,7 @@ class HeadStateGlobal(
         def isBlockLeader: Boolean = self.isBlockLeader.get
         def pendingOwnBlock: OwnBlock = self.pendingOwnBlock.get
 
-    private def l2Tip_ = blocksConfirmedL2.map(_.block).lastOption.getOrElse(zeroBlock)
+    private def l2Tip_ = blocksConfirmedL2.lastOption.map(_.block).getOrElse(zeroBlock)
 
     // Subclasses that implements APIs (writers)
     private final class InitializingPhaseImpl
@@ -380,8 +441,17 @@ class HeadStateGlobal(
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
-            force: Boolean = false
+            force: Boolean = false,
+            // This is a test-only flag that forces the node to submit fallback
+            // and other role-based regime txs immediately (when applying the block record).
+            quitConsensusImmediately: Boolean = false
         ): Either[String, Block] = {
+            // The testing facade calls tryProduceBlock on all nodes every time
+            // a test suite wants to produce a block.
+            // This has twofold effect:
+            // 1. Sets `quitConsensusImmediately` flag (on all nodes).
+            self.mbQuitConsensusImmediately = Some(quitConsensusImmediately)
+            // 2. The leader produces the block and starts consensus on it.
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !this.isBlockPending
             then
@@ -415,6 +485,7 @@ class HeadStateGlobal(
                 val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
                     s"force=$force " +
+                    s"quitConsensusImmedaitely=$quitConsensusImmediately " +
                     s"isBlockLeader=${this.isBlockLeader} " +
                     s"isBlockPending=${this.isBlockPending} "
                 log.info(msg)
@@ -422,7 +493,7 @@ class HeadStateGlobal(
         }
 
         override def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
-            log.info("Setting a new treasury utxo...")
+            log.info(s"Setting a new treasury utxo: $treasuryUtxo")
             self.stateL1.get.treasuryUtxo = treasuryUtxo
             metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
 
@@ -532,6 +603,180 @@ class HeadStateGlobal(
                         mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
             })
 
+            // TODO: L1 effects submission should be carried on by a separate process
+            record.l1Effect |> maybeMultisigL1Tx match {
+                case Some(settlementTx) =>
+                    log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
+                    cardano.tell(_.submit(settlementTx))
+                case _ =>
+            }
+
+            // Test dispute routine
+            def runTestDispute() = {
+
+                // Submit fallback tx
+                // TODO: wait till validity range is hit
+                val fallbackTx = l2LastMajorRecord.l1PostDatedEffect.get
+                val fallbackTxHash = txHash(fallbackTx)
+                log.info(s"Submitting fallback tx: $fallbackTxHash")
+                val fallbackResult = cardano.ask(_.submit(fallbackTx))
+                log.info(s"fallbackResult = $fallbackResult")
+                // Since fallback is the same tx for all nodes, we can use awaitTx here.
+                cardano.ask(_.awaitTx(fallbackTxHash))
+
+                // Build and submit a vote
+                // The idea for testing (tallying) is as follows:
+                // every node should submit a minor block they produced.
+                val turn = self.blockLeadTurn.get
+                val voteBlock = blocksConfirmedL2.clone().dropRightInPlace(turn).lastOption.get
+
+                log.info(s"voteBlock = $voteBlock")
+
+                voteBlock.block.blockHeader.blockType match {
+                    // Voting is possible
+                    case Minor =>
+                        // Temporary code for building Vote tx
+                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
+                        val voteUtxoId =
+                            cardano
+                                .ask(_.utxosAtAddress(disputeAddress))
+                                .find(u =>
+                                    val datum = getVoteDatum(u)
+                                    // TODO better way to get own key, which should be always defined
+                                    val value = headPeerVKs.get(ownPeer).get
+                                    val ownVk = hashVerificationKey(value)
+                                    datum.peer.isDefined &&
+                                    datum.peer.get == ownVk
+                                ) match {
+                                case Some(utxo) =>
+                                    UtxoIdL1.apply(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                                case None => throw RuntimeException("Vote UTxO was not found")
+                            }
+
+                        val ownAddress = AddressBech[L1](
+                          account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
+                        )
+
+                        // Temporarily
+                        val ownAccount = account(TestPeer.valueOf(ownPeer.name))
+
+                        val unresolvedTreasuryUtxo = UtxoIdL1.apply(fallbackTxHash, TxIx(0))
+                        val recipe = VoteTxRecipe(
+                          voteUtxoId,
+                          // treasury is always the first output, though this is arguably not the best way to get it
+                          unresolvedTreasuryUtxo,
+                          mkOnchainBlockHeader(voteBlock.block.blockHeader),
+                          voteBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
+                          ownAddress,
+                          ownAccount
+                        )
+                        log.info(s"Vote tx recipe: $recipe")
+                        val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
+                        val voteTxHash = txHash(voteTx)
+                        log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
+
+                        log.info(s"Submitting vote tx: $voteTxHash")
+                        val voteResult = cardano.ask(_.submit(voteTx))
+                        log.info(s"voteResult = $voteResult")
+                        cardano.ask(_.awaitTx(voteTxHash))
+
+                        runTallying(unresolvedTreasuryUtxo, ownAccount)
+
+                    // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
+                    // (Should not happen)
+                    case _ => throw RuntimeException("Vote block is not a minor block, can't vote")
+                }
+
+                def getVoteDatum(a: model.Utxo) = {
+                    fromData[VoteDatum](
+                      Interop.toScalusData(
+                        PlutusData
+                            .deserialize(HexUtil.decodeHexString(a.getInlineDatum))
+                      )
+                    )
+                }
+
+                def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
+
+                    def getVoteUtxos: List[BBUtxo] = {
+                        val voteTokenName = extractVoteTokenNameFromFallbackTx(
+                          l2LastMajorRecord.l1PostDatedEffect.get
+                        )
+
+                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
+
+                        // Returns L1 state - a list of vote utxos sorted in ascending key order.
+                        // TODO: use more effective endpoint that based on vote tokens' assets.
+                        val sortedVoteUtxoIds =
+                            cardano
+                                .ask(_.utxosAtAddress(disputeAddress))
+                                .filter(u =>
+                                    val voteTokenUnit = encodeHex(
+                                      this.headMintingPolicy.bytes
+                                    ) + voteTokenName.tokenNameHex
+                                    val units = u.getAmount.asScala.map(_.getUnit)
+                                    units.contains(voteTokenUnit)
+                                )
+                                .sortWith((a, b) =>
+                                    val datumA = getVoteDatum(a)
+                                    val datumB = getVoteDatum(b)
+                                    datumA.key < datumB.key
+                                )
+
+                        log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
+                        sortedVoteUtxoIds
+                    }
+
+                    type TallyTx = TxL1
+                    
+                    // Move to Tx.scala-like module
+                    def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
+                      utxo.getTxHash |> TxId.apply,
+                      utxo.getOutputIndex |> TxIx.apply
+                    )
+
+                    def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
+                        case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
+                        case _ => List.empty
+
+                    def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
+                        val recipe = TallyTxRecipe(
+                          getUtxoId(voteA),
+                          getUtxoId(voteB),
+                          unresolvedTreasuryUtxo,
+                          ownAccount
+                        )
+                        tallyTxBuilder.buildTallyTxDraft(recipe) match {
+                            case Right(tx) => tx
+                            case Left(err) =>
+                                log.error(err)
+                                throw RuntimeException(err)
+                        }
+                    }
+
+                    retry(RetryConfig.delayForever(3.seconds)) {
+                        log.info("Running tallying...")
+                        val txs = getVoteUtxos |> makeTallies
+                        log.debug(s"tallying round txs are: ${txs.map(serializeTxHex)}")
+                        if txs.isEmpty then ()
+                        else {
+                            txs.foreach(t => cardano.ask(_.submit(t)))
+                            throw RuntimeException(
+                              "Some tallying txs have been submitted, the next round is needed"
+                            )
+                        }
+                    }
+                }
+            }
+            end runTestDispute
+
+            // FIXME: this should be removed in the production version (or moved somewhere)
+            if isQuitConsensusImmediately then {
+                log.warn("Running test dispute")
+                runTestDispute()
+            }
+
+            // Done
             log.info(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
             )
@@ -622,11 +867,13 @@ class HeadStateGlobal(
         def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
             self.stateL2.get
 
-        override def tryProduceFinalBlock(force: Boolean): Either[String, Block] =
+        override def tryProduceFinalBlock(
+            force: Boolean
+        ): Either[String, Block] =
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !self.isBlockPending.get
             then
-                log.info(s"`Trying to produce the final block` ${l2Tip.blockHeader.blockNum + 1}...")
+                log.info(s"Trying to produce the final block ${l2Tip.blockHeader.blockNum + 1}...")
 
                 val tipHeader = l2Tip.blockHeader
                 blockProductionActor.ask(
@@ -725,6 +972,14 @@ class HeadStateGlobal(
                         mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
             })
 
+            record.l1Effect |> maybeMultisigL1Tx match {
+                case Some(finalizationTx) =>
+                    // Submit finalization tx
+                    log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
+                    cardano.tell(_.submit(finalizationTx))
+                case _ => assert(false, "Impossible: finalization tx should always present")
+            }
+
             log.info("Head was closed.")
 
     override def dumpState(): Unit =
@@ -776,6 +1031,7 @@ object HeadStateGlobal:
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
           headNativeScript = params.headNativeScript,
+          headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,
           seedAddress = params.seedAddress,
@@ -784,9 +1040,11 @@ object HeadStateGlobal:
           autonomousBlocks = params.autonomousBlocks
         )
 
+// TODO: we can optimize it (probably parameterized on block type)
 case class BlockRecord(
     block: Block,
     l1Effect: L1BlockEffect,
+    // Is not defined for minor blocks
     l1PostDatedEffect: L1PostDatedBlockEffect,
     l2Effect: L2BlockEffect
 )
@@ -818,10 +1076,14 @@ case class RefundedDeposit(
 )
 
 type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
-type MinorBlockL1Effect = Unit
 
-// TODO: this is missing for final block
-type L1PostDatedBlockEffect = Unit
+// It's not an "effect", but rather its parts - all nodes signatures that
+// can be turned into a voting transaction.
+type MinorBlockL1Effect = Seq[Ed25519Signature]
+
+// This is not defined for minor and final blocks, so we have to use Option here.
+// Probably we can do it better.
+type L1PostDatedBlockEffect = Option[TxL1]
 
 // Always None for final block, always Some for minor block,
 // None or Some for major (None in case a major block is produced

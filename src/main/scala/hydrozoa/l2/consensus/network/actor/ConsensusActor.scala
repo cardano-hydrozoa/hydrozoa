@@ -7,6 +7,7 @@ import hydrozoa.l1.multisig.tx.finalization.FinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.InitTxBuilder
 import hydrozoa.l1.multisig.tx.refund.RefundTxBuilder
 import hydrozoa.l1.multisig.tx.settlement.SettlementTxBuilder
+import hydrozoa.l1.rulebased.tx.fallback.FallbackTxBuilder
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Source}
@@ -59,6 +60,7 @@ class ConsensusActorFactory(
     val walletActor: ActorRef[Wallet],
     val cardanoActor: ActorRef[CardanoL1],
     val initTxBuilder: InitTxBuilder,
+    val fallbackTxBuilder: FallbackTxBuilder,
     val refundTxBuilder: RefundTxBuilder,
     val settlementTxBuilder: SettlementTxBuilder,
     val finalizationTxBuilder: FinalizationTxBuilder
@@ -166,7 +168,7 @@ class ConsensusActorFactory(
           stateActor,
           walletActor,
           settlementTxBuilder,
-          cardanoActor,
+          fallbackTxBuilder,
           dropMyself
         )
 
@@ -175,7 +177,6 @@ class ConsensusActorFactory(
           stateActor,
           walletActor,
           finalizationTxBuilder,
-          cardanoActor,
           dropMyself
         )
 

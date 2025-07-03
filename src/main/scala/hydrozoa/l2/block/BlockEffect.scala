@@ -17,7 +17,7 @@ object BlockEffect:
         utxosWithdrawn: UtxoSetL2
     ): L1BlockEffect =
         block.blockHeader.blockType match
-            case Minor => ()
+            case Minor => Seq.empty
             case Major =>
                 // Create settlement tx draft
                 val txRecipe = SettlementRecipe(

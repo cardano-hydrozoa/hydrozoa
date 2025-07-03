@@ -284,17 +284,15 @@ object MBTSuite extends Commands:
                     (otherHeadPeers + initiator).map(tp =>
                         mkWallet(tp).exportVerificationKeyBytes
                     )
-                val (headMultisigScript, headAddress) =
+                val (headMultisigScript, _headMp, headAddress) =
                     mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
-                val beaconTokenName = mkBeaconTokenName(seedUtxo)
 
                 // Recipe to build init initTx
                 val initTxRecipe = InitTxRecipe(
                   headAddress,
                   seedUtxo,
                   1000_000_000,
-                  headMultisigScript,
-                  beaconTokenName
+                  headMultisigScript
                 )
 
                 val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
@@ -581,7 +579,7 @@ object MBTSuite extends Commands:
                         case Major => Some(utxosActive)
                         case Final => None
 
-                    val record = BlockRecord(block, l1Effect, (), l2Effect)
+                    val record = BlockRecord(block, l1Effect, None, l2Effect)
 
                     // Calculate new state
                     // Submit L1

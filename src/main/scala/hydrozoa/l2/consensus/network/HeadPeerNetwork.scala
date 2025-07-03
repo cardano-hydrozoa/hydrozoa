@@ -256,7 +256,7 @@ given nonGenesisL2EventLabelSchema: Schema[L2EventLabel] =
 
 case class AckMinor(
     peer: WalletId,
-    signature: String,
+    signature: Ed25519SignatureHex,
     nextBlockFinal: Boolean
 ) extends Ack
 
@@ -265,6 +265,9 @@ given ackMinorCodec: JsonValueCodec[AckMinor] =
 
 given ackMinorSchema: Schema[AckMinor] =
     Schema.derived[AckMinor]
+
+given ed25519SignatureHexSchema: Schema[Ed25519SignatureHex] =
+    Schema.derived[Ed25519SignatureHex]
 
 /** ------------------------------------------------------------------------------------------
   * ReqMajor
@@ -286,18 +289,10 @@ given reqMajorSchema: Schema[ReqMajor] =
   * ------------------------------------------------------------------------------------------
   */
 
-// FIXME: remove
-case class AckMajorCombined(
-    blockHeader: BlockHeader,
-    rollouts: Set[TxKeyWitness],
-    settlement: TxKeyWitness,
-    nextBlockFinal: Boolean
-)
-
 case class AckMajor(
     peer: WalletId,
     rollouts: Seq[TxKeyWitness],
-    postDatedTransaction: TxKeyWitness
+    postDatedTransition: TxKeyWitness
 ) extends Ack
 
 given ackMajorCodec: JsonValueCodec[AckMajor] =
@@ -337,13 +332,6 @@ given reqFinalSchema: Schema[ReqFinal] =
   * AckFinal, AckFinal2
   * ------------------------------------------------------------------------------------------
   */
-
-// FIXME: remove
-case class AckFinalCombined(
-    blockHeader: BlockHeader,
-    rollouts: Set[TxKeyWitness],
-    finalization: TxKeyWitness
-)
 
 case class AckFinal(
     peer: WalletId,

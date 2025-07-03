@@ -72,7 +72,7 @@ class LocalFacade(
                 ret
 
     override def awaitTxL1(txId: TxId): Option[TxL1] = randomNode.awaitTxL1(txId)
-    
+
     override def submitL2(
         tx: L2Transaction | L2Withdrawal
     ): Either[String, TxId] =
@@ -99,15 +99,35 @@ class LocalFacade(
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean
+        nextBlockFinal: Boolean,
+        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
-        log.info("SUT: producing a block in a lockstep manner...")
+        log.info(
+          s"SUT: producing a block in a lockstep manner " +
+              s" nextBlockFinal = $nextBlockFinal, " +
+              s" quitConsensusImmediately = $quitConsensusImmediately"
+        )
 
-        // Note: this is not ideal, you may see errors in logs like
-        // "Block production procedure was unable to create a block number N+1".
-        val answers = peers.values.map(node => node.produceNextBlockLockstep(nextBlockFinal))
+        // Here we run requests to all nodes in parallel.
+        // This is important, since one of this calls will be blocked
+        // until the leader returns the block record.
+        // This is convenient, since we don't know who the leader is
+        // and also allow to propagate flags like quitConsensusImmediately
+        // to all nodes.
+        val requests = peers.values
+            .map(node =>
+                () => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
+            )
+            .toSeq
+
+        val answers = supervised(
+          par(requests)
+        )
+
         answers.find(a => a.isRight) match
-            case None         => Left("Block can't be produced at the moment")
+            case None =>
+                answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
+                Left("Block can't be produced at the moment")
             case Some(answer) => Right(answer.right.get)
 
     override def shutdownSut(): Unit =
@@ -140,7 +160,7 @@ object LocalFacade:
                         forkDiscard {
                             LocalNode.runNode(
                               simNetwork = simNetwork,
-                              mbCardanoL1Mock = Some(cardanoL1Mock),
+                              mbCardanoL1Mock = if useYaci then None else Some(cardanoL1Mock),
                               ownPeer = peer,
                               autonomousBlocks = autonomousBlocks,
                               useYaci = useYaci,
@@ -177,4 +197,3 @@ object LocalFacade:
           nodes.toMap,
           threadId => shutdownFlag.put(threadId, true)
         )
-

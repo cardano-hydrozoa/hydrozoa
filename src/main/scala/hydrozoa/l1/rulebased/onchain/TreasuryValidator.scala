@@ -1,14 +1,31 @@
 package hydrozoa.l1.rulebased.onchain
 
+import com.bloxbean.cardano.client.address.AddressProvider
+import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
+import hydrozoa.infra.toBB
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, UnresolvedDatum}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.{
+    AddressBech,
+    AddressBechL1,
+    L1,
+    Network,
+    VerificationKeyBytes,
+    networkL1static,
+    CurrencySymbol as HCurrencySymbol,
+    PosixTime as HPosixTime,
+    TokenName as HTokenName
+}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -22,17 +39,24 @@ import scalus.builtin.{
     ToData
 }
 import scalus.ledger.api.v1.Value.+
+import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum, OutputDatumHash}
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.prelude.crypto.bls12_381.G1.scale
 import scalus.prelude.{*, given}
-import supranational.blst.Scalar
-
-import java.math.BigInteger
 
 @Compile
 object TreasuryValidator extends Validator:
+
+    given [T <: scalus.ledger.api.v2.OutputDatum]: ToData[T] = (_ddd: T) =>
+        constrData(0, mkNilData())
+//        ddd match
+//            case NoOutputDatum => constrData(0, mkNilData())
+//            case OutputDatumHash(datumHash) =>
+//                constrData(1, builtin.List(datumHash.toData))
+//            case OutputDatum(datum) =>
+//                constrData(2, builtin.List(datum))
 
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
@@ -151,7 +175,7 @@ object TreasuryValidator extends Validator:
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
         // Parse datum
-        val treasuryDatum = datum match
+        val treasuryDatum: TreasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
             case None    => fail(DatumIsMissing)
 
@@ -280,7 +304,10 @@ object TreasuryValidator extends Validator:
                 // The number of withdrawals should match the number of utxos ids in the redeemer
                 require(withdrawalOutputs.size == utxoIds.size, WithdrawWrongNumberOfWithdrawals)
                 // Calculate the final poly for withdrawn subset
-                val withdrawnUtxos = utxoIds
+                // FIXME: this fails due to the same error:
+                // Caused by: java.lang.IllegalArgumentException: Expected case class type, got TypeVar(T,Some(218919)) in expression: match d with
+                // I blame this lines in Scalus, though it's not clear how to fix that since it uses
+                val withdrawnUtxos: List[ScalusScalar] = utxoIds
                     // Joint utxo ids and outputs
                     .zip(withdrawalOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars, multiply binomials
@@ -367,23 +394,6 @@ object TreasuryValidator extends Validator:
                 List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
     }
 
-    // TODO: move it away, this is useful only for offchain code
-    @Ignore
-    /*
-     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
-     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
-     * */
-    def getFinalPoly(binomial_poly: List[BigInt]): List[Scalar] = {
-        binomial_poly
-            .map(bi => Scalar(bi.bigInteger))
-            .foldLeft(List.single(new Scalar(BigInteger("1")))): (acc, term) =>
-                // We need to clone the whole `acc` since `mul` mutates it
-                // and final adding gets mutated `shiftedPoly`
-                val shiftedPoly: List[Scalar] = List.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
-    }
-
     def getG1Commitment(
         setup: List[BLS12_381_G1_Element],
         subset: List[ScalusScalar]
@@ -422,11 +432,46 @@ object TreasuryValidator extends Validator:
 
 end TreasuryValidator
 
-object TreasuryScript {
-    val sir = Compiler.compile(TreasuryValidator.validate)
-    val uplc = sir.toUplcOptimized(true)
+object TreasuryValidatorScript {
+    lazy val sir = Compiler.compile(TreasuryValidator.validate)
+    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+
+    // TODO: can we use Scalus for that?
+    lazy val plutusScript: PlutusV3Script = PlutusV3Script
+        .builder()
+        .`type`("PlutusScriptV3")
+        .cborHex(script.doubleCborHex)
+        .build()
+        .asInstanceOf[PlutusV3Script]
+
+    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+
+    def address(n: Network): AddressBechL1 = {
+        val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
+        address.getAddress |> AddressBech[L1].apply
+    }
 }
 
+def mkTreasuryDatumUnresolved(
+    headMp: HCurrencySymbol,
+    disputeId: HTokenName,
+    peers: List[VerificationKeyBytes],
+    deadlineVoting: HPosixTime,
+    versionMajor: BigInt,
+    params: L2ConsensusParamsH32
+): TreasuryDatum =
+    UnresolvedDatum(
+      headMp = ByteString.fromArray(IArray.genericWrapArray(headMp.bytes).toArray),
+      disputeId = ByteString.fromHex(disputeId.tokenNameHex),
+      peers = peers.map(_.bytes |> ByteString.fromArray),
+      peersN = peers.length,
+      deadlineVoting = deadlineVoting,
+      versionMajor = versionMajor,
+      params = params
+    ) |> Unresolved.apply
+
 @main
-def main(args: String): Unit =
-    println(TreasuryScript.sir.showHighlighted)
+def treasuryValidatorSir(args: String): Unit =
+    println(TreasuryValidatorScript.sir.showHighlighted)
+    println(TreasuryValidatorScript.scriptHash)
+//    ???

@@ -1,24 +1,34 @@
 package hydrozoa.l2.ledger.simple
 
 import cats.implicits.toBifunctorOps
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{Piper, decodeBech32AddressL2, plutusAddressAsL2}
+import hydrozoa.infra.{Piper, decodeBech32AddressL2, decodeHex, encodeHex, plutusAddressAsL2}
+import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.commitment.infG2Point
+import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
+import scalus.builtin.{BLS12_381_G1_Element, ByteString}
+import scalus.ledger.api.v1 as v1
+import scalus.prelude.{AssocMap, List as SList, Option as SOption, given}
+import scalus.prelude.List.{Cons, asScala, asScalus}
 import scalus.prelude.Option.{None as SNone, Some as SSome}
-import scalus.prelude.{Option, AssocMap, given}
-import scalus.ledger.api.v1 as scalus
+import supranational.blst.{P2, Scalar}
 
+import java.math.BigInteger
 import scala.collection.mutable
 
+import scala.collection.mutable
 
 /** This object defines types and constructors for Hydrozoa's L2 ledger and contains a class that
   * implements L2LedgerModule.
   */
 object SimpleL2Ledger:
 
-    opaque type LedgerUtxoId = scalus.TxOutRef
-    opaque type LedgerOutput = scalus.TxOut
+    opaque type LedgerUtxoId = v1.TxOutRef
+    opaque type LedgerOutput = v1.TxOut
 
     // Opaque, can be stored and provided back to the ledger.
     opaque type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
@@ -37,17 +47,17 @@ object SimpleL2Ledger:
 
     // UTxO conversions between Hydrozoa types and Ledger types
     private def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
-        val sTxId = scalus.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
+        val sTxId = v1.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
         val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
-        scalus.TxOutRef(sTxId, sTxIx)
+        v1.TxOutRef(sTxId, sTxIx)
 
     private def unliftOutputRef(outputRef: LedgerUtxoId): UtxoIdL2 =
         UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
 
     private def liftOutput(output: OutputL2): LedgerOutput =
         val address = decodeBech32AddressL2(output.address)
-        val value = scalus.Value.lovelace(output.coins)
-        scalus.TxOut(address = address, value = value, datumHash = SNone)
+        val value = v1.Value.lovelace(output.coins)
+        v1.TxOut(address = address, value = value, datumHash = SNone)
 
     private def unliftOutput(output: LedgerOutput): Output[L2] =
         val SSome(e) = AssocMap.get(output.value)(ByteString.empty)
@@ -65,6 +75,8 @@ object SimpleL2Ledger:
     private class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
         extends L2LedgerModule[InstancePurpose, LedgerUtxoSetOpaque]:
 
+        private val log = Logger(getClass)
+
         override type LedgerTransaction = L2Transaction | L2Withdrawal
 
         type SubmissionError = String
@@ -75,6 +87,55 @@ object SimpleL2Ledger:
         override def isEmpty: Boolean = activeState.isEmpty
 
         override def getUtxosActive: LedgerUtxoSetOpaque = activeState.clone.toMap
+
+        override def getUtxosActiveCommitment: IArray[Byte] = {
+            val elems = activeState.clone.toList
+                .map(e => Scalar().from_bendian(blake2b_224(serialiseData(e.toData)).bytes))
+                .asScalus
+            val setup = mkDummySetup(elems.length.toInt)
+            val commitmentPoint = getG2Commitment(setup, elems)
+            val commitment = IArray.unsafeFromArray(commitmentPoint.compress())
+            log.info(s"Commitment: ${(encodeHex(commitment))}")
+            commitment
+        }
+
+        /*
+         * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
+         * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
+         */
+        def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
+            binomial_poly
+                .foldLeft(SList.single(new Scalar(BigInteger("1")))): (acc, term) =>
+                    // We need to clone the whole `acc` since `mul` mutates it
+                    // and final adding gets mutated `shiftedPoly`
+                    val shiftedPoly: SList[Scalar] =
+                        SList.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
+                    val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
+                    SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
+        }
+
+        def mkDummySetup(n: Int): SList[P2] = {
+            val tau = Scalar(BigInteger("42"))
+            val setup =
+                (1 to n).map(k => P2.generator().mult(tau.mul(Scalar(BigInteger(n.toString)))))
+            setup.toList.asScalus
+        }
+
+        // TODO: use multi-scalar multiplication
+        def getG2Commitment(
+            setup: SList[P2],
+            subset: SList[Scalar]
+        ): P2 = {
+            val subsetInG2 =
+                SList.map2(getFinalPoly(subset), setup): (sb, st) =>
+                    st.mult(sb)
+
+            val zero = infG2Point
+            require(zero.is_inf())
+
+            subsetInG2.foldLeft(zero.dup()): (a, b) =>
+                a.add(b)
+        }
 
         override def getState: UtxoSetL2 =
             UtxoSet[L2](unliftUtxoSet(activeState.clone().toMap))
@@ -109,10 +170,10 @@ object SimpleL2Ledger:
                 inputs: List[LedgerOutput],
                 outputs: List[LedgerOutput]
             ): Boolean =
-                val before: scalus.Value =
-                    inputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
-                val after: scalus.Value =
-                    outputs.map(_.value).fold(scalus.Value.zero)(scalus.Value.plus)
+                val before: v1.Value =
+                    inputs.map(_.value).fold(v1.Value.zero)(v1.Value.plus)
+                val after: v1.Value =
+                    outputs.map(_.value).fold(v1.Value.zero)(v1.Value.plus)
                 before == after
 
             val txId = calculateTxHash(tx)

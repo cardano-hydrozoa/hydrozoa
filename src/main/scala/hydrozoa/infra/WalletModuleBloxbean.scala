@@ -4,8 +4,8 @@ import com.bloxbean.cardano.client.crypto.Blake2bUtil
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
+import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.{AnyLevel, SigningKeyBytes, Tx, TxKeyWitness, VerificationKeyBytes, WalletModule}
 
 object WalletModuleBloxbean extends WalletModule:
 
@@ -28,3 +28,11 @@ object WalletModuleBloxbean extends WalletModule:
         val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
         val signature = signingProvider.signExtended(txnBodyHash, signingKey.getKeyData)
         TxKeyWitness(signature, verificationKey.getKeyData)
+
+    override def createEd25519Signature(
+        msg: IArray[Byte],
+        signingKey: SigningKey
+    ): Ed25519Signature =
+        val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
+        val signature = signingProvider.signExtended(msg.toArray, signingKey.getKeyData)
+        Ed25519Signature(IArray.from(signature))

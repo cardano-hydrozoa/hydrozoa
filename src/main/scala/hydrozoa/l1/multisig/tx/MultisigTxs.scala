@@ -2,6 +2,7 @@ package hydrozoa.l1.multisig.tx
 
 import hydrozoa.TxL1
 
+// TODO: revise, add new multisig txs
 sealed trait MultisigTxTag
 sealed trait InitializationTxTag extends MultisigTxTag
 sealed trait PostDatedRefundTxTag extends MultisigTxTag

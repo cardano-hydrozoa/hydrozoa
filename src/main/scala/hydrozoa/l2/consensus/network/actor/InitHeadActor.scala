@@ -7,6 +7,7 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
+import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
@@ -32,6 +33,7 @@ private class InitHeadActor(
 
     private var txDraft: InitTx = _
     private var headNativeScript: NativeScript = _
+    private var headMintingPolicy: CurrencySymbol = _
     private var headAddress: AddressBechL1 = _
     private var beaconTokenName: TokenName = _
     private var seedAddress: AddressBechL1 = _
@@ -42,7 +44,7 @@ private class InitHeadActor(
 
         val headPeers = req.otherHeadPeers + req.initiator
         val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
-        val (headNativeScript, headAddress) =
+        val (headNativeScript, headMp, headAddress) =
             mkHeadNativeScriptAndAddress(headVKeys, cardanoActor.ask(_.network))
 
         log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
@@ -60,7 +62,6 @@ private class InitHeadActor(
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         log.info("Init tx draft: " + serializeTxHex(txDraft))
-
         log.info("Init tx draft hash: " + txHash(txDraft))
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
@@ -70,9 +71,11 @@ private class InitHeadActor(
         this.ownAck = ownAck
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
+        this.headMintingPolicy = headMp
         this.headAddress = headAddress
         this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress
+
         deliver(ownAck)
         Seq(ownAck)
 
@@ -84,9 +87,9 @@ private class InitHeadActor(
 
     private def tryMakeResult(): Unit =
         log.trace("tryMakeResult")
-        
-        // Request initially may absent 
-        if (req != null) 
+
+        // Initially the request may be absent (if an ack comes first)
+        if (req != null)
             val headPeers = req.otherHeadPeers + req.initiator
             if acks.keySet == headPeers
             then
@@ -94,7 +97,8 @@ private class InitHeadActor(
                 val initTx = acks.values.foldLeft(txDraft)(addWitness)
                 val serializedTx = serializeTxHex(initTx)
                 log.info("Initialization tx: " + serializedTx)
-    
+
+                // TODO: submission should be carried on by a separate thread
                 cardanoActor.ask(_.submit(toL1Tx(initTx))) match
                     case Right(txHash) =>
                         // Put the head into Initializing phase
@@ -107,6 +111,7 @@ private class InitHeadActor(
                           headPeersVKs,
                           HeadParams.default,
                           headNativeScript,
+                          headMintingPolicy,
                           headAddress,
                           beaconTokenName,
                           seedAddress,
@@ -118,7 +123,7 @@ private class InitHeadActor(
                         TxDump.dumpInitTx(initTx)
                         resultChannel.send(txHash)
                         dropMyself()
-    
+
                     case Left(err) =>
                         val msg = s"Can't submit init tx: $err"
                         log.error(msg)

@@ -36,9 +36,9 @@ class BloxBeanFinalizationTxBuilder(
         // Beacon token to burn
         val beaconTokenName = reader.multisigRegime(_.beaconTokenName)
         val beaconTokenAsset =
-            AssetUtil.getUnit(headNativeScript.getPolicyId, beaconTokenName.tokenName)
+            AssetUtil.getUnit(headNativeScript.getPolicyId, beaconTokenName.tokenNameHex)
         val beaconTokenToBurn = Asset.builder
-            .name(beaconTokenName.tokenName)
+            .name(beaconTokenName.tokenNameHex)
             .value(BigInteger.valueOf(-1))
             .build
 

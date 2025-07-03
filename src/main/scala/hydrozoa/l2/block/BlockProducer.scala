@@ -2,7 +2,7 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.Piper
+import hydrozoa.infra.{Piper, encodeHex}
 import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
@@ -172,12 +172,13 @@ object BlockProducer:
         )
             return None
 
+        val _ = stateL2.getUtxosActiveCommitment
+
         // Build the block
         val blockBuilder = BlockBuilder()
             .timeCreation(timeCreation)
             .blockNum(prevHeader.blockNum + 1)
-            //        .utxosActive(RH32UtxoSetL2.dummy) // TODO: calculate Merkle root hash
-            .utxosActive(42) // TODO: calculate Merkle root hash
+            .utxosActive(encodeHex(stateL2.getUtxosActiveCommitment))
             .apply(b => eventsInvalid.foldLeft(b)((b, e) => b.withInvalidEvent(e._1, e._2)))
             .apply(b => txValid.foldLeft(b)((b, txId) => b.withTransaction(txId)))
 

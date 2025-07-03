@@ -17,6 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
+import scalus.prelude.Option as SOption
 import scalus.prelude.Option.asScalus
 
 import scala.concurrent.duration.DurationInt
@@ -176,7 +177,7 @@ class Node:
     /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
       * done and effects are ready. Returns all that so it can be checked against a model.
       *
-      * NB: This is used for model-based testing only.
+      * NB: This is used for testing only.
       *
       * NB: Not exposed within API.
       *
@@ -186,7 +187,8 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean
+        nextBlockFinal: Boolean,
+        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
 
         assert(
@@ -194,10 +196,16 @@ class Node:
           "Autonomous block production should be turned off to use this function"
         )
 
-        log.info("Calling tryProduceBlock in lockstep...")
+        log.info(
+          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal, quitConsensusImmediately=$quitConsensusImmediately..."
+        )
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
-                nodeState.ask(_.head.openPhase(_.tryProduceBlock(nextBlockFinal, true))) match
+                nodeState.ask(
+                  _.head.openPhase(
+                    _.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately)
+                  )
+                ) match
                     case Left(err)    => Left(err)
                     case Right(block) => Right(block)
             case Finalizing =>
@@ -207,11 +215,12 @@ class Node:
             case other => Left(s"Node should be in Open or Finalizing pase, but it's in $other")
 
         errorOrBlock match
-            case Left(err)    => Left(err)
+            case Left(err) => Left(err)
             case Right(block) =>
-                val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
-                    nodeState.ask(_.head.getBlockRecord(block))
-                      .toRight(s"Effects for block ${block.blockHeader.blockNum} not found")
+                val effects = retryEither(RetryConfig.delay(100, 100.millis)) {
+                    nodeState
+                        .ask(_.head.getBlockRecord(block))
+                        .toRight(s"Effects for block ${block.blockHeader.blockNum} have not bee found after 10 secs of waiting")
                 }
 
                 effects match

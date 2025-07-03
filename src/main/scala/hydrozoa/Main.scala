@@ -11,6 +11,9 @@ import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, Fina
 import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
+import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
+import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
@@ -82,15 +85,18 @@ object HydrozoaNode extends OxApp:
                 val cardanoActor = Actor.create(cardano)
 
                 val nodeState: NodeState = NodeState.apply(knownPeers)
+                nodeState.setCardano(cardanoActor)
 
                 val (
                   initTxBuilder,
+                  fallbackTxBuilder,
                   depositTxBuilder,
                   refundTxBuilder,
                   settlementTxBuilder,
-                  finalizationTxBuilder
-                ) = mkTxBuilders(backendService, nodeState, knownPeers)
-
+                  finalizationTxBuilder,
+                  voteTxBuilder,
+                  tallyTxBuilder
+                ) = mkTxBuilders(backendService, nodeState)
 
                 val nodeStateActor = Actor.create(nodeState)
 
@@ -102,6 +108,7 @@ object HydrozoaNode extends OxApp:
                       walletActor,
                       cardanoActor,
                       initTxBuilder,
+                      fallbackTxBuilder,
                       refundTxBuilder,
                       settlementTxBuilder,
                       finalizationTxBuilder
@@ -126,6 +133,8 @@ object HydrozoaNode extends OxApp:
                 // Static actors for node state
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
                 nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
+                nodeState.setVoteTxBuilder(voteTxBuilder)
+                nodeState.setTallyTxBuilder(tallyTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -209,14 +218,15 @@ end mkCardanoL1
 
 def mkTxBuilders(
     backendService: BackendService,
-    nodeState: NodeState,
-    knownPeers: Set[WalletId]
+    nodeState: NodeState
 ) =
 
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders
     val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+    val fallbackTxBuilder: FallbackTxBuilder =
+        BloxBeanFallbackTxBuilder(backendService)
     val depositTxBuilder: DepositTxBuilder =
         BloxBeanDepositTxBuilder(backendService, nodeStateReader)
     val refundTxBuilder: RefundTxBuilder =
@@ -225,13 +235,20 @@ def mkTxBuilders(
         BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+    val voteTxBuilder: VoteTxBuilder =
+        BloxBeanVoteTxBuilder(backendService)
+    val tallyTxBuilder: TallyTxBuilder =
+        BloxBeanTallyTxBuilder(backendService)
 
     (
       initTxBuilder,
+      fallbackTxBuilder,
       depositTxBuilder,
       refundTxBuilder,
       settlementTxBuilder,
-      finalizationTxBuilder
+      finalizationTxBuilder,
+      voteTxBuilder,
+      tallyTxBuilder
     )
 
 end mkTxBuilders

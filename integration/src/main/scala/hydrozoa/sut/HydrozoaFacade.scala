@@ -28,8 +28,17 @@ trait HydrozoaFacade:
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]
 
+    /** Ask for a next block in a lockstep manner. Used only for testing.
+      * @param nextBlockFinal
+      *   request the network to close the head with the next block
+      * @param quitConsensusImmediately
+      *   whether the node should skip sending AckMajor2 so nodes can submit post-dated fallback
+      *   transaction
+      * @return
+      */
     def produceBlock(
-        nextBlockFinal: Boolean
+        nextBlockFinal: Boolean,
+        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
 
     def shutdownSut(): Unit
