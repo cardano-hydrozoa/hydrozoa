@@ -155,7 +155,6 @@ class ConsensusActorFactory(
           walletActor,
           cardanoActor,
           initTxBuilder,
-          fallbackTxBuilder,
           dropMyself
         )
 

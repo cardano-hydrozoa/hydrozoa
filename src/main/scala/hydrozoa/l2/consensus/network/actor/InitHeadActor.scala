@@ -21,7 +21,6 @@ private class InitHeadActor(
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
     initTxBuilder: InitTxBuilder,
-    fallbackTxBuilder: FallbackTxBuilder,
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
@@ -78,33 +77,6 @@ private class InitHeadActor(
         this.headAddress = headAddress
         this.beaconTokenName = beaconTokenName
         this.seedAddress = seedAddress
-
-//        // temporary code to test fallback tx, see https://github.com/cardano-hydrozoa/hydrozoa/issues/130
-//        // factor out
-//        val peers = req.otherHeadPeers + req.initiator
-//        // FIXME: .get
-//        val peersKeys = stateActor.ask(_.getVerificationKeys(peers).get)
-//
-//        val fallbackTxRecipe = FallbackTxRecipe(
-//            multisigTx = txDraft,
-//            treasuryScript = seedAddress,
-//            disputeScript = seedAddress,
-//            votingDuration = 1024,
-//            // Sorting
-//            peers = peersKeys.toList,
-//            headAddressBech32 = this.headAddress,
-//            headNativeScript = this.headNativeScript,
-//            headMintingPolicy = this.headMintingPolicy
-//        )
-//
-//        log.error(s"FallbackTxRecipe= $fallbackTxRecipe")
-//
-//        val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
-//
-//        log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
-//        log.info("Fallback tx draft hash: " + txHash(fallbackTxDraft))
-//
-//        // End of temporary code
 
         deliver(ownAck)
         Seq(ownAck)
