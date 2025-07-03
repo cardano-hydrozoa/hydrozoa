@@ -11,9 +11,13 @@ import munit.FunSuite
 import sttp.client4.Response
 import sttp.client4.quick.*
 
+import scala.concurrent.duration.Duration
+
 /** This integration test runs simple Hydrozoa happy-path.
   */
 class HappyPathSuite extends FunSuite {
+
+    override val munitTimeout = Duration(1, "m")
 
     private val useYaci = true;
 

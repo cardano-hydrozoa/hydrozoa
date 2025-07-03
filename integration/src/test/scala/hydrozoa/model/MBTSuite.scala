@@ -286,15 +286,13 @@ object MBTSuite extends Commands:
                     )
                 val (headMultisigScript, _headMp, headAddress) =
                     mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
-                val beaconTokenName = mkBeaconTokenName(seedUtxo)
 
                 // Recipe to build init initTx
                 val initTxRecipe = InitTxRecipe(
                   headAddress,
                   seedUtxo,
                   1000_000_000,
-                  headMultisigScript,
-                  beaconTokenName
+                  headMultisigScript
                 )
 
                 val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
