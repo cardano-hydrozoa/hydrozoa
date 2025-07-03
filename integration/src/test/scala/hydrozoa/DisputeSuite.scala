@@ -1,7 +1,12 @@
 package hydrozoa
 
+import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
+import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.txHash
+import hydrozoa.deploy.mkDeployTx
+import hydrozoa.infra.{serializeTxHex, toEither, txHash}
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l2.ledger.L2Transaction
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
@@ -57,7 +62,23 @@ class DisputeSuite extends FunSuite {
             // supervised { par(fs) }
             fs.foreach(_())
 
-        if (useYaci)
+        def deployHydrozoaScript(
+            backendService: BackendService,
+            peer: TestPeer,
+            script: Script
+        ): UtxoIdL1 = {
+            val tx = mkDeployTx(backendService, peer, script)
+            log.info(s"deployment tx is: ${serializeTxHex(tx)}")
+            backendService.getTransactionService.submitTransaction(tx.bytes).toEither match
+                case Right(txId) =>
+                    log.info(s"$txId")
+                    UtxoIdL1.apply(TxId(txId), TxIx(0))
+                case Left(err) =>
+                    log.error(s"Can't deploy reference scripts: $err")
+                    throw RuntimeException()
+        }
+
+        val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId) = if (useYaci)
             // Reset Yaci DevKit
             log.info("Resetting Yaci...")
             val _: Response[String] = quickRequest
@@ -68,9 +89,25 @@ class DisputeSuite extends FunSuite {
             log.info("Topping up peers' wallets...")
             topupNodeWallets(testPeers, 30, 5)
 
+            // Deploy reference scripts
+            val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
+
+            val treasuryScriptRefUtxoId =
+                deployHydrozoaScript(backendService, Julia, TreasuryValidatorScript.plutusScript)
+            val disputeScriptRefUtxoId =
+                deployHydrozoaScript(backendService, Isabel, DisputeResolutionScript.plutusScript)
+
+            (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
+        else (None, None)
+
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")
-        sut = LocalFacade.apply(testPeers, useYaci = useYaci)
+        sut = LocalFacade.apply(
+          testPeers,
+          useYaci = useYaci,
+          mbTreasuryScriptRefUtxoId,
+          mbDisputeScriptRefUtxoId
+        )
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -203,7 +240,7 @@ class DisputeSuite extends FunSuite {
                   )
                 )
               )
-            )   
+            )
             minor1_4 <- sut.produceBlock(false, true)
 
             _ = Thread.sleep(5000)

@@ -15,7 +15,7 @@ import hydrozoa.node.monitoring.NoopMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.NodeState
-import hydrozoa.{mkCardanoL1, mkTxBuilders}
+import hydrozoa.{UtxoIdL1, mkCardanoL1, mkTxBuilders}
 import ox.*
 import ox.channels.Actor
 import ox.logback.InheritableMDC
@@ -65,6 +65,8 @@ object LocalNode:
         useYaci: Boolean = true,
         yaciBFApiUri: String = "http://localhost:8080/api/v1/",
         pp: Option[ProtocolParams] = None,
+        mbTreasuryScriptRefUtxoId: Option[UtxoIdL1] = None,
+        mbDisputeScriptRefUtxoId: Option[UtxoIdL1] = None,
         nodeCallback: ((TestPeer, Node) => Unit)
     ): Unit =
         InheritableMDC.supervisedWhere("node" -> ownPeer.toString) {
@@ -92,7 +94,7 @@ object LocalNode:
                   voteTxBuilder,
                   tallyTxBuilder,
                   resolutionTxBuilder
-                ) = mkTxBuilders(backendService, nodeState)
+                ) = mkTxBuilders(backendService, nodeState, mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId)
 
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)

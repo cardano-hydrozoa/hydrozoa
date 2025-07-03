@@ -221,7 +221,9 @@ end mkCardanoL1
 
 def mkTxBuilders(
     backendService: BackendService,
-    nodeState: NodeState
+    nodeState: NodeState,
+    _mbTreasuryScriptRefUtxoId: Option[UtxoIdL1] = None,
+    _mbDisputeScriptRefUtxoId: Option[UtxoIdL1] = None
 ) =
 
     val nodeStateReader: HeadStateReader = nodeState.reader
