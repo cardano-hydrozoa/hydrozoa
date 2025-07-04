@@ -3,7 +3,7 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.address
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import hydrozoa.infra.toBB
+import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
@@ -476,10 +476,11 @@ object DisputeResolutionValidator extends Validator:
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
-                            case _ => fail(ResolveTreasurySpent)
+                            case _ => false
                     }
                     .getOrFail(ResolveTreasurySpent)
 
+                // TODO: This is checked by the treasury validator
                 val treasuryDatum =
                     treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
@@ -496,7 +497,8 @@ end DisputeResolutionValidator
 object DisputeResolutionScript {
 
     lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+//    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
     lazy val plutusScript: PlutusV3Script = PlutusV3Script
@@ -535,7 +537,8 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
     )
 
 @main
-def disputeResolutionValidatorSir(args: String): Unit = {
+def disputeResolutionValidatorSir(args: String): Unit =
     println(DisputeResolutionScript.sir.showHighlighted)
+    println(encodeHex(IArray.unsafeFromArray(DisputeResolutionScript.plutusScript.getScriptHash)))
     println(DisputeResolutionScript.scriptHash)
-}
+    println(DisputeResolutionScript.script.flatEncoded.length)

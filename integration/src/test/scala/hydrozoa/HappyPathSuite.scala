@@ -35,7 +35,7 @@ class HappyPathSuite extends FunSuite {
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
 
-    sut = LocalFacade.apply(testPeers, useYaci = useYaci)
+    sut = LocalFacade.apply(testPeers, useYaci = useYaci, None, None)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
