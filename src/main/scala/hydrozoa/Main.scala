@@ -12,7 +12,7 @@ import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, 
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
-import hydrozoa.l1.rulebased.tx.resolution.{BloxBeanResolutionTxBuilder, ResolutionTxBuilder}
+import hydrozoa.l1.rulebased.tx.resolution.BloxBeanResolutionTxBuilder
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
 import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
 import hydrozoa.l2.block.BlockProducer
@@ -222,8 +222,8 @@ end mkCardanoL1
 def mkTxBuilders(
     backendService: BackendService,
     nodeState: NodeState,
-    _mbTreasuryScriptRefUtxoId: Option[UtxoIdL1] = None,
-    _mbDisputeScriptRefUtxoId: Option[UtxoIdL1] = None
+    mbTreasuryScriptRefUtxoId: Option[UtxoIdL1] = None,
+    mbDisputeScriptRefUtxoId: Option[UtxoIdL1] = None
 ) =
 
     val nodeStateReader: HeadStateReader = nodeState.reader
@@ -244,7 +244,11 @@ def mkTxBuilders(
         BloxBeanVoteTxBuilder(backendService)
     val tallyTxBuilder: TallyTxBuilder =
         BloxBeanTallyTxBuilder(backendService)
-    val resolutionTxBuilder = BloxBeanResolutionTxBuilder(backendService)
+    val resolutionTxBuilder = BloxBeanResolutionTxBuilder(
+      backendService,
+      mbTreasuryScriptRefUtxoId,
+      mbDisputeScriptRefUtxoId
+    )
 
     (
       initTxBuilder,

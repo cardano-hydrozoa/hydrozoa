@@ -3,18 +3,14 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.address
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import hydrozoa.infra.toBB
+import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
-import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
-    containsCurrencySymbol,
-    containsExactlyOneAsset,
-    onlyNonAdaAsset
-}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsCurrencySymbol, containsExactlyOneAsset, onlyNonAdaAsset}
 import hydrozoa.l2.block.BlockTypeL2
 import hydrozoa.{PosixTime, *}
 import scalus.*
@@ -497,7 +493,8 @@ end DisputeResolutionValidator
 object DisputeResolutionScript {
 
     lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+//    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
     lazy val plutusScript: PlutusV3Script = PlutusV3Script
@@ -538,5 +535,6 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
 @main
 def disputeResolutionValidatorSir(args: String): Unit =
     println(DisputeResolutionScript.sir.showHighlighted)
+    println(encodeHex(IArray.unsafeFromArray(DisputeResolutionScript.plutusScript.getScriptHash)))
     println(DisputeResolutionScript.scriptHash)
     println(DisputeResolutionScript.script.flatEncoded.length)

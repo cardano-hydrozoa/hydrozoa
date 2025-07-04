@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
-import hydrozoa.infra.{serializeTxHex, toEither, txHash}
+import hydrozoa.infra.{encodeHex, serializeTxHex, toEither, txHash}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l2.ledger.L2Transaction
 import hydrozoa.node.TestPeer
@@ -68,7 +68,7 @@ class DisputeSuite extends FunSuite {
             script: Script
         ): UtxoIdL1 = {
             val tx = mkDeployTx(backendService, peer, script)
-            log.info(s"deployment tx is: ${serializeTxHex(tx)}")
+            log.info(s"deployment tx for script hash ${encodeHex(IArray.unsafeFromArray(script.getScriptHash))} is: ${serializeTxHex(tx)}")
             backendService.getTransactionService.submitTransaction(tx.bytes).toEither match
                 case Right(txId) =>
                     log.info(s"$txId")
@@ -93,7 +93,7 @@ class DisputeSuite extends FunSuite {
             val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
 
             val treasuryScriptRefUtxoId =
-                deployHydrozoaScript(backendService, Julia, TreasuryValidatorScript.plutusScript)
+                deployHydrozoaScript(backendService, Julia, TreasuryValidatorScript.plutusScript    )
             val disputeScriptRefUtxoId =
                 deployHydrozoaScript(backendService, Isabel, DisputeResolutionScript.plutusScript)
 

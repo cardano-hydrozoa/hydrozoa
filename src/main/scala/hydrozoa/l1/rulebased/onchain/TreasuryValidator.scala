@@ -3,7 +3,7 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import hydrozoa.infra.toBB
+import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
@@ -424,18 +424,19 @@ object TreasuryValidator extends Validator:
 end TreasuryValidator
 
 object TreasuryValidatorScript {
-    lazy val sir = Compiler.compile(TreasuryValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    val sir = Compiler.compile(TreasuryValidator.validate)
+//    val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
-    lazy val plutusScript: PlutusV3Script = PlutusV3Script
+    val plutusScript: PlutusV3Script = PlutusV3Script
         .builder()
         .`type`("PlutusScriptV3")
         .cborHex(script.doubleCborHex)
         .build()
         .asInstanceOf[PlutusV3Script]
 
-    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
 
     def address(n: Network): AddressBechL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
@@ -464,5 +465,6 @@ def mkTreasuryDatumUnresolved(
 @main
 def treasuryValidatorSir(args: String): Unit =
     println(TreasuryValidatorScript.sir.showHighlighted)
+    println(encodeHex(IArray.unsafeFromArray(TreasuryValidatorScript.plutusScript.getScriptHash)))
     println(TreasuryValidatorScript.scriptHash)
     println(TreasuryValidatorScript.script.flatEncoded.length)
