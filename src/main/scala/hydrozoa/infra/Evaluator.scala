@@ -3,7 +3,11 @@ package hydrozoa.infra
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
 import com.bloxbean.cardano.client.quicktx.{AbstractTx, QuickTxBuilder}
-import scalus.bloxbean.{EvaluatorMode, NoScriptSupplier, ScalusTransactionEvaluator, SlotConfig}
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
+import scalus.bloxbean.*
+
+import scala.jdk.CollectionConverters
+import scala.jdk.CollectionConverters.MapHasAsJava
 
 /** @tparam T
   *   likely you should use Tx
@@ -25,15 +29,14 @@ def mkBuilder[T](backendService: BackendService): AbstractTx[T] => QuickTxBuilde
             pp
         }
 
-        val quickTxBuilder = QuickTxBuilder(backendService)
-
         val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
+        val scriptSupplier = new ScriptServiceSupplier(backendService.getScriptService)
 
         val evaluator = ScalusTransactionEvaluator(
           slotConfig = SlotConfig.Preprod, // FIXME: use config parameter
           protocolParams = protocolParams,
           utxoSupplier = utxoSupplier,
-          scriptSupplier = NoScriptSupplier(),
+          scriptSupplier = scriptSupplier,
           mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
         )
 

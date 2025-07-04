@@ -59,7 +59,9 @@ lazy val core = (project in file("."))
         // Prometheus Java "client"
         "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
         "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
-        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6"
+        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6",
+        "io.bullet" %% "borer-core"       % "1.12.0",
+        "io.bullet" %% "borer-derivation" % "1.12.0"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,

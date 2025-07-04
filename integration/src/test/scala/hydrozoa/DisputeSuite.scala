@@ -100,6 +100,8 @@ class DisputeSuite extends FunSuite {
             (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
         else (None, None)
 
+        log.info(s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId")
+
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")
         sut = LocalFacade.apply(

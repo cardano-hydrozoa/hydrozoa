@@ -10,7 +10,11 @@ import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
-import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsCurrencySymbol, containsExactlyOneAsset, onlyNonAdaAsset}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
+    containsCurrencySymbol,
+    containsExactlyOneAsset,
+    onlyNonAdaAsset
+}
 import hydrozoa.l2.block.BlockTypeL2
 import hydrozoa.{PosixTime, *}
 import scalus.*
