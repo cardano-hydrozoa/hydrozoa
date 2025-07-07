@@ -68,7 +68,9 @@ class DisputeSuite extends FunSuite {
             script: Script
         ): UtxoIdL1 = {
             val tx = mkDeployTx(backendService, peer, script)
-            log.info(s"deployment tx for script hash ${encodeHex(IArray.unsafeFromArray(script.getScriptHash))} is: ${serializeTxHex(tx)}")
+            log.info(
+              s"deployment tx for script hash ${encodeHex(IArray.unsafeFromArray(script.getScriptHash))} is: ${serializeTxHex(tx)}"
+            )
             backendService.getTransactionService.submitTransaction(tx.bytes).toEither match
                 case Right(txId) =>
                     log.info(s"$txId")
@@ -89,18 +91,34 @@ class DisputeSuite extends FunSuite {
             log.info("Topping up peers' wallets...")
             topupNodeWallets(testPeers, 30, 5)
 
+            println(TreasuryValidatorScript.scriptHashString)
+            println(TreasuryValidatorScript.scriptHash)
+
             // Deploy reference scripts
             val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
 
             val treasuryScriptRefUtxoId =
-                deployHydrozoaScript(backendService, Julia, TreasuryValidatorScript.plutusScript    )
+                deployHydrozoaScript(
+                  backendService,
+                  Julia,
+                  TreasuryValidatorScript.plutusScript
+                )
+
             val disputeScriptRefUtxoId =
-                deployHydrozoaScript(backendService, Isabel, DisputeResolutionScript.plutusScript)
+                deployHydrozoaScript(
+                  backendService,
+                  Isabel,
+                  DisputeResolutionScript.plutusScript
+                )
+
+//            throw RuntimeException()
 
             (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
         else (None, None)
 
-        log.info(s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId")
+        log.info(
+          s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId"
+        )
 
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")

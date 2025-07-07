@@ -30,7 +30,7 @@ class BloxBeanResolutionTxBuilder(
     mbDisputeScriptRefUtxoId: Option[UtxoIdL1]
 ) extends ResolutionTxBuilder {
 
-    private val builder = mkBuilder[ScriptTx](backendService)
+    private val builder = mkBuilder[ScriptTx](backendService, false)
 
     override def buildResolutionTx(r: ResolutionTxRecipe): Either[String, TxL1] =
         (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId) match

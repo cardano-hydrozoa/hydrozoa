@@ -165,6 +165,8 @@ object TreasuryValidator extends Validator:
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
+        log("TreasuryValidator")
+
         // Parse datum
         val treasuryDatum: TreasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
@@ -172,6 +174,8 @@ object TreasuryValidator extends Validator:
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
+                log("Resolve")
+
                 // Treasury datum should be an "unresolved" one
                 val unresolvedDatum = treasuryDatum match
                     case Unresolved(d) => d
@@ -250,6 +254,8 @@ object TreasuryValidator extends Validator:
                 )
 
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
+                log("Withdraw")
+
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
                     case Resolved(d) => d
@@ -337,6 +343,8 @@ object TreasuryValidator extends Validator:
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
             case Deinit =>
+                log("DeinitD")
+
                 // This redeemer does not require the treasury’s active utxo set to be empty,
                 // but it implicitly requires the transaction to be multi-signed by all peers
                 // to burn the headMp tokens.
@@ -438,6 +446,8 @@ object TreasuryValidatorScript {
 
     val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
 
+    val scriptHashString: String = encodeHex(IArray.unsafeFromArray(plutusScript.getScriptHash))
+
     def address(n: Network): AddressBechL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
         address.getAddress |> AddressBech[L1].apply
@@ -464,7 +474,11 @@ def mkTreasuryDatumUnresolved(
 
 @main
 def treasuryValidatorSir(args: String): Unit =
-    println(TreasuryValidatorScript.sir.showHighlighted)
-    println(encodeHex(IArray.unsafeFromArray(TreasuryValidatorScript.plutusScript.getScriptHash)))
+    //    println(TreasuryValidatorScript.sir.showHighlighted)
+    println(DisputeResolutionScript.scriptHash)
+    println(DisputeResolutionScript.scriptHashString)
+    println(DisputeResolutionScript.script.flatEncoded.length)
+
+    println(TreasuryValidatorScript.scriptHashString)
     println(TreasuryValidatorScript.scriptHash)
     println(TreasuryValidatorScript.script.flatEncoded.length)

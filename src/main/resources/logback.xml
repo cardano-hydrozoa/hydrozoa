@@ -9,4 +9,5 @@
     </root>
     <logger name="com.bloxbean.cardano.client.crypto.bip32" level="warn"/>
     <logger name="hydrozoa" level="debug"/>
+    <logger name="scalus" level="trace"/>
 </configuration>
