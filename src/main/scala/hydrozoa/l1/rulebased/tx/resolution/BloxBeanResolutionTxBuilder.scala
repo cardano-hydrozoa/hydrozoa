@@ -10,13 +10,9 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.Vote
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{DisputeRedeemer, VoteDatum}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
-    ResolvedDatum,
-    TreasuryDatum,
-    TreasuryRedeemer
-}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{ResolvedDatum, TreasuryDatum, TreasuryRedeemer}
 import hydrozoa.{TxL1, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
@@ -51,7 +47,7 @@ class BloxBeanResolutionTxBuilder(
                 val (voteInput, voteDatum: VoteDatum) = getUtxoWithDatum[VoteDatum](r.talliedVote)
                 val vote = voteDatum.voteStatus match {
                     case Vote(vote) => vote
-                    case _          => throw RuntimeException("Tallied vote is empty")
+                    case NoVote     => throw RuntimeException("Tailled vote is NoVote")
                 }
 
                 val (treasuryInput, TreasuryDatum.Unresolved(treasuryDatum)) =
