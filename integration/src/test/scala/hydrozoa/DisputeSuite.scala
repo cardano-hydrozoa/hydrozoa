@@ -75,7 +75,7 @@ class DisputeSuite extends FunSuite {
                     UtxoIdL1.apply(TxId(txId), TxIx(0))
                 case Left(err) =>
                     log.error(s"Can't deploy reference scripts: $err")
-                    throw RuntimeException()
+                    throw RuntimeException(err)
         }
 
         val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId) = if (useYaci)
