@@ -13,7 +13,7 @@ class TreasuryValidatorTest extends FunSuite:
         val crs_g1 = List(
           BLS12_381_G1_Element(
             ByteString.fromHex(
-              "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+                "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
             )
           ),
           BLS12_381_G1_Element(

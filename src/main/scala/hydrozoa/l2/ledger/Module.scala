@@ -30,7 +30,7 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
     
     def getUtxosActiveCommitment: IArray[Byte] 
     
-    // Returns utxo state. Used only in L2 state endpoint for now.
+    // Returns utxo state. Used only in L2 state endpoint for now and for testing withdrawals in the rule-based regime.
     def getState: UtxoSetL2
 
     /** Replaces the active set of utxos with a provided set.

@@ -93,12 +93,19 @@ object LocalNode:
                   finalizationTxBuilder,
                   voteTxBuilder,
                   tallyTxBuilder,
-                  resolutionTxBuilder
-                ) = mkTxBuilders(backendService, nodeState, mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId)
+                  resolutionTxBuilder,
+                  withdrawTxBuilder
+                ) = mkTxBuilders(
+                  backendService,
+                  nodeState,
+                  mbTreasuryScriptRefUtxoId,
+                  mbDisputeScriptRefUtxoId
+                )
 
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
                 nodeState.setResolutionTxBuilder(resolutionTxBuilder)
+                nodeState.setWithdrawTxBuilder(withdrawTxBuilder)
 
                 val nodeStateActor = Actor.create(nodeState)
 

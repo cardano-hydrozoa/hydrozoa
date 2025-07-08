@@ -1,11 +1,9 @@
 package hydrozoa.l1.rulebased.onchain
 
 import com.bloxbean.cardano.client.address.AddressProvider
-import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
@@ -21,7 +19,6 @@ import hydrozoa.{
     L1,
     Network,
     VerificationKeyBytes,
-    networkL1static,
     CurrencySymbol as HCurrencySymbol,
     PosixTime as HPosixTime,
     TokenName as HTokenName
@@ -39,8 +36,8 @@ import scalus.builtin.{
     ToData
 }
 import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum, OutputDatumHash}
 import scalus.ledger.api.v3.*
+import scalus.prelude.List.Nil
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.prelude.crypto.bls12_381.G1.scale
@@ -55,7 +52,18 @@ object TreasuryValidator extends Validator:
     // a reference utxo with tau_token in it (or we can
     // store utxo in the datum).
     // Proposed prefix is 7828 (ptau on the phone dialpad)
-    val setup: List[BLS12_381_G1_Element] = List.empty
+    // NB: use `dumpSetupG1` to cook it for now
+    val setup: List[BLS12_381_G1_Element] =
+        List.Cons(
+          hex"b12d0c357016caa5c0ec0a6bdc07e60c2af4631c477366eeb6ab4fffbd0ca40ab9ec195091478a2698bf26349b785ae8",
+          List.Cons(
+            hex"ab50b7d5689506d7fa1360f4a75523d24958d2ffe278fc6d20e30ad3f77e2150390b10561381091985f0c5c80157043d",
+            List.Cons(
+              hex"ab2dae103dd5cff5f0b677498fe38a38341869c7a6a684c43659aeedd94d54aee76523ff9b1bf19c00d60623cf538fa4",
+              Nil
+            )
+          )
+        ).map(G1.uncompress)
 
     // EdDSA / ed25519 Cardano verification key
     private type VerificationKey = ByteString
@@ -287,6 +295,8 @@ object TreasuryValidator extends Validator:
 
                 // The beacon token should be preserved
                 // By contract, we require the treasure utxo is always be the head, and the tail be withdrawals
+                // FIXME: in reality the change outputs gets in
+                //   Ideally we need to use treasury for fees.
                 val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
                 require(
                   treasuryOutput.value
@@ -299,14 +309,21 @@ object TreasuryValidator extends Validator:
 
                 // Withdrawals
                 // The number of withdrawals should match the number of utxos ids in the redeemer
-                require(withdrawalOutputs.size == utxoIds.size, WithdrawWrongNumberOfWithdrawals)
+                // FIXME: in reality the change outputs gets in - hence +1 for now
+                require(
+                  withdrawalOutputs.size == utxoIds.size + 1,
+                  WithdrawWrongNumberOfWithdrawals
+                )
                 // Calculate the final poly for withdrawn subset
                 // FIXME: this fails due to the same error:
                 // Caused by: java.lang.IllegalArgumentException: Expected case class type, got TypeVar(T,Some(218919)) in expression: match d with
                 // I blame this lines in Scalus, though it's not clear how to fix that since it uses
+                log("1")
                 val withdrawnUtxos: List[ScalusScalar] = utxoIds
                     // Joint utxo ids and outputs
-                    .zip(withdrawalOutputs)
+                    // TODO:
+                    // .zip(withdrawalOutputs)
+                    .zip(withdrawalOutputs.reverse.tail.reverse)
                     // Convert to data, serialize, calculate a hash, convert to scalars, multiply binomials
                     .map(e =>
                         e.toData
@@ -315,22 +332,32 @@ object TreasuryValidator extends Validator:
                             |> ScalusScalar.fromByteStringBigEndianUnsafe
                     ) |> getFinalPolyScalus
 
+                log("2")
+
                 // Decompress commitments and run the membership check
                 val acc = bls12_381_G2_uncompress(resolvedDatum.utxosActive)
                 val proof_ = bls12_381_G2_uncompress(proof)
+
+                log("3")
 
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
                   WithdrawMembershipValidationFailed
                 )
 
+                log("4")
+
                 // Accumulator updated commitment
                 val outputResolvedDatum = treasuryOutput.inlineDatumOfType[ResolvedDatum]
+
+                log("5")
 
                 require(
                   outputResolvedDatum.utxosActive == proof,
                   WithdrawOutputAccumulatorUpdated
                 )
+
+                log("6")
 
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
                 // withdrawals.
@@ -338,9 +365,16 @@ object TreasuryValidator extends Validator:
                 val withdrawnValue =
                     tx.outputs.tail.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
+                log("7")
+
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
+
+                log("8")
+
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
+
+                log("9")
 
             case Deinit =>
                 log("DeinitD")

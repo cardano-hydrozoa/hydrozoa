@@ -10,7 +10,7 @@ trait WalletModule:
 
     def exportVerificationKeyBytes(publicKey: VerificationKey): VerificationKeyBytes
 
-    def createTxKeyWitness[L <: AnyLevel](
+    def createTxKeyWitness[L <: AnyLayer](
         tx: Tx[L],
         verificationKey: VerificationKey,
         signingKey: SigningKey
@@ -31,7 +31,7 @@ class Wallet(
         walletModule.exportVerificationKeyBytes(verificationKey)
     def getName: String = name
     def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
-    def createTxKeyWitness[L <: AnyLevel](tx: Tx[L]): TxKeyWitness =
+    def createTxKeyWitness[L <: AnyLayer](tx: Tx[L]): TxKeyWitness =
         walletModule.createTxKeyWitness(tx, verificationKey, signingKey)
     def getWalletId: WalletId = WalletId(getName)
     def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =

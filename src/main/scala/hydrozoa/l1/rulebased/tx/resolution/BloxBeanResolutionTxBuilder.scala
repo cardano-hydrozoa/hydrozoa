@@ -97,7 +97,7 @@ class BloxBeanResolutionTxBuilder(
                 val nodeAddress = r.nodeAccount.enterpriseAddress()
                 val txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-                val depositTx: Transaction = builder
+                val resolutionTx: Transaction = builder
                     .apply(txPartial)
                     // TODO: this should be LEQ than what an unresolved treasury datum contains
                     // see MajorBlockConfirmationActor.scala:210
@@ -108,6 +108,6 @@ class BloxBeanResolutionTxBuilder(
                     .withSigner(txSigner)
                     .buildAndSign()
 
-                Right(TxL1(depositTx.serialize))
+                Right(TxL1(resolutionTx.serialize))
             case _ => Left("Ref scripts are not set")
 }
