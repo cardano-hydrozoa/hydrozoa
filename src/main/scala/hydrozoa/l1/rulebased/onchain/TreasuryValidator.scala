@@ -3,7 +3,7 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import hydrozoa.infra.toBB
+import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
@@ -48,15 +48,6 @@ import scalus.prelude.{*, given}
 
 @Compile
 object TreasuryValidator extends Validator:
-
-    given [T <: scalus.ledger.api.v2.OutputDatum]: ToData[T] = (_ddd: T) =>
-        constrData(0, mkNilData())
-//        ddd match
-//            case NoOutputDatum => constrData(0, mkNilData())
-//            case OutputDatumHash(datumHash) =>
-//                constrData(1, builtin.List(datumHash.toData))
-//            case OutputDatum(datum) =>
-//                constrData(2, builtin.List(datum))
 
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
@@ -174,6 +165,8 @@ object TreasuryValidator extends Validator:
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
+        log("TreasuryValidator")
+
         // Parse datum
         val treasuryDatum: TreasuryDatum = datum match
             case Some(d) => d.to[TreasuryDatum]
@@ -181,6 +174,8 @@ object TreasuryValidator extends Validator:
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
+                log("Resolve")
+
                 // Treasury datum should be an "unresolved" one
                 val unresolvedDatum = treasuryDatum match
                     case Unresolved(d) => d
@@ -259,6 +254,8 @@ object TreasuryValidator extends Validator:
                 )
 
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
+                log("Withdraw")
+
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
                     case Resolved(d) => d
@@ -346,6 +343,8 @@ object TreasuryValidator extends Validator:
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
             case Deinit =>
+                log("DeinitD")
+
                 // This redeemer does not require the treasury’s active utxo set to be empty,
                 // but it implicitly requires the transaction to be multi-signed by all peers
                 // to burn the headMp tokens.
@@ -433,18 +432,21 @@ object TreasuryValidator extends Validator:
 end TreasuryValidator
 
 object TreasuryValidatorScript {
-    lazy val sir = Compiler.compile(TreasuryValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    val sir = Compiler.compile(TreasuryValidator.validate)
+//    val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
-    lazy val plutusScript: PlutusV3Script = PlutusV3Script
+    val plutusScript: PlutusV3Script = PlutusV3Script
         .builder()
         .`type`("PlutusScriptV3")
         .cborHex(script.doubleCborHex)
         .build()
         .asInstanceOf[PlutusV3Script]
 
-    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+
+    val scriptHashString: String = encodeHex(IArray.unsafeFromArray(plutusScript.getScriptHash))
 
     def address(n: Network): AddressBechL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
@@ -472,6 +474,11 @@ def mkTreasuryDatumUnresolved(
 
 @main
 def treasuryValidatorSir(args: String): Unit =
-    println(TreasuryValidatorScript.sir.showHighlighted)
+    //    println(TreasuryValidatorScript.sir.showHighlighted)
+    println(DisputeResolutionScript.scriptHash)
+    println(DisputeResolutionScript.scriptHashString)
+    println(DisputeResolutionScript.script.flatEncoded.length)
+
+    println(TreasuryValidatorScript.scriptHashString)
     println(TreasuryValidatorScript.scriptHash)
-//    ???
+    println(TreasuryValidatorScript.script.flatEncoded.length)

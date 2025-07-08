@@ -211,8 +211,10 @@ given policyIdSchema: Schema[PolicyId] =
 given tokenNameSchema: Schema[TokenName] =
     Schema.derived[TokenName]
 
-given stateL2ResponseSchema: Schema[StateL2Response] =
-    Schema.derived[StateL2Response]
+// FIXME (2025-07-04): A dependency update caused this to fail due to ambiguous 
+//     given instances. It was strictly necessary at the time, so we commented it out.
+//given stateL2ResponseSchema: Schema[StateL2Response] =
+//    Schema.derived[StateL2Response]
 
 case class InitRequest(
     otherPeers: List[WalletId],

@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.10.1+193-450792d5-SNAPSHOT"
+val scalusVersion = "0.10.1+219-a9cfa844-SNAPSHOT"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -59,7 +59,9 @@ lazy val core = (project in file("."))
         // Prometheus Java "client"
         "io.prometheus" % "prometheus-metrics-core" % "1.3.6",
         "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
-        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6"
+        "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6",
+        "io.bullet" %% "borer-core" % "1.12.0",
+        "io.bullet" %% "borer-derivation" % "1.12.0"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,

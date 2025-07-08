@@ -21,6 +21,7 @@ import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l2.block.*
@@ -226,6 +227,12 @@ class HeadStateGlobal(
     private var tallyTxBuilder: TallyTxBuilder = _
 
     def setTallyTxBuilder(builder: TallyTxBuilder): Unit = this.tallyTxBuilder = builder
+
+    private var resolutionTxBuilder: ResolutionTxBuilder = _
+
+    def setResolutionTxBuilder(builder: ResolutionTxBuilder): Unit = this.resolutionTxBuilder =
+        builder
+
     //
 
     override def currentPhase: HeadPhase = headPhase
@@ -682,6 +689,8 @@ class HeadStateGlobal(
 
                         runTallying(unresolvedTreasuryUtxo, ownAccount)
 
+                        runResolution(unresolvedTreasuryUtxo, ownAccount)
+
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     // (Should not happen)
                     case _ => throw RuntimeException("Vote block is not a minor block, can't vote")
@@ -696,48 +705,48 @@ class HeadStateGlobal(
                     )
                 }
 
+                def getVoteUtxos: List[BBUtxo] = {
+                    val voteTokenName = extractVoteTokenNameFromFallbackTx(
+                      l2LastMajorRecord.l1PostDatedEffect.get
+                    )
+
+                    val disputeAddress = DisputeResolutionScript.address(networkL1static)
+
+                    // Returns L1 state - a list of vote utxos sorted in ascending key order.
+                    // TODO: use more effective endpoint that based on vote tokens' assets.
+                    val sortedVoteUtxoIds =
+                        cardano
+                            .ask(_.utxosAtAddress(disputeAddress))
+                            .filter(u =>
+                                val voteTokenUnit = encodeHex(
+                                  this.headMintingPolicy.bytes
+                                ) + voteTokenName.tokenNameHex
+                                val units = u.getAmount.asScala.map(_.getUnit)
+                                units.contains(voteTokenUnit)
+                            )
+                            .sortWith((a, b) =>
+                                val datumA = getVoteDatum(a)
+                                val datumB = getVoteDatum(b)
+                                datumA.key < datumB.key
+                            )
+
+                    log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
+                    sortedVoteUtxoIds
+                }
+
+                // Move to Tx.scala-like module
+                def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
+                  utxo.getTxHash |> TxId.apply,
+                  utxo.getOutputIndex |> TxIx.apply
+                )
+
                 def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
 
-                    def getVoteUtxos: List[BBUtxo] = {
-                        val voteTokenName = extractVoteTokenNameFromFallbackTx(
-                          l2LastMajorRecord.l1PostDatedEffect.get
-                        )
-
-                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
-
-                        // Returns L1 state - a list of vote utxos sorted in ascending key order.
-                        // TODO: use more effective endpoint that based on vote tokens' assets.
-                        val sortedVoteUtxoIds =
-                            cardano
-                                .ask(_.utxosAtAddress(disputeAddress))
-                                .filter(u =>
-                                    val voteTokenUnit = encodeHex(
-                                      this.headMintingPolicy.bytes
-                                    ) + voteTokenName.tokenNameHex
-                                    val units = u.getAmount.asScala.map(_.getUnit)
-                                    units.contains(voteTokenUnit)
-                                )
-                                .sortWith((a, b) =>
-                                    val datumA = getVoteDatum(a)
-                                    val datumB = getVoteDatum(b)
-                                    datumA.key < datumB.key
-                                )
-
-                        log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
-                        sortedVoteUtxoIds
-                    }
-
                     type TallyTx = TxL1
-                    
-                    // Move to Tx.scala-like module
-                    def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
-                      utxo.getTxHash |> TxId.apply,
-                      utxo.getOutputIndex |> TxIx.apply
-                    )
 
                     def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
                         case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
-                        case _ => List.empty
+                        case _            => List.empty
 
                     def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
                         val recipe = TallyTxRecipe(
@@ -765,6 +774,45 @@ class HeadStateGlobal(
                               "Some tallying txs have been submitted, the next round is needed"
                             )
                         }
+                    }
+                }
+
+                def runResolution(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
+                    getVoteUtxos match {
+                        case talliedVoteUtxo :: Nil =>
+                            val talliedVote = getUtxoId(talliedVoteUtxo)
+                            val recipe =
+                                ResolutionTxRecipe(talliedVote, unresolvedTreasuryUtxo, ownAccount)
+
+                            val resolutionTx = resolutionTxBuilder.buildResolutionTx(recipe) match {
+                                case Right(tx) => tx
+                                case Left(err) =>
+                                    log.error(err)
+                                    throw RuntimeException(err)
+                            }
+
+                            log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
+                            val submitResult = cardano.ask(_.submit(resolutionTx))
+                            log.info(s"resolution tx submit result: $submitResult")
+
+                            retry(RetryConfig.delayForever(3.seconds)) {
+                                log.info("Running resolving...")
+                                val votes = getVoteUtxos
+                                log.debug(s"votes number is: ${votes.length}")
+                                if votes.isEmpty then ()
+                                else {
+                                    // just wait
+                                    throw RuntimeException(
+                                      "Still see votes, waiting for the resolution tx to get through"
+                                    )
+                                }
+                            }
+                        case _vote1 :: _vote2 :: _vs =>
+                            val msg = "More than one vote."
+                            log.error(msg)
+                            throw RuntimeException(msg)
+                        case Nil =>
+                            log.info("No votes found, likely resolution has been done.")
                     }
                 }
             }

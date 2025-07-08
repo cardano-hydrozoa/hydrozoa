@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
-import hydrozoa.infra.{serializeTxHex, toEither, txHash}
+import hydrozoa.infra.{encodeHex, serializeTxHex, toEither, txHash}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l2.ledger.L2Transaction
 import hydrozoa.node.TestPeer
@@ -68,7 +68,9 @@ class DisputeSuite extends FunSuite {
             script: Script
         ): UtxoIdL1 = {
             val tx = mkDeployTx(backendService, peer, script)
-            log.info(s"deployment tx is: ${serializeTxHex(tx)}")
+            log.info(
+              s"deployment tx for script hash ${encodeHex(IArray.unsafeFromArray(script.getScriptHash))} is: ${serializeTxHex(tx)}"
+            )
             backendService.getTransactionService.submitTransaction(tx.bytes).toEither match
                 case Right(txId) =>
                     log.info(s"$txId")
@@ -85,20 +87,38 @@ class DisputeSuite extends FunSuite {
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
 
-            // Topup nodes' wallets - every participant gets 3 utxos with 10 ada each
+            // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
             log.info("Topping up peers' wallets...")
-            topupNodeWallets(testPeers, 10, 3)
+            topupNodeWallets(testPeers, 30, 5)
+
+            println(TreasuryValidatorScript.scriptHashString)
+            println(TreasuryValidatorScript.scriptHash)
 
             // Deploy reference scripts
             val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
 
             val treasuryScriptRefUtxoId =
-                deployHydrozoaScript(backendService, Julia, TreasuryValidatorScript.plutusScript)
+                deployHydrozoaScript(
+                  backendService,
+                  Julia,
+                  TreasuryValidatorScript.plutusScript
+                )
+
             val disputeScriptRefUtxoId =
-                deployHydrozoaScript(backendService, Isabel, DisputeResolutionScript.plutusScript)
+                deployHydrozoaScript(
+                  backendService,
+                  Isabel,
+                  DisputeResolutionScript.plutusScript
+                )
+
+//            throw RuntimeException()
 
             (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
         else (None, None)
+
+        log.info(
+          s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId"
+        )
 
         // Make SUT
         log.info("Making a Hydrozoa head uing a local network...")
@@ -111,7 +131,7 @@ class DisputeSuite extends FunSuite {
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
-    test("Hydrozoa happy-path scenario") {
+    test("Hydrozoa dispute scenario") {
 
         val result = for
 
