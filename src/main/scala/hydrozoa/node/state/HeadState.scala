@@ -1030,7 +1030,7 @@ object HeadStateGlobal:
           ownPeer = params.ownPeer,
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
-          headNativeScript = params.headNativeScript,
+          headNativeScript = params.headNativeScript.toHydrozoaNativeScript,
           headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,

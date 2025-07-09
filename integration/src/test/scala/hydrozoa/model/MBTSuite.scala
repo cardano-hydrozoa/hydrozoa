@@ -3,12 +3,13 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toHydrozoaNativeScript
 import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptScalus}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder, InitTxRecipe}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
@@ -284,21 +285,27 @@ object MBTSuite extends Commands:
                     (otherHeadPeers + initiator).map(tp =>
                         mkWallet(tp).exportVerificationKeyBytes
                     )
-                val (headMultisigScript, _headMp, headAddress) =
-                    mkHeadNativeScriptAndAddress(pubKeys, networkL1static)
-
+   
                 // Recipe to build init initTx
                 val initTxRecipe = InitTxRecipe(
-                  headAddress,
+                  networkL1static,
                   seedUtxo,
                   1000_000_000,
-                  headMultisigScript
+                  pubKeys
                 )
 
                 val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
                 val backendService = BackendServiceMock(l1Mock, state.pp)
-                val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
-                val Right(initTx, _) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+                val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
+                val Right(initTx, headAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+                
+                // FIXME: the native script is now constructed inside the initTxBuilder;
+                // thus, this value is redundant and is only being created for compatibility during refactoring
+                // If its truly necessary to carry it around in the Hydrozoa state, then 
+                // we should pass it in the initTxRecipe; otherwise, we should take it out of
+                // the head state.
+                val headMultisigScript = mkHeadNativeScriptScalus(pubKeys)
+                
                 log.info(s"Init initTx: ${serializeTxHex(initTx)}")
                 val txId = txHash(initTx)
                 log.info(s"Init initTx hash: $txId")
@@ -319,7 +326,7 @@ object MBTSuite extends Commands:
                   initiator = Some(initiator),
                   headPeers = otherHeadPeers,
                   headAddressBech32 = Some(headAddress),
-                  headMultisigScript = Some(headMultisigScript),
+                  headMultisigScript = Some(headMultisigScript.toHydrozoaNativeScript),
                   treasuryUtxoId = Some(treasuryUtxoId),
                   knownTxs = l1Mock.getKnownTxs,
                   utxosActive = l1Mock.getUtxosActive
