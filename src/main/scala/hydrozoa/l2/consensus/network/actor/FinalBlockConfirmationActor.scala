@@ -7,6 +7,8 @@ import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
+import hydrozoa.l2.ledger.BlockProducerLedger
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2Ledger
 import hydrozoa.node.state.*
 import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
@@ -103,19 +105,23 @@ private class FinalBlockConfirmationActor(
                 val ownBlock = stateActor.ask(_.head.finalizingPhase(_.pendingOwnBlock))
                 ownBlock.utxosWithdrawn
             else
-                val (prevHeader, stateL2Cloned) =
+                val (prevHeader, stateL2) =
                     stateActor.ask(
                       _.head.finalizingPhase(head =>
                           (
                             head.l2Tip.blockHeader,
-                            head.stateL2.cloneForBlockProducer(),
+                            head.stateL2,
                           )
                       )
                     )
+
+                val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                ledgerL2.replaceUtxosActive(stateL2)
+
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  stateL2Cloned,
+                  ledgerL2,
                   Seq.empty,
                   TaggedUtxoSet.apply(),
                   true
