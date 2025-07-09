@@ -3,7 +3,7 @@ name: Latex CI
 on:
   push:
     branches: [ main ]
-    paths: [ 'spec/**' ]
+    paths: [ 'specification/**' ]
   workflow_dispatch:  # For manual testing
   # TODO: Change to release trigger later
   # release:
@@ -27,14 +27,14 @@ jobs:
       uses: xu-cheng/latex-action@v3
       with:
         root_file: hydrozoa.tex
-        working_directory: spec/
+        working_directory: specification/
 
     - name: Organize PDFs
       run: |
         mkdir -p pdfs
-        # Copy the PDF from spec directory
-        if ls spec/*.pdf 1> /dev/null 2>&1; then
-          cp spec/*.pdf pdfs/
+        # Copy the PDF from specification directory
+        if ls specification/*.pdf 1> /dev/null 2>&1; then
+          cp specification/*.pdf pdfs/
         else
           echo "No PDFs found - check if LaTeX compilation succeeded"
         fi
