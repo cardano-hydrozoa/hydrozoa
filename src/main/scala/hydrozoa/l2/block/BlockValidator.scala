@@ -8,7 +8,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
-import L2EventLabel.L2EventWithdrawalLabel
+import hydrozoa.l2.ledger.L2EventLabel.L2EventWithdrawalLabel
 
 import scala.collection.mutable
 import scala.language.strictEquality
@@ -73,7 +73,7 @@ object BlockValidator:
     def validateBlock(
         block: Block,
         prevHeader: BlockHeader,
-        stateL2: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        l2Ledger: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
         // FIXME: missing in the spec, empty for final block
         poolEventsL2: Seq[L2Event],
         // FIXME: missing in the spec, is not needed for minor and final blocks
@@ -119,13 +119,13 @@ object BlockValidator:
             boundary:
                 eventsValidWithEvents.foreach {
                     case tx: L2EventTransaction =>
-                        stateL2.toLedgerTransaction(tx.transaction) |> stateL2.submit match
+                        l2Ledger.toLedgerTransaction(tx.transaction) |> l2Ledger.submit match
                             case Right(txId, _) => ()
                             // FIXME: toString()
                             case Left(txId, err) =>
                                 break(Some(Invalid(L2EventNotValid(txId, err.toString))))
                     case wd: L2EventWithdrawal =>
-                        stateL2.toLedgerTransaction(wd.withdrawal) |> stateL2.submit match
+                        l2Ledger.toLedgerTransaction(wd.withdrawal) |> l2Ledger.submit match
                             case Right(txId, (_, utxosDiff)) =>
                                 utxosWithdrawn.addAll(utxosDiff.utxoMap)
                             case Left(txId, err) =>
@@ -153,7 +153,7 @@ object BlockValidator:
                 val txOrWd = invalidEvent match
                     case tx: L2EventTransaction => tx.transaction
                     case wd: L2EventWithdrawal  => wd.withdrawal
-                stateL2.toLedgerTransaction(txOrWd) |> stateL2.submit match
+                l2Ledger.toLedgerTransaction(txOrWd) |> l2Ledger.submit match
                     case Right(txId, _)  => break(Option(Invalid(ValidEventMarkedAsInvalid(txId))))
                     case Left(txId, err) => ()
             )
@@ -190,7 +190,7 @@ object BlockValidator:
                 val genesis: L2Genesis = L2Genesis.apply(depositsAbsorbedUtxos)
                 val genesisHash = calculateGenesisHash(genesis)
                 val genesisUtxos = mkGenesisOutputs(genesis, genesisHash)
-                stateL2.addGenesisUtxos(genesisUtxos)
+                l2Ledger.addGenesisUtxos(genesisUtxos)
                 Some(genesisHash, genesis)
 
         // 6. If finalizing, there are no deposits in the block
@@ -199,7 +199,7 @@ object BlockValidator:
         then return Invalid(FinalBlockContainsDeposits(depositsAbsorbed))
 
         // and all utxos should be withdrawn
-        if finalizing then utxosWithdrawn.addAll(stateL2.flushAndGetState.utxoMap)
+        if finalizing then utxosWithdrawn.addAll(l2Ledger.flushAndGetState.utxoMap)
 
         // 7. Return Invalid if block.blockType is not set according to the first among these to hold:
         // 7.a Final if finalizing is True.
@@ -250,4 +250,4 @@ object BlockValidator:
         then return Invalid(UnexpectedBlockVersion(expectedVersion, blockVersion))
 
         // 9. Return Valid, along with utxosActive, mbGenesis, and utxosWithdrawn.
-        Valid(stateL2.getUtxosActive, mbGenesis, UtxoSet[L2](utxosWithdrawn.toMap))
+        Valid(l2Ledger.getUtxosActive, mbGenesis, UtxoSet[L2](utxosWithdrawn.toMap))

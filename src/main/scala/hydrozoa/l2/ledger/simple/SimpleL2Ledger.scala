@@ -27,11 +27,11 @@ import scala.collection.mutable
   */
 object SimpleL2Ledger:
 
-    opaque type LedgerUtxoId = v1.TxOutRef
-    opaque type LedgerOutput = v1.TxOut
+    type LedgerUtxoId = v1.TxOutRef
+    type LedgerOutput = v1.TxOut
 
     // Opaque, can be stored and provided back to the ledger.
-    opaque type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
+    type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
 
     given CanEqual[LedgerUtxoSetOpaque, LedgerUtxoSetOpaque] = CanEqual.derived
 
@@ -46,25 +46,25 @@ object SimpleL2Ledger:
         ledger
 
     // UTxO conversions between Hydrozoa types and Ledger types
-    private def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
+    def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
         val sTxId = v1.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
         val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
         v1.TxOutRef(sTxId, sTxIx)
 
-    private def unliftOutputRef(outputRef: LedgerUtxoId): UtxoIdL2 =
+    def unliftOutputRef(outputRef: LedgerUtxoId): UtxoIdL2 =
         UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
 
-    private def liftOutput(output: OutputL2): LedgerOutput =
+    def liftOutput(output: OutputL2): LedgerOutput =
         val address = decodeBech32AddressL2(output.address)
         val value = v1.Value.lovelace(output.coins)
         v1.TxOut(address = address, value = value, datumHash = SNone)
 
-    private def unliftOutput(output: LedgerOutput): Output[L2] =
+    def unliftOutput(output: LedgerOutput): Output[L2] =
         val SSome(e) = AssocMap.get(output.value)(ByteString.empty)
         val SSome(coins) = AssocMap.get(e)(ByteString.empty)
         Output[L2](plutusAddressAsL2(output.address).asL2, coins, emptyTokens)
 
-    private def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =
+    def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =
         utxoSet.map(_.bimap(liftOutputRef, liftOutput))
 
     // This is not private, since it's used by MBT suite
@@ -72,7 +72,7 @@ object SimpleL2Ledger:
         utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
     // The implementation
-    private class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
+    class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
         extends L2LedgerModule[InstancePurpose, LedgerUtxoSetOpaque]:
 
         private val log = Logger(getClass)

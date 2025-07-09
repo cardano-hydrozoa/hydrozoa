@@ -4,7 +4,8 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.HydrozoaL2Ledger
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2Ledger
+import hydrozoa.l2.ledger.{BlockProducerLedger, HydrozoaL2Ledger}
 import hydrozoa.node.state.*
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
@@ -75,7 +76,7 @@ private class MinorBlockConfirmationActor(
             else
                 val (
                   prevHeader,
-                  stateL2Cloned,
+                  stateL2,
                   poolEventsL2,
                   depositUtxos,
                   isFinalizationRequested
@@ -84,17 +85,21 @@ private class MinorBlockConfirmationActor(
                       _.head.openPhase(open =>
                           (
                             open.l2Tip.blockHeader,
-                            open.stateL2.cloneForBlockProducer(),
+                            open.stateL2,
                             open.immutablePoolEventsL2,
                             open.peekDeposits,
                             open.isNextBlockFinal
                           )
                       )
                     )
+
+                val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                ledgerL2.replaceUtxosActive(stateL2)
+
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  stateL2Cloned,
+                  ledgerL2,
                   poolEventsL2,
                   depositUtxos, // FIXME: do we need it for a minor block?
                   false // minor is not a final
