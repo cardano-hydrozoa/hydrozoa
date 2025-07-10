@@ -36,12 +36,12 @@ class BloxBeanSettlementTxBuilder(
 
         // So instead we have to use the last known settlement transaction with `lastKnownTreasuryUtxoId`.
 
-        // val utxoIds = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
+        // val utxosId = r.deposits.toBuffer.append(reader.multisigRegime(_.treasuryUtxoId))
 
-        val utxoIds = r.deposits.toBuffer.append(reader.openPhaseReader(_.lastKnownTreasuryUtxoId))
+        val utxosId = r.deposits.toBuffer.append(reader.openPhaseReader(_.lastKnownTreasuryUtxoId))
 
-        val utxoInput: Seq[Utxo] =
-            utxoIds
+        val utxosInput: Seq[Utxo] =
+            utxosId
                 .map(r =>
                     backendService.getUtxoService
                         .getTxOutput(r.txId.hash, r.outputIx.ix)
@@ -59,7 +59,7 @@ class BloxBeanSettlementTxBuilder(
         // TODO: this might not work as expected, since it will produce
         //  lists like that: ada,token,...,ada,...
         val treasuryValue: List[Amount] =
-            utxoInput.toList.flatMap(u => u.getAmount.asScala)
+            utxosInput.toList.flatMap(u => u.getAmount.asScala)
 
         // Subtract withdrawn lovelace
         treasuryValue.foreach(a =>
@@ -74,7 +74,7 @@ class BloxBeanSettlementTxBuilder(
         )
 
         val txPartial = Tx()
-            .collectFrom(utxoInput.asJava)
+            .collectFrom(utxosInput.asJava)
             .payToContract(
               headAddressBech32,
               treasuryValue.asJava,

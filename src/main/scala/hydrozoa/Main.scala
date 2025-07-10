@@ -15,6 +15,7 @@ import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxB
 import hydrozoa.l1.rulebased.tx.resolution.BloxBeanResolutionTxBuilder
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
 import hydrozoa.l1.rulebased.tx.vote.{BloxBeanVoteTxBuilder, VoteTxBuilder}
+import hydrozoa.l1.rulebased.tx.withdraw.BloxBeanWithdrawTxBuilder
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
@@ -97,7 +98,8 @@ object HydrozoaNode extends OxApp:
                   finalizationTxBuilder,
                   voteTxBuilder,
                   tallyTxBuilder,
-                  resolutionTxBuilder
+                  resolutionTxBuilder,
+                  withdrawTxBuilder
                 ) = mkTxBuilders(backendService, nodeState)
 
                 val nodeStateActor = Actor.create(nodeState)
@@ -138,6 +140,7 @@ object HydrozoaNode extends OxApp:
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
                 nodeState.setResolutionTxBuilder(resolutionTxBuilder)
+                nodeState.setWithdrawTxBuilder(withdrawTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -249,6 +252,10 @@ def mkTxBuilders(
       mbTreasuryScriptRefUtxoId,
       mbDisputeScriptRefUtxoId
     )
+    val withdrawTxBuilder = BloxBeanWithdrawTxBuilder(
+      backendService,
+      mbTreasuryScriptRefUtxoId
+    )
 
     (
       initTxBuilder,
@@ -259,7 +266,8 @@ def mkTxBuilders(
       finalizationTxBuilder,
       voteTxBuilder,
       tallyTxBuilder,
-      resolutionTxBuilder
+      resolutionTxBuilder,
+      withdrawTxBuilder
     )
 
 end mkTxBuilders

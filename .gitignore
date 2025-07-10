@@ -44,4 +44,5 @@ txsl2.out
 # logs and outputs
 /flamegraph.html
 /yaci-store.log
-/mbt.log
+/*.log
+/dipsute.log

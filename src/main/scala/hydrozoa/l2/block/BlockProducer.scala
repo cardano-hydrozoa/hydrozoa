@@ -172,8 +172,6 @@ object BlockProducer:
         )
             return None
 
-        val _ = stateL2.getUtxosActiveCommitment
-
         // Build the block
         val blockBuilder = BlockBuilder()
             .timeCreation(timeCreation)
