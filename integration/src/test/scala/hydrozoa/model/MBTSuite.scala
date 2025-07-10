@@ -5,7 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.toHydrozoaNativeScript
 import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptScalus}
+import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
@@ -304,7 +304,7 @@ object MBTSuite extends Commands:
                 // If its truly necessary to carry it around in the Hydrozoa state, then 
                 // we should pass it in the initTxRecipe; otherwise, we should take it out of
                 // the head state.
-                val headMultisigScript = mkHeadNativeScriptScalus(pubKeys)
+                val headMultisigScript = mkHeadNativeScript(pubKeys)
                 
                 log.info(s"Init initTx: ${serializeTxHex(initTx)}")
                 val txId = txHash(initTx)

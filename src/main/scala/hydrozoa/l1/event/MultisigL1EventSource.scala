@@ -57,10 +57,9 @@ class MultisigL1EventSource(
                             )
                         )
 
-                        val nativeScriptBB =
-                            BBNativeScript.deserializeScriptRef(headNativeScript.script.toCbor)
+            
                         val treasuryTokenAmount = asset(
-                          nativeScriptBB.getPolicyId,
+                          headNativeScript.scriptHash.toHex,
                           beaconTokenName.tokenNameHex,
                           BigInteger.valueOf(1)
                         )

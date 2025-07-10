@@ -2,7 +2,7 @@ package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptScalus}
+import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.{AddressBech, AddressBechL1, L1, Tx, TxL1, UtxoId, UtxoIdL1}
@@ -17,7 +17,7 @@ import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toScalus}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
 import scalus.cardano.address.Address.Shelley
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.DatumOption.Inline
 
@@ -43,6 +43,7 @@ val emptyTxBody: TransactionBody = TransactionBody(
   currentTreasuryValue = None,
   donation = None
 )
+
 class ScalusInitializationTxBuilder(backendService: BackendService) extends InitTxBuilder {
 
     override def mkInitializationTxDraft(
@@ -56,14 +57,12 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     val feeCoin = Coin(1_000_000)
 
                     // Construct head native script directly from the list of peers
-                    val headNativeScript = mkHeadNativeScriptScalus(recipe.peers)
+                    val headNativeScript = mkHeadNativeScript(recipe.peers)
 
                     // Put the head address of the native script
                     val headAddress: Address = Shelley(
                       ShelleyAddress(
-                        // QUESTION (Peter, 2025-07-09): Is this correct? I believe someone once mentioned we
-                        // wanted the mainnet network for l2
-                        network = Mainnet,
+                        network = recipe.network.toScalus,
                         payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
                         delegation = Null
                       )
@@ -77,7 +76,9 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                         Map(
                           (
                             AssetName(
-                              ByteString.fromHex(mkBeaconTokenName(recipe.seedUtxo).tokenNameHex)
+                              ByteString.fromHex(
+                                mkBeaconTokenName(recipe.seedUtxo).tokenNameHex.drop(2)
+                              )
                             ),
                             1
                           )
@@ -98,10 +99,14 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
 
                     val changeOutput: TransactionOutput = TransactionOutput(
                       address = seedOutput.address,
-                      value = seedOutput.value - headValue - Value(
-                        coin = feeCoin,
-                        multiAsset = Map.empty
-                      ),
+                      // Change is calculated manually here as the seed output's value, minus the
+                      // ada put into the head, minus the fee.
+                      value = seedOutput.value -
+                          Value(coin = Coin(recipe.coins.toLong), multiAsset = Map.empty) -
+                          Value(
+                            coin = feeCoin,
+                            multiAsset = Map.empty
+                          ),
                       datumOption = None
                     )
 
@@ -114,19 +119,19 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                           mint = Some(beaconToken)
                         )
 
-                    val scalusTransaction : Transaction =         Transaction(
-                        body = KeepRaw(ourBody),
-                        witnessSet = TransactionWitnessSet(nativeScripts = Set(headNativeScript)),
-                        isValid = true,
-                        auxiliaryData = None
+                    val scalusTransaction: Transaction = Transaction(
+                      body = KeepRaw(ourBody),
+                      witnessSet = TransactionWitnessSet(nativeScripts = Set(headNativeScript)),
+                      isValid = true,
+                      auxiliaryData = None
                     )
 
-                    (Tx(Cbor.encode(scalusTransaction).toByteArray),
-
+                    (
+                      Tx(Cbor.encode(scalusTransaction).toByteArray),
                       headAddress match {
                           case Shelley(sa) => AddressBech(sa.toBech32.get)
                           // NOTE (Peter, 2025-08-07) I miss monads, how do I do those in scala?
-                          case _ => throw new Exception ("Hydra Head is not at a Shelly address")
+                          case _ => throw new Exception("Hydra Head is not at a Shelly address")
                       }
                     )
 

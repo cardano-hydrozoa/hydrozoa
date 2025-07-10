@@ -2,10 +2,10 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toIArray
+import hydrozoa.infra.transitionary.{toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptScalus}
+import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
@@ -16,7 +16,10 @@ import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
 import io.bullet.borer.Cbor
 import ox.channels.{ActorRef, Channel, Source}
 import scalus.builtin.{ByteString, given}
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.TransactionOutput.Shelley
 
 import scala.collection.mutable
 
@@ -48,8 +51,18 @@ private class InitHeadActor(
 
         val headPeers = req.otherHeadPeers + req.initiator
         val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
+        val headNativeScript = mkHeadNativeScript(headVKeys)
+        val headMintingPolicy: CurrencySymbol = CurrencySymbol(headNativeScript.scriptHash.toIArray)
 
-        // log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
+        val headAddress: AddressBechL1 = AddressBech(
+          ShelleyAddress(
+            network = cardanoActor.ask(_.network.toScalus),
+            payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
+            delegation = Null
+          ).toBech32.get
+        )
+
+        log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
 
         val initTxRecipe = InitTxRecipe(
           network = cardanoActor.ask(_.network),
@@ -62,13 +75,11 @@ private class InitHeadActor(
 
         // Builds and balance initialization tx
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-//
-//        log.info("Init tx draft: " + serializeTxHex(txDraft))
-//        log.info("Init tx draft hash: " + txHash(txDraft))
 
-        val (me, ownWit) = walletActor.ask(w =>
-            (w.getWalletId, w.createTxKeyWitness(txDraft))
-        )
+        log.info("Init tx draft: " + serializeTxHex(txDraft))
+        log.info("Init tx draft hash: " + txHash(txDraft))
+
+        val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckInit(me, ownWit)
 
         this.req = req

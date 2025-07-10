@@ -8,23 +8,19 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
-
+import co.nstant.in.cbor.model.Array as CborArray
+import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import hydrozoa.{Network, TxL1}
-import hydrozoa.infra.{
-    addressToBloxbean,
-    mkBuilder,
-    numberOfSignatories,
-    toBloxbean,
-    txOutputToUtxo
-}
+import hydrozoa.infra.{addressToBloxbean, mkBuilder, numberOfSignatories, toBloxbean, txOutputToUtxo}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx, toL1Tx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
+import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromCbor, fromData}
-import scalus.prelude.Option.{Some, None}
+import scalus.prelude.Option.{None, Some}
 
 import scala.jdk.CollectionConverters.*
 import scala.language.postfixOps
@@ -94,8 +90,12 @@ class BloxBeanRefundTxBuilder(
 
         txPartial.from(headAddressBech32)
 
+        // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from 
+        // scalus's `Native` to BB's `NativeScript`. 
+        val hnsCborAsByteArray : Array[Byte] = reader.multisigRegime(_.headNativeScript).bytes
+        val hnsCborArray = CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
         val headNativeScript =
-            NativeScript.deserializeScriptRef(reader.multisigRegime(_.headNativeScript).bytes)
+            NativeScript.deserialize(hnsCborArray)
 
         val postDatedRefundTx = builder
             .apply(txPartial)

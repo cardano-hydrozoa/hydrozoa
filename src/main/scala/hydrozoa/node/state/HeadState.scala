@@ -7,15 +7,8 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{
-    Piper,
-    encodeHex,
-    extractVoteTokenNameFromFallbackTx,
-    serializeTxHex,
-    txFees,
-    txHash,
-    verKeyHash
-}
+import hydrozoa.infra.transitionary.toHydrozoaNativeScript
+import hydrozoa.infra.{Piper, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, txFees, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
@@ -36,6 +29,7 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter

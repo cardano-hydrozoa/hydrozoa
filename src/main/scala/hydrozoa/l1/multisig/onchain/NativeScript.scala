@@ -1,24 +1,7 @@
 package hydrozoa.l1.multisig.onchain
 
-import com.bloxbean.cardano.client.address.AddressProvider.getEntAddress
-import com.bloxbean.cardano.client.common.model.Network
-import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
-import com.bloxbean.cardano.client.crypto.VerificationKey
-import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, ScriptPubkey}
-import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import hydrozoa.infra.CryptoHash.*
-import hydrozoa.infra.{CryptoHash, PSStyleAssoc, Piper, encodeHex, toBB}
-import hydrozoa.{
-    AddressBech,
-    AddressBechL1,
-    L1,
-    TokenName,
-    UtxoIdL1,
-    VerificationKeyBytes,
-    CurrencySymbol as HCurrencySymbol,
-    NativeScript as HNativeScript,
-    Network as HNetwork
-}
+import hydrozoa.VerificationKeyBytes
+import hydrozoa.infra.verKeyHash
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AddrKeyHash, Hash, Script}
 import scalus.ledger.api.Timelock.{AllOf, Signature}
@@ -43,7 +26,7 @@ def mkHeadNativeScript(
     Script.Native(
       AllOf(
         vKeys
-            .map(key => AddrKeyHash(ByteString.fromArray(key.bytes)))
+            .map(key => AddrKeyHash(ByteString.fromHex(key.verKeyHash)))
             .toIndexedSeq
             .sorted(using Ordering[AddrKeyHash])
             .map(Signature(_))

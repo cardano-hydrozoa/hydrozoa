@@ -2,6 +2,7 @@ package hydrozoa.l1.multisig.tx.finalization
 
 import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.Asset
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
@@ -9,6 +10,7 @@ import hydrozoa.TxL1
 import hydrozoa.infra.{force, mkBuilder, numberOfSignatories, toBloxBeanTransactionOutput}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
+import co.nstant.in.cbor.model.Array as CborArray
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -30,8 +32,13 @@ class BloxBeanFinalizationTxBuilder(
             .getTxOutput(treasuryUtxoId._1.hash, treasuryUtxoId._2.ix.intValue)
             .force
 
+        // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from
+        // scalus's `Native` to BB's `NativeScript`.
+        val hnsCborAsByteArray: Array[Byte] = reader.multisigRegime(_.headNativeScript).bytes
+        val hnsCborArray =
+            CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
         val headNativeScript =
-            NativeScript.deserializeScriptRef(reader.multisigRegime(_.headNativeScript).bytes)
+            NativeScript.deserialize(hnsCborArray)
 
         // Beacon token to burn
         val beaconTokenName = reader.multisigRegime(_.beaconTokenName)

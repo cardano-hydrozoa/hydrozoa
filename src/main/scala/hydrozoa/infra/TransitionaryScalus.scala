@@ -3,20 +3,20 @@
 
 package hydrozoa.infra.transitionary
 
-import co.nstant.in.cbor.CborDecoder
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.infra.toEither
-import hydrozoa.{AddressBechL1, NativeScript, AnyLevel, UtxoId, UtxoIdL1, Network as HNetwork}
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.infra.{Piper, toEither}
+import hydrozoa.{AnyLevel, NativeScript, UtxoId, Network as HNetwork}
+import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
-import scalus.builtin.Data.toData
-import scalus.cardano.ledger.{DatumOption, Hash, TransactionInput, TransactionOutput, Value}
-import scalus.cardano.address.{Address, Network, ShelleyAddress}
+import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.{Address, Network}
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import co.nstant.in.cbor.model.Array
+import scalus.cardano.ledger.*
 
-extension [L <: AnyLevel] (utxo: UtxoId[L]) {
+extension [L <: AnyLevel](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
           transactionId = Hash(ByteString.fromHex(utxo.txId.hash)),
@@ -24,16 +24,24 @@ extension [L <: AnyLevel] (utxo: UtxoId[L]) {
         )
 }
 
-extension [HF, P] (hash : Hash[HF, P]){
-    def toIArray : IArray[Byte] =
+extension [HF, P](hash: Hash[HF, P]) {
+    def toIArray: IArray[Byte] =
         IArray.from(hash.bytes)
 }
 
-extension (native : Native) {
+extension (native: Native) {
     def toHydrozoaNativeScript: NativeScript = {
         NativeScript(native.script.toCbor)
     }
 }
+
+extension (network: HNetwork) {
+    def toScalus: Network = {
+        if network.networkId == 1
+            then Mainnet else Testnet
+    }
+}
+
 
 // Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
 def bloxToScalusUtxoQuery[L <: AnyLevel](
@@ -47,15 +55,20 @@ def bloxToScalusUtxoQuery[L <: AnyLevel](
         case Right(utxo) =>
             Right({
 
-                // FIXME: No idea if this is correct
+                println((utxo.getAddress))
                 val outAddress = Address.fromBech32(utxo.getAddress)
                 val outVal: Value = utxo.toValue.toLedgerValue
-                val outDat = utxo.getInlineDatum
+                val outDat = Option(utxo.getInlineDatum).map(hex => 
+                    hex |> HexUtil.decodeHexString  
+                        |> PlutusData.deserialize 
+                        |> Interop.toScalusData
+                        |> DatumOption.Inline.apply
+                )
 
                 TransactionOutput(
                   address = outAddress,
                   value = outVal,
-                  datumOption = Some(DatumOption.Inline(toData(ByteString.fromHex(outDat))))
+                  datumOption = outDat
                 )
             })
     }
