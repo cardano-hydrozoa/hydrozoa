@@ -10,10 +10,12 @@ import hydrozoa.l2.commitment.infG2Point
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.builtin.Data.toData
-import scalus.ledger.api.v1
+import scalus.ledger.api.v2.OutputDatum.NoOutputDatum
+import scalus.ledger.api.v3
 import scalus.prelude.{AssocMap, List as SList, Option as SOption, given}
 import scalus.prelude.List.{Cons, asScala, asScalus}
 import scalus.prelude.Option.{None as SNone, Some as SSome}
+import scalus.prelude.crypto.bls12_381.G1
 import supranational.blst.{P1, P2, Scalar}
 
 import java.math.BigInteger
@@ -25,8 +27,8 @@ import scala.collection.mutable
   */
 object SimpleL2Ledger:
 
-    opaque type LedgerUtxoId = v1.TxOutRef
-    opaque type LedgerOutput = v1.TxOut
+    opaque type LedgerUtxoId = v3.TxOutRef
+    opaque type LedgerOutput = v3.TxOut
 
     // Opaque, can be stored and provided back to the ledger.
     opaque type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
@@ -45,17 +47,17 @@ object SimpleL2Ledger:
 
     // UTxO conversions between Hydrozoa types and Ledger types
     private def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
-        val sTxId = v1.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
+        val sTxId = v3.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
         val sTxIx = BigInt(UtxoIdL2.outputIx.ix)
-        v1.TxOutRef(sTxId, sTxIx)
+        v3.TxOutRef(sTxId, sTxIx)
 
     private def unliftOutputRef(outputRef: LedgerUtxoId): UtxoIdL2 =
         UtxoIdL2(TxId(outputRef.id.hash.toHex), TxIx(outputRef.idx.toChar))
 
     private def liftOutput(output: OutputL2): LedgerOutput =
         val address = decodeBech32AddressL2(output.address)
-        val value = v1.Value.lovelace(output.coins)
-        v1.TxOut(address = address, value = value, datumHash = SNone)
+        val value = v3.Value.lovelace(output.coins)
+        v3.TxOut(address = address, value = value)
 
     private def unliftOutput(output: LedgerOutput): Output[L2] =
         val SSome(e) = AssocMap.get(output.value)(ByteString.empty)
@@ -69,18 +71,22 @@ object SimpleL2Ledger:
     def unliftUtxoSet(utxosSetOpaque: LedgerUtxoSetOpaque): Map[UtxoIdL2, OutputL2] =
         utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
+    val tau = Scalar(BigInteger("42"))
+
     def mkDummySetupG2(n: Int): SList[P2] = {
-        val tau = Scalar(BigInteger("42"))
         val setup =
-            (1 to n).map(_ => P2.generator().mult(tau.mul(Scalar(BigInteger(n.toString)))))
-        setup.toList.asScalus
+            (1 to n + 1).map(i =>
+                P2.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
+            )
+        SList.Cons(P2.generator(), setup.toList.asScalus)
     }
 
     def mkDummySetupG1(n: Int): SList[P1] = {
-        val tau = Scalar(BigInteger("42"))
         val setup =
-            (1 to n).map(_ => P1.generator().mult(tau.mul(Scalar(BigInteger(n.toString)))))
-        setup.toList.asScalus
+            (1 to n + 1).map(i =>
+                P1.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
+            )
+        SList.Cons(P1.generator(), setup.toList.asScalus)
     }
 
     // The implementation
@@ -101,45 +107,25 @@ object SimpleL2Ledger:
         override def getUtxosActive: LedgerUtxoSetOpaque = activeState.clone.toMap
 
         override def getUtxosActiveCommitment: IArray[Byte] = {
+            val elemsRaw = activeState.clone.toList
+                .map(e => blake2b_224(serialiseData(e.toData)).toHex)
+                .asScalus
+            log.info(s"utxos active hashes raw: $elemsRaw")
+
             val elems = activeState.clone.toList
                 .map(e => Scalar().from_bendian(blake2b_224(serialiseData(e.toData)).bytes))
                 .asScalus
+            log.info(s"utxos active hashes: ${elems.map(e => BigInt.apply(e.to_bendian()))}")
+
             val setup = mkDummySetupG2(elems.length.toInt)
+
+            val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
+            setupBS.foreach(println)
+
             val commitmentPoint = getG2Commitment(setup, elems)
             val commitment = IArray.unsafeFromArray(commitmentPoint.compress())
             log.info(s"Commitment: ${(encodeHex(commitment))}")
             commitment
-        }
-
-        /*
-         * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
-         * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
-         */
-        def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
-            binomial_poly
-                .foldLeft(SList.single(new Scalar(BigInteger("1")))): (acc, term) =>
-                    // We need to clone the whole `acc` since `mul` mutates it
-                    // and final adding gets mutated `shiftedPoly`
-                    val shiftedPoly: SList[Scalar] =
-                        SList.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
-                    val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
-                    SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
-        }
-
-        // TODO: use multi-scalar multiplication
-        def getG2Commitment(
-            setup: SList[P2],
-            subset: SList[Scalar]
-        ): P2 = {
-            val subsetInG2 =
-                SList.map2(getFinalPoly(subset), setup): (sb, st) =>
-                    st.mult(sb)
-
-            val zero = infG2Point
-            require(zero.is_inf())
-
-            subsetInG2.foldLeft(zero.dup()): (a, b) =>
-                a.add(b)
         }
 
         override def getState: UtxoSetL2 =
@@ -175,10 +161,10 @@ object SimpleL2Ledger:
                 inputs: List[LedgerOutput],
                 outputs: List[LedgerOutput]
             ): Boolean =
-                val before: v1.Value =
-                    inputs.map(_.value).fold(v1.Value.zero)(v1.Value.plus)
-                val after: v1.Value =
-                    outputs.map(_.value).fold(v1.Value.zero)(v1.Value.plus)
+                val before: v3.Value =
+                    inputs.map(_.value).fold(v3.Value.zero)(v3.Value.plus)
+                val after: v3.Value =
+                    outputs.map(_.value).fold(v3.Value.zero)(v3.Value.plus)
                 before == after
 
             val txId = calculateTxHash(tx)
@@ -254,9 +240,43 @@ object SimpleL2Ledger:
             ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
             ledgerForBlockProduction
 
+/*
+ * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
+ * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
+ */
+def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
+    binomial_poly
+        .foldLeft(SList.single(new Scalar(BigInteger("1")))): (acc, term) =>
+            // We need to clone the whole `acc` since `mul` mutates it
+            // and final adding gets mutated `shiftedPoly`
+            val shiftedPoly: SList[Scalar] =
+                SList.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
+            val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
+            SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
+}
+
+// TODO: use multi-scalar multiplication
+def getG2Commitment(
+    setup: SList[P2],
+    subset: SList[Scalar]
+): P2 = {
+    val subsetInG2 =
+        SList.map2(getFinalPoly(subset), setup): (sb, st) =>
+            st.mult(sb)
+
+    val zero = infG2Point
+    require(zero.is_inf())
+
+    subsetInG2.foldLeft(zero.dup()): (a, b) =>
+        a.add(b)
+}
+
 @main
 def dumpSetupG1(): Unit = {
     val setup = SimpleL2Ledger.mkDummySetupG1(5)
     val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
     setupBS.foreach(println)
+
+//    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
+//    println(G1.generator.toCompressedByteString)
 }

@@ -1,9 +1,17 @@
 package hydrozoa.l1.rulebased.onchain
 
-import hydrozoa.l1.rulebased.onchain.scalar.Scalar
+import hydrozoa.infra.encodeHex
+import hydrozoa.l1.rulebased.onchain.scalar.Scalar as SScalar
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.mkDummySetupG2
+import hydrozoa.l2.ledger.simple.getG2Commitment
 import munit.FunSuite
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
+import scalus.ledger.api.v3.ScriptContext
 import scalus.prelude.List
+import scalus.prelude.crypto.bls12_381.G2
+import supranational.blst.Scalar
+
+import scala.io.Source
 
 class TreasuryValidatorTest extends FunSuite:
 
@@ -13,7 +21,7 @@ class TreasuryValidatorTest extends FunSuite:
         val crs_g1 = List(
           BLS12_381_G1_Element(
             ByteString.fromHex(
-                "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+              "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
             )
           ),
           BLS12_381_G1_Element(
@@ -32,7 +40,7 @@ class TreasuryValidatorTest extends FunSuite:
 
         // Subset
         val subset = List(
-          Scalar("22401154959170154123134540742828377934364533580409315286338474307961").get
+          SScalar("22401154959170154123134540742828377934364533580409315286338474307961").get
         )
 
         // Proof
@@ -43,4 +51,90 @@ class TreasuryValidatorTest extends FunSuite:
         )
 
         assertEquals(TreasuryValidator.checkMembership(crs_g1, accumulator, subset, proof), true)
+    }
+
+    test("check_membership_dummy") {
+
+        // Pre-calculated powers of tau
+        val crs_g1 = TreasuryValidator.setup
+
+        // Accumulator:
+        val accumulator = G2.generator
+
+        // Empty subset
+        val subset: List[SScalar] = List()
+
+        // Proof
+        val proof = G2.generator
+
+        assertEquals(TreasuryValidator.checkMembership(crs_g1, accumulator, subset, proof), true)
+    }
+
+    /** This test is based on real (i.e. test) Hydrozoa data.
+      */
+    test("check_membership_hydrozoa_test") {
+
+        // Pre-calculated powers of tau
+        val crs_g1 = TreasuryValidator.setup
+
+        // Accumulator:
+        val accumulator = BLS12_381_G2_Element(
+          ByteString.fromHex(
+            // log
+            "931cc290dd0dd5a3d9edf9b865f967dd60341ee525b1216a973274897a146c3e11e43b8b41635ecdbd30a2899218f5ed11039ad70a0eb043489820a6f65e6d62a0357e3a9b97f25cb18766fdb28c808475e242b2a37ab3febdf7e7fbb1b8d4a4"
+          )
+        )
+
+        // Subset
+        val subset = List(
+          SScalar("4792973633413630736518528537479107674611990690430790408815911322150").get,
+          SScalar("14938298949569724933183763973017050336046564539387946588209698254937").get
+        )
+
+        val ss = subset.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+        println(s"utxos active hashes: ${ss.map(e => BigInt.apply(e.to_bendian()))}")
+
+        val setup = mkDummySetupG2(subset.size.toInt)
+
+        val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
+        setupBS.foreach(println)
+
+        // TODO: Make separate test for that
+        val commitmentPoint =
+            getG2Commitment(setup, subset.map(ss => Scalar().from_bendian(ss._1.toByteArray)))
+        val commitment = encodeHex(IArray.unsafeFromArray(commitmentPoint.compress()))
+
+        assertEquals(
+          commitment,
+          "931cc290dd0dd5a3d9edf9b865f967dd60341ee525b1216a973274897a146c3e11e43b8b41635ecdbd30a2899218f5ed11039ad70a0eb043489820a6f65e6d62a0357e3a9b97f25cb18766fdb28c808475e242b2a37ab3febdf7e7fbb1b8d4a4"
+        )
+
+        // Proof
+        val proof = G2.generator
+
+        assertEquals(TreasuryValidator.checkMembership(crs_g1, accumulator, subset, proof), true)
+    }
+
+    test("Withdraw redeemer") {
+        val ctxData = Data.fromJson(
+          Source
+              .fromResource("withdraw-ctx-01.json")
+              .getLines()
+              .foldLeft("")((acc, line) => acc + line)
+        )
+        val ctx: ScriptContext = Data.fromData[ScriptContext](ctxData)
+        println(ctx)
+        TreasuryValidator.validate(ctxData)
+    }
+
+    test("Withdraw redeemer 02 - broken") {
+        val ctxData = Data.fromJson(
+          Source
+              .fromResource("withdraw-ctx-02.json")
+              .getLines()
+              .foldLeft("")((acc, line) => acc + line)
+        )
+        val ctx: ScriptContext = Data.fromData[ScriptContext](ctxData)
+        println(ctx)
+        TreasuryValidator.validate(ctxData)
     }

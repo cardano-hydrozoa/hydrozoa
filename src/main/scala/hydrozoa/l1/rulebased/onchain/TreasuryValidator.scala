@@ -55,11 +55,11 @@ object TreasuryValidator extends Validator:
     // NB: use `dumpSetupG1` to cook it for now
     val setup: List[BLS12_381_G1_Element] =
         List.Cons(
-          hex"b12d0c357016caa5c0ec0a6bdc07e60c2af4631c477366eeb6ab4fffbd0ca40ab9ec195091478a2698bf26349b785ae8",
+          hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
           List.Cons(
-            hex"ab50b7d5689506d7fa1360f4a75523d24958d2ffe278fc6d20e30ad3f77e2150390b10561381091985f0c5c80157043d",
+            hex"8ce3b57b791798433fd323753489cac9bca43b98deaafaed91f4cb010730ae1e38b186ccd37a09b8aed62ce23b699c48",
             List.Cons(
-              hex"ab2dae103dd5cff5f0b677498fe38a38341869c7a6a684c43659aeedd94d54aee76523ff9b1bf19c00d60623cf538fa4",
+              hex"8ed36ed5fb9a1b099d84cba0686d8af9a2929a348797cd51c335cdcea1099e3d6f95126dfbc93abcfb3b56a7fc14477b",
               Nil
             )
           )
@@ -318,66 +318,52 @@ object TreasuryValidator extends Validator:
                 // FIXME: this fails due to the same error:
                 // Caused by: java.lang.IllegalArgumentException: Expected case class type, got TypeVar(T,Some(218919)) in expression: match d with
                 // I blame this lines in Scalus, though it's not clear how to fix that since it uses
-                log("1")
+
+                // TODO:
+                val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
+
+                // Zip utxo ids and outputs
                 val withdrawnUtxos: List[ScalusScalar] = utxoIds
-                    // Joint utxo ids and outputs
-                    // TODO:
                     // .zip(withdrawalOutputs)
-                    .zip(withdrawalOutputs.reverse.tail.reverse)
-                    // Convert to data, serialize, calculate a hash, convert to scalars, multiply binomials
+                    .zip(withdrawalOutputsNoChange)
+                    // Convert to data, serialize, calculate a hash, convert to scalars
                     .map(e =>
                         e.toData
                             |> serialiseData
                             |> blake2b_224
                             |> ScalusScalar.fromByteStringBigEndianUnsafe
-                    ) |> getFinalPolyScalus
-
-                log("2")
+                    )
 
                 // Decompress commitments and run the membership check
                 val acc = bls12_381_G2_uncompress(resolvedDatum.utxosActive)
                 val proof_ = bls12_381_G2_uncompress(proof)
-
-                log("3")
 
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
                   WithdrawMembershipValidationFailed
                 )
 
-                log("4")
-
                 // Accumulator updated commitment
-                val outputResolvedDatum = treasuryOutput.inlineDatumOfType[ResolvedDatum]
-
-                log("5")
+                val Resolved(outputResolvedDatum) = treasuryOutput.inlineDatumOfType[TreasuryDatum]
 
                 require(
                   outputResolvedDatum.utxosActive == proof,
                   WithdrawOutputAccumulatorUpdated
                 )
 
-                log("6")
-
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
                 // withdrawals.
                 // TODO: combine with iterating for poly calculation up above?
                 val withdrawnValue =
-                    tx.outputs.tail.foldLeft(Value.zero)((acc, o) => acc + o.value)
-
-                log("7")
+                    withdrawalOutputsNoChange.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
 
-                log("8")
-
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
-                log("9")
-
             case Deinit =>
-                log("DeinitD")
+                log("Deinit")
 
                 // This redeemer does not require the treasury’s active utxo set to be empty,
                 // but it implicitly requires the transaction to be multi-signed by all peers

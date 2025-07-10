@@ -34,6 +34,7 @@ import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
+import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
@@ -45,6 +46,8 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.prelude.crypto.bls12_381.G2
+import supranational.blst.{P1, P2}
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter
@@ -847,7 +850,7 @@ class HeadStateGlobal(
 
                             log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
                             val submitResult = cardano.ask(_.submit(resolutionTx))
-                            log.info(s"resolution tx submit result: $submitResult")
+                            log.info(s"resolution tx submit result (might be left for some nodes): $submitResult")
 
                             retry(RetryConfig.delayForever(3.seconds)) {
                                 log.info("Running resolving...")
@@ -878,7 +881,8 @@ class HeadStateGlobal(
                     // Now, for testing we are assuming we can just use L2 ledger directly.
                     // Also, we now try to withdraw all utxos from the ledger in one go.
                     val utxos = stateL2.flushAndGetState
-                    val proof = encodeHex(stateL2.getUtxosActiveCommitment)
+                    // Since we are removing all utxos, proof := g2
+                    val proof = G2.generator.toCompressedByteString.toHex
 
                     val recipe = WithdrawTxRecipe(
                       utxos,
@@ -898,11 +902,13 @@ class HeadStateGlobal(
 
                     log.info(s"Withdraw tx is: ${serializeTxHex(withdrawTx)}")
                     val submitResult = cardano.ask(_.submit(withdrawTx))
+                    log.info(s"Withdraw tx submission result is: $submitResult")
                     submitResult match {
                         case Right(txHash) =>
                             log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
+                            cardano.ask(_.awaitTx(txHash))
                         case Left(err) =>
-                            log.error(err)
+                            log.error(s"Withdraw tx submission failed with: $err")
                             throw RuntimeException(err)
                     }
                 }
