@@ -23,6 +23,8 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
                         Value(coin = Coin(recipe.depositAmount.toLong), multiAsset = Map.empty)
+                        
+                    // TODO: factor this out or change types. It is shared with the settlement Tx builder    
                     val headAddress: Address =
                         Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
 

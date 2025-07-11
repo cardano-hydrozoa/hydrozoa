@@ -29,7 +29,7 @@ import hydrozoa.l1.multisig.tx.refund.{
     RefundTxBuilder,
     ScalusRefundTxBuilder
 }
-import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
+import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -594,7 +594,7 @@ object MBTSuite extends Commands:
                     val backendService = BackendServiceMock(l1Mock, state.pp)
                     val nodeStateReader = NodeStateReaderMock(state)
 
-                    val settlementTxBuilder = BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+                    val settlementTxBuilder = ScalusSettlementTxBuilder(backendService, nodeStateReader)
                     val finalizationTxBuilder = BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
                     val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)

@@ -214,7 +214,7 @@ case class Datum(bytes: Array[Byte])
 
 // Shall we use bytes as in other types?
 // NOTE: The string itself is prefixed with 0x; you may need to drop it if
-// another function is note expecting it.
+// another function is not expecting it.
 case class TokenName(tokenNameHex: String)
 
 // UDiffTime

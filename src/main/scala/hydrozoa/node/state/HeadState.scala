@@ -608,7 +608,8 @@ class HeadStateGlobal(
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(settlementTx) =>
                     log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
-                    cardano.tell(_.submit(settlementTx))
+                    val ret = cardano.ask(_.submit(settlementTx))
+                    log.info(s"settlementResult = $ret")
                 case _ =>
             }
 
