@@ -1,5 +1,6 @@
 // These types are temporary bridging between hydrozoa types and scalus types.
 // Eventually, we want to move exclusively to the scalus types
+// TODO: Not tests for this module yet
 
 package hydrozoa.infra.transitionary
 
@@ -7,14 +8,23 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AnyLevel, NativeScript, UtxoId, Network as HNetwork}
+import hydrozoa.{AnyLevel, NativeScript, TxAny, TxL1, UtxoId, Network as HNetwork}
+import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
+import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.{Mainnet, Testnet}
-import scalus.cardano.address.{Address, Network}
+import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.{Address, Network, Pointer, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.*
+import scalus.ledger
+import scalus.ledger.api
+import scalus.ledger.api.v1
+import scalus.ledger.api.v1.StakingCredential.StakingHash
+import scalus.prelude
+import scalus.cardano.ledger.Transaction.{given }
 
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = Set.empty,
@@ -66,6 +76,15 @@ extension (network: HNetwork) {
     }
 }
 
+// REVIEW (Peter, 2025-07-11): This was adapted from Claude on 2025-07-11
+// I don't really understand what its doing.
+extension (tx : TxL1) {
+    def toScalus : Transaction = {
+        given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
+        Cbor.decode(tx.bytes).to[Transaction].value
+    }
+}
+
 // Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
 def bloxToScalusUtxoQuery[L <: AnyLevel](
     backendService: BackendService,
@@ -97,3 +116,40 @@ def bloxToScalusUtxoQuery[L <: AnyLevel](
     }
 
 }
+
+/** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
+  *
+  * This function converts between the simplified address representation used in Plutus script
+  * contexts and the comprehensive address representation used in the domain model.
+  */
+
+// TODO: Needs tests
+def v1AddressToLedger(address: v1.Address, network: Network): ShelleyAddress = {
+
+    val paymentPart: ShelleyPaymentPart = address.credential match {
+        case ledger.api.v1.Credential.PubKeyCredential(v1hash) =>
+            ShelleyPaymentPart.Key(AddrKeyHash(v1hash.hash))
+        case ledger.api.v1.Credential.ScriptCredential(v1hash) =>
+            ShelleyPaymentPart.Script(Hash(v1hash))
+    }
+
+    val delegationPart: ShelleyDelegationPart = address.stakingCredential match {
+        case prelude.Option.None => Null
+        case prelude.Option.Some(sc) =>
+            sc match {
+                case sh: StakingHash =>
+                    sh match {
+                        case ledger.api.v1.StakingCredential.StakingHash(v1Hash) =>
+                            v1Hash match {
+                                case ledger.api.v1.Credential.PubKeyCredential(v1Key) => ShelleyDelegationPart.Key(Hash(v1Key.hash))
+                                case ledger.api.v1.Credential.ScriptCredential(v1Script) => ShelleyDelegationPart.Script(Hash(v1Script))
+                            }
+                    }
+                case ledger.api.v1.StakingCredential.StakingPtr(a, b, c) =>
+                            ShelleyDelegationPart.Pointer(Pointer(Slot(a.toLong), b.toLong, c.toLong))
+                    }
+            }
+    ShelleyAddress(network = network, payment = paymentPart, delegation = delegationPart)
+}
+
+
