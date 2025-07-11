@@ -16,6 +16,29 @@ import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.*
 
+val emptyTxBody: TransactionBody = TransactionBody(
+  inputs = Set.empty,
+  outputs = IndexedSeq.empty,
+  fee = Coin(0),
+  ttl = None,
+  certificates = Set.empty,
+  withdrawals = None,
+  auxiliaryDataHash = None,
+  validityStartSlot = None,
+  mint = None,
+  scriptDataHash = None,
+  collateralInputs = Set.empty,
+  requiredSigners = Set.empty,
+  networkId = None,
+  collateralReturnOutput = None,
+  totalCollateral = None,
+  referenceInputs = Set.empty,
+  votingProcedures = None,
+  proposalProcedures = Set.empty,
+  currentTreasuryValue = None,
+  donation = None
+)
+
 extension [L <: AnyLevel](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
@@ -38,10 +61,10 @@ extension (native: Native) {
 extension (network: HNetwork) {
     def toScalus: Network = {
         if network.networkId == 1
-            then Mainnet else Testnet
+        then Mainnet
+        else Testnet
     }
 }
-
 
 // Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
 def bloxToScalusUtxoQuery[L <: AnyLevel](
@@ -55,12 +78,12 @@ def bloxToScalusUtxoQuery[L <: AnyLevel](
         case Right(utxo) =>
             Right({
 
-                println((utxo.getAddress))
+                println(utxo.getAddress)
                 val outAddress = Address.fromBech32(utxo.getAddress)
                 val outVal: Value = utxo.toValue.toLedgerValue
-                val outDat = Option(utxo.getInlineDatum).map(hex => 
-                    hex |> HexUtil.decodeHexString  
-                        |> PlutusData.deserialize 
+                val outDat = Option(utxo.getInlineDatum).map(hex =>
+                    hex |> HexUtil.decodeHexString
+                        |> PlutusData.deserialize
                         |> Interop.toScalusData
                         |> DatumOption.Inline.apply
                 )
