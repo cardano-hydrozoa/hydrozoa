@@ -1,13 +1,15 @@
 package hydrozoa.l1.rulebased.onchain
 
+import cats.syntax.group.*
 import com.bloxbean.cardano.client.address
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import hydrozoa.infra.toBB
+import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidatorScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
@@ -26,7 +28,11 @@ import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, Validator, fail, require, given}
+import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, Validator, fail, log, require, given}
+import scalus.uplc.DeBruijnedProgram
+import scalus.uplc.eval.*
+
+import java.nio.file.{Files, Paths}
 
 @Compile
 object DisputeResolutionValidator extends Validator:
@@ -200,6 +206,8 @@ object DisputeResolutionValidator extends Validator:
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
+        log("DisputeResolution")
+
         // Parse datum
         val voteDatum: VoteDatum = datum match
             case Some(d) => d.to[VoteDatum]
@@ -207,6 +215,8 @@ object DisputeResolutionValidator extends Validator:
 
         redeemer.to[DisputeRedeemer] match
             case DisputeRedeemer.Vote(voteRedeemer) =>
+                log("Vote")
+
                 // There must not be any other spent input matching voteOutref on transaction hash
                 val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
                     case List.Cons(voteOutref, tail) =>
@@ -337,6 +347,8 @@ object DisputeResolutionValidator extends Validator:
               */
 
             case DisputeRedeemer.Tally(tallyRedeemer) =>
+                log("Tally")
+
                 // TODO: hide `ownInput` and `otherInput` so they can't be used accidentally
                 val ownInput = tx.inputs.find(_.outRef === ownRef).get
                 val otherInput: TxInInfo =
@@ -464,6 +476,8 @@ object DisputeResolutionValidator extends Validator:
                 require(continuingOutputDatum.peer === None)
 
             case DisputeRedeemer.Resolve =>
+                log("Resolve")
+
                 val voteInput = tx.inputs.find(_.outRef === ownRef).get
                 val (headMp, disputeId, _) = voteInput.resolved.value.onlyNonAdaAsset
 
@@ -476,10 +490,11 @@ object DisputeResolutionValidator extends Validator:
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
-                            case _ => fail(ResolveTreasurySpent)
+                            case _ => false
                     }
                     .getOrFail(ResolveTreasurySpent)
 
+                // TODO: This is checked by the treasury validator
                 val treasuryDatum =
                     treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
@@ -496,7 +511,8 @@ end DisputeResolutionValidator
 object DisputeResolutionScript {
 
     lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+//    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    lazy val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
     lazy val plutusScript: PlutusV3Script = PlutusV3Script
@@ -507,6 +523,10 @@ object DisputeResolutionScript {
         .asInstanceOf[PlutusV3Script]
 
     lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+
+    lazy val scriptHashString: String = encodeHex(
+      IArray.unsafeFromArray(plutusScript.getScriptHash)
+    )
 
     def address(n: Network): AddressBechL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
@@ -535,7 +555,20 @@ def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
     )
 
 @main
-def disputeResolutionValidatorSir(args: String): Unit = {
-    println(DisputeResolutionScript.sir.showHighlighted)
+def disputeResolutionValidatorSir(args: String): Unit =
+//    println(DisputeResolutionScript.sir.showHighlighted)
     println(DisputeResolutionScript.scriptHash)
-}
+    println(DisputeResolutionScript.scriptHashString)
+    println(DisputeResolutionScript.script.flatEncoded.length)
+
+    println(TreasuryValidatorScript.scriptHashString)
+    println(TreasuryValidatorScript.scriptHash)
+    println(TreasuryValidatorScript.script.flatEncoded.length)
+
+@main
+def evaluate(): Unit =
+    given PlutusVM = PlutusVM.makePlutusV3VM()
+//    val p = TreasuryValidatorScript.sir.toUplc()
+    val p =
+        DeBruijnedProgram.fromFlatEncoded(Files.readAllBytes(Paths.get("script-Spend-2.flat")))
+    println(p.evaluateDebug)

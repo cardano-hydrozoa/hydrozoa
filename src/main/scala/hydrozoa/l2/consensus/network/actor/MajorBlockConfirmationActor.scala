@@ -204,7 +204,7 @@ private class MajorBlockConfirmationActor(
           multisigTx = settlementTxDraft,
           treasuryAddress = TreasuryValidatorScript.address(networkL1static),
           disputeAddress = DisputeResolutionScript.address(networkL1static),
-          // FIXME: use a real value, this is Sunday September 3rd, 2028
+          // FIXME: use a real value, this is: Sunday, September 3, 2028 8:30:24 AM GMT-06:00
           votingDuration = BigInt("1851604224000"),
           // Sorting
           peers = peersKeys.toList,

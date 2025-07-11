@@ -3,14 +3,17 @@ package hydrozoa.infra
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
 import com.bloxbean.cardano.client.quicktx.{AbstractTx, QuickTxBuilder}
-import scalus.bloxbean.{EvaluatorMode, NoScriptSupplier, ScalusTransactionEvaluator, SlotConfig}
+import scalus.bloxbean.*
 
 /** @tparam T
   *   likely you should use Tx
   * @return
   *   function that takes a tx skeleton and return the builder
   */
-def mkBuilder[T](backendService: BackendService): AbstractTx[T] => QuickTxBuilder#TxContext =
+def mkBuilder[T](
+    backendService: BackendService,
+    debugDumpFilesForTesting: Boolean = false
+): AbstractTx[T] => QuickTxBuilder#TxContext =
     (tx: AbstractTx[T]) =>
 
         val protocolParams: ProtocolParams = {
@@ -25,16 +28,16 @@ def mkBuilder[T](backendService: BackendService): AbstractTx[T] => QuickTxBuilde
             pp
         }
 
-        val quickTxBuilder = QuickTxBuilder(backendService)
-
         val utxoSupplier = new DefaultUtxoSupplier(backendService.getUtxoService)
+        val scriptSupplier = new ScriptServiceSupplier(backendService.getScriptService)
 
         val evaluator = ScalusTransactionEvaluator(
           slotConfig = SlotConfig.Preprod, // FIXME: use config parameter
           protocolParams = protocolParams,
           utxoSupplier = utxoSupplier,
-          scriptSupplier = NoScriptSupplier(),
-          mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST
+          scriptSupplier = scriptSupplier,
+          mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST,
+          debugDumpFilesForTesting = debugDumpFilesForTesting
         )
 
         QuickTxBuilder(backendService)

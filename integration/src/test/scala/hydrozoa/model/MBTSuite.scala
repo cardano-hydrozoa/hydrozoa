@@ -66,7 +66,7 @@ object MBTSuite extends Commands:
             val response: Response[String] = quickRequest
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
-        LocalFacade.apply(state.knownPeers, false, useYaci)
+        LocalFacade.apply(state.knownPeers, false, useYaci, None, None)
 
     override def destroySut(sut: Sut): Unit =
         log.warn("<-------------------- destroy SUT")
