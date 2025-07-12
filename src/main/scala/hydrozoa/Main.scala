@@ -10,8 +10,8 @@ import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{ScalusInitializationTxBuilder, InitTxBuilder}
-import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
-import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l1.multisig.tx.refund.{ScalusRefundTxBuilder, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.{ScalusSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l1.rulebased.tx.resolution.BloxBeanResolutionTxBuilder
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
@@ -252,9 +252,9 @@ def mkTxBuilders(
     val depositTxBuilder: DepositTxBuilder =
         ScalusDepositTxBuilder(backendService, nodeStateReader)
     val refundTxBuilder: RefundTxBuilder =
-        BloxBeanRefundTxBuilder(backendService, nodeStateReader)
+        ScalusRefundTxBuilder(backendService, nodeStateReader)
     val settlementTxBuilder: SettlementTxBuilder =
-        BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+        ScalusSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
         BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
     val voteTxBuilder: VoteTxBuilder =

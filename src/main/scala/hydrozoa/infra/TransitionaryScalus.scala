@@ -1,5 +1,6 @@
 // These types are temporary bridging between hydrozoa types and scalus types.
 // Eventually, we want to move exclusively to the scalus types
+// TODO: Not tests for this module yet
 
 package hydrozoa.infra.transitionary
 
@@ -7,14 +8,24 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AnyLevel, NativeScript, UtxoId, Network as HNetwork}
+import hydrozoa.{AddressBech, AnyLevel, NativeScript, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
+import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
+import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.{Mainnet, Testnet}
-import scalus.cardano.address.{Address, Network}
-import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
-import scalus.cardano.ledger.Script.Native
+import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.*
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.Transaction.given
+import scalus.ledger.api
+import scalus.ledger.api.v1
+import scalus.ledger.api.v1.StakingCredential.StakingHash
+import scalus.{ledger, prelude}
 
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = Set.empty,
@@ -47,6 +58,43 @@ extension [L <: AnyLevel](utxo: UtxoId[L]) {
         )
 }
 
+extension [L <: hydrozoa.AnyLevel] (address : AddressBech[L]) {
+    def toScalus : Address = Address.fromBech32(address.bech32)
+}
+
+extension (p : HPolicyId) {
+    def toScalus : PolicyId = {
+        Hash(ByteString.fromHex(p.policyId))
+    }
+}
+
+def htokensToMultiAsset (tokens : Tokens) : MultiAsset = {
+   tokens.map((cs, tnAndQ) =>
+       (cs.toScalus
+           , tnAndQ.map((tn, q) =>
+           (AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2))),q.toLong)
+       )
+       ))    
+}
+
+
+extension [L <: hydrozoa.AnyLevel] (output : Output[L]) {
+    def toScalus: TransactionOutput = {
+        
+        TransactionOutput(
+            address = output.address.toScalus, 
+            value = Value(coin = Coin(output.coins.toLong), multiAsset = htokensToMultiAsset(output.tokens)), 
+            datumOption = output.mbInlineDatum match {
+                case Some(d) => Some(
+                  // NEEDS REVIEW (Peter, 2025-07-11): I don't know the encoding, I'm assuming this is correct
+                  Inline(toData(ByteString.fromHex(d)))
+                )
+                case None => None
+            }
+            )
+    }
+}
+
 extension [HF, P](hash: Hash[HF, P]) {
     def toIArray: IArray[Byte] =
         IArray.from(hash.bytes)
@@ -63,6 +111,15 @@ extension (network: HNetwork) {
         if network.networkId == 1
         then Mainnet
         else Testnet
+    }
+}
+
+// REVIEW (Peter, 2025-07-11): This was adapted from Claude on 2025-07-11
+// I don't really understand what its doing.
+extension (tx : TxL1) {
+    def toScalus : Transaction = {
+        given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
+        Cbor.decode(tx.bytes).to[Transaction].value
     }
 }
 
@@ -95,5 +152,41 @@ def bloxToScalusUtxoQuery[L <: AnyLevel](
                 )
             })
     }
-
 }
+
+/** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
+  *
+  * This function converts between the simplified address representation used in Plutus script
+  * contexts and the comprehensive address representation used in the domain model.
+  */
+
+// TODO: Needs tests
+def v1AddressToLedger(address: v1.Address, network: Network): ShelleyAddress = {
+
+    val paymentPart: ShelleyPaymentPart = address.credential match {
+        case ledger.api.v1.Credential.PubKeyCredential(v1hash) =>
+            ShelleyPaymentPart.Key(AddrKeyHash(v1hash.hash))
+        case ledger.api.v1.Credential.ScriptCredential(v1hash) =>
+            ShelleyPaymentPart.Script(Hash(v1hash))
+    }
+
+    val delegationPart: ShelleyDelegationPart = address.stakingCredential match {
+        case prelude.Option.None => Null
+        case prelude.Option.Some(sc) =>
+            sc match {
+                case sh: StakingHash =>
+                    sh match {
+                        case ledger.api.v1.StakingCredential.StakingHash(v1Hash) =>
+                            v1Hash match {
+                                case ledger.api.v1.Credential.PubKeyCredential(v1Key) => ShelleyDelegationPart.Key(Hash(v1Key.hash))
+                                case ledger.api.v1.Credential.ScriptCredential(v1Script) => ShelleyDelegationPart.Script(Hash(v1Script))
+                            }
+                    }
+                case ledger.api.v1.StakingCredential.StakingPtr(a, b, c) =>
+                            ShelleyDelegationPart.Pointer(Pointer(Slot(a.toLong), b.toLong, c.toLong))
+                    }
+            }
+    ShelleyAddress(network = network, payment = paymentPart, delegation = delegationPart)
+}
+
+

@@ -3,21 +3,38 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toHydrozoaNativeScript
-import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
+import hydrozoa.infra.transitionary.{toHydrozoaNativeScript, toScalus}
+import hydrozoa.infra.{
+    NoMatch,
+    PSStyleAssoc,
+    Piper,
+    TooManyMatches,
+    decodeBech32AddressL1,
+    decodeBech32AddressL2,
+    onlyOutputToAddress,
+    serializeTxHex,
+    txHash
+}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
-import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
-import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
-import hydrozoa.l1.multisig.tx.settlement.BloxBeanSettlementTxBuilder
+import hydrozoa.l1.multisig.tx.initialization.{
+    InitTxBuilder,
+    InitTxRecipe,
+    ScalusInitializationTxBuilder
+}
+import hydrozoa.l1.multisig.tx.refund.{
+    PostDatedRefundRecipe,
+    RefundTxBuilder,
+    ScalusRefundTxBuilder
+}
+import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.HydrozoaL2Ledger
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkWallet}
@@ -30,8 +47,7 @@ import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.Test.Parameters
 import org.scalacheck.commands.Commands
 import org.scalacheck.rng.Seed
-import org.scalacheck.util.Pretty
-import org.scalacheck.util.ConsoleReporter
+import org.scalacheck.util.{ConsoleReporter, Pretty}
 import org.scalacheck.{Gen, Prop, Properties, Test}
 import scalus.prelude.Option as ScalusOption
 import sttp.client4.Response
@@ -408,11 +424,12 @@ object MBTSuite extends Commands:
 
             val Right(_) = l1Mock.submit(depositTxDraft |> toL1Tx)
 
-            val refundTxBuilder: RefundTxBuilder = BloxBeanRefundTxBuilder(backendService, nodeStateReader)
+            val refundTxBuilder: RefundTxBuilder = ScalusRefundTxBuilder(backendService, nodeStateReader)
 
+            
             val Right(refundTxDraft) =
                 refundTxBuilder.mkPostDatedRefundTxDraft(
-                    PostDatedRefundRecipe(depositTxDraft, index)
+                    PostDatedRefundRecipe(depositTxDraft.toScalus, index, l1Mock.network.toScalus)
                 )
 
             val depositUtxoId = UtxoIdL1(depositTxHash, index)
@@ -577,7 +594,7 @@ object MBTSuite extends Commands:
                     val backendService = BackendServiceMock(l1Mock, state.pp)
                     val nodeStateReader = NodeStateReaderMock(state)
 
-                    val settlementTxBuilder = BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+                    val settlementTxBuilder = ScalusSettlementTxBuilder(backendService, nodeStateReader)
                     val finalizationTxBuilder = BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
 
                     val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
