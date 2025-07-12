@@ -1,48 +1,19 @@
 package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.infra.{mkBuilder, numberOfSignatories, toEither}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
-import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
-import hydrozoa.{AddressBech, AddressBechL1, L1, Tx, TxL1, UtxoId, UtxoIdL1}
-import scalus.builtin.Data.toData
-import scalus.|>
-
-import java.math.BigInteger
-import scala.jdk.CollectionConverters.*
-import scalus.cardano.ledger.*
-import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toScalus}
+import hydrozoa.l1.multisig.tx.InitTx
+import hydrozoa.{AddressBech, AddressBechL1, Tx}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 import scalus.cardano.address.Address.Shelley
-import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-
-val emptyTxBody: TransactionBody = TransactionBody(
-  inputs = Set.empty,
-  outputs = IndexedSeq.empty,
-  fee = Coin(0),
-  ttl = None,
-  certificates = Set.empty,
-  withdrawals = None,
-  auxiliaryDataHash = None,
-  validityStartSlot = None,
-  mint = None,
-  scriptDataHash = None,
-  collateralInputs = Set.empty,
-  requiredSigners = Set.empty,
-  networkId = None,
-  collateralReturnOutput = None,
-  totalCollateral = None,
-  referenceInputs = Set.empty,
-  votingProcedures = None,
-  proposalProcedures = Set.empty,
-  currentTreasuryValue = None,
-  donation = None
-)
 
 class ScalusInitializationTxBuilder(backendService: BackendService) extends InitTxBuilder {
 

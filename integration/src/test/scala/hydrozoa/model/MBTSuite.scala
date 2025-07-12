@@ -7,7 +7,7 @@ import hydrozoa.infra.transitionary.toHydrozoaNativeScript
 import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
-import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, PostDatedRefundRecipe, RefundTxBuilder}
@@ -396,7 +396,7 @@ object MBTSuite extends Commands:
             val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
             val backendService = BackendServiceMock(l1Mock, state.pp)
             val nodeStateReader = NodeStateReaderMock(state)
-            val depositTxBuilder: DepositTxBuilder = BloxBeanDepositTxBuilder(backendService, nodeStateReader)
+            val depositTxBuilder: DepositTxBuilder = ScalusDepositTxBuilder(backendService, nodeStateReader)
 
             // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
             val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
