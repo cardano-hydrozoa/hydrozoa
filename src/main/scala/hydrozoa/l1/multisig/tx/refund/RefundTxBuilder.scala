@@ -2,6 +2,8 @@ package hydrozoa.l1.multisig.tx.refund
 
 import hydrozoa.{TxIx, TxL1}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.Transaction
 
 trait RefundTxBuilder {
     def mkPostDatedRefundTxDraft(
@@ -10,6 +12,8 @@ trait RefundTxBuilder {
 }
 
 case class PostDatedRefundRecipe(
-    depositTx: TxL1,
-    txIx: TxIx
+    // TODO: newtype this transaction?
+    depositTx: Transaction,
+    txIx: TxIx,
+    network: Network
 )

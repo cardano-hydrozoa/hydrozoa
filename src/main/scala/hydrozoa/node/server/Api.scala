@@ -5,6 +5,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import scalus.cardano.ledger.Value
 import sttp.tapir.Schema
 
 // Types for NODE API

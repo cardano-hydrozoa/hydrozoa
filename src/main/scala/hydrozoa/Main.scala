@@ -4,13 +4,14 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.toEither
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
-import hydrozoa.l1.multisig.tx.deposit.{BloxBeanDepositTxBuilder, DepositTxBuilder}
-import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{BloxBeanInitializationTxBuilder, InitTxBuilder}
-import hydrozoa.l1.multisig.tx.refund.{BloxBeanRefundTxBuilder, RefundTxBuilder}
-import hydrozoa.l1.multisig.tx.settlement.{BloxBeanSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder}
+import hydrozoa.l1.multisig.tx.finalization.{ScalusFinalizationTxBuilder, FinalizationTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{ScalusInitializationTxBuilder, InitTxBuilder}
+import hydrozoa.l1.multisig.tx.refund.{ScalusRefundTxBuilder, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.settlement.{ScalusSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l1.rulebased.tx.resolution.BloxBeanResolutionTxBuilder
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
@@ -32,6 +33,22 @@ import ox.*
 import ox.channels.{Actor, ActorRef}
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
+import scalus.bloxbean.Interop
+import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
+import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
+import scalus.cardano.ledger.{
+    AssetName,
+    Coin,
+    DatumOption,
+    Hash,
+    MultiAsset,
+    TransactionOutput,
+    Value
+}
+import scalus.cardano.ledger.TransactionOutput.Shelley
+import scalus.prelude.AssocMap
 import sttp.client4.UriContext
 import sttp.model.Uri
 
@@ -229,17 +246,17 @@ def mkTxBuilders(
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders
-    val initTxBuilder: InitTxBuilder = BloxBeanInitializationTxBuilder(backendService)
+    val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
     val fallbackTxBuilder: FallbackTxBuilder =
         BloxBeanFallbackTxBuilder(backendService)
     val depositTxBuilder: DepositTxBuilder =
-        BloxBeanDepositTxBuilder(backendService, nodeStateReader)
+        ScalusDepositTxBuilder(backendService, nodeStateReader)
     val refundTxBuilder: RefundTxBuilder =
-        BloxBeanRefundTxBuilder(backendService, nodeStateReader)
+        ScalusRefundTxBuilder(backendService, nodeStateReader)
     val settlementTxBuilder: SettlementTxBuilder =
-        BloxBeanSettlementTxBuilder(backendService, nodeStateReader)
+        ScalusSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
-        BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+        ScalusFinalizationTxBuilder(backendService, nodeStateReader)
     val voteTxBuilder: VoteTxBuilder =
         BloxBeanVoteTxBuilder(backendService)
     val tallyTxBuilder: TallyTxBuilder =

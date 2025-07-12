@@ -7,15 +7,8 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{
-    Piper,
-    encodeHex,
-    extractVoteTokenNameFromFallbackTx,
-    serializeTxHex,
-    txFees,
-    txHash,
-    verKeyHash
-}
+import hydrozoa.infra.transitionary.toHydrozoaNativeScript
+import hydrozoa.infra.{Piper, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, txFees, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
@@ -37,6 +30,7 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter
@@ -614,7 +608,8 @@ class HeadStateGlobal(
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(settlementTx) =>
                     log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
-                    cardano.tell(_.submit(settlementTx))
+                    val ret = cardano.ask(_.submit(settlementTx))
+                    log.info(s"settlementResult = $ret")
                 case _ =>
             }
 
@@ -1024,7 +1019,8 @@ class HeadStateGlobal(
                 case Some(finalizationTx) =>
                     // Submit finalization tx
                     log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
-                    cardano.tell(_.submit(finalizationTx))
+                    val res = cardano.ask(_.submit(finalizationTx))
+                    log.info(s"Finalization tx submission result is: ${res}")
                 case _ => assert(false, "Impossible: finalization tx should always present")
             }
 
@@ -1078,7 +1074,7 @@ object HeadStateGlobal:
           ownPeer = params.ownPeer,
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
-          headNativeScript = params.headNativeScript,
+          headNativeScript = params.headNativeScript.toHydrozoaNativeScript,
           headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,

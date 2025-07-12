@@ -16,6 +16,7 @@ import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
 import hydrozoa.node.state.HeadPhase.Finalized
 import hydrozoa.{AddressBechL1, CurrencySymbol, NativeScript, TokenName, VerificationKeyBytes}
 import ox.channels.ActorRef
+import scalus.cardano.ledger.Script.Native
 
 import scala.collection.mutable
 
@@ -177,7 +178,7 @@ case class InitializingHeadParams(
     ownPeer: WalletId,
     headPeerVKs: Map[WalletId, VerificationKeyBytes],
     headParams: HeadParams,
-    headNativeScript: NativeScript,
+    headNativeScript: Native,
     headMintingPolicy: CurrencySymbol,
     headAddress: AddressBechL1,
     beaconTokenName: TokenName,
