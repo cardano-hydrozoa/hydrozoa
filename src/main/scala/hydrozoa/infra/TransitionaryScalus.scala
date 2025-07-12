@@ -8,23 +8,24 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AnyLevel, NativeScript, TxAny, TxL1, UtxoId, Network as HNetwork}
+import hydrozoa.{AddressBech, AnyLevel, NativeScript, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
-import scalus.cardano.address.{Address, Network, Pointer, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
-import scalus.cardano.ledger.Script.Native
+import scalus.cardano.address.*
 import scalus.cardano.ledger.*
-import scalus.ledger
+import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.Transaction.given
 import scalus.ledger.api
 import scalus.ledger.api.v1
 import scalus.ledger.api.v1.StakingCredential.StakingHash
-import scalus.prelude
-import scalus.cardano.ledger.Transaction.{given }
+import scalus.{ledger, prelude}
 
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = Set.empty,
@@ -55,6 +56,43 @@ extension [L <: AnyLevel](utxo: UtxoId[L]) {
           transactionId = Hash(ByteString.fromHex(utxo.txId.hash)),
           index = utxo.outputIx.ix
         )
+}
+
+extension [L <: hydrozoa.AnyLevel] (address : AddressBech[L]) {
+    def toScalus : Address = Address.fromBech32(address.bech32)
+}
+
+extension (p : HPolicyId) {
+    def toScalus : PolicyId = {
+        Hash(ByteString.fromHex(p.policyId))
+    }
+}
+
+def htokensToMultiAsset (tokens : Tokens) : MultiAsset = {
+   tokens.map((cs, tnAndQ) =>
+       (cs.toScalus
+           , tnAndQ.map((tn, q) =>
+           (AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2))),q.toLong)
+       )
+       ))    
+}
+
+
+extension [L <: hydrozoa.AnyLevel] (output : Output[L]) {
+    def toScalus: TransactionOutput = {
+        
+        TransactionOutput(
+            address = output.address.toScalus, 
+            value = Value(coin = Coin(output.coins.toLong), multiAsset = htokensToMultiAsset(output.tokens)), 
+            datumOption = output.mbInlineDatum match {
+                case Some(d) => Some(
+                  // NEEDS REVIEW (Peter, 2025-07-11): I don't know the encoding, I'm assuming this is correct
+                  Inline(toData(ByteString.fromHex(d)))
+                )
+                case None => None
+            }
+            )
+    }
 }
 
 extension [HF, P](hash: Hash[HF, P]) {
@@ -114,7 +152,6 @@ def bloxToScalusUtxoQuery[L <: AnyLevel](
                 )
             })
     }
-
 }
 
 /** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .

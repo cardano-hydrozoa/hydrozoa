@@ -67,8 +67,11 @@ class ScalusRefundTxBuilder(
         )
 
         // CBOR encoded hydrozoa native script
+        // TODO: Turn this into a helper function or revise the types; its duplicated in the settlement tx builder
         val headNativeScript: Native =
             Cbor.decode(reader.multisigRegime(_.headNativeScript).bytes).to[Native].value
+        
+        // TODO: factor out. Duplicated in Settlement Transaction
         val requiredSigners = headNativeScript.script match {
             case api.Timelock.AllOf(scripts) =>
                 scripts.map {
