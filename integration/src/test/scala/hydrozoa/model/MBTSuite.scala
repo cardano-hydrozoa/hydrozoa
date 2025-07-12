@@ -18,7 +18,7 @@ import hydrozoa.infra.{
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
-import hydrozoa.l1.multisig.tx.finalization.BloxBeanFinalizationTxBuilder
+import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.{
     InitTxBuilder,
     InitTxRecipe,
@@ -595,7 +595,7 @@ object MBTSuite extends Commands:
                     val nodeStateReader = NodeStateReaderMock(state)
 
                     val settlementTxBuilder = ScalusSettlementTxBuilder(backendService, nodeStateReader)
-                    val finalizationTxBuilder = BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+                    val finalizationTxBuilder = ScalusFinalizationTxBuilder(backendService, nodeStateReader)
 
                     val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
                     val l2Effect: L2BlockEffect = block.blockHeader.blockType match

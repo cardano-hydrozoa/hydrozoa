@@ -8,7 +8,7 @@ import hydrozoa.infra.toEither
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder}
-import hydrozoa.l1.multisig.tx.finalization.{BloxBeanFinalizationTxBuilder, FinalizationTxBuilder}
+import hydrozoa.l1.multisig.tx.finalization.{ScalusFinalizationTxBuilder, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.initialization.{ScalusInitializationTxBuilder, InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{ScalusRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{ScalusSettlementTxBuilder, SettlementTxBuilder}
@@ -256,7 +256,7 @@ def mkTxBuilders(
     val settlementTxBuilder: SettlementTxBuilder =
         ScalusSettlementTxBuilder(backendService, nodeStateReader)
     val finalizationTxBuilder: FinalizationTxBuilder =
-        BloxBeanFinalizationTxBuilder(backendService, nodeStateReader)
+        ScalusFinalizationTxBuilder(backendService, nodeStateReader)
     val voteTxBuilder: VoteTxBuilder =
         BloxBeanVoteTxBuilder(backendService)
     val tallyTxBuilder: TallyTxBuilder =

@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AddressBech, AnyLevel, NativeScript, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
+import hydrozoa.{AddressBech, AnyLevel, NativeScript, TokenName, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
@@ -68,11 +68,19 @@ extension (p : HPolicyId) {
     }
 }
 
+
+extension  (tn : TokenName) {
+    // Token Name comes prepended with a 0x; we drop it
+    def toScalus : AssetName = {
+        AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2)))
+    }
+}
+
 def htokensToMultiAsset (tokens : Tokens) : MultiAsset = {
    tokens.map((cs, tnAndQ) =>
        (cs.toScalus
            , tnAndQ.map((tn, q) =>
-           (AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2))),q.toLong)
+           (tn.toScalus,q.toLong)
        )
        ))    
 }
@@ -103,6 +111,11 @@ extension [HF, P](hash: Hash[HF, P]) {
 extension (native: Native) {
     def toHydrozoaNativeScript: NativeScript = {
         NativeScript(native.script.toCbor)
+    }
+}
+extension (native : NativeScript) {
+    def toScalusNativeScript : Native = {
+        Cbor.decode(native.bytes).to[Native].value
     }
 }
 

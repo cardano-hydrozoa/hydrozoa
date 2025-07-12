@@ -1019,7 +1019,8 @@ class HeadStateGlobal(
                 case Some(finalizationTx) =>
                     // Submit finalization tx
                     log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
-                    cardano.tell(_.submit(finalizationTx))
+                    val res = cardano.ask(_.submit(finalizationTx))
+                    log.info(s"Finalization tx submission result is: ${res}")
                 case _ => assert(false, "Impossible: finalization tx should always present")
             }
 
