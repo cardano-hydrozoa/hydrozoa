@@ -119,7 +119,9 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
             .outputIndex(outputIndex)
             .address(output.address.bech32)
             .amount(
-              (amounts.toSet + Amount.lovelace(BigInteger.valueOf(output.coins.longValue))).toList.asJava
+              (amounts.toSet + Amount.lovelace(
+                BigInteger.valueOf(output.coins.longValue)
+              )).toList.asJava
             )
             .build()
 

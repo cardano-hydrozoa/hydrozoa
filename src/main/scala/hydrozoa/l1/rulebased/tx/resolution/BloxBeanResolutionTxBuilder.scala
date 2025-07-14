@@ -12,7 +12,11 @@ import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{DisputeRedeemer, VoteDatum}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{ResolvedDatum, TreasuryDatum, TreasuryRedeemer}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
+    ResolvedDatum,
+    TreasuryDatum,
+    TreasuryRedeemer
+}
 import hydrozoa.{TxL1, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}

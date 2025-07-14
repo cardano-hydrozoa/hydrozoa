@@ -31,19 +31,18 @@ class BlockProducer:
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
         finalizing: Boolean
-    ):  Either[String, (
-            Block,
-            HydrozoaL2Ledger.LedgerUtxoSetOpaque,
-            UtxoSetL2,
-            UtxoSetL2,
-            Option[(TxId, L2Genesis)])
+    ): Either[
+      String,
+      (Block, HydrozoaL2Ledger.LedgerUtxoSetOpaque, UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
     ] =
 
         // TODO: move to the block producer?
         val poolEventsSorted = poolEvents.sortBy(_.getEventId.hash)
 
         log.info(s"Pool events for block production: ${poolEvents.map(_.getEventId.hash)}")
-        log.info(s"Pool events for block production (sorted): ${poolEventsSorted.map(_.getEventId.hash)}")
+        log.info(
+          s"Pool events for block production (sorted): ${poolEventsSorted.map(_.getEventId.hash)}"
+        )
 
         BlockProducer.createBlock(
           stateL2,
@@ -64,7 +63,8 @@ class BlockProducer:
                     case Final => networkRef.tell(_.reqFinal(ReqFinal(block)))
                 Right(some)
             case None =>
-                val msg = s"Block production procedure was unable to create a block number ${prevHeader.blockNum+1}"
+                val msg =
+                    s"Block production procedure was unable to create a block number ${prevHeader.blockNum + 1}"
                 log.warn(msg)
                 Left(msg)
 

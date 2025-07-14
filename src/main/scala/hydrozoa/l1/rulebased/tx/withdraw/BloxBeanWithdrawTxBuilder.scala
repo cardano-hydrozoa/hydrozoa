@@ -71,8 +71,7 @@ class BloxBeanWithdrawTxBuilder(
                     if a.getUnit.equals("lovelace") then
                         a.setQuantity((a.getQuantity.subtract(withdrawnCoins)))
                 )
-                
-                
+
                 val withdrawRedeemer = WithdrawRedeemer(
                   r.withdrawals.utxoMap.keys.map(_.toTxOutRefV3).toList.asScalus,
                   proofBS

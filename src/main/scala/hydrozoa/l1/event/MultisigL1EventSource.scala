@@ -77,8 +77,8 @@ class MultisigL1EventSource(
                                 sleep(100.millis)
                                 loop = nodeState.ask(_.mbInitializedOn.isDefined)
                                     && (
-                                        nodeState.ask(_.head.currentPhase == Open)
-                                          ||  nodeState.ask(_.head.currentPhase == Finalizing)
+                                      nodeState.ask(_.head.currentPhase == Open)
+                                          || nodeState.ask(_.head.currentPhase == Finalizing)
                                     )
 
                             log.info("Leaving L1 source supervised scope")
@@ -191,7 +191,10 @@ class MultisigL1EventSource(
                                         if (!knownDepositIds.contains(utxoId)) then
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
                                             depositsNew.utxoMap
-                                                .put(depositUtxo.unTag.ref, depositUtxo.unTag.output)
+                                                .put(
+                                                  depositUtxo.unTag.ref,
+                                                  depositUtxo.unTag.output
+                                                )
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )
@@ -222,8 +225,8 @@ class MultisigL1EventSource(
                             utxos.foreach(utxo =>
                                 val utxoId = UtxoId[L1]
                                     .apply(
-                                        utxo.getTxHash |> TxId.apply,
-                                        utxo.getOutputIndex |> TxIx.apply
+                                      utxo.getTxHash |> TxId.apply,
+                                      utxo.getOutputIndex |> TxIx.apply
                                     )
                                 utxoType_(utxo) match
                                     case MultisigUtxoType.Treasury(utxo) =>
@@ -232,13 +235,17 @@ class MultisigL1EventSource(
                                             mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
-                                    case other => 
-                                        log.info(s"UTxO of type $other are ignored in Finalizing mode")
+                                    case other =>
+                                        log.info(
+                                          s"UTxO of type $other are ignored in Finalizing mode"
+                                        )
                             )
                             mbNewTreasury
 
                         // FIXME: no guarantees head is still finalizing
-                        nodeState.tell(_.head.finalizingPhase(finalizingHead =>
-                            mbNewTreasury.foreach(finalizingHead.newTreasuryUtxo)
-                        ))
+                        nodeState.tell(
+                          _.head.finalizingPhase(finalizingHead =>
+                              mbNewTreasury.foreach(finalizingHead.newTreasuryUtxo)
+                          )
+                        )
                     case other => log.warn(s"Unsupported phase: $other")

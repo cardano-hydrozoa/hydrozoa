@@ -53,7 +53,7 @@ private class InitHeadActor(
           headAddress,
           req.seedUtxoId,
           req.treasuryCoins,
-          headNativeScript,
+          headNativeScript
         )
 
         log.info(s"initTxRecipe: $initTxRecipe")

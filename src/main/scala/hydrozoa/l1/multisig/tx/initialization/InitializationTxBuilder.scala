@@ -13,5 +13,5 @@ case class InitTxRecipe(
     headAddressBech32: AddressBechL1,
     seedOutput: UtxoIdL1,
     coins: BigInt,
-    headNativeScript: NativeScript,
+    headNativeScript: NativeScript
 )

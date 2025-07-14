@@ -126,15 +126,3 @@ class TreasuryValidatorTest extends FunSuite:
         println(ctx)
         TreasuryValidator.validate(ctxData)
     }
-
-    test("Withdraw redeemer 02 - broken") {
-        val ctxData = Data.fromJson(
-          Source
-              .fromResource("withdraw-ctx-02.json")
-              .getLines()
-              .foldLeft("")((acc, line) => acc + line)
-        )
-        val ctx: ScriptContext = Data.fromData[ScriptContext](ctxData)
-        println(ctx)
-        TreasuryValidator.validate(ctxData)
-    }

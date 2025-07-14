@@ -15,7 +15,7 @@ trait WithdrawTxBuilder {
 case class WithdrawTxRecipe(
     withdrawals: UtxoSetL2,
     resolvedTreasuryUtxoId: UtxoIdL1,
-    proof: UtxoSetCommitment,   
+    proof: UtxoSetCommitment,
     // TODO: Account is used to build and submit in the builder,
     //   though likely we want to separate these two phases.
     nodeAccount: Account

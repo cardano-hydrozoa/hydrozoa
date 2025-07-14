@@ -850,7 +850,9 @@ class HeadStateGlobal(
 
                             log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
                             val submitResult = cardano.ask(_.submit(resolutionTx))
-                            log.info(s"resolution tx submit result (might be left for some nodes): $submitResult")
+                            log.info(
+                              s"resolution tx submit result (might be left for some nodes): $submitResult"
+                            )
 
                             retry(RetryConfig.delayForever(3.seconds)) {
                                 log.info("Running resolving...")

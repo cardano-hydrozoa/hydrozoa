@@ -38,7 +38,9 @@ class CardanoL1Mock() extends CardanoL1:
                 val setSizeBefore = utxosActive.size
                 val inputs = txInputs(tx)
                 if (!inputs.toSet.subsetOf(utxosActive.keySet))
-                    throw RuntimeException(s"Some inputs are missing: ${inputs.toSet.&~(utxosActive.keySet)}")
+                    throw RuntimeException(
+                      s"Some inputs are missing: ${inputs.toSet.&~(utxosActive.keySet)}"
+                    )
                 utxosActive.subtractAll(inputs)
                 val outputs = txOutputs(tx)
                 utxosActive.addAll(outputs)
