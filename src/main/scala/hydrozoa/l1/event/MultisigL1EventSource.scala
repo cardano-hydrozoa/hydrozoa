@@ -25,6 +25,7 @@ import scala.language.strictEquality
 import scala.util.Try
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.Script.Native
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
   *
@@ -39,7 +40,7 @@ class MultisigL1EventSource(
     def awaitInitTx(
         txId: TxId,
         headAddress: AddressBechL1,
-        headNativeScript: NativeScript,
+        headNativeScript: Native,
         beaconTokenName: TokenName
     ): Unit =
         log.info("awaitInitTx")
@@ -56,10 +57,9 @@ class MultisigL1EventSource(
                             )
                         )
 
-                        val nativeScriptBB =
-                            BBNativeScript.deserializeScriptRef(headNativeScript.bytes)
+            
                         val treasuryTokenAmount = asset(
-                          nativeScriptBB.getPolicyId,
+                          headNativeScript.scriptHash.toHex,
                           beaconTokenName.tokenNameHex,
                           BigInteger.valueOf(1)
                         )
