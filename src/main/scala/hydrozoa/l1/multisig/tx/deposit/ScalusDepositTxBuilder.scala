@@ -6,7 +6,7 @@ import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{Tx, TxIx, TxL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Address
+import scalus.cardano.address.{Address, ShelleyPaymentPart, StakePayload}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
 
@@ -16,7 +16,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
     override def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)] = {
 
         bloxToScalusUtxoQuery(backendService, recipe.deposit) match {
-            case Left(err) => Left("Scalus DepositTxBuilder failed: " ++ err)
+            case Left(err) => Left(s"Scalus DepositTxBuilder failed: ${err}")
             case Right(utxoFunding) =>
                 Right({
                     // TODO: we set the fee to 1 ada, but this doesn't need to be
@@ -42,6 +42,15 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                       ) - depositValue,
                       datumOption = None
                     )
+
+                    val requiredSigner : AddrKeyHash  = { utxoFunding.address match
+                            case Address.Shelley(shelleyAddress) =>
+                                shelleyAddress.payment match
+                                    case ShelleyPaymentPart.Key(hash) => hash
+                                    case _ => return Left("deposit not at a pubkey address")
+                            case _ => return Left("Could not get key hash for required signer")
+                    }
+
 
                     val txBody = emptyTxBody.copy(
                       inputs = Set(recipe.deposit.toScalus),

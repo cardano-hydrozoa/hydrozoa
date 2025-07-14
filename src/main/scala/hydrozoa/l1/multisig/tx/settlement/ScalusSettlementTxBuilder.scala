@@ -96,6 +96,7 @@ class ScalusSettlementTxBuilder(
 
         //////////////
         // Datum
+        // TODO: Pass the hash of the protocol parameters in the datum
         val treasuryDatum = toData(
           mkMultisigTreasuryDatum(r.majorVersion, ByteString.empty).toData
         )

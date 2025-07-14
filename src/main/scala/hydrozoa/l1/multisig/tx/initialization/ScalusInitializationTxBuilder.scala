@@ -41,6 +41,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
 
                     // singleton beacon token minted by the native script with the TN being the hash of the
                     // seed utxo
+                    // TODO: factor out "mkSingleToken"
                     val beaconToken: MultiAsset = Map(
                       (
                         headNativeScript.scriptHash,
@@ -102,7 +103,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                       headAddress match {
                           case Shelley(sa) => AddressBech(sa.toBech32.get)
                           // NOTE (Peter, 2025-08-07) I miss monads, how do I do those in scala?
-                          case _ => throw new Exception("Hydra Head is not at a Shelly address")
+                          case _ => return Left("Hydra Head is not at a Shelly address")
                       }
                     )
 

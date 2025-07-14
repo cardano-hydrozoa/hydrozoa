@@ -36,7 +36,8 @@ class ScalusFinalizationTxBuilder(
             reader.multisigRegime(_.beaconTokenName).toScalus
         val beaconTokenBurn = Map((beaconTokenPolicyId, Map((beaconTokenName, -1.toLong))))
 
-        val treasuryUtxoId = reader.multisigRegime(_.treasuryUtxoId)
+        val treasuryUtxoId =  reader.multisigRegimeReader(_.treasuryUtxoId)
+
         val treasuryUtxo: TransactionOutput =
             bloxToScalusUtxoQuery(backendService, treasuryUtxoId) match {
                 case Left(err) => return Left("treasury utxo not found")
