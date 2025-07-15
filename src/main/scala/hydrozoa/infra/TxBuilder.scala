@@ -29,7 +29,7 @@ trait TxBuilder {
     type InitializationErrorType
     def txInitializer(
         calculationResult: CalculationResult,
-        initializer: Transaction
+        entryTx: Transaction
     ): Either[InitializationErrorType, Transaction]
 
     // N.B.: Should include dummy signature for tx sizing purposes
@@ -46,10 +46,10 @@ trait TxBuilder {
     //
     // The downside is that mis-constructing this function can lead to infinite loops.
     type FixedPointError
-    def txFixedPoint(calculationResult: CalculationResult): (
+    def txFixedPoint(calculationResult: CalculationResult): ((
         resultTxBody: Either[FixedPointError, Transaction],
         initialTxBody: Transaction
-    ) => Either[FixedPointError, Transaction]
+    ) => Either[FixedPointError, Transaction])
 
     // Have a smart constructor to add dummy signatures from specified pubkeys so that we can re-use
     // transaction sizing machinery.
@@ -126,5 +126,12 @@ trait TxBuilder {
         }
         finalTx
     }
-
+    
+    
+    // Helper functions
+    // A function usable in the fixed-point that simply returns the initial transaction
+    def idFixedPoint(
+                        calculationResult: CalculationResult
+                    ): (rtx: Either[FixedPointError, Transaction], itx: Transaction) => Either[FixedPointError, Transaction] =
+        (r, i) => Right(i)
 }
