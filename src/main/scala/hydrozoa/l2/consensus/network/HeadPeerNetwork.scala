@@ -358,3 +358,31 @@ given ackFinal2Schema: Schema[AckFinal2] =
 // FIXME: remove, currently used in ReqAux
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
+
+/** ------------------------------------------------------------------------------------------
+  * ReqDeinit
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class ReqDeinit(deinitTx: TxL1) extends Req:
+    type ackType = AckDeinit
+    type resultType = Unit
+
+given reqDeinitCodec: JsonValueCodec[ReqDeinit] =
+    JsonCodecMaker.make
+
+given reqDeinitSchema: Schema[ReqDeinit] =
+    Schema.derived[ReqDeinit]
+
+/** ------------------------------------------------------------------------------------------
+  * AckDeinit
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class AckDeinit(peer: WalletId, signature: TxKeyWitness) extends Ack
+
+given ackDeinitCodec: JsonValueCodec[AckDeinit] =
+    JsonCodecMaker.make
+
+given ackDeinitSchema: Schema[AckDeinit] =
+    Schema.derived[AckDeinit]

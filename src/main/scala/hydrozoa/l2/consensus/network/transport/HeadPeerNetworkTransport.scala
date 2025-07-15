@@ -38,6 +38,8 @@ import hydrozoa.l2.consensus.network.{
     ackFinalSchema,
     ackInitCodec,
     ackInitSchema,
+    ackDeinitCodec,
+    ackDeinitSchema,
     ackMajor2Codec,
     ackMajor2Schema,
     ackMajorCodec,
@@ -52,6 +54,8 @@ import hydrozoa.l2.consensus.network.{
     reqFinalSchema,
     reqInitCodec,
     reqInitSchema,
+    reqDeinitCodec,
+    reqDeinitSchema,
     reqMajorCodec,
     reqMajorSchema,
     reqMinorCodec,
@@ -121,6 +125,8 @@ enum AnyMsg:
     case ReqFinalMsg(content: ReqFinal, aux: ReqAux)
     case AckFinalMsg(content: AckFinal, aux: AckAux)
     case AckFinal2Msg(content: AckFinal2, aux: AckAux)
+    case ReqDeinitMsg(content: ReqDeinit, aux: ReqAux)
+    case AckDeinitMsg(content: AckDeinit, aux: AckAux)
 
     def getFromSeq: (TestPeer, Long) = this match
         case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
@@ -139,6 +145,8 @@ enum AnyMsg:
         case ReqFinalMsg(_, aux)       => aux.from -> aux.seq
         case AckFinalMsg(_, aux)       => aux.from -> aux.seq
         case AckFinal2Msg(_, aux)      => aux.from -> aux.seq
+        case ReqDeinitMsg(_, aux)      => aux.from -> aux.seq
+        case AckDeinitMsg(_, aux)      => aux.from -> aux.seq
 
     def asAck: Option[(TestPeer, Long, Ack)] = this match
         case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
@@ -150,6 +158,7 @@ enum AnyMsg:
         case AckMajor2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case AckFinalMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
         case AckFinal2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case _                               => None
 
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
@@ -186,6 +195,10 @@ enum AnyMsg:
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
             case AckFinal2Msg(content, aux) =>
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
+            case ReqDeinitMsg(content, aux) =>
+                Left(aux.from, aux.seq, content)
+            case AckDeinitMsg(content, aux) =>
+                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
 
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
@@ -208,6 +221,8 @@ enum AnyMsg:
         case ReqFinalMsg(content, _)       => content
         case AckFinalMsg(content, _)       => content
         case AckFinal2Msg(content, _)      => content
+        case ReqDeinitMsg(content, _)      => content
+        case AckDeinitMsg(content, _)      => content
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
@@ -218,6 +233,7 @@ object AnyMsg:
         case content: ReqMinor       => ReqMinorMsg(content, aux)
         case content: ReqMajor       => ReqMajorMsg(content, aux)
         case content: ReqFinal       => ReqFinalMsg(content, aux)
+        case content: ReqDeinit      => ReqDeinitMsg(content, aux)
 
     def apply[A <: Aux](msg: Ack, aux: AckAux): AnyMsg = msg match
         case content: AckVerKey      => AckVerKeyMsg(content, aux)
@@ -229,6 +245,7 @@ object AnyMsg:
         case content: AckMajor2      => AckMajor2Msg(content, aux)
         case content: AckFinal       => AckFinalMsg(content, aux)
         case content: AckFinal2      => AckFinal2Msg(content, aux)
+        case content: AckDeinit      => AckDeinitMsg(content, aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make

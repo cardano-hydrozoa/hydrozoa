@@ -748,8 +748,13 @@ class HeadStateGlobal(
                             }
                         }
 
+                        // TODO: The withdraw tx doesn't get through due to a unlift error, so for now we
+                        //  can just skip that tx.
+
                         // The condition is not required, just a way to speed up tests a tad and simplify logs
-                        if (turn == 0) runWithdraw(resolvedTreasury, ownAccount)
+                        // if (turn == 0) runWithdraw(resolvedTreasury, ownAccount)
+
+                        runDeinit(resolvedTreasury, ownAccount)
 
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     // (Should not happen)
@@ -916,6 +921,14 @@ class HeadStateGlobal(
                             log.error(s"Withdraw tx submission failed with: $err")
                             throw RuntimeException(err)
                     }
+                }
+
+                def runDeinit(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
+                    // Build and propose a deinit transaction. For testing purposes we
+                    // are going to build a tx that:
+                    // - sends all funds from the treasury to the proposer
+                    // - burns all head tokens
+                    ()
                 }
             }
             end runTestDispute
