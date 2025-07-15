@@ -32,4 +32,3 @@ def mkHeadNativeScript(
             .map(Signature(_))
       )
     )
-

@@ -10,7 +10,6 @@ import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v1.{Address, PosixTime}
 import scalus.prelude.Option
 
-
 import scala.util.Try
 
 // MultisigTreasuryDatum
@@ -19,7 +18,8 @@ case class MultisigTreasuryDatum(
     utxosActive: ByteString,
     versionMajor: BigInt,
     params: L2ConsensusParamsH32
-) derives FromData, ToData
+) derives FromData,
+      ToData
 
 type L2ConsensusParamsH32 = ByteString
 
@@ -45,7 +45,8 @@ case class DepositDatum(
     deadline: PosixTime,
     refundAddress: Address,
     refundDatum: Option[ByteString]
-) derives FromData, ToData
+) derives FromData,
+      ToData
 
 import scala.Option as OptionS
 

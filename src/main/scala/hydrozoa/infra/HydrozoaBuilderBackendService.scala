@@ -62,7 +62,7 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
                         // This is required only due to BB's peculiarities
                         val multisigTreasuryUtxo: Utxo =
                             txOutputToUtxo(txHash, treasuryOutputIx.ix, treasuryOutput)
-                            
+
                         val result = Result.success("").asInstanceOf[Result[util.List[Utxo]]]
                         result.withValue(List(multisigTreasuryUtxo).asJava)
                         result

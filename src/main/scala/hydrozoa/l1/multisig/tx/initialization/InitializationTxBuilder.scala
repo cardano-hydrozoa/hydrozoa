@@ -5,7 +5,7 @@ import hydrozoa.l1.multisig.tx.InitTx
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.Transaction
 
-// TODO: Make the Address fit better into the hydrazoa type heirarchy 
+// TODO: Make the Address fit better into the hydrazoa type heirarchy
 // (i.e., this should read InitTx instead of Transaction
 trait InitTxBuilder {
     def mkInitializationTxDraft(

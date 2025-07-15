@@ -39,4 +39,3 @@ def credentialToBloxbean(credential: v1.Credential): Credential =
     credential match
         case PubKeyCredential(hash) => fromKey(hash.hash.bytes)
         case ScriptCredential(hash) => fromScript(hash.bytes)
-

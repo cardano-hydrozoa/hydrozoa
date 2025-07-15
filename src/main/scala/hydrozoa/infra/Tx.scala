@@ -22,19 +22,19 @@ import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
 
-def txHash[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): TxId = TxId(
+def txHash[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | Tx[L]): TxId = TxId(
   getTxHash(getAnyTxBytes(tx))
 )
 
-def serializeTxHex[T <: MultisigTxTag, L <: AnyLevel](tx: MultisigTx[T] | Tx[L]): String =
+def serializeTxHex[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | Tx[L]): String =
     HexUtil.encodeHexString(getAnyTxBytes(tx))
 
-def getAnyTxBytes[L <: AnyLevel, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) = tx.bytes
+def getAnyTxBytes[L <: AnyLayer, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) = tx.bytes
 
-def deserializeTxHex[L <: AnyLevel](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
+def deserializeTxHex[L <: AnyLayer](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
 
 // Pure function to add a key witness to a transaction.
-def addWitness[L <: AnyLevel](tx: Tx[L], wit: TxKeyWitness): Tx[L] =
+def addWitness[L <: AnyLayer](tx: Tx[L], wit: TxKeyWitness): Tx[L] =
     val txBytes = TransactionBytes(tx.bytes)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
@@ -98,22 +98,22 @@ def txFees(tx: TxAny): Long = Transaction.deserialize(tx.bytes).getBody.getFee.l
 //    val datum = output.getInlineDatum
 //    Interop.toScalusData(datum)
 
-def toBloxBeanTransactionOutput[L <: AnyLevel](output: Output[L]): TransactionOutput =
+def toBloxBeanTransactionOutput[L <: AnyLayer](output: Output[L]): TransactionOutput =
     TransactionOutput.builder
         .address(output.address.bech32)
         .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
         .build
 
-def txInputs[L <: AnyLevel](tx: Tx[L]): Seq[UtxoId[L]] =
+def txInputs[L <: AnyLayer](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
     inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex.toChar))).toSeq
 
-def valueTokens[L <: AnyLevel](tokens: Value): Tokens = {
+def valueTokens[L <: AnyLayer](tokens: Value): Tokens = {
     tokens.toMap.asScala.toMap.map((k, v) =>
         PolicyId(k) -> v.asScala.toMap.map((k, v) => TokenName(k) -> BigInt.apply(v))
     )
 }
-def txOutputs[L <: AnyLevel](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
+def txOutputs[L <: AnyLayer](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
     val txId = txHash(tx)
     outputs.zipWithIndex

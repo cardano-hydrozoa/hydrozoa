@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AddressBech, AnyLevel, NativeScript, TokenName, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
+import hydrozoa.{AddressBech, AnyLayer, NativeScript, TokenName, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
@@ -50,7 +50,7 @@ val emptyTxBody: TransactionBody = TransactionBody(
   donation = None
 )
 
-extension [L <: AnyLevel](utxo: UtxoId[L]) {
+extension [L <: AnyLayer](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
           transactionId = Hash(ByteString.fromHex(utxo.txId.hash)),
@@ -58,7 +58,7 @@ extension [L <: AnyLevel](utxo: UtxoId[L]) {
         )
 }
 
-extension [L <: hydrozoa.AnyLevel] (address : AddressBech[L]) {
+extension [L <: hydrozoa.AnyLayer] (address : AddressBech[L]) {
     def toScalus : Address = Address.fromBech32(address.bech32)
 }
 
@@ -86,7 +86,7 @@ def htokensToMultiAsset (tokens : Tokens) : MultiAsset = {
 }
 
 
-extension [L <: hydrozoa.AnyLevel] (output : Output[L]) {
+extension [L <: hydrozoa.AnyLayer] (output : Output[L]) {
     def toScalus: TransactionOutput = {
         
         TransactionOutput(
@@ -137,7 +137,7 @@ extension (tx : TxL1) {
 }
 
 // Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
-def bloxToScalusUtxoQuery[L <: AnyLevel](
+def bloxToScalusUtxoQuery[L <: AnyLayer](
     backendService: BackendService,
     utxoId: UtxoId[L]
 ): Either[String, TransactionOutput] = {
@@ -201,5 +201,3 @@ def v1AddressToLedger(address: v1.Address, network: Network): ShelleyAddress = {
             }
     ShelleyAddress(network = network, payment = paymentPart, delegation = delegationPart)
 }
-
-

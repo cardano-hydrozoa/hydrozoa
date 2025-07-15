@@ -12,7 +12,11 @@ import hydrozoa.infra.{mkBuilder, toEither}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{DisputeRedeemer, VoteDatum}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{ResolvedDatum, TreasuryDatum, TreasuryRedeemer}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
+    ResolvedDatum,
+    TreasuryDatum,
+    TreasuryRedeemer
+}
 import hydrozoa.{TxL1, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
@@ -97,7 +101,7 @@ class BloxBeanResolutionTxBuilder(
                 val nodeAddress = r.nodeAccount.enterpriseAddress()
                 val txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-                val depositTx: Transaction = builder
+                val resolutionTx: Transaction = builder
                     .apply(txPartial)
                     // TODO: this should be LEQ than what an unresolved treasury datum contains
                     // see MajorBlockConfirmationActor.scala:210
@@ -108,6 +112,6 @@ class BloxBeanResolutionTxBuilder(
                     .withSigner(txSigner)
                     .buildAndSign()
 
-                Right(TxL1(depositTx.serialize))
+                Right(TxL1(resolutionTx.serialize))
             case _ => Left("Ref scripts are not set")
 }
