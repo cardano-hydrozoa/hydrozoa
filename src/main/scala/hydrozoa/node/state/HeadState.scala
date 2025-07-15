@@ -7,6 +7,7 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toHydrozoaNativeScript
 import hydrozoa.infra.{
     Piper,
     decodeHex,
@@ -48,6 +49,7 @@ import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 import scalus.prelude.crypto.bls12_381.G2
 import supranational.blst.{P1, P2}
+import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter
@@ -629,7 +631,8 @@ class HeadStateGlobal(
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(settlementTx) =>
                     log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
-                    cardano.tell(_.submit(settlementTx))
+                    val ret = cardano.ask(_.submit(settlementTx))
+                    log.info(s"settlementResult = $ret")
                 case _ =>
             }
 
@@ -1123,7 +1126,8 @@ class HeadStateGlobal(
                 case Some(finalizationTx) =>
                     // Submit finalization tx
                     log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
-                    cardano.tell(_.submit(finalizationTx))
+                    val res = cardano.ask(_.submit(finalizationTx))
+                    log.info(s"Finalization tx submission result is: ${res}")
                 case _ => assert(false, "Impossible: finalization tx should always present")
             }
 
@@ -1177,7 +1181,7 @@ object HeadStateGlobal:
           ownPeer = params.ownPeer,
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
-          headNativeScript = params.headNativeScript,
+          headNativeScript = params.headNativeScript.toHydrozoaNativeScript,
           headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,

@@ -2,9 +2,10 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.{toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScriptAndAddress}
+import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
@@ -12,7 +13,13 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
+import io.bullet.borer.Cbor
 import ox.channels.{ActorRef, Channel, Source}
+import scalus.builtin.{ByteString, given}
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.TransactionOutput.Shelley
 
 import scala.collection.mutable
 
@@ -32,7 +39,7 @@ private class InitHeadActor(
     private var ownAck: AckInit = _
 
     private var txDraft: InitTx = _
-    private var headNativeScript: NativeScript = _
+    private var headNativeScript: Native = _
     private var headMintingPolicy: CurrencySymbol = _
     private var headAddress: AddressBechL1 = _
     private var beaconTokenName: TokenName = _
@@ -44,16 +51,24 @@ private class InitHeadActor(
 
         val headPeers = req.otherHeadPeers + req.initiator
         val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
-        val (headNativeScript, headMp, headAddress) =
-            mkHeadNativeScriptAndAddress(headVKeys, cardanoActor.ask(_.network))
+        val headNativeScript = mkHeadNativeScript(headVKeys)
+        val headMintingPolicy: CurrencySymbol = CurrencySymbol(headNativeScript.scriptHash.toIArray)
+
+        val headAddress: AddressBechL1 = AddressBech(
+          ShelleyAddress(
+            network = cardanoActor.ask(_.network.toScalus),
+            payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
+            delegation = Null
+          ).toBech32.get
+        )
 
         log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
 
         val initTxRecipe = InitTxRecipe(
-          headAddress,
-          req.seedUtxoId,
-          req.treasuryCoins,
-          headNativeScript
+          network = cardanoActor.ask(_.network),
+          seedUtxo = req.seedUtxoId,
+          coins = req.treasuryCoins,
+          peers = headVKeys
         )
 
         log.info(s"initTxRecipe: $initTxRecipe")
@@ -71,7 +86,7 @@ private class InitHeadActor(
         this.ownAck = ownAck
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
-        this.headMintingPolicy = headMp
+        this.headMintingPolicy = CurrencySymbol(headNativeScript.scriptHash.toIArray)
         this.headAddress = headAddress
         this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress

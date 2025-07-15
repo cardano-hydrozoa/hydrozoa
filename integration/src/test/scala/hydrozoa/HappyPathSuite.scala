@@ -54,6 +54,7 @@ class HappyPathSuite extends FunSuite {
 
             _ = sut.awaitTxL1(initTxId)
 
+            // Deposit change from initialization transaction
             deposit1 <- sut.deposit(
               Alice,
               DepositRequest(
