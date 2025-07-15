@@ -221,7 +221,7 @@ class Node:
                     nodeState
                         .ask(_.head.getBlockRecord(block))
                         .toRight(
-                          s"Effects for block ${block.blockHeader.blockNum} have not bee found after 10 secs of waiting"
+                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 10 secs of waiting"
                         )
                 }
 
