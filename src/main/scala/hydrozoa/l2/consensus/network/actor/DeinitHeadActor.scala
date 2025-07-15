@@ -78,7 +78,7 @@ private class DeinitHeadActor(
         // Initially the request may be absent (if an ack comes first)
         if (req != null)
             val (headPeers) = stateActor.ask(_.head.openPhase(open => (open.headPeers)))
-            
+
             if acks.keySet == headPeers
             then
                 // All wits are here, we can sign and submit

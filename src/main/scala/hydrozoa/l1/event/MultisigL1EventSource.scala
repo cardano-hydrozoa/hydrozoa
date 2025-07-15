@@ -57,7 +57,6 @@ class MultisigL1EventSource(
                             )
                         )
 
-            
                         val treasuryTokenAmount = asset(
                           headNativeScript.scriptHash.toHex,
                           beaconTokenName.tokenNameHex,
