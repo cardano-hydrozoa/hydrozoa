@@ -71,6 +71,7 @@ object SimpleL2Ledger:
     def unliftUtxoSet(utxosSetOpaque: LedgerUtxoSetOpaque): Map[UtxoIdL2, OutputL2] =
         utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
+    // TODO: this will be gone as soon as we get a setup ceremony up and running.
     val tau = Scalar(BigInteger("42"))
 
     def mkDummySetupG2(n: Int): SList[P2] = {
