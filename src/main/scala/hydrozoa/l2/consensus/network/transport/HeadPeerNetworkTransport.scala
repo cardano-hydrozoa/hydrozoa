@@ -105,9 +105,6 @@ case class AckAux(from: TestPeer, seq: Long, replyTo: TestPeer, replyToSeq: Long
 given ackAuxSchema: Schema[AckAux] =
     Schema.derived[AckAux]
 
-trait HasMsgId:
-    def msgId: Long
-
 enum AnyMsg:
     case ReqVerKeyMsg(content: ReqVerKey, aux: ReqAux)
     case AckVerKeyMsg(content: AckVerKey, aux: AckAux)

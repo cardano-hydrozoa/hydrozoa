@@ -35,6 +35,8 @@ trait HeadPeerNetwork {
     def reqMajor(req: ReqMajor): Unit
 
     def reqFinal(req: ReqFinal): Unit
+
+    def reqDeinit(req: ReqDeinit): Unit
 }
 
 /** ------------------------------------------------------------------------------------------
@@ -364,7 +366,7 @@ given testPeerSchema: Schema[TestPeer] =
   * ------------------------------------------------------------------------------------------
   */
 
-case class ReqDeinit(deinitTx: TxL1) extends Req:
+case class ReqDeinit(deinitTx: TxL1, headPeers: Set[WalletId]) extends Req:
     type ackType = AckDeinit
     type resultType = Unit
 

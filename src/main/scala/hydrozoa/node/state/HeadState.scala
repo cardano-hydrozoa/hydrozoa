@@ -29,14 +29,15 @@ import hydrozoa.l1.rulebased.onchain.{
     TreasuryValidatorScript,
     hashVerificationKey
 }
+import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqDeinit}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.TestPeer
@@ -48,8 +49,6 @@ import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 import scalus.prelude.crypto.bls12_381.G2
-import supranational.blst.{P1, P2}
-import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter
@@ -231,6 +230,11 @@ class HeadStateGlobal(
     def setCardano(cardano: ActorRef[CardanoL1]): Unit =
         this.cardano = cardano
 
+    private var network: ActorRef[HeadPeerNetwork] = _
+
+    def setNetwork(network: ActorRef[HeadPeerNetwork]) =
+        this.network = network
+
     // TODO: remove
 
     private var voteTxBuilder: VoteTxBuilder = _
@@ -249,6 +253,10 @@ class HeadStateGlobal(
     private var withdrawTxBuilder: WithdrawTxBuilder = _
 
     def setWithdrawTxBuilder(builder: WithdrawTxBuilder): Unit = this.withdrawTxBuilder = builder
+
+    private var deinitTxBuilder: DeinitTxBuilder = _
+
+    def setDeinitTxBuilder(builder: DeinitTxBuilder): Unit = this.deinitTxBuilder = builder
 
     //
 
@@ -323,7 +331,10 @@ class HeadStateGlobal(
     override def openPhase[A](foo: OpenPhase => A): A =
         headPhase match
             case Open => foo(OpenPhaseImpl())
-            case _    => throw IllegalStateException("The head is not in Open phase.")
+            case _    =>
+                val msg = "The head is not in Open phase."
+                log.error(msg)
+                throw RuntimeException(msg)
 
     override def finalizingPhase[A](foo: FinalizingPhase => A): A =
         headPhase match
@@ -924,11 +935,30 @@ class HeadStateGlobal(
                 }
 
                 def runDeinit(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
-                    // Build and propose a deinit transaction. For testing purposes we
-                    // are going to build a tx that:
-                    // - sends all funds from the treasury to the proposer
+                    // Build and propose a deinit transaction.
+                    // For testing purposes we are going to build a tx that:
+                    // - sends all funds from the treasury to the initial seeder
                     // - burns all head tokens
-                    ()
+                    val recipe = DeinitTxRecipe(
+                      resolvedTreasury,
+                      self.seedAddress,
+                      self.headNativeScript,
+                      self.headMintingPolicy,
+                      ownAccount
+                    )
+
+                    val Right(deinitTxDraft) = deinitTxBuilder.buildDeinitTxDraft(recipe)
+
+                    val headPeers = this.headPeers
+
+                    // Fire and forget for now, arguably should be .ask
+                    network.tell(_.reqDeinit(ReqDeinit(deinitTxDraft, headPeers)))
+                    log.info("Waiting for the deinit tx...")
+                    cardano.ask(
+                      _.awaitTx(txHash(deinitTxDraft), RetryConfig.delay(30, 1.second))
+                    )
+                    // This is the end of the head
+                    System.exit(0)
                 }
             }
             end runTestDispute

@@ -99,6 +99,10 @@ class ConsensusActorFactory(
                 val actor = mkFinalBlockActor(dropMyself)
                 val ownAck = actor.init(req)
                 actor -> ownAck
+            case req: ReqDeinit =>
+                val actor = mkDeinitActor(dropMyself)
+                val ownAck = actor.init(req)
+                actor -> ownAck
 
     def spawnByAck(ack: Ack, dropMyself: () => Unit): (Option[ConsensusActor], Option[Ack]) =
         log.info("spawnByAck")
@@ -115,7 +119,7 @@ class ConsensusActorFactory(
                 val actor = mkRefundLaterActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> None
-            case ack: AckUnit =>
+            case _: AckUnit =>
                 (None, None)
             case ack: AckMinor =>
                 val actor = mkMinorBlockActor(dropMyself)
@@ -135,6 +139,10 @@ class ConsensusActorFactory(
                 Some(actor) -> mbAck
             case ack: AckFinal2 =>
                 val actor = mkFinalBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckDeinit =>
+                val actor = mkDeinitActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
 
@@ -178,6 +186,14 @@ class ConsensusActorFactory(
           walletActor,
           finalizationTxBuilder,
           dropMyself
+        )
+
+    private def mkDeinitActor(dropMyself: () => Unit) =
+        new DeinitHeadActor(
+            stateActor,
+            walletActor,
+            cardanoActor,
+            dropMyself
         )
 
 end ConsensusActorFactory

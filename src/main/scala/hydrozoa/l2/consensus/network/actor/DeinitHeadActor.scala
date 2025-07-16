@@ -25,10 +25,10 @@ import scalus.cardano.ledger.TransactionOutput.Shelley
 import scala.collection.mutable
 
 private class DeinitHeadActor(
+    // TODO: remove
     stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
-    deinitTxBuilder: DeinitTxBuilder,
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
@@ -43,15 +43,9 @@ private class DeinitHeadActor(
     private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqType): Seq[AckType] =
-        log.trace(s"Deinit req: $req")
+        log.info(s"Initializing deinit actor: $req")
 
-        val deinitTxRecipe = DeinitTxRecipe(
-        )
-
-        log.info(s"deinitTxRecipe: $deinitTxRecipe")
-
-        // Builds and balance thedeinit tx
-        val Right(txDraft) = deinitTxBuilder.buildDeinitTxDraft(deinitTxRecipe)
+        val txDraft = req.deinitTx
 
         log.info("Deinit tx draft: " + serializeTxHex(txDraft))
         log.info("Deinit tx draft hash: " + txHash(txDraft))
@@ -67,17 +61,20 @@ private class DeinitHeadActor(
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
-        log.trace(s"Deliver ack: $ack")
+        log.info(s"Deliver ack: $ack")
         acks.put(ack.peer, ack.signature)
         tryMakeResult()
         None
 
     private def tryMakeResult(): Unit =
-        log.trace("tryMakeResult")
+        log.info("tryMakeResult")
 
         // Initially the request may be absent (if an ack comes first)
         if (req != null)
-            val (headPeers) = stateActor.ask(_.head.openPhase(open => (open.headPeers)))
+
+            // TODO: this hangs, I suppose because we call deinit from the state, though it is strange.
+            // stateActor.ask(_.head.openPhase(open => (open.headPeers)))
+            val headPeers = req.headPeers;
 
             if acks.keySet == headPeers
             then

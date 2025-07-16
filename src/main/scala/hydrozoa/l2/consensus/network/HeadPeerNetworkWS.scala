@@ -66,3 +66,9 @@ class HeadPeerNetworkWS(
         log.info(s"ReqFinal for block: $req.block")
         val seq = transport.nextSeq
         dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
+
+    override def reqDeinit(req: ReqDeinit): Unit =
+        log.info(s"ReqDeinit: $req")
+        val seq = transport.nextSeq
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
+        
