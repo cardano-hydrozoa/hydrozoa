@@ -759,13 +759,13 @@ class HeadStateGlobal(
                             }
                         }
 
-                        // TODO: The withdraw tx doesn't get through due to a unlift error, so for now we
-                        //  can just skip that tx.
-
                         // The condition is not required, just a way to speed up tests a tad and simplify logs
-                        // if (turn == 0) runWithdraw(resolvedTreasury, ownAccount)
-
-                        runDeinit(resolvedTreasury, ownAccount)
+                        if (turn == 0) {
+                            val withdrawalTxHash = runWithdrawal(resolvedTreasury, ownAccount)
+                            // The rest of treasury should be always the first output
+                            val restTreasury = UtxoIdL1(withdrawalTxHash, TxIx(0))
+                            runDeinit(restTreasury, ownAccount)
+                        }
 
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     // (Should not happen)
@@ -894,7 +894,7 @@ class HeadStateGlobal(
                     }
                 }
 
-                def runWithdraw(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
+                def runWithdrawal(resolvedTreasury: UtxoIdL1, ownAccount: Account): TxId = {
 
                     log.info("Running withdraw...")
 
@@ -928,6 +928,7 @@ class HeadStateGlobal(
                         case Right(txHash) =>
                             log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
                             cardano.ask(_.awaitTx(txHash))
+                            txHash
                         case Left(err) =>
                             log.error(s"Withdraw tx submission failed with: $err")
                             throw RuntimeException(err)
@@ -957,8 +958,8 @@ class HeadStateGlobal(
                     cardano.ask(
                       _.awaitTx(txHash(deinitTxDraft), RetryConfig.delay(30, 1.second))
                     )
-                    // This is the end of the head
-                    System.exit(0)
+//                    // This is the end of the head
+//                    System.exit(0)
                 }
             }
             end runTestDispute

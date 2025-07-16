@@ -111,8 +111,6 @@ class DisputeSuite extends FunSuite {
                   DisputeResolutionScript.plutusScript
                 )
 
-//            throw RuntimeException()
-
             (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
         else (None, None)
 
