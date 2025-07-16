@@ -5,7 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.Tx
 import hydrozoa.infra.transitionary.{
     bloxToScalusUtxoQuery,
-    emptyTxBody,
+
     toScalus,
     toScalusNativeScript
 }
@@ -81,7 +81,7 @@ class ScalusFinalizationTxBuilder(
         )
 
         val txBody =
-            emptyTxBody.copy(
+            TransactionBody(
               inputs = Set(treasuryUtxoId.toScalus),
               outputs = outputsToWithdraw.toIndexedSeq.map(Sized(_)).appended(Sized(changeOutput)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be

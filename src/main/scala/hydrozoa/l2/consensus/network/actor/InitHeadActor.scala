@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toIArray, toScalus}
+import hydrozoa.infra.transitionary.{toHydrozoa, toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
@@ -19,6 +19,7 @@ import scalus.builtin.{ByteString, given}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionOutput.Shelley
 
 import scala.collection.mutable
@@ -74,8 +75,9 @@ private class InitHeadActor(
         log.info(s"initTxRecipe: $initTxRecipe")
 
         // Builds and balance initialization tx
-        val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-
+        val Right(txDraftScalus, seedAddress) = initTxBuilder.runTxBuilder(initTxRecipe)
+        val txDraft = Tx(Cbor.encode(txDraftScalus).toByteArray)
+        
         log.info("Init tx draft: " + serializeTxHex(txDraft))
         log.info("Init tx draft hash: " + txHash(txDraft))
 
@@ -89,7 +91,7 @@ private class InitHeadActor(
         this.headMintingPolicy = CurrencySymbol(headNativeScript.scriptHash.toIArray)
         this.headAddress = headAddress
         this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
-        this.seedAddress = seedAddress
+        this.seedAddress = seedAddress.toHydrozoa
 
         deliver(ownAck)
         Seq(ownAck)

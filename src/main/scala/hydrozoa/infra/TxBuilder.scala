@@ -1,7 +1,9 @@
 package hydrozoa.infra
 
 import hydrozoa.infra.transitionary.emptyTxBody
-import scalus.cardano.ledger.{KeepRaw, Transaction, TransactionBody, TransactionWitnessSet}
+import scalus.cardano.ledger.*
+
+import scala.util.control.TailCalls.{TailRec, done}
 
 trait TxBuilder {
     // The Tx Builder "recipe" type contains all the information needed
@@ -18,19 +20,23 @@ trait TxBuilder {
     // queries because (for us) queries are not pure. The failures we want to isolate here are things
     // like "the query returned a UTxO at the right address, but we expected an inline datum and got a datum hash",
     // or "the redeemer provided won't satisfy on-chain logic".
-    def calculate(queryResult: QueryResult): Either[CalculationError, CalculationResult]
     type CalculationResult
     type CalculationError
+    def calculate(queryResult: QueryResult): Either[CalculationError, CalculationResult]
 
     // The "tx initializer" is a non-recursive entry-point for constructing an initial Tx based on the calculation
     // result and an "entrypoint" transaction . We're considering implementing it as a first step for both efficiency
     // purposes and to make it easier to test. This is (essentially) just an endomorphism over `Transaction`; the errors
     // here won't be due to recursion.
     type InitializationErrorType
+    // In most cases, the initializer result will just be a Transaction.
+    // However, we make it generic in order to write info out of the build process
+    // for diagnostics or logging
+    type InitializerResult
     def txInitializer(
         calculationResult: CalculationResult,
         entryTx: Transaction
-    ): Either[InitializationErrorType, Transaction]
+    ): Either[InitializationErrorType, InitializerResult]
 
     // N.B.: Should include dummy signature for tx sizing purposes
     // This is heavily inspired from sc-tools:
@@ -45,11 +51,16 @@ trait TxBuilder {
     //     utxo contains the correct token.
     //
     // The downside is that mis-constructing this function can lead to infinite loops.
-    type FixedPointError
-    def txFixedPoint(calculationResult: CalculationResult): ((
-        resultTxBody: Either[FixedPointError, Transaction],
-        initialTxBody: Transaction
-    ) => Either[FixedPointError, Transaction])
+    type FinalizerError
+    // In most cases, the finalizer result will just be Transaction. However, we make it generic
+    // in order to write info out of the build process for diagnostics or
+    // logging
+    type FinalizerResult
+
+    def txFinalizer(
+        cr: CalculationResult,
+        initRes: InitializerResult
+    ): TailRec[Either[FinalizerError, FinalizerResult]]
 
     // Have a smart constructor to add dummy signatures from specified pubkeys so that we can re-use
     // transaction sizing machinery.
@@ -66,6 +77,10 @@ trait TxBuilder {
     // essentially the following (with `Either`'s threaded throughout):
     /*
 
+       Recipe
+         |
+         |
+         v
     ============
     |   Query  |
     ============
@@ -82,56 +97,39 @@ trait TxBuilder {
          |------------> |===============|
          |              |  initializer  |
          |              |===============|
-         |                      |
-         |                      | Transaction
-         |                      v
+         |                 |
+         |                 |  InitializerResult
+         |                 v
          |             |=================|
-         |------------>|   fixedPoint    |<-----|
+         |------------>|   finalizer     |<-----|
                        |=================|      |
                                 |               | (recursive case)
-                  Transaction   |               |
+                                |               |
+                  FinalizerRes  |               |
+                                |               |
                                 |---------------|
                                 |
                                 | (non recursive case)
                                 v
-                              finalTx : Transaction
+                 finalRes : FinalizerRes
 
      */
     def runTxBuilder(recipe: Recipe): Either[
-      QueryError | CalculationError | InitializationErrorType | FixedPointError,
-      Transaction
+      QueryError | CalculationError | InitializationErrorType | FinalizerError,
+      FinalizerResult
     ] = {
-        val qr: QueryResult = this.query(recipe) match {
-            case Left(err) => return Left(err)
-            case Right(r)  => r
-        }
-
-        val cr: CalculationResult = this.calculate(qr) match {
-            case Left(err) => return Left(err)
-            case Right(r)  => r
-        }
-
-        val initTxBody: Transaction = this.txInitializer(cr, this.entryTx) match {
-            case Left(err) => return Left(err)
-            case Right(r)  => r
-        }
-
-        // We create a fixed point based on the result of the calculations
-        val finalTx = {
-            val fp = this.txFixedPoint(cr)
-            lazy val result: Either[FixedPointError, Transaction] = {
-                fp(result, initTxBody)
-            }
-            result
-        }
-        finalTx
+        for
+            qr <- this.query(recipe)
+            cr <- this.calculate(qr)
+            initRes <- this.txInitializer(cr, this.entryTx)
+            finalRes <- this.txFinalizer(cr = cr, initRes = initRes).result
+        yield finalRes
     }
-    
-    
+
     // Helper functions
-    // A function usable in the fixed-point that simply returns the initial transaction
-    def idFixedPoint(
-                        calculationResult: CalculationResult
-                    ): (rtx: Either[FixedPointError, Transaction], itx: Transaction) => Either[FixedPointError, Transaction] =
-        (r, i) => Right(i)
+    // A function usable in the finalizer fixed-point that simply returns the initial transaction
+    def idFinalizer(irToFr: InitializerResult => FinalizerResult)(
+        cr: CalculationResult,
+        initRes: InitializerResult
+    ): TailRec[Either[FinalizerError, FinalizerResult]] = done(Right(irToFr(initRes)))
 }

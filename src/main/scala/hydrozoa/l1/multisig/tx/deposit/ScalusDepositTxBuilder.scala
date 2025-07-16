@@ -1,14 +1,14 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toScalus}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{Tx, TxIx, TxL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyPaymentPart, StakePayload}
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 
 class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateReader)
     extends DepositTxBuilder {
@@ -42,17 +42,8 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                       ) - depositValue,
                       datumOption = None
                     )
-
-                    val requiredSigner : AddrKeyHash  = { utxoFunding.address match
-                            case Address.Shelley(shelleyAddress) =>
-                                shelleyAddress.payment match
-                                    case ShelleyPaymentPart.Key(hash) => hash
-                                    case _ => return Left("deposit not at a pubkey address")
-                            case _ => return Left("Could not get key hash for required signer")
-                    }
-
-
-                    val txBody = emptyTxBody.copy(
+                    
+                    val txBody = TransactionBody(
                       inputs = Set(recipe.deposit.toScalus),
                       outputs = IndexedSeq(depositOutput, changeOutput).map(Sized(_)),
                       fee = feeCoin,
@@ -62,7 +53,6 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                               return Left(
                                 "buildDepositTxDraft: expecting an address key hash, got a stake key"
                               )
-
                       })
                     )
 

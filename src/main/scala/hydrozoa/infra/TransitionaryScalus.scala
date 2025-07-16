@@ -8,7 +8,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AddressBech, AnyLevel, NativeScript, TokenName, Output, Tokens, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
+import hydrozoa.{AddressBech, AnyLevel, NativeScript, Output, TokenName, Tokens, Tx, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
@@ -28,27 +28,17 @@ import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.{ledger, prelude}
 
 val emptyTxBody: TransactionBody = TransactionBody(
-  inputs = Set.empty,
-  outputs = IndexedSeq.empty,
-  fee = Coin(0),
-  ttl = None,
-  certificates = Set.empty,
-  withdrawals = None,
-  auxiliaryDataHash = None,
-  validityStartSlot = None,
-  mint = None,
-  scriptDataHash = None,
-  collateralInputs = Set.empty,
-  requiredSigners = Set.empty,
-  networkId = None,
-  collateralReturnOutput = None,
-  totalCollateral = None,
-  referenceInputs = Set.empty,
-  votingProcedures = None,
-  proposalProcedures = Set.empty,
-  currentTreasuryValue = None,
-  donation = None
+    inputs = Set.empty,
+    outputs = IndexedSeq.empty,
+    fee = Coin(0)
 )
+
+extension [L <: AnyLevel] (addr: Address) {
+    def toHydrozoa : AddressBech[L] = addr match {
+        case Shelley(s) => AddressBech(s.toBech32.get)
+        case _ => throw RuntimeException("only shelley addresses allowed")
+    }
+}
 
 extension [L <: AnyLevel](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =

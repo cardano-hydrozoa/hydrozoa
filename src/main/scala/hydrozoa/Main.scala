@@ -9,7 +9,7 @@ import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{ScalusFinalizationTxBuilder, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{ScalusInitializationTxBuilder, InitTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{ScalusRefundTxBuilder, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{ScalusSettlementTxBuilder, SettlementTxBuilder}
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
@@ -246,7 +246,7 @@ def mkTxBuilders(
     val nodeStateReader: HeadStateReader = nodeState.reader
 
     // Tx Builders
-    val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
+    val initTxBuilder: InitTxBuilder = InitTxBuilder(backendService)
     val fallbackTxBuilder: FallbackTxBuilder =
         BloxBeanFallbackTxBuilder(backendService)
     val depositTxBuilder: DepositTxBuilder =

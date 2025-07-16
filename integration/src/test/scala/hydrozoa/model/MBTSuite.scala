@@ -3,7 +3,7 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toHydrozoaNativeScript, toScalus}
+import hydrozoa.infra.transitionary.{toHydrozoa, toHydrozoaNativeScript, toScalus}
 import hydrozoa.infra.{
     NoMatch,
     PSStyleAssoc,
@@ -15,22 +15,18 @@ import hydrozoa.infra.{
     serializeTxHex,
     txHash
 }
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
+import hydrozoa.l1.multisig.onchain.mkHeadNativeScript
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{
-    InitTxBuilder,
-    InitTxRecipe,
-    ScalusInitializationTxBuilder
-}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.refund.{
     PostDatedRefundRecipe,
     RefundTxBuilder,
     ScalusRefundTxBuilder
 }
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
-import hydrozoa.l1.multisig.tx.toL1Tx
+import hydrozoa.l1.multisig.tx.{MultisigTx, toL1Tx}
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
@@ -42,6 +38,7 @@ import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
+import io.bullet.borer.Cbor
 import org.scalacheck.Gen.resize
 import org.scalacheck.Prop.{Result, propBoolean}
 import org.scalacheck.Test.Parameters
@@ -54,8 +51,6 @@ import sttp.client4.Response
 import sttp.client4.quick.*
 
 import java.util.concurrent.atomic.AtomicInteger
-import scala.collection.immutable.Set as Opt
-import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
 import scala.util.{Failure, Success, Try}
 
@@ -312,8 +307,9 @@ object MBTSuite extends Commands:
 
                 val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
                 val backendService = BackendServiceMock(l1Mock, state.pp)
-                val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
-                val Right(initTx, headAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+                val initTxBuilder: InitTxBuilder = InitTxBuilder(backendService)
+                val Right(initTxScalus, headAddress) = initTxBuilder.runTxBuilder(initTxRecipe)
+                val initTx = MultisigTx(Tx(Cbor.encode(initTxScalus).toByteArray))
                 
                 // FIXME: the native script is now constructed inside the initTxBuilder;
                 // thus, this value is redundant and is only being created for compatibility during refactoring
@@ -328,7 +324,7 @@ object MBTSuite extends Commands:
 
                 l1Mock.submit(initTx.toL1Tx)
 
-                val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
+                val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress.toHydrozoa) match
                     case Right(ix, _, _, _) => UtxoIdL1(txId, ix)
                     case Left(err) => err match
                             case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
@@ -341,7 +337,7 @@ object MBTSuite extends Commands:
                   headPhase = Some(Open),
                   initiator = Some(initiator),
                   headPeers = otherHeadPeers,
-                  headAddressBech32 = Some(headAddress),
+                  headAddressBech32 = Some(headAddress.toHydrozoa),
                   headMultisigScript = Some(headMultisigScript.toHydrozoaNativeScript),
                   treasuryUtxoId = Some(treasuryUtxoId),
                   knownTxs = l1Mock.getKnownTxs,

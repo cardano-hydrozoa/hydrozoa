@@ -27,18 +27,22 @@ import scalus.cardano.ledger.{
 }
 import scalus.builtin.Data.toData
 
+import scala.util.control.TailCalls
+import scala.util.control.TailCalls.TailRec
+
 // FIXME: temporary value until we do proper fee calculation
-val feeCoin: Coin = Coin(1_000_000.toLong)
+val feeCoin: Coin = Coin(1_000_000L)
 
 // TODO: Make the Address fit better into the hydrazoa type heirarchy
 // (i.e., this should read InitTx instead of Transaction
-trait InitTxBuilder extends TxBuilder {
+class InitTxBuilder(backendService: BackendService) extends TxBuilder {
     override type Recipe = InitTxRecipe
 
+    // Queries do a single lookup for the Tx Output of the seed utxo
     override type QueryResult = InitTxQueryResult
     override type QueryError = String
     override def query(recipe: this.Recipe): Either[QueryError, QueryResult] = {
-        bloxToScalusUtxoQuery(recipe.backendService, recipe.seedUtxo) match {
+        bloxToScalusUtxoQuery(backendService, recipe.seedUtxo) match {
             case Left(err) => Left(s"QueryError: ${err}")
             case Right(seedOutput) =>
                 Right(
@@ -53,6 +57,7 @@ trait InitTxBuilder extends TxBuilder {
         }
     }
 
+    // Calculation constructs inputs, outputs, mint values, and the native script
     override type CalculationResult = InitTxCalculationResult
     override type CalculationError = Void
     override def calculate(qr: QueryResult): Either[CalculationError, CalculationResult] = {
@@ -75,19 +80,12 @@ trait InitTxBuilder extends TxBuilder {
         // seed utxo
         // TODO: factor out "mkSingleToken"
         val beaconToken: MultiAsset = Map(
-          (
-            headNativeScript.scriptHash,
-            Map(
-              (
+          headNativeScript.scriptHash ->
+              Map(
                 AssetName(
-                  ByteString.fromHex(
-                    mkBeaconTokenName(qr.seedUtxo).tokenNameHex.drop(2)
-                  )
-                ),
-                1
+                  ByteString.fromHex(mkBeaconTokenName(qr.seedUtxo).tokenNameHex.drop(2))
+                ) -> 1
               )
-            )
-          )
         )
 
         // Head output (L1) sits at the head address with the initial deposit from the seed utxo
@@ -108,11 +106,8 @@ trait InitTxBuilder extends TxBuilder {
           // Change is calculated manually here as the seed output's value, minus the
           // ada put into the head, minus the fee.
           value = qr.seedOutput.value -
-              Value(coin = Coin(qr.coins.toLong), multiAsset = Map.empty) -
-              Value(
-                coin = feeCoin,
-                multiAsset = Map.empty
-              ),
+              Value(Coin(qr.coins.toLong)) -
+              Value(feeCoin),
           datumOption = None
         )
 
@@ -122,43 +117,49 @@ trait InitTxBuilder extends TxBuilder {
             headTO = headOutput,
             changeTO = changeOutput,
             beaconToken = beaconToken,
-            headNativeScript = headNativeScript
+            headNativeScript = headNativeScript,
+            headAddress = headAddress
           )
         )
     }
 
     override type InitializationErrorType = String
+    override type InitializerResult = (Transaction, Address)
     override def txInitializer(
         cr: CalculationResult,
         entryTx: Transaction
-    ): Either[InitializationErrorType, Transaction] = {
+    ): Either[InitializationErrorType, this.InitializerResult] = {
         Right(
-          entryTx.copy(
-            body = KeepRaw(
-              entryTx.body.value.copy(
-                inputs = Set(cr.seedUtxo),
-                outputs = IndexedSeq(cr.headTO, cr.changeTO).map(Sized(_)),
-                fee = feeCoin,
-                mint = Some(cr.beaconToken)
-              )
+          (
+            entryTx.copy(
+              body = KeepRaw(
+                entryTx.body.value.copy(
+                  inputs = Set(cr.seedUtxo),
+                  outputs = IndexedSeq(cr.headTO, cr.changeTO).map(Sized(_)),
+                  fee = feeCoin,
+                  mint = Some(cr.beaconToken)
+                )
+              ),
+              witnessSet = TransactionWitnessSet(nativeScripts = Set(cr.headNativeScript)),
+              isValid = true
             ),
-            witnessSet = TransactionWitnessSet(nativeScripts = Set(cr.headNativeScript)),
-            isValid = true
+            cr.headAddress
           )
         )
     }
 
-    override type FixedPointError = Void
-    override def txFixedPoint(calculationResult: CalculationResult): (
-        resultTxBody: Either[FixedPointError, Transaction],
-        initialTxBody: Transaction
-    ) => Either[FixedPointError, Transaction] = this.idFixedPoint
+    override type FinalizerError = Void
+    override type FinalizerResult = InitializerResult
+    override def txFinalizer(
+        cr: CalculationResult,
+        initRes: InitializerResult
+    ): TailRec[Either[FinalizerError, FinalizerResult]] =
+        this.idFinalizer(i => i)(cr, initRes)
 
 }
 
 case class InitTxRecipe(
     network: Network,
-    backendService: BackendService,
     seedUtxo: UtxoIdL1,
     coins: BigInt,
     peers: Set[VerificationKeyBytes]
@@ -177,7 +178,6 @@ case class InitTxCalculationResult(
     headTO: TransactionOutput,
     changeTO: TransactionOutput,
     headNativeScript: Native,
+    headAddress: Address,
     beaconToken: MultiAsset
 )
-
-

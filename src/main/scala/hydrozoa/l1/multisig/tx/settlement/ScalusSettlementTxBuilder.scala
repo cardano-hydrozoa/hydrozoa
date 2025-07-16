@@ -1,30 +1,21 @@
 package hydrozoa.l1.multisig.tx.settlement
 
-import scalus.builtin.ByteString
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.Tx
 import hydrozoa.infra.force
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toScalus}
 import hydrozoa.l1.multisig.state.mkMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop.toPlutusData
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{
-    Coin,
-    KeepRaw,
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    Value
-}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Address
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.*
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -130,7 +121,7 @@ class ScalusSettlementTxBuilder(
         ///////////////////////////
         // Finally construct the body
         val txBody =
-            emptyTxBody.copy(
+            TransactionBody(
               inputs = utxoIds.toSet.map(_.toScalus),
               outputs = withdrawals.appended(treasuryOutput),
               // TODO: we set the fee to 1 ada, but this doesn't need to be

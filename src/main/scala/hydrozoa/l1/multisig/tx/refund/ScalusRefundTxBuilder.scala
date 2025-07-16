@@ -2,7 +2,7 @@ package hydrozoa.l1.multisig.tx.refund
 
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.NativeScript
-import hydrozoa.infra.transitionary.{emptyTxBody, toScalusNativeScript, v1AddressToLedger}
+import hydrozoa.infra.transitionary.{toScalusNativeScript, v1AddressToLedger}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.{AddressBech, Tx}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
@@ -15,7 +15,7 @@ import scalus.cardano.address.Address.Shelley
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, Sized, Transaction, TransactionInput, TransactionOutput, TransactionWitnessSet, VKeyWitness, Value}
+import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, Sized, Transaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, VKeyWitness, Value}
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -59,29 +59,14 @@ class ScalusRefundTxBuilder(
         // TODO: Turn this into a helper function or revise the types; its duplicated in the settlement tx builder
         val headNativeScript: Native =
               reader.multisigRegime(_.headNativeScript).toScalusNativeScript
-
-        // TODO: factor out. Duplicated in Settlement Transaction
-        val requiredSigners = headNativeScript.script match {
-            case api.Timelock.AllOf(scripts) =>
-                scripts.map {
-                    case s: Signature => s.keyHash
-                    // FIXME (Peter, 2025-07-11):
-                    //  Warns that non-local returns are no longer supported and to
-                    // use boundary/boundary break-in instead -- but I don't know what this
-                    // is yet
-                    case _ => return Left("Malformed native script: not a multisig")
-                }.toSet
-            case _ => return Left("Malformed native script: top level is not AllOf")
-        }
-
+        
         val txBody =
-            emptyTxBody.copy(
+            TransactionBody(
               inputs = Set(TransactionInput(transactionId = r.depositTx.id, index = r.txIx.ix)),
               outputs = IndexedSeq(refundOutput).map(Sized(_)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin,
               validityStartSlot = validitySlot,
-              requiredSigners = requiredSigners
             )
 
         val txWitSet: TransactionWitnessSet =
