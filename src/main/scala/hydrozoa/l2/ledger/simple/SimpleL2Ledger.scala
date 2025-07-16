@@ -60,8 +60,8 @@ object SimpleL2Ledger:
         v3.TxOut(address = address, value = value)
 
     private def unliftOutput(output: LedgerOutput): Output[L2] =
-        val SSome(e) = AssocMap.get(output.value)(ByteString.empty)
-        val SSome(coins) = AssocMap.get(e)(ByteString.empty)
+        val e = output.value.getOrFail(ByteString.empty)
+        val coins = e.getOrFail(ByteString.empty)
         Output[L2](plutusAddressAsL2(output.address).asL2, coins, emptyTokens)
 
     private def liftUtxoSet(utxoSet: Map[UtxoIdL2, OutputL2]): LedgerUtxoSetOpaque =
