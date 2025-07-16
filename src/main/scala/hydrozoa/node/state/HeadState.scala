@@ -331,7 +331,7 @@ class HeadStateGlobal(
     override def openPhase[A](foo: OpenPhase => A): A =
         headPhase match
             case Open => foo(OpenPhaseImpl())
-            case _    =>
+            case _ =>
                 val msg = "The head is not in Open phase."
                 log.error(msg)
                 throw RuntimeException(msg)

@@ -190,10 +190,10 @@ class ConsensusActorFactory(
 
     private def mkDeinitActor(dropMyself: () => Unit) =
         new DeinitHeadActor(
-            stateActor,
-            walletActor,
-            cardanoActor,
-            dropMyself
+          stateActor,
+          walletActor,
+          cardanoActor,
+          dropMyself
         )
 
 end ConsensusActorFactory

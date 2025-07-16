@@ -71,4 +71,3 @@ class HeadPeerNetworkWS(
         log.info(s"ReqDeinit: $req")
         val seq = transport.nextSeq
         dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
-        

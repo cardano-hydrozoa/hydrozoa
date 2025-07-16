@@ -366,7 +366,13 @@ given testPeerSchema: Schema[TestPeer] =
   * ------------------------------------------------------------------------------------------
   */
 
-case class ReqDeinit(deinitTx: TxL1, headPeers: Set[WalletId]) extends Req:
+case class ReqDeinit(
+    deinitTx: TxL1,
+    // TODO: this should not be here. I added it to avoid calling HeadState from the actor
+    //   since I saw a deadlock once I tried. We have to figure it out, since the actor
+    //   needs the state to effectively deinit the head.
+    headPeers: Set[WalletId]
+) extends Req:
     type ackType = AckDeinit
     type resultType = Unit
 
