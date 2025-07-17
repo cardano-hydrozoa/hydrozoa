@@ -99,13 +99,11 @@ class LocalFacade(
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
-              s" nextBlockFinal = $nextBlockFinal, " +
-              s" quitConsensusImmediately = $quitConsensusImmediately"
+              s" nextBlockFinal = $nextBlockFinal"
         )
 
         // Here we run requests to all nodes in parallel.
@@ -115,20 +113,34 @@ class LocalFacade(
         // and also allow to propagate flags like quitConsensusImmediately
         // to all nodes.
         val requests = peers.values
-            .map(node =>
-                () => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
-            )
+            .map(node => () => node.produceNextBlockLockstep(nextBlockFinal))
             .toSeq
 
         val answers = supervised(
           par(requests)
         )
 
+        log.info("Got all requests from nodes.")
+
         answers.find(a => a.isRight) match
             case None =>
                 answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
                 Left("Block can't be produced at the moment")
-            case Some(answer) => Right(answer.right.get)
+            case Some(answer) =>
+                log.info(
+                  s"Block details are here #${answer.right.get._1.block.blockHeader.blockNum}"
+                )
+                Right(answer.right.get)
+
+    override def runDispute(): Unit =
+        log.info("running test dispute...")
+        val requests = peers.values
+            .map(node => () => node.runDispute())
+            .toSeq
+
+        val answers = supervised(
+          par(requests)
+        )
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")

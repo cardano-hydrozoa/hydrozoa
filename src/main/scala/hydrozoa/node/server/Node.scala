@@ -187,8 +187,7 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
 
         assert(
@@ -197,13 +196,14 @@ class Node:
         )
 
         log.info(
-          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal, quitConsensusImmediately=$quitConsensusImmediately..."
+          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal..."
         )
+
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
                 nodeState.ask(
                   _.head.openPhase(
-                    _.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately)
+                    _.tryProduceBlock(nextBlockFinal, true)
                   )
                 ) match
                     case Left(err)    => Left(err)
@@ -217,7 +217,8 @@ class Node:
         errorOrBlock match
             case Left(err) => Left(err)
             case Right(block) =>
-                val effects = retryEither(RetryConfig.delay(100, 100.millis)) {
+                val effects = retryEither(RetryConfig.delay(10, 100.millis)) {
+                    log.info("Trying to obtain block results...")
                     nodeState
                         .ask(_.head.getBlockRecord(block))
                         .toRight(
@@ -228,6 +229,10 @@ class Node:
                 effects match
                     case Left(err)                     => Left(err)
                     case Right(blockRecord, mbGenesis) => Right(blockRecord, mbGenesis)
+
+    def runDispute() =
+        log.warn("Running test dispute routine...")
+        nodeState.ask(_.head.openPhase(_.runTestDispute()))
 
     def stateL2(): StateL2Response =
         nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse

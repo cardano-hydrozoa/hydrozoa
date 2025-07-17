@@ -94,7 +94,8 @@ object LocalNode:
                   voteTxBuilder,
                   tallyTxBuilder,
                   resolutionTxBuilder,
-                  withdrawTxBuilder
+                  withdrawTxBuilder,
+                  deinitTxBuilder
                 ) = mkTxBuilders(
                   backendService,
                   nodeState,
@@ -106,6 +107,7 @@ object LocalNode:
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
                 nodeState.setResolutionTxBuilder(resolutionTxBuilder)
                 nodeState.setWithdrawTxBuilder(withdrawTxBuilder)
+                nodeState.setDeinitTxBuilder(deinitTxBuilder)
 
                 val nodeStateActor = Actor.create(nodeState)
 
@@ -139,6 +141,8 @@ object LocalNode:
                 network.setDispatcher(dispatcherActor)
                 val networkActor = Actor.create(network)
 
+                nodeState.setNetwork(networkActor)
+                
                 // Static actors for node state
                 val multisigL1EventSource =
                     new MultisigL1EventSource(nodeStateActor, cardanoActor)

@@ -104,10 +104,13 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case _ => throw RuntimeException("decoding error")
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] = throw RuntimeException(
       "Real Hydrozoa facade doesn't support lockstep block producing"
+    )
+
+    override def runDispute(): Unit = throw RuntimeException(
+      "Real Hydrozoa facade doesn't implement explicit run dispute method"
     )
 
     override def shutdownSut(): Unit = ()

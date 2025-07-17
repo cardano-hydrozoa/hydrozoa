@@ -15,7 +15,18 @@ import scalus.cardano.address.Address.Shelley
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, Sized, Transaction, TransactionInput, TransactionOutput, TransactionWitnessSet, VKeyWitness, Value}
+import scalus.cardano.ledger.{
+    AssetName,
+    Coin,
+    KeepRaw,
+    Sized,
+    Transaction,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    VKeyWitness,
+    Value
+}
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -58,7 +69,7 @@ class ScalusRefundTxBuilder(
         // CBOR encoded hydrozoa native script
         // TODO: Turn this into a helper function or revise the types; its duplicated in the settlement tx builder
         val headNativeScript: Native =
-              reader.multisigRegime(_.headNativeScript).toScalusNativeScript
+            reader.multisigRegime(_.headNativeScript).toScalusNativeScript
 
         // TODO: factor out. Duplicated in Settlement Transaction
         val requiredSigners = headNativeScript.script match {

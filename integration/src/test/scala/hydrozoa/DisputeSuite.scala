@@ -111,8 +111,6 @@ class DisputeSuite extends FunSuite {
                   DisputeResolutionScript.plutusScript
                 )
 
-//            throw RuntimeException()
-
             (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
         else (None, None)
 
@@ -261,7 +259,9 @@ class DisputeSuite extends FunSuite {
                 )
               )
             )
-            minor1_4 <- sut.produceBlock(false, true)
+            minor1_4 <- sut.produceBlock(false)
+
+            _ = sut.runDispute()
 
             _ = Thread.sleep(5000)
         yield (major1, major1SettlementTx, minor1_1, minor1_2, minor1_3, minor1_4)
