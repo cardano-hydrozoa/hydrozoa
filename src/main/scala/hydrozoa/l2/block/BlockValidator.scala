@@ -9,7 +9,7 @@ import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.L2EventWithdrawalLabel
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import SimpleL2Ledger.SimpleL2LedgerClass
 import scalus.ledger.api.v3
 
 import scala.collection.mutable

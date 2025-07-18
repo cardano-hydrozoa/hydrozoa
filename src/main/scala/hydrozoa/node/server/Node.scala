@@ -9,8 +9,7 @@ import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger
-import hydrozoa.l2.ledger.{L2Genesis, mkTransactionEvent, mkWithdrawalEvent}
+import hydrozoa.l2.ledger.{L2Genesis, SimpleL2Ledger, mkTransactionEvent, mkWithdrawalEvent}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError

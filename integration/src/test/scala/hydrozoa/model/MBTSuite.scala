@@ -17,7 +17,7 @@ import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2LedgerClass, liftUtxoSet, unliftUtxoSet}
+import SimpleL2Ledger.{SimpleL2LedgerClass, liftUtxoSet, unliftUtxoSet}
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkWallet}

@@ -7,7 +7,7 @@ import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import hydrozoa.l2.ledger.SimpleL2Ledger.SimpleL2LedgerClass
 import hydrozoa.node.state.*
 import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}

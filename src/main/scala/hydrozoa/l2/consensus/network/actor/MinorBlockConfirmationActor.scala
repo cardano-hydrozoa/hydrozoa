@@ -4,7 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import hydrozoa.l2.ledger.SimpleL2Ledger.SimpleL2LedgerClass
 import hydrozoa.node.state.*
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}

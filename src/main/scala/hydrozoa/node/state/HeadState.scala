@@ -37,10 +37,9 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.{SimpleL2Ledger as SimpleL2LedgerO, *}
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger as SimpleL2LedgerO
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2LedgerClass, unliftUtxoSet}
+import hydrozoa.l2.ledger.SimpleL2Ledger.{SimpleL2LedgerClass, unliftUtxoSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
@@ -294,8 +293,6 @@ class HeadStateGlobal(
 
     // L2 state
     private var stateL2: Option[Map[v3.TxOutRef, v3.TxOut]] = None
-//    private var stateL2
-//        : Option[L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]] = None
 
     // HeadStateReader
     override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =

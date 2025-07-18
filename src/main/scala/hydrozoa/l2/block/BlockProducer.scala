@@ -8,7 +8,7 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import SimpleL2Ledger.SimpleL2LedgerClass
 import ox.channels.ActorRef
 import ox.sleep
 import scalus.ledger.api.v3
