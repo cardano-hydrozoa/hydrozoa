@@ -8,14 +8,15 @@ import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger as SimpleL2LedgerO
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2Ledger
-import hydrozoa.l2.ledger.{BlockProducerLedger, HydrozoaL2Ledger, L2Genesis}
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import hydrozoa.l2.ledger.L2Genesis
 import hydrozoa.node.state.*
 import hydrozoa.*
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -33,7 +34,7 @@ private class MajorBlockConfirmationActor(
     override type ReqType = ReqMajor
     override type AckType = AckMajor | AckMajor2
 
-    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
+    private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
     private var mbGenesis: Option[(TxId, L2Genesis)] = _
     private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
@@ -138,7 +139,7 @@ private class MajorBlockConfirmationActor(
                           )
                         )
 
-                    val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                    val ledgerL2 = SimpleL2LedgerClass()
                     ledgerL2.replaceUtxosActive(stateL2)
 
                     val resolution = BlockValidator.validateBlock(

@@ -9,6 +9,8 @@ import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.L2EventWithdrawalLabel
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.language.strictEquality
@@ -73,18 +75,18 @@ object BlockValidator:
     def validateBlock(
         block: Block,
         prevHeader: BlockHeader,
-        l2Ledger: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        l2Ledger: SimpleL2LedgerClass,
         // FIXME: missing in the spec, empty for final block
         poolEventsL2: Seq[L2Event],
         // FIXME: missing in the spec, is not needed for minor and final blocks
         depositUtxos: DepositUtxos,
         // FIXME: missing in the spec, can be removed I guess
         finalizing: Boolean
-    ): ValidationResolution[HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
+    ): ValidationResolution[Map[v3.TxOutRef, v3.TxOut]] =
 
         // Type alias with the injected dep type
         type MbValidationResolution =
-            Option[ValidationResolution[HydrozoaL2Ledger.LedgerUtxoSetOpaque]]
+            Option[ValidationResolution[Map[v3.TxOutRef, v3.TxOut]]]
 
         // 1. Initialize the variables and arguments.
         var mbGenesis: Option[(TxId, L2Genesis)] = None

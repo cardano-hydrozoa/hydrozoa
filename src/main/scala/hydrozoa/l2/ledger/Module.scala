@@ -2,13 +2,7 @@ package hydrozoa.l2.ledger
 
 import hydrozoa.{OutputL2, TxId, UtxoIdL2, UtxoSetL2}
 
-sealed trait LedgerPurpose
-
-sealed trait HydrozoaHeadLedger extends LedgerPurpose
-sealed trait BlockProducerLedger extends LedgerPurpose
-sealed trait MBTSuiteLedger extends LedgerPurpose
-
-trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
+trait L2LedgerModule[LedgerUtxoSetOpaque]:
 
     /** Type for things, that can be submitted to the ledger.
       */
@@ -70,14 +64,3 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       * @return
       */
     def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction
-
-    /** Makes a copy of the current ledger for block production purposes.
-      *
-      * @param ev
-      *   evidence that we are cloning Hydrozoa ledger, not its clone
-      * @return
-      *   cloned ledger
-      */
-    def cloneForBlockProducer()(using
-        InstancePurpose =:= HydrozoaHeadLedger
-    ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque]

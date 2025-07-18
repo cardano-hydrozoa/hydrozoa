@@ -8,8 +8,10 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
 import ox.channels.ActorRef
 import ox.sleep
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -25,7 +27,7 @@ class BlockProducer:
         this.networkRef = networkRef
 
     def produceBlock(
-        l2Ledger: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        l2Ledger: SimpleL2LedgerClass,
         poolEvents: Seq[L2Event],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
@@ -33,7 +35,7 @@ class BlockProducer:
         finalizing: Boolean
     ): Either[
       String,
-      (Block, HydrozoaL2Ledger.LedgerUtxoSetOpaque, UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
+      (Block, Map[v3.TxOutRef, v3.TxOut], UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
     ] =
 
         // TODO: move to the block producer?
@@ -92,14 +94,14 @@ object BlockProducer:
       *   deposits to absorb, and multisig regime keep-alive is not yet needed.
       */
     def createBlock(
-        l2Ledger: L2LedgerModule[BlockProducerLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque],
+        l2Ledger: SimpleL2LedgerClass,
         poolEvents: Seq[L2Event],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
         finalizing: Boolean
     ): Option[
-      (Block, HydrozoaL2Ledger.LedgerUtxoSetOpaque, UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
+      (Block, Map[v3.TxOutRef, v3.TxOut], UtxoSetL2, UtxoSetL2, Option[(TxId, L2Genesis)])
     ] =
 
         // 1. Initialize the variables and arguments.

@@ -17,7 +17,7 @@ import scala.jdk.CollectionConverters.*
   */
 
 // This defines the implementation to use as L2 ledger
-val HydrozoaL2Ledger = SimpleL2Ledger
+//val HydrozoaL2Ledger = SimpleL2Ledger
 
 /** --------------------------------------------------------------------------------------------- L2
   * Genesis

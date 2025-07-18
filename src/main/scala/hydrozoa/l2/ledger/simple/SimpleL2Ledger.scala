@@ -34,17 +34,7 @@ object SimpleL2Ledger:
     type LedgerUtxoSetOpaque = Map[LedgerUtxoId, LedgerOutput]
 
     given CanEqual[LedgerUtxoSetOpaque, LedgerUtxoSetOpaque] = CanEqual.derived
-
-    def mkLedgerForHead(): L2LedgerModule[HydrozoaHeadLedger, LedgerUtxoSetOpaque] =
-        new SimpleL2Ledger()
-
-    def mkLedgerForBlockProducer(
-        utxoSet: Map[UtxoIdL2, OutputL2]
-    ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque] =
-        val ledger = new SimpleL2Ledger[BlockProducerLedger]()
-        ledger.replaceUtxosActive(utxoSet |> liftUtxoSet)
-        ledger
-
+    
     // UTxO conversions between Hydrozoa types and Ledger types
     def liftOutputRef(UtxoIdL2: UtxoIdL2): LedgerUtxoId =
         val sTxId = v3.TxId(ByteString.fromHex(UtxoIdL2.txId.hash))
@@ -91,8 +81,8 @@ object SimpleL2Ledger:
     }
 
     // The implementation
-    class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
-        extends L2LedgerModule[InstancePurpose, LedgerUtxoSetOpaque]:
+    class SimpleL2LedgerClass
+        extends L2LedgerModule[LedgerUtxoSetOpaque]:
 
         private val log = Logger(getClass)
 
@@ -234,12 +224,6 @@ object SimpleL2Ledger:
 
         override def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction = tx
 
-        override def cloneForBlockProducer()(using
-            InstancePurpose =:= HydrozoaHeadLedger
-        ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque] =
-            val ledgerForBlockProduction = new SimpleL2Ledger[BlockProducerLedger]()
-            ledgerForBlockProduction.replaceUtxosActive(activeState.clone().toMap)
-            ledgerForBlockProduction
 
 /*
  * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1

@@ -40,7 +40,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger as SimpleL2LedgerO
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2Ledger, unliftUtxoSet}
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2LedgerClass, unliftUtxoSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
@@ -490,7 +490,7 @@ class HeadStateGlobal(
 
                 val tipHeader = l2Tip.blockHeader
 
-                val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                val ledgerL2 = SimpleL2LedgerClass()
                 ledgerL2.replaceUtxosActive(stateL2)
 
                 blockProductionActor.ask(
@@ -1039,7 +1039,7 @@ class HeadStateGlobal(
 
                 val tipHeader = l2Tip.blockHeader
 
-                val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                val ledgerL2 = SimpleL2LedgerClass()
                 ledgerL2.replaceUtxosActive(stateL2)
 
                 blockProductionActor.ask(
@@ -1218,7 +1218,7 @@ case class BlockRecord(
 
 case class OwnBlock(
     block: Block,
-    utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque,
+    utxosActive: Map[v3.TxOutRef, v3.TxOut],
     utxosWithdrawn: UtxoSetL2,
     mbGenesis: Option[(TxId, L2Genesis)]
 )
@@ -1255,7 +1255,7 @@ type L1PostDatedBlockEffect = Option[TxL1]
 // Always None for final block, always Some for minor block,
 // None or Some for major (None in case a major block is produced
 // to refresh a L1 treasury utxo.
-type L2BlockEffect = Option[HydrozoaL2Ledger.LedgerUtxoSetOpaque]
+type L2BlockEffect = Option[Map[v3.TxOutRef, v3.TxOut]]
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
 

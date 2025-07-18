@@ -4,11 +4,11 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2Ledger
-import hydrozoa.l2.ledger.{BlockProducerLedger, HydrozoaL2Ledger}
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2LedgerClass
 import hydrozoa.node.state.*
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 
@@ -23,7 +23,7 @@ private class MinorBlockConfirmationActor(
     override type ReqType = ReqMinor
     override type AckType = AckMinor
 
-    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
+    private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
     private val acks: mutable.Map[WalletId, AckMinor] = mutable.Map.empty
     private var finalizeHead: Boolean = false
 
@@ -93,7 +93,7 @@ private class MinorBlockConfirmationActor(
                       )
                     )
 
-                val ledgerL2 = SimpleL2Ledger[BlockProducerLedger]()
+                val ledgerL2 = SimpleL2LedgerClass()
                 ledgerL2.replaceUtxosActive(stateL2)
 
                 val resolution = BlockValidator.validateBlock(

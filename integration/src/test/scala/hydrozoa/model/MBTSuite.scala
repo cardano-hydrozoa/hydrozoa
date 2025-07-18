@@ -4,37 +4,20 @@ package hydrozoa.model
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.{toHydrozoaNativeScript, toScalus}
-import hydrozoa.infra.{
-    NoMatch,
-    PSStyleAssoc,
-    Piper,
-    TooManyMatches,
-    decodeBech32AddressL1,
-    decodeBech32AddressL2,
-    onlyOutputToAddress,
-    serializeTxHex,
-    txHash
-}
+import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{
-    InitTxBuilder,
-    InitTxRecipe,
-    ScalusInitializationTxBuilder
-}
-import hydrozoa.l1.multisig.tx.refund.{
-    PostDatedRefundRecipe,
-    RefundTxBuilder,
-    ScalusRefundTxBuilder
-}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
+import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder, ScalusRefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2LedgerClass, liftUtxoSet, unliftUtxoSet}
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.{account, mkWallet}
@@ -166,7 +149,8 @@ object MBTSuite extends Commands:
         )
 
     def genTransactionL2(s: State): Gen[TransactionL2Command] =
-        val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(s.utxosActiveL2)
+        val l2 = SimpleL2LedgerClass()
+        l2.replaceUtxosActive(liftUtxoSet(s.utxosActiveL2))
 
         for
             numberOfInputs <- Gen.choose(1, 5.min(s.utxosActiveL2.size))
@@ -565,8 +549,9 @@ object MBTSuite extends Commands:
         ): (Result, HydrozoaState) =
 
             // Produce block
-            val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(state.utxosActiveL2)
-
+            val l2 = SimpleL2LedgerClass()
+            l2.replaceUtxosActive(liftUtxoSet(state.utxosActiveL2))
+            
             // TODO: move to the block producer?
             val sortedPoolEvents = state.poolEvents.sortBy(_.getEventId.hash)
 
@@ -638,7 +623,7 @@ object MBTSuite extends Commands:
                         knownTxs = l1Mock.getKnownTxs,
                         treasuryUtxoId = treasuryUtxoId,
                         utxosActive = l1Mock.getUtxosActive,
-                        utxosActiveL2 = l2.getUtxosActive |> HydrozoaL2Ledger.unliftUtxoSet
+                        utxosActiveL2 = l2.getUtxosActive |> unliftUtxoSet
                     )
 
                     Right(record, mbGenesis) /\ newState
