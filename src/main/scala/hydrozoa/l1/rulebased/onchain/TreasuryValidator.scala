@@ -453,8 +453,8 @@ end TreasuryValidator
 
 object TreasuryValidatorScript {
     val sir = Compiler.compile(TreasuryValidator.validate)
-//    val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
-    val script = sir.toUplc().plutusV3
+    val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+//    val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
     val plutusScript: PlutusV3Script = PlutusV3Script
