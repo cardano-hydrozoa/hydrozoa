@@ -40,7 +40,7 @@ import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.l2.ledger.simple.SimpleL2Ledger as SimpleL2LedgerO
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger.SimpleL2Ledger
+import hydrozoa.l2.ledger.simple.SimpleL2Ledger.{SimpleL2Ledger, unliftUtxoSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
@@ -49,15 +49,15 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.Script.Native
+import scalus.ledger.api.v3
 import scalus.prelude.crypto.bls12_381.G2
 import supranational.blst.{P1, P2}
-import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
-import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-import scalus.ledger.api.v1
+import scala.jdk.CollectionConverters.*
 
 enum HeadPhase derives CanEqual:
     case Initializing
@@ -165,7 +165,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
-    def stateL2: Map[v1.TxOutRef, v1.TxOut]
+    def stateL2: Map[v3.TxOutRef, v3.TxOut]
     def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2Genesis)] = None): Unit
     def applyBlockEvents(
         blockNum: Int,
@@ -191,7 +191,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     ): Either[String, Block]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
-    def stateL2: Map[v1.TxOutRef, v1.TxOut]
+    def stateL2: Map[v3.TxOutRef, v3.TxOut]
     def tryProduceFinalBlock(force: Boolean): Either[String, Block]
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def finalizeHead(block: BlockRecord): Unit
@@ -293,7 +293,7 @@ class HeadStateGlobal(
     private var stateL1: Option[MultisigHeadStateL1] = None
 
     // L2 state
-    private var stateL2: Option[Map[v1.TxOutRef, v1.TxOut]] = None
+    private var stateL2: Option[Map[v3.TxOutRef, v3.TxOut]] = None
 //    private var stateL2
 //        : Option[L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]] = None
 
@@ -546,7 +546,7 @@ class HeadStateGlobal(
             val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.coins).sum
             metrics.tell(_.setDepositsLiquidity(coins.toLong))
 
-        override def stateL2: Map[v1.TxOutRef, v1.TxOut] = self.stateL2.get
+        override def stateL2: Map[v3.TxOutRef, v3.TxOut] = self.stateL2.get
 
         override def applyBlockRecord(
             record: BlockRecord,
@@ -897,7 +897,7 @@ class HeadStateGlobal(
                     // TODO: at this point a specific set of utxos should be restored
                     // Now, for testing we are assuming we can just use L2 ledger directly.
                     // Also, we now try to withdraw all utxos from the ledger in one go.
-                    val utxos = stateL2.flushAndGetState
+                    val utxos: UtxoSet[L2] = UtxoSet.apply(unliftUtxoSet(stateL2))
                     // Since we are removing all utxos, proof := g2
                     val proof = G2.generator.toCompressedByteString.toHex
 
@@ -1026,7 +1026,7 @@ class HeadStateGlobal(
             tryProduceBlock(true)
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
-        def stateL2: Map[v1.TxOutRef, v1.TxOut] =
+        def stateL2: Map[v3.TxOutRef, v3.TxOut] =
             self.stateL2.get
 
         override def tryProduceFinalBlock(
