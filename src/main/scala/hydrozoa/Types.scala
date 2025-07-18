@@ -6,9 +6,9 @@ import scala.collection.mutable
 
 /** Cardano network layers.
   */
-sealed trait AnyLevel derives CanEqual
-sealed trait L1 extends AnyLevel derives CanEqual
-sealed trait L2 extends AnyLevel derives CanEqual
+sealed trait AnyLayer derives CanEqual
+sealed trait L1 extends AnyLayer derives CanEqual
+sealed trait L2 extends AnyLayer derives CanEqual
 
 /** Cardano txs in a serialized form.
   * @param bytes
@@ -16,9 +16,9 @@ sealed trait L2 extends AnyLevel derives CanEqual
   * @tparam L
   *   phantom parameter to distinguish tx level (L1, L2, Any)
   */
-case class Tx[+L <: AnyLevel](bytes: Array[Byte])
+case class Tx[+L <: AnyLayer](bytes: Array[Byte])
 
-type TxAny = Tx[AnyLevel]
+type TxAny = Tx[AnyLayer]
 type TxL1 = Tx[L1]
 
 object TxL1:
@@ -30,7 +30,7 @@ object TxL2:
     def apply(bytes: Array[Byte]): TxL2 = Tx[L2](bytes)
 
 // Bech32 addresses
-case class AddressBech[+L <: AnyLevel](bech32: String) derives CanEqual:
+case class AddressBech[+L <: AnyLayer](bech32: String) derives CanEqual:
     def asL1: AddressBech[L1] = AddressBech[L1](bech32)
     def asL2: AddressBech[L2] = AddressBech[L2](bech32)
 
@@ -56,7 +56,7 @@ case class TxId(hash: String) derives CanEqual
 //  Currently, the absence of Schema for Char prevents us from doing so.
 case class TxIx(ix: Int) derives CanEqual
 
-final case class UtxoId[L <: AnyLevel](txId: TxId, outputIx: TxIx) derives CanEqual
+final case class UtxoId[L <: AnyLayer](txId: TxId, outputIx: TxIx) derives CanEqual
 
 type UtxoIdL1 = UtxoId[L1]
 type UtxoIdL2 = UtxoId[L2]
@@ -72,7 +72,7 @@ type Tokens = Map[PolicyId, Map[TokenName, BigInt]]
 val emptyTokens: Tokens = Map.empty
 
 // TODO: migrate to Value
-case class Output[L <: AnyLevel](
+case class Output[L <: AnyLayer](
     address: AddressBech[L],
     coins: BigInt,
     tokens: Tokens,
@@ -81,7 +81,7 @@ case class Output[L <: AnyLevel](
 
 // TODO: Unsound in general
 object Output:
-    def apply[L <: AnyLevel](o: OutputNoTokens[L]): Output[L] =
+    def apply[L <: AnyLayer](o: OutputNoTokens[L]): Output[L] =
         new Output[L](o.address, o.coins, emptyTokens, o.mbInlineDatum)
 
 type OutputL1 = Output[L1]
@@ -112,7 +112,7 @@ type OutputL2 = Output[L2]
 [error]      ---------------------------------------------------------------------------
  */
 
-case class OutputNoTokens[L <: AnyLevel](
+case class OutputNoTokens[L <: AnyLayer](
     address: AddressBech[L],
     coins: BigInt,
     mbInlineDatum: Option[String] = None
@@ -123,15 +123,15 @@ case class OutputNoTokens[L <: AnyLevel](
   * ---------------------------------------------------------------------------------------------
   */
 
-case class Utxo[L <: AnyLevel](ref: UtxoId[L], output: Output[L])
+case class Utxo[L <: AnyLayer](ref: UtxoId[L], output: Output[L])
 
 // TODO: Lossy conversion
 object OutputNoTokens:
-    def apply[L <: AnyLevel](o: Output[L]): OutputNoTokens[L] =
+    def apply[L <: AnyLayer](o: Output[L]): OutputNoTokens[L] =
         new OutputNoTokens[L](o.address, o.coins, o.mbInlineDatum)
 
 object Utxo:
-    def apply[L <: AnyLevel](
+    def apply[L <: AnyLayer](
         txId: TxId,
         txIx: TxIx,
         address: AddressBech[L],
@@ -141,10 +141,10 @@ object Utxo:
     ) =
         new Utxo[L](UtxoId[L](txId, txIx), Output(address, coins, tokens, mbInlineDatum))
 
-case class TaggedUtxo[L <: AnyLevel, F <: MultisigUtxoTag](unTag: Utxo[L])
+case class TaggedUtxo[L <: AnyLayer, F <: MultisigUtxoTag](unTag: Utxo[L])
 
 object TaggedUtxo:
-    def apply[L <: AnyLevel, T <: MultisigUtxoTag](
+    def apply[L <: AnyLayer, T <: MultisigUtxoTag](
         txId: TxId,
         txIx: TxIx,
         address: AddressBech[L],
@@ -158,38 +158,38 @@ object TaggedUtxo:
   * ---------------------------------------------------------------------------------------------
   */
 
-type UtxoMap[L <: AnyLevel] = Map[UtxoId[L], Output[L]]
+type UtxoMap[L <: AnyLayer] = Map[UtxoId[L], Output[L]]
 
-case class UtxoSet[L <: AnyLevel](utxoMap: UtxoMap[L])
+case class UtxoSet[L <: AnyLayer](utxoMap: UtxoMap[L])
 
 type UtxoSetL1 = UtxoSet[L1]
 type UtxoSetL2 = UtxoSet[L2]
 
 object UtxoSet:
-    def apply[L <: AnyLevel](): UtxoSet[L] =
+    def apply[L <: AnyLayer](): UtxoSet[L] =
         new UtxoSet(Map.empty)
 
-    def apply[L <: AnyLevel](map: UtxoMap[L]): UtxoSet[L] =
+    def apply[L <: AnyLayer](map: UtxoMap[L]): UtxoSet[L] =
         new UtxoSet(map)
 
-    def apply[L <: AnyLevel, F](mutableUtxoSet: TaggedUtxoSetMutable[L, F]): UtxoSet[L] =
+    def apply[L <: AnyLayer, F](mutableUtxoSet: TaggedUtxoSetMutable[L, F]): UtxoSet[L] =
         new UtxoSet(mutableUtxoSet.utxoMap.toMap)
 
-case class TaggedUtxoSet[L <: AnyLevel, F <: MultisigUtxoTag](unTag: UtxoSet[L])
+case class TaggedUtxoSet[L <: AnyLayer, F <: MultisigUtxoTag](unTag: UtxoSet[L])
 
 object TaggedUtxoSet:
-    def apply[L <: AnyLevel, F <: MultisigUtxoTag](): TaggedUtxoSet[L, F] =
+    def apply[L <: AnyLayer, F <: MultisigUtxoTag](): TaggedUtxoSet[L, F] =
         new TaggedUtxoSet[L, F](UtxoSet.apply())
 
-    def apply[L <: AnyLevel, F <: MultisigUtxoTag](map: UtxoMap[L]): TaggedUtxoSet[L, F] =
+    def apply[L <: AnyLayer, F <: MultisigUtxoTag](map: UtxoMap[L]): TaggedUtxoSet[L, F] =
         new TaggedUtxoSet[L, F](UtxoSet.apply(map))
 
-    def apply[L <: AnyLevel, F <: MultisigUtxoTag](
+    def apply[L <: AnyLayer, F <: MultisigUtxoTag](
         mutableUtxoSet: TaggedUtxoSetMutable[L, F]
     ): TaggedUtxoSet[L, F] =
         new TaggedUtxoSet[L, F](UtxoSet.apply(mutableUtxoSet.utxoMap.toMap))
 
-case class TaggedUtxoSetMutable[L <: AnyLevel, F](utxoMap: mutable.Map[UtxoId[L], Output[L]])
+case class TaggedUtxoSetMutable[L <: AnyLayer, F](utxoMap: mutable.Map[UtxoId[L], Output[L]])
 
 // Policy ID
 case class PolicyId(policyId: String)
@@ -213,6 +213,8 @@ case class CurrencySymbol(bytes: IArray[Byte])
 case class Datum(bytes: Array[Byte])
 
 // Shall we use bytes as in other types?
+// NOTE: The string itself is prefixed with 0x; you may need to drop it if
+// another function is not expecting it.
 case class TokenName(tokenNameHex: String)
 
 // UDiffTime

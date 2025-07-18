@@ -27,10 +27,10 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       *   Returns an opaque copy of active utxos.
       */
     def getUtxosActive: LedgerUtxoSetOpaque
-    
-    def getUtxosActiveCommitment: IArray[Byte] 
-    
-    // Returns utxo state. Used only in L2 state endpoint for now.
+
+    def getUtxosActiveCommitment: IArray[Byte]
+
+    // Returns utxo state. Used only in L2 state endpoint for now and for testing withdrawals in the rule-based regime.
     def getState: UtxoSetL2
 
     /** Replaces the active set of utxos with a provided set.
@@ -40,11 +40,11 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
       */
     def replaceUtxosActive(activeState: LedgerUtxoSetOpaque): Unit
 
-    /** Allows adding arbitrary genesis UTxOs. 
-     * @param utxos
-     */
+    /** Allows adding arbitrary genesis UTxOs.
+      * @param utxos
+      */
     def addGenesisUtxos(utxos: UtxoSetL2): Unit
-    
+
     def getOutput(utxoId: UtxoIdL2): OutputL2
 
     /** Removes all active utxos from the ledger.
@@ -65,11 +65,10 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
         event: LedgerTransaction
     ): Either[(TxId, SubmissionError), (TxId, (UtxoSetL2, UtxoSetL2))]
 
-    /**
-     * Transforms Hydrozoa's tx/withdrawal into ledger format.
-     * @param tx
-     * @return
-     */
+    /** Transforms Hydrozoa's tx/withdrawal into ledger format.
+      * @param tx
+      * @return
+      */
     def toLedgerTransaction(tx: L2Transaction | L2Withdrawal): LedgerTransaction
 
     /** Makes a copy of the current ledger for block production purposes.
@@ -82,4 +81,3 @@ trait L2LedgerModule[InstancePurpose <: LedgerPurpose, LedgerUtxoSetOpaque]:
     def cloneForBlockProducer()(using
         InstancePurpose =:= HydrozoaHeadLedger
     ): L2LedgerModule[BlockProducerLedger, LedgerUtxoSetOpaque]
-

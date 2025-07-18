@@ -3,29 +3,19 @@ package hydrozoa.l1.rulebased.tx.fallback
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
+import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{
-    HydrozoaBuilderBackendService,
-    Piper,
-    decodeHex,
-    encodeHex,
-    mkBuilder,
-    numberOfSignatories
-}
+import hydrozoa.infra.{HydrozoaBuilderBackendService, Piper, decodeHex, encodeHex, mkBuilder, numberOfSignatories}
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
-import hydrozoa.l1.rulebased.onchain.{
-    mkDefVoteDatum,
-    mkTreasuryDatumUnresolved,
-    mkVoteDatum,
-    mkVoteTokenName
-}
+import hydrozoa.l1.rulebased.onchain.{mkDefVoteDatum, mkTreasuryDatumUnresolved, mkVoteDatum, mkVoteTokenName}
 import hydrozoa.{TxId, TxIx, TxL1, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.prelude.List.asScalus
+import co.nstant.in.cbor.model.Array as CborArray
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -56,9 +46,13 @@ class BloxBeanFallbackTxBuilder(
           )
         )
 
+        // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from 
+        // scalus's `Native` to BB's `NativeScript`. 
+        val hnsCborAsByteArray: Array[Byte] = r.headNativeScript.bytes
+        val hnsCborArray = CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
         val headNativeScript =
-            NativeScript.deserializeScriptRef(r.headNativeScript.bytes)
-
+            NativeScript.deserialize(hnsCborArray)
+            
         // Calculate dispute id
         val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(multisigTreasuryUtxo.getTxHash), TxIx(0)))
 

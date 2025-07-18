@@ -172,8 +172,6 @@ object BlockProducer:
         )
             return None
 
-        val _ = l2Ledger.getUtxosActiveCommitment
-
         // Build the block
         val blockBuilder = BlockBuilder()
             .timeCreation(timeCreation)

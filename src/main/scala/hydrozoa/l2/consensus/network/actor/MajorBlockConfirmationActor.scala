@@ -69,7 +69,7 @@ private class MajorBlockConfirmationActor(
             // L1 effect
             val wits = acks2.map(_._2.settlement)
             val settlementTx = wits.foldLeft(this.settlementTxDraft)(addWitnessMultisig)
-            // val serializedTx = serializeTxHex(settlementTx)
+            log.info("Settlement signed tx: " + serializeTxHex(settlementTx))
             val l1Effect: L1BlockEffect = settlementTx
 
             // L1 post-dated fallback effect

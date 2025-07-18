@@ -1,10 +1,7 @@
 package hydrozoa.node.monitoring
 
 import hydrozoa.l2.ledger.L2EventLabel
-import L2EventLabel.{
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
+import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import io.prometheus.metrics.core.metrics.{Counter, Gauge, Histogram}
 
 def nonGenesisEventLabel(eventType: L2EventLabel | String): String = {

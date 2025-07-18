@@ -7,8 +7,10 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toHydrozoaNativeScript
 import hydrozoa.infra.{
     Piper,
+    decodeHex,
     encodeHex,
     extractVoteTokenNameFromFallbackTx,
     serializeTxHex,
@@ -20,12 +22,20 @@ import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
-import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Resolved
+import hydrozoa.l1.rulebased.onchain.{
+    DisputeResolutionScript,
+    TreasuryValidatorScript,
+    hashVerificationKey
+}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
+import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
+import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
@@ -39,6 +49,9 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.prelude.crypto.bls12_381.G2
+import supranational.blst.{P1, P2}
+import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
 import scala.collection.JavaConverters.asScalaBufferConverter
@@ -235,6 +248,10 @@ class HeadStateGlobal(
 
     def setResolutionTxBuilder(builder: ResolutionTxBuilder): Unit = this.resolutionTxBuilder =
         builder
+
+    private var withdrawTxBuilder: WithdrawTxBuilder = _
+
+    def setWithdrawTxBuilder(builder: WithdrawTxBuilder): Unit = this.withdrawTxBuilder = builder
 
     //
 
@@ -626,7 +643,8 @@ class HeadStateGlobal(
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(settlementTx) =>
                     log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
-                    cardano.tell(_.submit(settlementTx))
+                    val ret = cardano.ask(_.submit(settlementTx))
+                    log.info(s"settlementResult = $ret")
                 case _ =>
             }
 
@@ -702,6 +720,48 @@ class HeadStateGlobal(
                         runTallying(unresolvedTreasuryUtxo, ownAccount)
 
                         runResolution(unresolvedTreasuryUtxo, ownAccount)
+
+                        // Waiting till the resolved treasury appears
+                        val resolvedTreasury = retry(RetryConfig.delayForever(3.seconds)) {
+
+                            log.info("Checking for resolved treasury utxo")
+                            val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
+                            val beaconTokenUnit = encodeHex(
+                              this.headMintingPolicy.bytes ++ decodeHex(
+                                this.beaconTokenName.tokenNameHex
+                              )
+                            )
+
+                            // TODO: use more effective endpoint that based on vote tokens' assets.
+                            cardano
+                                .ask(_.utxosAtAddress(treasuryAddress))
+                                .find(u =>
+                                    fromData[TreasuryDatum](
+                                      Interop.toScalusData(
+                                        PlutusData
+                                            .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
+                                      )
+                                    ) match {
+                                        case Resolved(_) =>
+                                            u.getAmount.asScala
+                                                .map(_.getUnit)
+                                                .contains(beaconTokenUnit)
+                                        case _ => false
+                                    }
+                                ) match {
+                                case Some(utxo) =>
+                                    UtxoIdL1(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                                case None =>
+                                    log.info("Resolved treasury utxo was not found")
+                                    // just wait
+                                    throw RuntimeException(
+                                      "Waiting for resolved treasury"
+                                    )
+                            }
+                        }
+
+                        // The condition is not required, just a way to speed up tests a tad and simplify logs
+                        if (turn == 0) runWithdraw(resolvedTreasury, ownAccount)
 
                     // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
                     // (Should not happen)
@@ -805,7 +865,9 @@ class HeadStateGlobal(
 
                             log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
                             val submitResult = cardano.ask(_.submit(resolutionTx))
-                            log.info(s"resolution tx submit result: $submitResult")
+                            log.info(
+                              s"resolution tx submit result (might be left for some nodes): $submitResult"
+                            )
 
                             retry(RetryConfig.delayForever(3.seconds)) {
                                 log.info("Running resolving...")
@@ -825,6 +887,46 @@ class HeadStateGlobal(
                             throw RuntimeException(msg)
                         case Nil =>
                             log.info("No votes found, likely resolution has been done.")
+                    }
+                }
+
+                def runWithdraw(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
+
+                    log.info("Running withdraw...")
+
+                    // TODO: at this point a specific set of utxos should be restored
+                    // Now, for testing we are assuming we can just use L2 ledger directly.
+                    // Also, we now try to withdraw all utxos from the ledger in one go.
+                    val utxos = stateL2.flushAndGetState
+                    // Since we are removing all utxos, proof := g2
+                    val proof = G2.generator.toCompressedByteString.toHex
+
+                    val recipe = WithdrawTxRecipe(
+                      utxos,
+                      resolvedTreasury,
+                      proof,
+                      ownAccount
+                    )
+
+                    log.info(s"Withdraw tx recipe: $recipe")
+
+                    val withdrawTx = withdrawTxBuilder.buildWithdrawTx(recipe) match {
+                        case Right(tx) => tx
+                        case Left(err) =>
+                            log.error(err)
+                            throw RuntimeException(err)
+                    }
+
+                    log.info(s"Withdraw tx is: ${serializeTxHex(withdrawTx)}")
+                    val submitResult = cardano.ask(_.submit(withdrawTx))
+                    log.info(s"Withdraw tx submission result is: $submitResult")
+                    submitResult match {
+                        case Right(txHash) =>
+                            log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
+                            cardano.ask(_.awaitTx(txHash))
+                        case Left(err) =>
+                            log.error(s"Withdraw tx submission failed with: $err")
+                            throw RuntimeException(err)
                     }
                 }
             }
@@ -1040,7 +1142,8 @@ class HeadStateGlobal(
                 case Some(finalizationTx) =>
                     // Submit finalization tx
                     log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
-                    cardano.tell(_.submit(finalizationTx))
+                    val res = cardano.ask(_.submit(finalizationTx))
+                    log.info(s"Finalization tx submission result is: ${res}")
                 case _ => assert(false, "Impossible: finalization tx should always present")
             }
 
@@ -1094,7 +1197,7 @@ object HeadStateGlobal:
           ownPeer = params.ownPeer,
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
-          headNativeScript = params.headNativeScript,
+          headNativeScript = params.headNativeScript.toHydrozoaNativeScript,
           headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,

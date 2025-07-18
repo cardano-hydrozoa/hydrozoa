@@ -221,7 +221,9 @@ class Node:
                 val effects = retryEither(RetryConfig.delay(100, 100.millis)) {
                     nodeState
                         .ask(_.head.getBlockRecord(block))
-                        .toRight(s"Effects for block ${block.blockHeader.blockNum} have not bee found after 10 secs of waiting")
+                        .toRight(
+                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 10 secs of waiting"
+                        )
                 }
 
                 effects match

@@ -17,7 +17,7 @@ object WalletModuleBloxbean extends WalletModule:
     ): VerificationKeyBytes =
         VerificationKeyBytes(verificationKey.getKeyData)
 
-    override def createTxKeyWitness[L <: AnyLevel](
+    override def createTxKeyWitness[L <: AnyLayer](
         tx: Tx[L],
         verificationKey: VerificationKey,
         signingKey: SigningKey
