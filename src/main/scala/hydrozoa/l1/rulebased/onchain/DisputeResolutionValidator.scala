@@ -511,8 +511,8 @@ end DisputeResolutionValidator
 object DisputeResolutionScript {
 
     lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-//    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
-    lazy val script = sir.toUplc().plutusV3
+    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+//    lazy val script = sir.toUplc().plutusV3
 
     // TODO: can we use Scalus for that?
     lazy val plutusScript: PlutusV3Script = PlutusV3Script
