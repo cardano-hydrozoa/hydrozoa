@@ -4,10 +4,11 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.HydrozoaL2Ledger
+import hydrozoa.l2.ledger.SimpleL2Ledger.SimpleL2LedgerClass
 import hydrozoa.node.state.*
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 
@@ -22,7 +23,7 @@ private class MinorBlockConfirmationActor(
     override type ReqType = ReqMinor
     override type AckType = AckMinor
 
-    private var utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque = _
+    private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
     private val acks: mutable.Map[WalletId, AckMinor] = mutable.Map.empty
     private var finalizeHead: Boolean = false
 
@@ -75,7 +76,7 @@ private class MinorBlockConfirmationActor(
             else
                 val (
                   prevHeader,
-                  stateL2Cloned,
+                  stateL2,
                   poolEventsL2,
                   depositUtxos,
                   isFinalizationRequested
@@ -84,17 +85,21 @@ private class MinorBlockConfirmationActor(
                       _.head.openPhase(open =>
                           (
                             open.l2Tip.blockHeader,
-                            open.stateL2.cloneForBlockProducer(),
+                            open.stateL2,
                             open.immutablePoolEventsL2,
                             open.peekDeposits,
                             open.isNextBlockFinal
                           )
                       )
                     )
+
+                val ledgerL2 = SimpleL2LedgerClass()
+                ledgerL2.replaceUtxosActive(stateL2)
+
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  stateL2Cloned,
+                  ledgerL2,
                   poolEventsL2,
                   depositUtxos, // FIXME: do we need it for a minor block?
                   false // minor is not a final

@@ -37,8 +37,9 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.*
+import hydrozoa.l2.ledger.{SimpleL2Ledger as SimpleL2LedgerO, *}
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.SimpleL2Ledger.{SimpleL2LedgerClass, unliftUtxoSet}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
@@ -47,14 +48,15 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.Script.Native
+import scalus.ledger.api.v3
 import scalus.prelude.crypto.bls12_381.G2
 import supranational.blst.{P1, P2}
-import scalus.cardano.ledger.Script.Native
 
 import scala.CanEqual.derived
-import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
+import scala.jdk.CollectionConverters.*
 
 enum HeadPhase derives CanEqual:
     case Initializing
@@ -120,7 +122,7 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
-sealed trait OpenPhaseReader extends MultisigRegimeReader:
+trait OpenPhaseReader extends MultisigRegimeReader:
     def immutablePoolEventsL2: Seq[L2Event]
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
@@ -162,7 +164,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
-    def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]
+    def stateL2: Map[v3.TxOutRef, v3.TxOut]
     def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2Genesis)] = None): Unit
     def applyBlockEvents(
         blockNum: Int,
@@ -188,7 +190,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     ): Either[String, Block]
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
-    def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]
+    def stateL2: Map[v3.TxOutRef, v3.TxOut]
     def tryProduceFinalBlock(force: Boolean): Either[String, Block]
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def finalizeHead(block: BlockRecord): Unit
@@ -286,10 +288,11 @@ class HeadStateGlobal(
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
     private val depositL1Effects: mutable.Buffer[DepositRecord] = mutable.Buffer()
 
-    // L1&L2 states
+    // L1 states
     private var stateL1: Option[MultisigHeadStateL1] = None
-    private var stateL2
-        : Option[L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque]] = None
+
+    // L2 state
+    private var stateL2: Option[Map[v3.TxOutRef, v3.TxOut]] = None
 
     // HeadStateReader
     override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
@@ -417,8 +420,7 @@ class HeadStateGlobal(
             self.mbIsNextBlockFinal = Some(false)
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
-            // TODO: here we decide which ledger we are using
-            self.stateL2 = Some(HydrozoaL2Ledger.mkLedgerForHead())
+            self.stateL2 = Some(Map.empty)
 
             metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
 
@@ -484,9 +486,13 @@ class HeadStateGlobal(
                 val finalizing = self.headPhase == Finalizing
 
                 val tipHeader = l2Tip.blockHeader
+
+                val ledgerL2 = SimpleL2LedgerClass()
+                ledgerL2.replaceUtxosActive(stateL2)
+
                 blockProductionActor.ask(
                   _.produceBlock(
-                    stateL2.cloneForBlockProducer(),
+                    ledgerL2,
                     immutablePoolEventsL2,
                     peekDeposits,
                     tipHeader,
@@ -537,9 +543,7 @@ class HeadStateGlobal(
             val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.coins).sum
             metrics.tell(_.setDepositsLiquidity(coins.toLong))
 
-        override def stateL2
-            : L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
-            self.stateL2.get
+        override def stateL2: Map[v3.TxOutRef, v3.TxOut] = self.stateL2.get
 
         override def applyBlockRecord(
             record: BlockRecord,
@@ -574,12 +578,17 @@ class HeadStateGlobal(
             val volumeWithdrawn = record.block.validWithdrawals.toList
                 .map(confirmedEvents(_).asInstanceOf[L2EventWithdrawal])
                 .flatMap(_.withdrawal.inputs)
-                .map(stateL2.getOutput)
+                .map(SimpleL2LedgerO.liftOutputRef)
+                .map(stateL2(_))
+                .map(SimpleL2LedgerO.unliftOutput)
                 .map(_.coins)
                 .sum
                 .toLong
 
-            record.l2Effect.foreach(stateL2.replaceUtxosActive)
+            record.l2Effect match {
+                case Some(state) => self.stateL2 = Some(state)
+                case None        => throw RuntimeException("should not happen")
+            }
 
             // NB: should be run after confirmMempoolEvents
             metrics.tell(m => {
@@ -885,7 +894,7 @@ class HeadStateGlobal(
                     // TODO: at this point a specific set of utxos should be restored
                     // Now, for testing we are assuming we can just use L2 ledger directly.
                     // Also, we now try to withdraw all utxos from the ledger in one go.
-                    val utxos = stateL2.flushAndGetState
+                    val utxos: UtxoSet[L2] = UtxoSet.apply(unliftUtxoSet(stateL2))
                     // Since we are removing all utxos, proof := g2
                     val proof = G2.generator.toCompressedByteString.toHex
 
@@ -1014,7 +1023,7 @@ class HeadStateGlobal(
             tryProduceBlock(true)
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
-        def stateL2: L2LedgerModule[HydrozoaHeadLedger, HydrozoaL2Ledger.LedgerUtxoSetOpaque] =
+        def stateL2: Map[v3.TxOutRef, v3.TxOut] =
             self.stateL2.get
 
         override def tryProduceFinalBlock(
@@ -1026,9 +1035,13 @@ class HeadStateGlobal(
                 log.info(s"Trying to produce the final block ${l2Tip.blockHeader.blockNum + 1}...")
 
                 val tipHeader = l2Tip.blockHeader
+
+                val ledgerL2 = SimpleL2LedgerClass()
+                ledgerL2.replaceUtxosActive(stateL2)
+
                 blockProductionActor.ask(
                   _.produceBlock(
-                    stateL2.cloneForBlockProducer(),
+                    ledgerL2,
                     Seq.empty,
                     TaggedUtxoSet.apply(),
                     tipHeader,
@@ -1148,7 +1161,7 @@ class HeadStateGlobal(
 
                 log.trace(
                   "-----------------------   Open: L2 State   ------------------------------------" +
-                      s"\n${openPhase(_.stateL2.getUtxosActive)}"
+                      s"\n${openPhase(_.stateL2)}"
                 )
                 log.trace(
                   "------------------------  Open: BLOCKS   --------------------------------------" +
@@ -1166,7 +1179,7 @@ class HeadStateGlobal(
                 )
                 log.trace(
                   "-----------------------   Finalizing: L2 State   ------------------------------------" +
-                      s"${finalizingPhase(_.stateL2.getUtxosActive)}"
+                      s"${finalizingPhase(_.stateL2)}"
                 )
             case _ => println("dumpState is missing due to nodes's being in wrong phase.")
 }
@@ -1202,7 +1215,7 @@ case class BlockRecord(
 
 case class OwnBlock(
     block: Block,
-    utxosActive: HydrozoaL2Ledger.LedgerUtxoSetOpaque,
+    utxosActive: Map[v3.TxOutRef, v3.TxOut],
     utxosWithdrawn: UtxoSetL2,
     mbGenesis: Option[(TxId, L2Genesis)]
 )
@@ -1239,7 +1252,7 @@ type L1PostDatedBlockEffect = Option[TxL1]
 // Always None for final block, always Some for minor block,
 // None or Some for major (None in case a major block is produced
 // to refresh a L1 treasury utxo.
-type L2BlockEffect = Option[HydrozoaL2Ledger.LedgerUtxoSetOpaque]
+type L2BlockEffect = Option[Map[v3.TxOutRef, v3.TxOut]]
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
 

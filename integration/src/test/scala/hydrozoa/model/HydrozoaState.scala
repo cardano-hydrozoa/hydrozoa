@@ -98,6 +98,30 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
     override def initializingPhaseReader[A](foo: InitializingPhaseReader => A): A = ???
 
-    override def openPhaseReader[A](foo: OpenPhaseReader => A): A = ???
+    override def openPhaseReader[A](foo: OpenPhaseReader => A): A =
+        (new OpenPhaseReader:
+            def immutablePoolEventsL2: Seq[L2Event] = ???
+            def immutableBlocksConfirmedL2: Seq[BlockRecord] = ???
+            def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = ???
+            def l2Tip: Block = ???
+            def l2LastMajorRecord: BlockRecord = ???
+            def l2LastMajor: Block = ???
+            def lastKnownTreasuryUtxoId: UtxoIdL1 = s.treasuryUtxoId.get
+            def peekDeposits: DepositUtxos = ???
+            def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) = ???
+            def blockLeadTurn: Int = ???
+            def isBlockLeader: Boolean = ???
+            def isBlockPending: Boolean = ???
+            def pendingOwnBlock: OwnBlock = ???
+            def isQuitConsensusImmediately: Boolean = ???
+            def beaconTokenName: hydrozoa.TokenName = ???
+            def headBechAddress: hydrozoa.AddressBechL1 = ???
+            def headMintingPolicy: hydrozoa.CurrencySymbol = ???
+            def headNativeScript: hydrozoa.NativeScript = ???
+            def headPeers: Set[hydrozoa.node.state.WalletId] = ???
+            def seedAddress: hydrozoa.AddressBechL1 = ???
+            def stateL1: hydrozoa.l1.multisig.state.MultisigHeadStateL1 = ???
+            def treasuryUtxoId: hydrozoa.UtxoIdL1 = ???
+        ) |> foo
 
     override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A = ???
