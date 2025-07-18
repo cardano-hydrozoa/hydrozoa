@@ -4,25 +4,33 @@ import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import hydrozoa.infra.TxBuilder
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, toBB, toScalus}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.Vote
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{
-    BlockHeader,
-    DisputeRedeemer,
-    MinorBlockL1Effect,
-    VoteDatum,
-    VoteDetails
-}
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{BlockHeader, *}
 import hydrozoa.{AddressBechL1, Ed25519Signature, TxL1, UtxoIdL1}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Era.Conway
+import scalus.cardano.ledger.Language.PlutusV3
 import scalus.cardano.ledger.RedeemerTag.Spend
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.utils.MinTransactionFee
+import scalus.ledger.babbage.ProtocolParams
 import scalus.prelude.List.asScalus
+import scalus.uplc.eval.{ExBudget, ExCPU, ExMemory, PlutusVM}
+import scalus.bloxbean.{EvaluatorMode, SlotConfig, TxEvaluator}
+
+import scala.math.Fractional.Implicits.infixFractionalOps
+import scala.math.Integral.Implicits.infixIntegralOps
+import scala.math.Numeric.Implicits.infixNumericOps
+import scala.collection.immutable.TreeSet
+import scala.collection.mutable
+import scala.util.control.TailCalls
+import scala.util.control.TailCalls.{done, tailcall}
 
 // TODO: Some parts of this can most probably be factored out into their own Tx Builders. This includes:
 // - Setting collteral
@@ -42,6 +50,7 @@ class VoteTxBuilder(backendService: BackendService, recipe: VoteTxRecipe) extend
             inVoteUtxo <- bloxToScalusUtxoQuery(backendService, recipe.voteUtxoId)
             collateralUtxo <- bloxToScalusUtxoQuery(backendService, recipe.collateralUtxoId)
         yield VoteQueryResult(inVoteUtxo = inVoteUtxo, collateralUtxo = collateralUtxo)
+
     }
     // Cache the result
     // (Note, Peter 2025-07-16: Alex suggested just using exceptions and making things mutable, so I'll just
@@ -79,7 +88,10 @@ class VoteTxBuilder(backendService: BackendService, recipe: VoteTxRecipe) extend
                 )
 
         val multisig =
-            recipe.proof.map(s => ByteString.fromArray(s.signature.toArray)).toList.asScalus
+            recipe.proof
+                .map(s => ByteString.fromArray(IArray.genericWrapArray(s.signature).toArray))
+                .toList
+                .asScalus
         val voteRedeemer = DisputeRedeemer.Vote(MinorBlockL1Effect(recipe.blockHeader, multisig))
 
         // NEEDS REVIEW: Double check this.
@@ -106,66 +118,198 @@ class VoteTxBuilder(backendService: BackendService, recipe: VoteTxRecipe) extend
     // - collateral return output, because we do not know the total collateral
     // - ScriptDataHash, because we don't know the Exunits that should be allocate to the
     //       dispute script (unless we over-estimate)
-    // 
+    //
     // Additionally, in the Witness Set, we cannot know the redeemers for the same reason as the ScriptDataHash
     override def txInitializer(
         calculationResult: CalculationResult,
         entryTx: Transaction
     ): Either[InitializationErrorType, InitializerResult] = {
-        val redeemers : Some[KeepRaw[Redeemers]] = Some(
+        val witnessSet = TransactionWitnessSet(
+          // NEEDS REVIEW: There's "cbor encoded", "double cbor encoded", and "flat encoded"
+          // I don't know which I need. I think maybe these should be made into opaque newtypes?
+          plutusV3Scripts = Set(
+            Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.script.flatEncoded))
+          ),
+          // This redeemer is a dummy redeemer. It cannot be properly constructed until we
+          // know the exunits, but we need it  in order to run the script to calculate the ex-units
+          redeemers = Some(
             KeepRaw(
-                Redeemers.from(
-                    Seq(
-                        Redeemer(
-                            tag = Spend,
-                            index = 0,
-                            data = calculationResult.outVoteRedeemer.toData,
-                            // FIXME: at this point, we can't know the correct exunits to allocate.
-                            // This is a dummy value for now
-                            exUnits = ExUnits(memory = 999_999_999, steps = 999_999_999)
-                        )
-                    )
+              Redeemers.from(
+                Seq(
+                  Redeemer(
+                    tag = Spend,
+                    index = 0,
+                    data = calculationResult.outVoteRedeemer.toData,
+                    exUnits = ExUnits(memory = 0, steps = 0)
+                  )
                 )
+              )
             )
+          )
         )
-        
+
         Right(
           Transaction(
             body = KeepRaw(
               entryTx.body.value.copy(
                 inputs = Set(recipe.voteUtxoId.toScalus),
-                ttl = Some(1024),
-                scriptDataHash = Some(
-                  // FIXME: computeScriptDataHash looks like it produces a DataHash, not a ScriptDataHash, so we have
-                  // to wrap an unwrap here.
-                  Hash(
-                    ScriptDataHashGenerator.computeScriptDataHash(
-                      era = ???,
-                      redeemers = redeemers,
-                      datums = KeepRaw(
-                        TaggedSet(Set(calculationResult.outVoteDatum.toData).map(KeepRaw(_)))
-                      ),
-                      costModels = ???
+                // This is a dummy output; the value cannot be known until after we know the fee.
+                // But we need this here dummy output in order to calculate the script context and
+                // run the script to calculate exunits.
+                outputs = IndexedSeq(
+                  Sized(
+                    TransactionOutput(
+                      address = calculationResult.outVoteAddress,
+                      value = queryResult.inVoteUtxo.value,
+                      datumOption = Some(Inline(calculationResult.outVoteDatum.toData))
                     )
                   )
                 ),
+                ttl = Some(1024),
                 collateralInputs = Set(recipe.collateralUtxoId.toScalus),
                 requiredSigners = Set(calculationResult.voteSigner),
                 referenceInputs = Set(recipe.treasuryUtxoId.toScalus)
               )
             ),
-            witnessSet = TransactionWitnessSet(
-              // NEEDS REVIEW: There's "cbor encoded", "double cbor encoded", and "flat encoded"
-              // I don't know which I need. I think maybe these should be made into opaque newtypes?
-              plutusV3Scripts = Set(
-                Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.script.flatEncoded))
-              ),
-              redeemers = redeemers
-            ),
+            witnessSet = witnessSet,
             isValid = true,
             auxiliaryData = None
           )
         )
+    }
+
+    override type FinalizerResult = Transaction
+    // The current approach here is to try to find a fixed point, but there's no guarantee that this will converge.
+    // A binary search may be better, or timing after a number of iterations.
+    override def txFinalizer(
+        cr: VoteCalculationResult,
+        initRes: InitializerResult
+    ): TailCalls.TailRec[Either[FinalizerError, FinalizerResult]] = {
+        ///////////////////////
+        // First thing we need to do is evaluate the transaction in order to find ex-units, so we can compute the
+        // fee. In order to do costing, we need the cost models.
+
+        val costModels = ScriptDataHashGenerator.getUsedCostModels(
+          pparams = recipe.protocolParams,
+          // WARN: we use the init witness because we need the cost model in order to
+          // evaluate the script for ex-unit calculations, which in turn affects the redeemer in the cost
+          // model. This seems like it might throw off convergence? But then again, this is the transaction
+          // we are going to evaluate...
+          w = initRes.witnessSet,
+          refLangs = TreeSet(PlutusV3)
+        )
+
+        // Now comes the thorny part. We don't have a TxEvaluator in scalus yet as far as I can tell, so 
+        // we have to end up casting a lot of things back to bloxbean.
+        val evaluator = TxEvaluator(
+          slotConfig = SlotConfig.Preview,
+          initialBudget = ExBudget(cpu = ExCPU(999_999_999), memory = ExMemory(999_999_999)),
+          protocolMajorVersion = recipe.protocolParams.protocolVersion.major,
+          costMdls = costModels.toBB,
+          mode = EvaluatorMode.EVALUATE_AND_COMPUTE_COST,
+          debugDumpFilesForTesting = false
+        )
+
+        val voteTxRes = evaluator.evaluateTx(
+          initRes.toBB,
+          inputUtxos = Map(recipe.voteUtxoId.toBB -> queryResult.inVoteUtxo)
+        )
+
+        ////////////
+        // Then we compute the fee. This, in part, digs into the redeemer map to see what the allocated exunits
+        // are for each redeemer
+
+        // N.B.: Will throw if we're missing scripts, I think. But for this
+        // transaction, we provide the dispute script directly, so I don't
+        // think we will miss any.
+        val Right(minFee) =
+            MinTransactionFee(
+              transaction = initRes,
+              utxo = Map.empty,
+              protocolParams = recipe.protocolParams
+            )
+
+        ///////////////
+        // Then we use that to compute how much collateral we need. This is a percentage of the fee
+
+        // We must have:
+        // collateral * 100 > fee * collateralPercentge
+        val collateralCoin: Coin = Coin(
+          (minFee.value.toDouble * recipe.protocolParams.collateralPercentage.toDouble / 100).ceil.toLong
+        )
+        assert(collateralCoin.value > 0, "Collateral must be > 0")
+
+        ///////////////
+        // Then we compute the collateral return output by removing the needed collateral from the
+        // collateral input
+
+        // No .copy() here?
+        val collateralReturnOutput: TransactionOutput = TransactionOutput(
+          address = queryResult.collateralUtxo.address,
+          value = queryResult.collateralUtxo.value - Value(collateralCoin)
+        )
+
+        val redeemers: Some[KeepRaw[Redeemers]] = Some(
+          KeepRaw(
+            Redeemers.from(
+              Seq(
+                Redeemer(
+                  tag = Spend,
+                  index = 0,
+                  data = cr.outVoteRedeemer.toData,
+                  exUnits = disputeScriptExUnits
+                )
+              )
+            )
+          )
+        )
+
+        val witnessSet: TransactionWitnessSet = initRes.witnessSet.copy(redeemers = redeemers)
+
+        val scriptDataHash =
+            ScriptDataHashGenerator.computeScriptDataHash(
+              era = Conway,
+              // This will get set in the finalizer, we don't know it yet because we don't know the exunits
+              redeemers = redeemers,
+              datums = KeepRaw(
+                TaggedSet(Set(cr.outVoteDatum.toData).map(KeepRaw(_)))
+              ),
+              costModels = costModels
+            )
+
+        ////////////////////////////////
+        // Now we have enough to construct a new transaction with updated outputs, fees,
+        // collateral stuff, witness set, and data hash.
+        // Our hope is that this process converges to something stable.
+
+        val nextRes: Transaction =
+            initRes.copy(
+              body = KeepRaw(
+                initRes.body.value.copy(
+                  outputs = IndexedSeq(
+                    Sized(
+                      TransactionOutput(
+                        address = cr.outVoteAddress,
+                        value = queryResult.inVoteUtxo.value - Value(minFee),
+                        datumOption = Some(Inline(cr.outVoteDatum.toData))
+                      )
+                    )
+                  ),
+                  // FIXME: computeScriptDataHash looks like it produces a DataHash, not a ScriptDataHash, so we have
+                  // to do an additional wrapping here
+                  scriptDataHash = Some(Hash(scriptDataHash)),
+                  fee = minFee,
+                  totalCollateral = Some(collateralCoin),
+                  collateralReturnOutput = Some(Sized(collateralReturnOutput))
+                )
+              ),
+              witnessSet = witnessSet
+            )
+
+        ////////////////////////
+        // If the new transaction matches the old one, then we've converged to a fixed point and we can return.
+        // If it doesn't, we need to perform a recursive call and try to step closer to convergence.
+        if initRes == nextRes then done(Right(nextRes)) else tailcall(txFinalizer(cr, nextRes))
     }
 }
 
@@ -179,7 +323,8 @@ case class VoteTxRecipe(
     // TODO:Account is used to build and submit in the builder,
     //   though likely we want to separate these two phases.
     nodeAccount: Account,
-    collateralUtxoId: UtxoIdL1
+    collateralUtxoId: UtxoIdL1,
+    protocolParams: ProtocolParams
 )
 
 case class VoteCalculationResult(

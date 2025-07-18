@@ -4,11 +4,31 @@
 
 package hydrozoa.infra.transitionary
 
+import com.bloxbean.cardano.client.transaction.spec.{
+    Transaction as BBTx,
+    TransactionInput as BBTxIn,
+    TransactionOutput as BBTxOut
+}
+import co.nstant.in.cbor.CborDecoder
+import co.nstant.in.cbor.model.DataItem
 import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.plutus.spec.{CostMdls, PlutusData}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.{AddressBech, AnyLevel, NativeScript, Output, TokenName, Tokens, Tx, TxAny, TxL1, UtxoId, Network as HNetwork, PolicyId as HPolicyId}
+import hydrozoa.{
+    AddressBech,
+    AnyLevel,
+    NativeScript,
+    Output,
+    TokenName,
+    Tokens,
+    Tx,
+    TxAny,
+    TxL1,
+    UtxoId,
+    Network as HNetwork,
+    PolicyId as HPolicyId
+}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
@@ -27,16 +47,49 @@ import scalus.ledger.api.v1
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.{ledger, prelude}
 
+import java.io.ByteArrayInputStream
+
 val emptyTxBody: TransactionBody = TransactionBody(
-    inputs = Set.empty,
-    outputs = IndexedSeq.empty,
-    fee = Coin(0)
+  inputs = Set.empty,
+  outputs = IndexedSeq.empty,
+  fee = Coin(0)
 )
 
-extension [L <: AnyLevel] (addr: Address) {
-    def toHydrozoa : AddressBech[L] = addr match {
+extension [L <: AnyLevel](addr: Address) {
+    def toHydrozoa: AddressBech[L] = addr match {
         case Shelley(s) => AddressBech(s.toBech32.get)
-        case _ => throw RuntimeException("only shelley addresses allowed")
+        case _          => throw RuntimeException("only shelley addresses allowed")
+    }
+}
+
+// From Claude sonnet 4, July 17th 2025
+extension (cm: CostModels) {
+    def toBB: CostMdls = {
+        // Step 1: Encode to CBOR bytes using Borer
+        val cborBytes = Cbor.encode(cm).toByteArray
+
+        // Step 2: Parse with co.nstant.in.cbor
+        val inputStream = new ByteArrayInputStream(cborBytes)
+        val decoder = new CborDecoder(inputStream)
+        val dataItems: java.util.List[DataItem] = decoder.decode()
+
+        // Get the first (and typically only) DataItem
+        val dataItem: DataItem = dataItems.get(0)
+        CostMdls.deserialize(dataItem)
+    }
+
+}
+
+// Don't know if this will work
+extension (tx: Transaction) {
+    def toBB: BBTx = {
+        BBTx.deserialize(Cbor.encode(tx).toByteArray)
+    }
+}
+
+extension[L <: AnyLevel] (txIn: UtxoId[L]) {
+    def toBB: BBTxIn = {
+        BBTxIn(txIn.txId.hash, txIn.outputIx.ix)
     }
 }
 
@@ -48,48 +101,45 @@ extension [L <: AnyLevel](utxo: UtxoId[L]) {
         )
 }
 
-extension [L <: hydrozoa.AnyLevel] (address : AddressBech[L]) {
-    def toScalus : Address = Address.fromBech32(address.bech32)
+extension [L <: hydrozoa.AnyLevel](address: AddressBech[L]) {
+    def toScalus: Address = Address.fromBech32(address.bech32)
 }
 
-extension (p : HPolicyId) {
-    def toScalus : PolicyId = {
+extension (p: HPolicyId) {
+    def toScalus: PolicyId = {
         Hash(ByteString.fromHex(p.policyId))
     }
 }
 
-
-extension  (tn : TokenName) {
+extension (tn: TokenName) {
     // Token Name comes prepended with a 0x; we drop it
-    def toScalus : AssetName = {
+    def toScalus: AssetName = {
         AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2)))
     }
 }
 
-def htokensToMultiAsset (tokens : Tokens) : MultiAsset = {
-   tokens.map((cs, tnAndQ) =>
-       (cs.toScalus
-           , tnAndQ.map((tn, q) =>
-           (tn.toScalus,q.toLong)
-       )
-       ))    
+def htokensToMultiAsset(tokens: Tokens): MultiAsset = {
+    tokens.map((cs, tnAndQ) => (cs.toScalus, tnAndQ.map((tn, q) => (tn.toScalus, q.toLong))))
 }
 
-
-extension [L <: hydrozoa.AnyLevel] (output : Output[L]) {
+extension [L <: hydrozoa.AnyLevel](output: Output[L]) {
     def toScalus: TransactionOutput = {
-        
+
         TransactionOutput(
-            address = output.address.toScalus, 
-            value = Value(coin = Coin(output.coins.toLong), multiAsset = htokensToMultiAsset(output.tokens)), 
-            datumOption = output.mbInlineDatum match {
-                case Some(d) => Some(
-                  // NEEDS REVIEW (Peter, 2025-07-11): I don't know the encoding, I'm assuming this is correct
-                  Inline(toData(ByteString.fromHex(d)))
-                )
-                case None => None
-            }
-            )
+          address = output.address.toScalus,
+          value = Value(
+            coin = Coin(output.coins.toLong),
+            multiAsset = htokensToMultiAsset(output.tokens)
+          ),
+          datumOption = output.mbInlineDatum match {
+              case Some(d) =>
+                  Some(
+                    // NEEDS REVIEW (Peter, 2025-07-11): I don't know the encoding, I'm assuming this is correct
+                    Inline(toData(ByteString.fromHex(d)))
+                  )
+              case None => None
+          }
+        )
     }
 }
 
@@ -103,8 +153,8 @@ extension (native: Native) {
         NativeScript(native.script.toCbor)
     }
 }
-extension (native : NativeScript) {
-    def toScalusNativeScript : Native = {
+extension (native: NativeScript) {
+    def toScalusNativeScript: Native = {
         Cbor.decode(native.bytes).to[Native].value
     }
 }
@@ -119,8 +169,8 @@ extension (network: HNetwork) {
 
 // REVIEW (Peter, 2025-07-11): This was adapted from Claude on 2025-07-11
 // I don't really understand what its doing.
-extension (tx : TxL1) {
-    def toScalus : Transaction = {
+extension (tx: TxL1) {
+    def toScalus: Transaction = {
         given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
         Cbor.decode(tx.bytes).to[Transaction].value
     }
@@ -181,15 +231,15 @@ def v1AddressToLedger(address: v1.Address, network: Network): ShelleyAddress = {
                     sh match {
                         case ledger.api.v1.StakingCredential.StakingHash(v1Hash) =>
                             v1Hash match {
-                                case ledger.api.v1.Credential.PubKeyCredential(v1Key) => ShelleyDelegationPart.Key(Hash(v1Key.hash))
-                                case ledger.api.v1.Credential.ScriptCredential(v1Script) => ShelleyDelegationPart.Script(Hash(v1Script))
+                                case ledger.api.v1.Credential.PubKeyCredential(v1Key) =>
+                                    ShelleyDelegationPart.Key(Hash(v1Key.hash))
+                                case ledger.api.v1.Credential.ScriptCredential(v1Script) =>
+                                    ShelleyDelegationPart.Script(Hash(v1Script))
                             }
                     }
                 case ledger.api.v1.StakingCredential.StakingPtr(a, b, c) =>
-                            ShelleyDelegationPart.Pointer(Pointer(Slot(a.toLong), b.toLong, c.toLong))
-                    }
+                    ShelleyDelegationPart.Pointer(Pointer(Slot(a.toLong), b.toLong, c.toLong))
             }
+    }
     ShelleyAddress(network = network, payment = paymentPart, delegation = delegationPart)
 }
-
-
