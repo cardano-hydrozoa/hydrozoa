@@ -8,18 +8,6 @@ import supranational.blst.{P1, P2}
 // BLS common stuff
 
 // The point at infinity AKA zero point in G2.
-val infG1Point: P1 =
-    P1(
-        IArray
-            .genericWrapArray(
-                decodeHex(
-                    "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-                )
-            )
-            .toArray
-    )
-
-// The point at infinity AKA zero point in G2.
 val infG2Point: P2 =
     P2(
       IArray
