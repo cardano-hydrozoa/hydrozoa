@@ -1,11 +1,23 @@
 package hydrozoa.l2.commitment
 
 import hydrozoa.infra.{decodeHex, encodeHex}
-import supranational.blst.P2
+import supranational.blst.{P1, P2}
 
 // TODO: generalize for different type of commitments (?)
 
 // BLS common stuff
+
+// The point at infinity AKA zero point in G2.
+val infG1Point: P1 =
+    P1(
+        IArray
+            .genericWrapArray(
+                decodeHex(
+                    "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                )
+            )
+            .toArray
+    )
 
 // The point at infinity AKA zero point in G2.
 val infG2Point: P2 =
