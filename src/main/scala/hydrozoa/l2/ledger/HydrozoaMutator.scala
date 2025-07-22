@@ -1,0 +1,156 @@
+package hydrozoa.l2.ledger
+
+import scalus.cardano.ledger.rules.{AddOutputsToUtxoMutator, AllInputsMustBeInUtxoValidator, EmptyInputsValidator, InputsAndReferenceInputsDisjointValidator, MissingKeyHashesValidator, MissingOrExtraScriptHashesValidator, NativeScriptsValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, RemoveInputsFromUtxoMutator, TransactionExecutionUnitsValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator, VerifiedSignaturesInWitnessesValidator}
+import scalus.cardano.ledger.TransactionInput
+import scalus.cardano.ledger.rules.STS.Validator
+
+/*
+We define three mutators for the three L2 event types (Genesis, Transaction, Withdrawal).
+
+Then, finally, we define a mutator that both validates and processes any L2Event
+ */
+
+object HydrozoaGenesisMutator extends STSL2.Mutator {
+    override final type Error = String
+
+    // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
+    // index
+    private def addGenesisUtxosToState(g: L2Genesis, state: State): State = {
+        g.utxos
+            .foldLeft((state, 0))((acc, output) => {
+                val newState = acc._1.copy(utxo =
+                    acc._1.utxo.updated(
+                      key = TransactionInput(transactionId = g.txId, index = acc._2),
+                      value = output
+                    )
+                )
+                (newState, acc._2 + 1)
+            })
+            ._1
+    }
+
+    override def transit(context: Context, state: State, event: Event): Result = event match {
+        case g: L2Genesis => {
+            for
+                // Validates that outputs are well formed -- babbage outputs, no delegation, no non-ada tokens, etc
+                _ <- L2ConformanceValidator.validate(context, state, event)
+            yield (addGenesisUtxosToState(g, state))
+        }
+        case _ => Right(state)
+    }
+}
+
+object HydrozoaTransactionMutator extends STSL2.Mutator {
+    // TODO: Improve error type?
+    override final type Error = String
+
+    override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
+        case L2Transaction(event) => {
+            // A helper for mapping the error type and applying arguments
+            def helper(v: Validator): Either[Error, Unit] =
+                mapLeft(_.toString)(v.validate(context, state, event))
+            for
+                // Upstream validators (applied alphabetically for ease of comparison in a file browser
+                // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
+                // but I've removed the rules that I'm certain won't apply
+                _ <- helper(AllInputsMustBeInUtxoValidator)
+                _ <- helper(EmptyInputsValidator)
+                _ <- helper(InputsAndReferenceInputsDisjointValidator)
+                _ <- helper(VerifiedSignaturesInWitnessesValidator)
+                _ <- helper(MissingKeyHashesValidator)
+                _ <- helper(MissingOrExtraScriptHashesValidator)
+                _ <- helper(NativeScriptsValidator)
+                _ <- helper(TransactionSizeValidator)
+                _ <- helper(OutputsHaveNotEnoughCoinsValidator)
+                _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
+                _ <- helper(OutsideValidityIntervalValidator)
+                _ <- helper(ValueNotConservedUTxOValidator)
+                _ <- helper(VerifiedSignaturesInWitnessesValidator)
+                /* Not yet implemented validators (2025-07-22)
+                _ <- helper(ExactSetOfRedeemersValidator)
+                _ <- helper(ScriptsWellFormedValidator)
+                _ <- helper(ProtocolParamsViewHashesMatchValidator)
+                _ <- helper(WrongNetworkValidator)
+                _ <- helper(WrongNetworkInTxBodyValidator)
+                 */
+                // Upstream mutators
+                state <- mapLeft(_.toString)(
+                  RemoveInputsFromUtxoMutator.transit(context, state, event)
+                )
+                state <- mapLeft(_.toString)(AddOutputsToUtxoMutator.transit(context, state, event))
+            yield state
+        }
+        case _ => Right(state)
+    }
+}
+
+object HydrozoaWithdrawalMutator extends STSL2.Mutator {
+    // TODO: Improve error type?
+    override final type Error = String
+
+    override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
+        case L2Withdrawal(event) => {
+            // A helper for mapping the error type and applying arguments
+            def helper(v: Validator): Either[Error, Unit] =
+                mapLeft(_.toString)(v.validate(context, state, event))
+
+            for
+                // Native validators
+                _ <- if event.body.value.outputs.nonEmpty then Left("Withdrawals cannot have outputs") else Right(())
+                
+                // Upstream validators (applied alphabetically for ease of comparison in a file browser
+                // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
+                // but I've removed the rules that I'm certain won't apply
+                
+                // Differs from transactions in that the following rules are removed:
+                // - OutputsHaveNotEnoughCoinsValidator
+                // - OutputsHaveTooBigValuesStorageSizeValidator
+                // - ValueNotConservedUtxOValidator
+                _ <- helper(AllInputsMustBeInUtxoValidator)
+                _ <- helper(EmptyInputsValidator)
+                _ <- helper(InputsAndReferenceInputsDisjointValidator)
+                _ <- helper(VerifiedSignaturesInWitnessesValidator)
+                _ <- helper(MissingKeyHashesValidator)
+                _ <- helper(MissingOrExtraScriptHashesValidator)
+                _ <- helper(NativeScriptsValidator)
+                _ <- helper(TransactionSizeValidator)
+                _ <- helper(OutsideValidityIntervalValidator)
+                _ <- helper(VerifiedSignaturesInWitnessesValidator)
+                /* Not yet implemented validators (2025-07-22)
+                _ <- helper(ExactSetOfRedeemersValidator)
+                _ <- helper(ScriptsWellFormedValidator)
+                _ <- helper(ProtocolParamsViewHashesMatchValidator)
+                _ <- helper(WrongNetworkValidator)
+                _ <- helper(WrongNetworkInTxBodyValidator)
+                 */
+                // Upstream mutators
+                state <- mapLeft(_.toString)(
+                    RemoveInputsFromUtxoMutator.transit(context, state, event)
+                )
+            yield state
+        }
+        case _ => Right(state)
+    }
+}
+
+// The primary entry point for the L2 ledger
+object HydrozoaL2Mutator extends STSL2.Mutator {
+    override final type Error = String
+
+    override def transit(context: Context, state: State, event: Event): Result = {
+        for 
+            _ <- L2ConformanceValidator.validate(context, state, event)
+            state <- HydrozoaGenesisMutator(context, state, event)
+            state <- HydrozoaTransactionMutator(context, state, event)
+            state <- HydrozoaWithdrawalMutator(context, state, event)
+        yield state        
+    }
+}
+
+//////////////////
+// Helper
+
+private def mapLeft[A, B, C](f: A => C)(e: Either[A, B]): (Either[C, B]) = e match {
+    case Left(a)  => Left(f(a))
+    case Right(b) => Right(b)
+}
