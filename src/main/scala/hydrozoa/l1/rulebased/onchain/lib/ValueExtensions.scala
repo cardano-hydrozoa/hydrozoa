@@ -12,8 +12,9 @@ object ValueExtensions:
 
         def containsCurrencySymbol(cs: CurrencySymbol): Boolean =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
-            tokens.map(_._1).contains(cs)
+            self.toList match
+                case List.Cons(_, tokens) => tokens.map(_._1).contains(cs)
+                case List.Nil             => false
 
         // Is it useful? get(cs).getOrElse(AssocMap.empty) does the same job
 //        def tokensUnder(cs: CurrencySymbol): AssocMap[TokenName, BigInt] =
@@ -33,42 +34,46 @@ object ValueExtensions:
             amount: BigInt
         ): Boolean =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
-            tokens match
-                case List.Cons((cs_, names), otherSymbols) =>
-                    if otherSymbols.isEmpty then
-                        if cs_ == cs then
-                            names.toList match
-                                case List.Cons((tn_, amount_), otherNames) =>
-                                    otherNames.isEmpty && tn_ == tn && amount_ == amount
-                                case _ => false
-                        else false
-                    else false
-                case _ => false
+            self.toList match
+                case List.Cons(_, tokens) =>
+                    tokens match
+                        case List.Cons((cs_, names), otherSymbols) =>
+                            if otherSymbols.isEmpty then
+                                if cs_ == cs then
+                                    names.toList match
+                                        case List.Cons((tn_, amount_), otherNames) =>
+                                            otherNames.isEmpty && tn_ == tn && amount_ == amount
+                                        case _ => false
+                                else false
+                            else false
+                        case _ => false
+                case List.Nil => false
 
         /** Returns the only non-ada asset, i.e. a unique token in the value or fails.
           * @return
           */
         def onlyNonAdaAsset: (CurrencySymbol, TokenName, BigInt) =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
-
-            tokens match
-                case List.Cons((cs, names), otherSymbols) =>
-                    require(
-                      otherSymbols.isEmpty,
-                      "onlyNonAdaToken: found more than one currency symbol"
-                    )
-                    names.toList match
-                        case List.Cons((tokenName, amount), otherNames) =>
+            self.toList match
+                case List.Cons(_, tokens) =>
+                    tokens match
+                        case List.Cons((cs, names), otherSymbols) =>
                             require(
-                              otherNames.isEmpty,
-                              "onlyNonAdaToken: found more than one token name"
+                              otherSymbols.isEmpty,
+                              "onlyNonAdaToken: found more than one currency symbol"
                             )
-                            (cs, tokenName, amount)
-                        // TODO: is it reachable? can the inner Map[TokenName, BigInt] be empty?
-                        case List.Nil => fail("onlyNonAdaToken: malformed value")
-                case List.Nil => fail("onlyNonAdaToken: no non-ada assets in value")
+                            names.toList match
+                                case List.Cons((tokenName, amount), otherNames) =>
+                                    require(
+                                      otherNames.isEmpty,
+                                      "onlyNonAdaToken: found more than one token name"
+                                    )
+                                    (cs, tokenName, amount)
+                                // TODO: is it reachable? can the inner Map[TokenName, BigInt] be empty?
+                                case List.Nil => fail("onlyNonAdaToken: malformed value")
+                        case List.Nil => fail("onlyNonAdaToken: no non-ada assets in value")
+                case List.Nil =>
+                    fail("onlyNonAdaToken: no non-ada assets in value")
 
         // Negate value, useful for burning operations
         def unary_- : Value = Value.zero - self

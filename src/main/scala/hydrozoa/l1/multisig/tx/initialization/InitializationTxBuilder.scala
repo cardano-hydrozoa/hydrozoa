@@ -17,5 +17,5 @@ case class InitTxRecipe(
     network: Network,
     seedUtxo: UtxoIdL1,
     coins: BigInt,
-    peers: Set[VerificationKeyBytes],
+    peers: Set[VerificationKeyBytes]
 )

@@ -10,7 +10,8 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.10.1+228-294456c3-SNAPSHOT"
+val scalusVersion = "0.10.1+274-f2c74970-SNAPSHOT"
+val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -31,12 +32,12 @@ lazy val core = (project in file("."))
           "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
         // Scalus
-        "org.scalus" %% "scalus" % scalusVersion,
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion,
-        "org.scalus" %% "scalus-bloxbean-cardano-client-lib" % scalusVersion,
+        "org.scalus" %% "scalus" % scalusVersion withSources (),
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
+        "org.scalus" %% "scalus-bloxbean-cardano-client-lib" % scalusVersion withSources (),
         // Cardano Client library
-        "com.bloxbean.cardano" % "cardano-client-lib" % "0.7.0-beta3-SNAPSHOT",
-        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.7.0-beta3-SNAPSHOT",
+        "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
+        "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Tapir for API definition
         "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.11.14",
         "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.11.14",
