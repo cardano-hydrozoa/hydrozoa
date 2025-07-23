@@ -41,11 +41,7 @@ import java.math.BigInteger
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 
-sealed trait L2Event
 
-case class L2Transaction(transaction: Transaction) extends L2Event
-case class L2Withdrawal(transaction: Transaction) extends L2Event
-case class L2Genesis(txId: TransactionHash, utxos: Seq[TransactionOutput]) extends L2Event
 
 ////////////////////////////////////////
 // Layer 2 state transition system

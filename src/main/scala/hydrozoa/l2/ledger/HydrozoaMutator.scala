@@ -1,8 +1,8 @@
 package hydrozoa.l2.ledger
 
-import scalus.cardano.ledger.rules.{AddOutputsToUtxoMutator, AllInputsMustBeInUtxoValidator, EmptyInputsValidator, InputsAndReferenceInputsDisjointValidator, MissingKeyHashesValidator, MissingOrExtraScriptHashesValidator, NativeScriptsValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, RemoveInputsFromUtxoMutator, TransactionExecutionUnitsValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator, VerifiedSignaturesInWitnessesValidator}
 import scalus.cardano.ledger.TransactionInput
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.rules.*
 
 /*
 We define three mutators for the three L2 event types (Genesis, Transaction, Withdrawal).
@@ -10,18 +10,20 @@ We define three mutators for the three L2 event types (Genesis, Transaction, Wit
 Then, finally, we define a mutator that both validates and processes any L2Event
  */
 
-object HydrozoaGenesisMutator extends STSL2.Mutator {
+private object HydrozoaGenesisMutator extends STSL2.Mutator {
     override final type Error = String
 
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
-    private def addGenesisUtxosToState(g: L2Genesis, state: State): State = {
+    private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
+        val genesisId = g.getEventId
+        
         g.utxos
-            .foldLeft((state, 0))((acc, output) => {
+            .foldLeft((state, 0))((acc, tiTo) => {
                 val newState = acc._1.copy(utxo =
                     acc._1.utxo.updated(
-                      key = TransactionInput(transactionId = g.txId, index = acc._2),
-                      value = output
+                      key = TransactionInput(transactionId = genesisId, index = acc._2),
+                      value = tiTo._2
                     )
                 )
                 (newState, acc._2 + 1)
@@ -30,22 +32,17 @@ object HydrozoaGenesisMutator extends STSL2.Mutator {
     }
 
     override def transit(context: Context, state: State, event: Event): Result = event match {
-        case g: L2Genesis => {
-            for
-                // Validates that outputs are well formed -- babbage outputs, no delegation, no non-ada tokens, etc
-                _ <- L2ConformanceValidator.validate(context, state, event)
-            yield (addGenesisUtxosToState(g, state))
-        }
+        case g: L2EventGenesis => Right(addGenesisUtxosToState(g, state))
         case _ => Right(state)
     }
 }
 
-object HydrozoaTransactionMutator extends STSL2.Mutator {
+private object HydrozoaTransactionMutator extends STSL2.Mutator {
     // TODO: Improve error type?
     override final type Error = String
 
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
-        case L2Transaction(event) => {
+        case L2EventTransaction(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
                 mapLeft(_.toString)(v.validate(context, state, event))
@@ -84,24 +81,27 @@ object HydrozoaTransactionMutator extends STSL2.Mutator {
     }
 }
 
-object HydrozoaWithdrawalMutator extends STSL2.Mutator {
+private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
     // TODO: Improve error type?
     override final type Error = String
 
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
-        case L2Withdrawal(event) => {
+        case L2EventWithdrawal(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
                 mapLeft(_.toString)(v.validate(context, state, event))
 
             for
-                // Native validators
-                _ <- if event.body.value.outputs.nonEmpty then Left("Withdrawals cannot have outputs") else Right(())
-                
+                // L2 Native validators
+                _ <-
+                    if event.body.value.outputs.nonEmpty then
+                        Left("Withdrawals cannot have outputs")
+                    else Right(())
+
                 // Upstream validators (applied alphabetically for ease of comparison in a file browser
                 // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
                 // but I've removed the rules that I'm certain won't apply
-                
+
                 // Differs from transactions in that the following rules are removed:
                 // - OutputsHaveNotEnoughCoinsValidator
                 // - OutputsHaveTooBigValuesStorageSizeValidator
@@ -125,7 +125,7 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                  */
                 // Upstream mutators
                 state <- mapLeft(_.toString)(
-                    RemoveInputsFromUtxoMutator.transit(context, state, event)
+                  RemoveInputsFromUtxoMutator.transit(context, state, event)
                 )
             yield state
         }
@@ -138,12 +138,12 @@ object HydrozoaL2Mutator extends STSL2.Mutator {
     override final type Error = String
 
     override def transit(context: Context, state: State, event: Event): Result = {
-        for 
+        for
             _ <- L2ConformanceValidator.validate(context, state, event)
             state <- HydrozoaGenesisMutator(context, state, event)
             state <- HydrozoaTransactionMutator(context, state, event)
             state <- HydrozoaWithdrawalMutator(context, state, event)
-        yield state        
+        yield state
     }
 }
 

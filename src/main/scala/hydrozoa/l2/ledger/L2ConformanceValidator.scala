@@ -1,5 +1,6 @@
 package hydrozoa.l2.ledger
 
+import hydrozoa.l2.ledger
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -27,11 +28,11 @@ object L2ConformanceValidator extends STSL2.Validator {
     override def validate(context: Context, state: State, event: Event)(using
         v1: L2ConformanceValidator[Transaction]
     )(using v2: L2ConformanceValidator[TransactionOutput]): Either[String, Unit] = event match {
-        case L2Transaction(tx) => v1.l2Validate(tx)
-        case L2Withdrawal(tx)  => v1.l2Validate(tx)
-        case L2Genesis(txId, utxos) =>
-            utxos.foldLeft[Either[Error, Unit]](Right(()))((acc, to) =>
-                if acc.isLeft then acc else v2.l2Validate(to)
+        case L2EventTransaction(tx) => v1.l2Validate(tx)
+        case L2EventWithdrawal(tx)  => v1.l2Validate(tx)
+        case L2EventGenesis(resolvedSeq) =>
+           resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
+                if acc.isLeft then acc else v2.l2Validate(resolved._2)
             )
     }
 }
