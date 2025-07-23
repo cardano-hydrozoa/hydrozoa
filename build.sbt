@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.10.1+349-6d9dc32d-SNAPSHOT"
+val scalusVersion = "0.10.1+228-294456c3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
@@ -31,9 +31,9 @@ lazy val core = (project in file("."))
           "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       libraryDependencies ++= Seq(
         // Scalus
-        "org.scalus" %% "scalus" % scalusVersion withSources(),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources(),
-        "org.scalus" %% "scalus-bloxbean-cardano-client-lib" % scalusVersion withSources(),
+        "org.scalus" %% "scalus" % scalusVersion,
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion,
+        "org.scalus" %% "scalus-bloxbean-cardano-client-lib" % scalusVersion,
         // Cardano Client library
         "com.bloxbean.cardano" % "cardano-client-lib" % "0.7.0-beta3-SNAPSHOT",
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % "0.7.0-beta3-SNAPSHOT",
