@@ -8,14 +8,27 @@ import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.toHydrozoaNativeScript
-import hydrozoa.infra.{Piper, decodeHex, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, txFees, txHash, verKeyHash}
+import hydrozoa.infra.{
+    Piper,
+    decodeHex,
+    encodeHex,
+    extractVoteTokenNameFromFallbackTx,
+    serializeTxHex,
+    txFees,
+    txHash,
+    verKeyHash
+}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Resolved
-import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.onchain.{
+    DisputeResolutionScript,
+    TreasuryValidatorScript,
+    hashVerificationKey
+}
 import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
@@ -981,7 +994,7 @@ class HeadStateGlobal(
                 // Also, we now try to withdraw all utxos from the ledger in one go.
                 val utxos = stateL2.flushAndGetState
                 // Since we are removing all utxos, proof := g1
-                    // TODO: stronger typing
+                // TODO: stronger typing
                 val proof = G1.generator.toCompressedByteString.toHex
 
                 val recipe = WithdrawTxRecipe(

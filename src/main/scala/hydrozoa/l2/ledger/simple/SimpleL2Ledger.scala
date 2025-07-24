@@ -71,25 +71,6 @@ object SimpleL2Ledger:
     def unliftUtxoSet(utxosSetOpaque: LedgerUtxoSetOpaque): Map[UtxoIdL2, OutputL2] =
         utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
-//    // TODO: this will be gone as soon as we get a setup ceremony up and running.
-//    val tau = Scalar(BigInteger("42"))
-//
-//    def mkDummySetupG2(n: Int): SList[P2] = {
-//        val setup =
-//            (1 to n + 1).map(i =>
-//                P2.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
-//            )
-//        SList.Cons(P2.generator(), setup.toList.asScalus)
-//    }
-//
-//    def mkDummySetupG1(n: Int): SList[P1] = {
-//        val setup =
-//            (1 to n + 1).map(i =>
-//                P1.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
-//            )
-//        SList.Cons(P1.generator(), setup.toList.asScalus)
-//    }
-
     // The implementation
     private class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
         extends L2LedgerModule[InstancePurpose, LedgerUtxoSetOpaque]:
@@ -109,10 +90,6 @@ object SimpleL2Ledger:
 
         // TODO: use a type wrapper for the return value
         override def getUtxosActiveCommitment: IArray[Byte] = {
-//            val elemsRaw = activeState.clone.toList
-//                .map(e => blake2b_224(serialiseData(e.toData)).toHex)
-//                .asScalus
-//            log.info(s"utxos active hashes raw: $elemsRaw")
 
             val elems = activeState.clone.toList
                 .map(e => Scalar().from_bendian(blake2b_224(serialiseData(e.toData)).bytes))
@@ -288,14 +265,4 @@ def getG1Commitment(
 //
 //    subsetInG2.foldLeft(zero.dup()): (a, b) =>
 //        a.add(b)
-//}
-
-//@main
-//def dumpSetupG1(): Unit = {
-//    val setup = SimpleL2Ledger.mkDummySetupG1(5)
-//    val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
-//    setupBS.foreach(println)
-//
-////    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
-////    println(G1.generator.toCompressedByteString)
 //}
