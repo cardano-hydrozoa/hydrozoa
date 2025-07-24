@@ -9,7 +9,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.deserializeDatumHex
-import hydrozoa.l2.ledger.{L2Transaction, L2Withdrawal}
+import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
     depositEndpoint,
     finalizeEndpoint,
@@ -153,26 +153,20 @@ object NodeRestApi:
 
 // JSON/Schema instances
 enum SubmitRequestL2:
-    case Transaction(transaction: L2Transaction)
-    case Withdrawal(withdrawal: L2Withdrawal)
+    case Transaction(transaction: L2EventTransaction)
+    case Withdrawal(withdrawal: L2EventWithdrawal)
 
 object SubmitRequestL2:
-    def apply(event: L2Transaction | L2Withdrawal): SubmitRequestL2 =
+    def apply(event: L2EventTransaction | L2EventWithdrawal): SubmitRequestL2 =
         event match
-            case tx: L2Transaction => Transaction(tx)
-            case wd: L2Withdrawal  => Withdrawal(wd)
+            case tx: L2EventTransaction => Transaction(tx)
+            case wd: L2EventWithdrawal  => Withdrawal(wd)
 
 given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
     JsonCodecMaker.make
 
 given submitRequestL2Schema: Schema[SubmitRequestL2] =
     Schema.derived[SubmitRequestL2]
-
-given simpleTransactionSchema: Schema[L2Transaction] =
-    Schema.derived[L2Transaction]
-
-given simpleTWithdrawalSchema: Schema[L2Withdrawal] =
-    Schema.derived[L2Withdrawal]
 
 given txIdSchema: Schema[TxId] =
     Schema.derived[TxId]

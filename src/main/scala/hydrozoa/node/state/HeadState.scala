@@ -7,7 +7,14 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toHydrozoaNativeScript
+import hydrozoa.infra.transitionary.{
+    contextAndStateFromV3UTxO,
+    toHUTxO,
+    toHydrozoa,
+    toHydrozoaNativeScript,
+    toScalusLedger,
+    toV3UTxO
+}
 import hydrozoa.infra.{
     Piper,
     decodeHex,
@@ -37,10 +44,17 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.{SimpleL2Ledger as SimpleL2LedgerO, *}
+import hydrozoa.l2.ledger.{
+    L2Event,
+    L2EventGenesis,
+    L2EventLabel,
+    L2EventTransaction,
+    L2EventWithdrawal,
+    l2EventLabel
+}
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.l2.ledger.SimpleL2Ledger.{SimpleL2LedgerClass, unliftUtxoSet}
 import hydrozoa.node.TestPeer
+import hydrozoa.UtxoMap
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
@@ -101,7 +115,7 @@ trait HeadState:
       * @return
       *   Block record and optional genesis if effects for block are ready.
       */
-    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2Genesis)])]
+    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2EventGenesis)])]
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Readers hierarchy
@@ -165,7 +179,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: Map[v3.TxOutRef, v3.TxOut]
-    def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2Genesis)] = None): Unit
+    def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2EventGenesis)] = None): Unit
     def applyBlockEvents(
         blockNum: Int,
         eventsValid: Seq[(TxId, L2EventLabel)],
@@ -282,7 +296,7 @@ class HeadStateGlobal(
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
     // TODO: having two lists won't work when we are to replay events, we need order
-    private val genesisEventsConfirmedL2: mutable.Map[Int, (TxId, L2Genesis)] = mutable.Map()
+    private val genesisEventsConfirmedL2: mutable.Map[Int, (TxId, L2EventGenesis)] = mutable.Map()
     // TODO: these events won't contain genesis events
     private val nonGenesisEventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
@@ -335,7 +349,7 @@ class HeadStateGlobal(
 
     override def getBlockRecord(
         block: Block
-    ): Option[(BlockRecord, Option[(TxId, L2Genesis)])] =
+    ): Option[(BlockRecord, Option[(TxId, L2EventGenesis)])] =
         // TODO: shall we use Map not Buffer?
         self.blocksConfirmedL2.find(_.block == block) match
             case None => None
@@ -487,12 +501,9 @@ class HeadStateGlobal(
 
                 val tipHeader = l2Tip.blockHeader
 
-                val ledgerL2 = SimpleL2LedgerClass()
-                ledgerL2.replaceUtxosActive(stateL2)
-
                 blockProductionActor.ask(
                   _.produceBlock(
-                    ledgerL2,
+                    contextAndStateFromV3UTxO(stateL2),
                     immutablePoolEventsL2,
                     peekDeposits,
                     tipHeader,
@@ -502,7 +513,12 @@ class HeadStateGlobal(
                 ) match
                     case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
                         self.pendingOwnBlock = Some(
-                          OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                          OwnBlock(
+                            block,
+                            toV3UTxO(utxosActive),
+                            toHUTxO(utxosWithdrawn),
+                            mbGenesis.map((th, e) => (TxId(th.toHex), e))
+                          )
                         )
                         self.isBlockPending = Some(true)
                         self.mbIsNextBlockFinal = Some(nextBlockFinal)
@@ -547,7 +563,7 @@ class HeadStateGlobal(
 
         override def applyBlockRecord(
             record: BlockRecord,
-            mbGenesis: Option[(TxId, L2Genesis)] = None
+            mbGenesis: Option[(TxId, L2EventGenesis)] = None
         ): Unit =
             log.info(s"Applying block ${record.block.blockHeader.blockNum}")
 
@@ -569,21 +585,18 @@ class HeadStateGlobal(
 
             val confirmedEvents = applyBlockEvents(
               blockNum,
-              body.eventsValid,
-              body.eventsInvalid,
-              body.depositsAbsorbed
+              body.eventsValid.map((th, e) => (TxId(th.toHex), e)),
+              body.eventsInvalid.map((th, e) => (TxId(th.toHex), e)),
+              body.depositsAbsorbed.map(_.toHydrozoa)
             )
 
             // NB: this should be run before replacing utxo set
             val volumeWithdrawn = record.block.validWithdrawals.toList
-                .map(confirmedEvents(_).asInstanceOf[L2EventWithdrawal])
-                .flatMap(_.withdrawal.inputs)
-                .map(SimpleL2LedgerO.liftOutputRef)
-                .map(stateL2(_))
-                .map(SimpleL2LedgerO.unliftOutput)
-                .map(_.coins)
+                .map(th => confirmedEvents(TxId(th.toHex)).asInstanceOf[L2EventWithdrawal])
+                .flatMap(e => e.transaction.body.value.inputs)
+                .map(contextAndStateFromV3UTxO(stateL2)._2.utxo(_))
+                .map(_.value.coin.value)
                 .sum
-                .toLong
 
             record.l2Effect match {
                 case Some(state) => self.stateL2 = Some(state)
@@ -613,11 +626,11 @@ class HeadStateGlobal(
                 m.incEventsL2Handled(L2EventWithdrawalLabel, true, invalidWds)
 
                 // FIXME: should be calculated on L1
-                mbGenesis.foreach(g => m.addInboundL1Volume(g._2.volume()))
+                mbGenesis.foreach(g => m.addInboundL1Volume(g._2.volume))
 
                 val volumeTransacted = record.block.validTransactions.toList
-                    .map(confirmedEvents(_).asInstanceOf[L2EventTransaction])
-                    .map(_.transaction.volume())
+                    .map(th => confirmedEvents(TxId(th.toHex)).asInstanceOf[L2EventTransaction])
+                    .map(_.volume)
                     .sum
                 m.addTransactedL2Volume(volumeTransacted)
 
@@ -894,7 +907,11 @@ class HeadStateGlobal(
                     // TODO: at this point a specific set of utxos should be restored
                     // Now, for testing we are assuming we can just use L2 ledger directly.
                     // Also, we now try to withdraw all utxos from the ledger in one go.
-                    val utxos: UtxoSet[L2] = UtxoSet.apply(unliftUtxoSet(stateL2))
+                    val utxos: UtxoSet[L2] = UtxoSet.apply(map =
+                        (stateL2.map((ti, to) =>
+                            (ti.toScalusLedger.toHydrozoa[L2], to.toScalusLedger.toHydrozoa[L2])
+                        ))
+                    )
                     // Since we are removing all utxos, proof := g2
                     val proof = G2.generator.toCompressedByteString.toHex
 
@@ -954,7 +971,7 @@ class HeadStateGlobal(
 
             def applyValidEvent(blockNum: Int, txId: TxId): (TxId, L2Event) =
                 log.info(s"Marking event $txId as validated by block $blockNum")
-                self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
+                self.poolEventsL2.indexWhere(e => TxId(e.getEventId.toHex) == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = self.poolEventsL2.remove(i)
@@ -1036,12 +1053,9 @@ class HeadStateGlobal(
 
                 val tipHeader = l2Tip.blockHeader
 
-                val ledgerL2 = SimpleL2LedgerClass()
-                ledgerL2.replaceUtxosActive(stateL2)
-
                 blockProductionActor.ask(
                   _.produceBlock(
-                    ledgerL2,
+                    contextAndStateFromV3UTxO(stateL2),
                     Seq.empty,
                     TaggedUtxoSet.apply(),
                     tipHeader,
@@ -1051,7 +1065,12 @@ class HeadStateGlobal(
                 ) match
                     case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
                         self.pendingOwnBlock = Some(
-                          OwnBlock(block, utxosActive, utxosWithdrawn, mbGenesis)
+                          OwnBlock(
+                            block,
+                            toV3UTxO(utxosActive),
+                            toHUTxO[L2](utxosWithdrawn),
+                            mbGenesis.map((th, e) => (TxId(th.toHex), e))
+                          )
                         )
                         self.isBlockPending = Some(true)
                         Right(block)
@@ -1217,7 +1236,7 @@ case class OwnBlock(
     block: Block,
     utxosActive: Map[v3.TxOutRef, v3.TxOut],
     utxosWithdrawn: UtxoSetL2,
-    mbGenesis: Option[(TxId, L2Genesis)]
+    mbGenesis: Option[(TxId, L2EventGenesis)]
 )
 
 case class PendingDeposit(
