@@ -138,7 +138,7 @@ class LocalFacade(
             .map(node => () => node.runDispute())
             .toSeq
 
-        val answers = supervised(
+        val _ = supervised(
           par(requests)
         )
 
@@ -146,6 +146,7 @@ class LocalFacade(
         log.info("shutting SUT down...")
         shutdown(Thread.currentThread().threadId())
 
+// This might be just a boolean flag, we don't need thread ids here anymore
 val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
@@ -188,12 +189,14 @@ object LocalFacade:
                         }
                     )
 
-                    // Wait for shutdown flag
+                    // Wait for any shutdown flag
                     retry(RetryConfig.delayForever(50.millis))(
-                      if (!shutdownFlag.contains(Thread.currentThread().threadId()))
+                      if (shutdownFlag.isEmpty) {
+                          // log.warn(s"Keep going, no shutdown flags: ${shutdownFlag}")
                           throw RuntimeException()
+                      }
                     )
-                    println(s"thread=${Thread.currentThread().threadId()} is done")
+                    println(s"Exiting facade's thread=${Thread.currentThread().threadId()}")
                 }
         }
 
@@ -203,9 +206,7 @@ object LocalFacade:
         retry(RetryConfig.delayForever(100.millis))(
           {
               val nodeSize = synchronized(nodes.size)
-              if (nodeSize < peers.size) then
-                  // println(s"nodeSize=${nodeSize}")
-                  throw RuntimeException()
+              if (nodeSize < peers.size) then throw RuntimeException()
           }
         )
 
