@@ -15,7 +15,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
 
     override def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)] = {
 
-        bloxToScalusUtxoQuery(backendService, recipe.deposit) match {
+        bloxToScalusUtxoQuery(backendService, recipe.deposit.toScalus) match {
             case Left(err) => Left(s"Scalus DepositTxBuilder failed: ${err}")
             case Right(utxoFunding) =>
                 Right({

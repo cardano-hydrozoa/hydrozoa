@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus.network
 
-import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter, readFromArray}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
@@ -10,7 +10,10 @@ import hydrozoa.l2.ledger.*
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
+import scalus.builtin.ByteString
+import scalus.cardano.ledger.{Transaction, TransactionInput, TransactionOutput}
 import sttp.tapir.Schema
+import sttp.tapir.generic.auto.*
 
 import scala.collection.mutable
 
@@ -185,8 +188,8 @@ given reqEventL2Schema: Schema[ReqEventL2] =
 given nonGenesisL2Schema: Schema[L2Event] =
     Schema.derived[L2Event]
 
-given simpleTransactionSchema: Schema[L2Transaction] =
-    Schema.derived[L2Transaction]
+given l2EventTransactionSchema: Schema[L2EventTransaction] =
+    Schema.derived[L2EventTransaction]
 
 given utxoIdL2Schema: Schema[UtxoIdL2] =
     Schema.derived[UtxoIdL2]
@@ -197,8 +200,8 @@ given simpleOutputSchema: Schema[OutputNoTokens[L2]] =
 given addressBechL2Schema: Schema[AddressBechL2] =
     Schema.derived[AddressBechL2]
 
-given simpleWithdrawalSchema: Schema[L2Withdrawal] =
-    Schema.derived[L2Withdrawal]
+given l2EventWithdrawalSchema: Schema[L2EventWithdrawal] =
+    Schema.derived[L2EventWithdrawal]
 
 /** ------------------------------------------------------------------------------------------
   * AckUnit
@@ -358,3 +361,27 @@ given ackFinal2Schema: Schema[AckFinal2] =
 // FIXME: remove, currently used in ReqAux
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
+
+/////////////////////////////////////////
+// Scala schemas/json codecs; should be supereded by CIP-0116 compliant instances
+
+// N.B.: From the docs:
+//   "As a fallback, you can also always use Schema.string[T] or Schema.binary[T], however this will provide only basic
+//   documentation, and won’t perform any validation."
+// Given that these are bytestrings, I think the binary schema is probably sufficient.
+given byteStringSchema: Schema[ByteString] =
+    Schema.binary[ByteString]
+
+// N.B.: adapted from Claude Sonnet 4, 2025-07-24
+given byteStringCodec: JsonValueCodec[ByteString] = new JsonValueCodec[ByteString] {
+    override def decodeValue(in: JsonReader, default: ByteString): ByteString = {
+        val bytes = in.readBase64AsBytes(null)
+        ByteString.fromArray(bytes) 
+    }
+
+    override def encodeValue(x: ByteString, out: JsonWriter): Unit = {
+        out.writeBase64Val(x.bytes, false) 
+    }
+
+    override val nullValue: ByteString = ByteString.empty
+}

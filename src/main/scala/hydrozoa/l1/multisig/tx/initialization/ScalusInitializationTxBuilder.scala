@@ -20,7 +20,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
     override def mkInitializationTxDraft(
         recipe: InitTxRecipe
     ): Either[String, (InitTx, AddressBechL1)] =
-        bloxToScalusUtxoQuery(backendService, recipe.seedUtxo) match {
+        bloxToScalusUtxoQuery(backendService, recipe.seedUtxo.toScalus) match {
             case Left(err) => Left("Scalus InititializationTxBuilder failed: " ++ err)
             case Right(seedOutput) =>
                 Right({

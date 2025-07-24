@@ -39,7 +39,7 @@ class ScalusFinalizationTxBuilder(
         val treasuryUtxoId =  reader.multisigRegimeReader(_.treasuryUtxoId)
 
         val treasuryUtxo: TransactionOutput =
-            bloxToScalusUtxoQuery(backendService, treasuryUtxoId) match {
+            bloxToScalusUtxoQuery(backendService, treasuryUtxoId.toScalus) match {
                 case Left(err) => return Left("treasury utxo not found")
                 case Right(to) => to
             }

@@ -11,7 +11,6 @@ import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScr
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
 import scalus.cardano.ledger.Script.Native

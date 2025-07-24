@@ -7,12 +7,12 @@ import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
-import hydrozoa.l2.ledger.SimpleL2Ledger.SimpleL2LedgerClass
-import hydrozoa.l2.ledger.{L2Genesis, SimpleL2Ledger as SimpleL2LedgerO}
 import hydrozoa.node.state.*
 import hydrozoa.*
+import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHydrozoa}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
+import hydrozoa.l2.ledger.L2EventGenesis
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.ledger.api.v3
@@ -34,7 +34,7 @@ private class MajorBlockConfirmationActor(
     override type AckType = AckMajor | AckMajor2
 
     private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
-    private var mbGenesis: Option[(TxId, L2Genesis)] = _
+    private var mbGenesis: Option[(TxId,  L2EventGenesis)] = _
     private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
@@ -119,7 +119,11 @@ private class MajorBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         // Block validation (the leader can skip validation for its own block).
-        val (utxosActive, mbGenesis, utxosWithdrawn) =
+        val (
+          utxosActive: Map[v3.TxOutRef, v3.TxOut],
+          mbGenesis: Option[(TxId, L2EventGenesis)],
+          utxosWithdrawn: UtxoSetL2
+        ) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.openPhase(_.pendingOwnBlock))
@@ -138,13 +142,10 @@ private class MajorBlockConfirmationActor(
                           )
                         )
 
-                    val ledgerL2 = SimpleL2LedgerClass()
-                    ledgerL2.replaceUtxosActive(stateL2)
-
                     val resolution = BlockValidator.validateBlock(
                       req.block,
                       prevHeader,
-                      ledgerL2,
+                      contextAndStateFromV3UTxO(stateL2),
                       poolEventsL2,
                       depositUtxos,
                       false
@@ -179,7 +180,7 @@ private class MajorBlockConfirmationActor(
         // Create settlement tx draft
         val txRecipe = SettlementRecipe(
           req.block.blockHeader.versionMajor,
-          req.block.blockBody.depositsAbsorbed,
+          req.block.blockBody.depositsAbsorbed.map(_.toHydrozoa),
           utxosWithdrawn
         )
         log.info(s"Settlement tx recipe: $txRecipe")
