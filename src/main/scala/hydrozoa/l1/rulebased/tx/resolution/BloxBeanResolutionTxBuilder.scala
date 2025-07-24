@@ -64,7 +64,8 @@ class BloxBeanResolutionTxBuilder(
                           treasuryDatum.headMp,
                           vote.utxosActive,
                           (treasuryDatum.versionMajor, vote.versionMinor),
-                          treasuryDatum.params
+                          treasuryDatum.params,
+                          treasuryDatum.setup
                         )
                       )
                       .toData
