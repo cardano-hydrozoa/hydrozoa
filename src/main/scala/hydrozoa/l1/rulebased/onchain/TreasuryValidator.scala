@@ -13,6 +13,7 @@ import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.l2.commitment.TrustedSetup
 import hydrozoa.{
     AddressBech,
     AddressBechL1,
@@ -39,25 +40,12 @@ import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.List.Nil
 import scalus.prelude.Option.{None, Some}
+import scalus.prelude.crypto.bls12_381.G2
 import scalus.prelude.crypto.bls12_381.G2.scale
-import scalus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.prelude.{*, given}
 
 @Compile
 object TreasuryValidator extends Validator:
-
-    // TODO: put it into the treasury datum
-    val setup: List[BLS12_381_G2_Element] =
-        List.Cons(
-          hex"93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8",
-          List.Cons(
-            hex"a78b94342f7d47a92f8618d0cf60cd3f8c77279ffafb2f0d71e4be074979f1b2f536007e9dcd236abaabcac3769930791224556839c0c3b5bf3f3bad9727dfc5c3326539883a6b798bef5302776ede7b939374a236e96658b269c3f4a2ea859e",
-            List.Cons(
-              hex"b9086118d5b8d72c7166fd8ef5fb7c87079c2ebdab5a9b0ed6a950cd5d46a59dc97ad0e3cbde40a497065a8aebbb265210710c1663f874367287ff6ed8961fc59ba38063adae0197a88850a531de6174bf2f0457346574feb60606b5debe96db",
-              Nil
-            )
-          )
-        ).map(G2.uncompress)
 
     // EdDSA / ed25519 Cardano verification key
     private type VerificationKey = ByteString
@@ -80,7 +68,8 @@ object TreasuryValidator extends Validator:
         peersN: BigInt,
         deadlineVoting: PosixTime,
         versionMajor: BigInt,
-        params: L2ConsensusParamsH32
+        params: L2ConsensusParamsH32,
+        setup: List[ByteString]
     )
 
     given FromData[UnresolvedDatum] = FromData.derived
@@ -90,7 +79,8 @@ object TreasuryValidator extends Validator:
         headMp: CurrencySymbol,
         utxosActive: MembershipProof,
         version: (BigInt, BigInt),
-        params: L2ConsensusParamsH32
+        params: L2ConsensusParamsH32,
+        setup: List[ByteString]
     )
 
     given FromData[ResolvedDatum] = FromData.derived
@@ -135,6 +125,8 @@ object TreasuryValidator extends Validator:
         "headMp in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryInputOutputParams =
         "params in treasuryInput and treasuryOutput must match"
+    private inline val ResolveTreasuryInputOutputSetup =
+        "setup in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedNoVote =
@@ -147,6 +139,8 @@ object TreasuryValidator extends Validator:
         "Number of outputs should match the number of utxo ids"
     private inline val WithdrawBeaconTokenFailure =
         "Treasury should contain exactly one beacon token"
+    private inline val WithdrawSetupIsNotBigEnough =
+        "Trusted setup in the treasury is not big enough"
     private inline val WithdrawMembershipValidationFailed =
         "Withdrawals membership check failed"
     private inline val WithdrawBeaconTokenShouldBePreserved =
@@ -255,6 +249,11 @@ object TreasuryValidator extends Validator:
                   ResolveTreasuryInputOutputParams
                 )
 
+                require(
+                  unresolvedDatum.setup === treasuryOutputDatum.setup,
+                  ResolveTreasuryInputOutputSetup
+                )
+
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
                 log("Withdraw")
 
@@ -333,10 +332,19 @@ object TreasuryValidator extends Validator:
                 val proof_ = bls12_381_G1_uncompress(proof)
 
                 require(
+                  resolvedDatum.setup.length > withdrawnUtxos.length,
+                  WithdrawSetupIsNotBigEnough
+                )
+
+                // Extract setup of needed length
+                val setup = resolvedDatum.setup.take(withdrawnUtxos.length + 1).map(G2.uncompress)
+
+                require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
                   WithdrawMembershipValidationFailed
                 )
 
+                // TODO: handle datum type explicitly?
                 // Accumulator updated commitment
                 val Resolved(outputResolvedDatum) = treasuryOutput.inlineDatumOfType[TreasuryDatum]
 
@@ -483,7 +491,9 @@ def mkTreasuryDatumUnresolved(
       peersN = peers.length,
       deadlineVoting = deadlineVoting,
       versionMajor = versionMajor,
-      params = params
+      params = params,
+      // TODO: magic number, arguably should be a parameter
+      setup = TrustedSetup.g2Monomials.take(10).map(_.toCompressedByteString)
     ) |> Unresolved.apply
 
 @main
