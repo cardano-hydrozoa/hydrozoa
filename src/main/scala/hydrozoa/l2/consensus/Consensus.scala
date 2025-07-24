@@ -112,6 +112,7 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.info("Spawning actor proactively...")
         val dropMyself = () => ownActor.tell(_.dropActor(origin))
         val (newActor, acks) = consensusActorFactory.spawnByReq(req, dropMyself)
+        log.trace(s"Deinit acks = $acks")
         spawnActorReactivelyIn.send(newActor)
         val newActorRef = spawnActorReactivelyOut.receive()
         actors.put(origin, newActorRef)
@@ -126,6 +127,7 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         val ret = actors.remove(origin)
         assert(ret.isDefined)
 
+    // TODO: rename
     private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
     private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
 
