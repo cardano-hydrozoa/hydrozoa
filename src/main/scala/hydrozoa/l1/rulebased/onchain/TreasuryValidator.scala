@@ -39,31 +39,25 @@ import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.List.Nil
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.crypto.bls12_381.G1
-import scalus.prelude.crypto.bls12_381.G1.scale
+import scalus.prelude.crypto.bls12_381.G2.scale
+import scalus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.prelude.{*, given}
 
 @Compile
 object TreasuryValidator extends Validator:
 
-    // TODO: we don't know exactly how to handle this
-    // most likely we want to create an utxo with the setup
-    // upon switching into rule-based mode so it will be
-    // a reference utxo with tau_token in it (or we can
-    // store utxo in the datum).
-    // Proposed prefix is 7828 (ptau on the phone dialpad)
-    // NB: use `dumpSetupG1` to cook it for now
-    val setup: List[BLS12_381_G1_Element] =
+    // TODO: put it into the treasury datum
+    val setup: List[BLS12_381_G2_Element] =
         List.Cons(
-          hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+          hex"93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8",
           List.Cons(
-            hex"8ce3b57b791798433fd323753489cac9bca43b98deaafaed91f4cb010730ae1e38b186ccd37a09b8aed62ce23b699c48",
+            hex"a78b94342f7d47a92f8618d0cf60cd3f8c77279ffafb2f0d71e4be074979f1b2f536007e9dcd236abaabcac3769930791224556839c0c3b5bf3f3bad9727dfc5c3326539883a6b798bef5302776ede7b939374a236e96658b269c3f4a2ea859e",
             List.Cons(
-              hex"8ed36ed5fb9a1b099d84cba0686d8af9a2929a348797cd51c335cdcea1099e3d6f95126dfbc93abcfb3b56a7fc14477b",
+              hex"b9086118d5b8d72c7166fd8ef5fb7c87079c2ebdab5a9b0ed6a950cd5d46a59dc97ad0e3cbde40a497065a8aebbb265210710c1663f874367287ff6ed8961fc59ba38063adae0197a88850a531de6174bf2f0457346574feb60606b5debe96db",
               Nil
             )
           )
-        ).map(G1.uncompress)
+        ).map(G2.uncompress)
 
     // EdDSA / ed25519 Cardano verification key
     private type VerificationKey = ByteString
@@ -335,8 +329,8 @@ object TreasuryValidator extends Validator:
                     )
 
                 // Decompress commitments and run the membership check
-                val acc = bls12_381_G2_uncompress(resolvedDatum.utxosActive)
-                val proof_ = bls12_381_G2_uncompress(proof)
+                val acc = bls12_381_G1_uncompress(resolvedDatum.utxosActive)
+                val proof_ = bls12_381_G1_uncompress(proof)
 
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
@@ -413,16 +407,16 @@ object TreasuryValidator extends Validator:
                 List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
     }
 
-    def getG1Commitment(
-        setup: List[BLS12_381_G1_Element],
+    def getG2Commitment(
+        setup: List[BLS12_381_G2_Element],
         subset: List[ScalusScalar]
-    ): BLS12_381_G1_Element = {
-        val subsetInG1 =
+    ): BLS12_381_G2_Element = {
+        val subsetInGroup =
             List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
                 st.scale(sb.toInt)
 
-        subsetInG1.foldLeft(G1.zero): (a, b) =>
-            bls12_381_G1_add(a, b)
+        subsetInGroup.foldLeft(G2.zero): (a, b) =>
+            bls12_381_G2_add(a, b)
     }
 
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
@@ -438,14 +432,14 @@ object TreasuryValidator extends Validator:
       *   True if the accumulator is valid, false otherwise.
       */
     def checkMembership(
-        setup: List[BLS12_381_G1_Element],
-        acc: BLS12_381_G2_Element,
+        setup: List[BLS12_381_G2_Element],
+        acc: BLS12_381_G1_Element,
         subset: List[ScalusScalar],
-        proof: BLS12_381_G2_Element
+        proof: BLS12_381_G1_Element
     ): Boolean = {
-        val g1 = setup !! 0
-        val lhs = bls12_381_millerLoop(g1, acc)
-        val rhs = bls12_381_millerLoop(getG1Commitment(setup, subset), proof)
+        val g2 = setup !! 0
+        val lhs = bls12_381_millerLoop(acc, g2)
+        val rhs = bls12_381_millerLoop(proof, getG2Commitment(setup, subset))
         bls12_381_finalVerify(lhs, rhs)
     }
 

@@ -6,7 +6,7 @@ import hydrozoa.*
 import hydrozoa.infra.{Piper, decodeBech32AddressL2, decodeHex, encodeHex, plutusAddressAsL2}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.commitment.infG2Point
+import hydrozoa.l2.commitment.{TrustedSetup, infG1Point, infG2Point}
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.builtin.Data.toData
@@ -71,24 +71,24 @@ object SimpleL2Ledger:
     def unliftUtxoSet(utxosSetOpaque: LedgerUtxoSetOpaque): Map[UtxoIdL2, OutputL2] =
         utxosSetOpaque.map(_.bimap(unliftOutputRef, unliftOutput))
 
-    // TODO: this will be gone as soon as we get a setup ceremony up and running.
-    val tau = Scalar(BigInteger("42"))
-
-    def mkDummySetupG2(n: Int): SList[P2] = {
-        val setup =
-            (1 to n + 1).map(i =>
-                P2.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
-            )
-        SList.Cons(P2.generator(), setup.toList.asScalus)
-    }
-
-    def mkDummySetupG1(n: Int): SList[P1] = {
-        val setup =
-            (1 to n + 1).map(i =>
-                P1.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
-            )
-        SList.Cons(P1.generator(), setup.toList.asScalus)
-    }
+//    // TODO: this will be gone as soon as we get a setup ceremony up and running.
+//    val tau = Scalar(BigInteger("42"))
+//
+//    def mkDummySetupG2(n: Int): SList[P2] = {
+//        val setup =
+//            (1 to n + 1).map(i =>
+//                P2.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
+//            )
+//        SList.Cons(P2.generator(), setup.toList.asScalus)
+//    }
+//
+//    def mkDummySetupG1(n: Int): SList[P1] = {
+//        val setup =
+//            (1 to n + 1).map(i =>
+//                P1.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
+//            )
+//        SList.Cons(P1.generator(), setup.toList.asScalus)
+//    }
 
     // The implementation
     private class SimpleL2Ledger[InstancePurpose <: LedgerPurpose]
@@ -107,25 +107,27 @@ object SimpleL2Ledger:
 
         override def getUtxosActive: LedgerUtxoSetOpaque = activeState.clone.toMap
 
+        // TODO: use a type wrapper for the return value
         override def getUtxosActiveCommitment: IArray[Byte] = {
-            val elemsRaw = activeState.clone.toList
-                .map(e => blake2b_224(serialiseData(e.toData)).toHex)
-                .asScalus
-            log.info(s"utxos active hashes raw: $elemsRaw")
+//            val elemsRaw = activeState.clone.toList
+//                .map(e => blake2b_224(serialiseData(e.toData)).toHex)
+//                .asScalus
+//            log.info(s"utxos active hashes raw: $elemsRaw")
 
             val elems = activeState.clone.toList
                 .map(e => Scalar().from_bendian(blake2b_224(serialiseData(e.toData)).bytes))
                 .asScalus
             log.info(s"utxos active hashes: ${elems.map(e => BigInt.apply(e.to_bendian()))}")
 
-            val setup = mkDummySetupG2(elems.length.toInt)
+            // TODO: check that the setup is long enough
+            val g1Monomials = TrustedSetup.g1Monomials(elems.length.toInt + 1)
 
-            val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
-            setupBS.foreach(println)
+            // TODO: should it be <?
+            assert(elems.length <= g1Monomials.length, "Number of utxos should fit the setup")
 
-            val commitmentPoint = getG2Commitment(setup, elems)
+            val commitmentPoint = getG1Commitment(g1Monomials, elems)
             val commitment = IArray.unsafeFromArray(commitmentPoint.compress())
-            log.info(s"Commitment: ${(encodeHex(commitment))}")
+            log.info(s"UTxO set commitment is: ${(encodeHex(commitment))}")
             commitment
         }
 
@@ -257,27 +259,43 @@ def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
 }
 
 // TODO: use multi-scalar multiplication
-def getG2Commitment(
-    setup: SList[P2],
+def getG1Commitment(
+    setup: SList[P1],
     subset: SList[Scalar]
-): P2 = {
-    val subsetInG2 =
+): P1 = {
+    val subsetInG1 =
         SList.map2(getFinalPoly(subset), setup): (sb, st) =>
             st.mult(sb)
 
-    val zero = infG2Point
+    val zero = infG1Point
     require(zero.is_inf())
 
-    subsetInG2.foldLeft(zero.dup()): (a, b) =>
+    subsetInG1.foldLeft(zero.dup()): (a, b) =>
         a.add(b)
 }
 
-@main
-def dumpSetupG1(): Unit = {
-    val setup = SimpleL2Ledger.mkDummySetupG1(5)
-    val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
-    setupBS.foreach(println)
+//// TODO: use multi-scalar multiplication
+//def getG2Commitment(
+//    setup: SList[P2],
+//    subset: SList[Scalar]
+//): P2 = {
+//    val subsetInG2 =
+//        SList.map2(getFinalPoly(subset), setup): (sb, st) =>
+//            st.mult(sb)
+//
+//    val zero = infG2Point
+//    require(zero.is_inf())
+//
+//    subsetInG2.foldLeft(zero.dup()): (a, b) =>
+//        a.add(b)
+//}
 
-//    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
-//    println(G1.generator.toCompressedByteString)
-}
+//@main
+//def dumpSetupG1(): Unit = {
+//    val setup = SimpleL2Ledger.mkDummySetupG1(5)
+//    val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
+//    setupBS.foreach(println)
+//
+////    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
+////    println(G1.generator.toCompressedByteString)
+//}
