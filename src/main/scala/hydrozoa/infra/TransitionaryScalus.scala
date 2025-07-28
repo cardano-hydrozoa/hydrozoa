@@ -75,6 +75,14 @@ val emptyTxBody: TransactionBody = TransactionBody(
   donation = None
 )
 
+val emptyTransaction: Transaction =
+    Transaction(
+      body = KeepRaw(emptyTxBody),
+      witnessSet = TransactionWitnessSet.empty,
+      isValid = false,
+      auxiliaryData = None
+    )
+
 extension [L <: AnyLayer](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
@@ -293,7 +301,7 @@ extension (txor: v3.TxOutRef) {
     def toScalusLedger: TransactionInput =
         TransactionInput(transactionId = Hash(txor.id.hash), index = txor.idx.toInt)
     def toHydrozoa[L <: AnyLayer]: UtxoId[L] =
-        UtxoId[L](txId = TxId(txor.id.hash.toHex), outputIx = TxIx(txor.idx.toInt))    
+        UtxoId[L](txId = TxId(txor.id.hash.toHex), outputIx = TxIx(txor.idx.toInt))
 }
 
 // FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
