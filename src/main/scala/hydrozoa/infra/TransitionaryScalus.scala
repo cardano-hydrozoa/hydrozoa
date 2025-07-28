@@ -4,11 +4,11 @@
 
 package hydrozoa.infra.transitionary
 
-import hydrozoa.infra.toBloxbean
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.transaction.spec.Transaction as BBTransaction
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{Piper, addressToBloxbean, plutusAddressAsL2, toEither}
+import hydrozoa.infra.{Piper, toEither}
 import hydrozoa.{
     AddressBech,
     AnyLayer,
@@ -16,13 +16,11 @@ import hydrozoa.{
     Output,
     TokenName,
     Tokens,
-    TxAny,
     TxId,
     TxIx,
     TxL1,
     UtxoId,
     UtxoSet,
-    hydrozoaL2Network,
     networkL1static,
     Network as HNetwork,
     PolicyId as HPolicyId
@@ -34,7 +32,7 @@ import scalus.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.{Mainnet, Testnet}
-import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.DatumOption.Inline
@@ -50,38 +48,31 @@ import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option
 import scalus.{ledger, prelude}
 
-import scala.collection.immutable.SortedMap
+//////////////////////////////////
+// "Empty" values used for building up real values and for testing
 
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = Set.empty,
   outputs = IndexedSeq.empty,
-  fee = Coin(0),
-  ttl = None,
-  certificates = Set.empty,
-  withdrawals = None,
-  auxiliaryDataHash = None,
-  validityStartSlot = None,
-  mint = None,
-  scriptDataHash = None,
-  collateralInputs = Set.empty,
-  requiredSigners = Set.empty,
-  networkId = None,
-  collateralReturnOutput = None,
-  totalCollateral = None,
-  referenceInputs = Set.empty,
-  votingProcedures = None,
-  proposalProcedures = Set.empty,
-  currentTreasuryValue = None,
-  donation = None
+  fee = Coin(0)
 )
 
-val emptyTransaction: Transaction =
+val emptyTransaction: Transaction = {
     Transaction(
       body = KeepRaw(emptyTxBody),
       witnessSet = TransactionWitnessSet.empty,
       isValid = false,
       auxiliaryData = None
     )
+}
+
+val emptyContext: Context =
+    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+
+val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
+
+//////////////////////
+// Extension Methods
 
 extension [L <: AnyLayer](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
@@ -204,6 +195,14 @@ extension (tx: TxL1) {
     def toScalus: Transaction = {
         given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
         Cbor.decode(tx.bytes).to[Transaction].value
+    }
+}
+
+extension (tx: BBTransaction) {
+    def toScalus: Transaction = {
+        val s = tx.serialize()
+        given OriginalCborByteArray = OriginalCborByteArray(s)
+        Cbor.decode(s).to[Transaction].value
     }
 }
 

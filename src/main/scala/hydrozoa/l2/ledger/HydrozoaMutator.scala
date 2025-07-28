@@ -40,7 +40,7 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
         case L2EventTransaction(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                mapLeft(_.toString)(v.validate(context, state, event))
+                (v.validate(context, state, event))
             for
                 // Upstream validators (applied alphabetically for ease of comparison in a file browser
                 // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
@@ -66,10 +66,10 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- mapLeft(_.toString)(
+                state <- (
                   RemoveInputsFromUtxoMutator.transit(context, state, event)
                 )
-                state <- mapLeft(_.toString)(AddOutputsToUtxoMutator.transit(context, state, event))
+                state <- (AddOutputsToUtxoMutator.transit(context, state, event))
             yield state
         }
         case _ => Right(state)
@@ -81,7 +81,7 @@ private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
         case L2EventWithdrawal(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                mapLeft(_.toString)(v.validate(context, state, event))
+                (v.validate(context, state, event))
 
             for
                 // L2 Native validators
@@ -116,7 +116,7 @@ private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- mapLeft(_.toString)(
+                state <- (
                   RemoveInputsFromUtxoMutator.transit(context, state, event)
                 )
             yield state
