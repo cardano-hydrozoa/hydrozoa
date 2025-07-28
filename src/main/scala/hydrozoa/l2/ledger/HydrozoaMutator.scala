@@ -11,8 +11,6 @@ Then, finally, we define a mutator that both validates and processes any L2Event
  */
 
 private object HydrozoaGenesisMutator extends STSL2.Mutator {
-    override final type Error = String
-
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
     private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
@@ -38,9 +36,6 @@ private object HydrozoaGenesisMutator extends STSL2.Mutator {
 }
 
 private object HydrozoaTransactionMutator extends STSL2.Mutator {
-    // TODO: Improve error type?
-    override final type Error = String
-
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
         case L2EventTransaction(event) => {
             // A helper for mapping the error type and applying arguments
@@ -82,9 +77,6 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
 }
 
 private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
-    // TODO: Improve error type?
-    override final type Error = String
-
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
         case L2EventWithdrawal(event) => {
             // A helper for mapping the error type and applying arguments
@@ -135,8 +127,6 @@ private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
 
 // The primary entry point for the L2 ledger
 object HydrozoaL2Mutator extends STSL2.Mutator {
-    override final type Error = String
-
     override def transit(context: Context, state: State, event: Event): Result = {
         for
             _ <- L2ConformanceValidator.validate(context, state, event)

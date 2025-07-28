@@ -23,17 +23,13 @@ trait L2ConformanceValidator[L1]:
     def l2Validate(l1: L1): Either[String, Unit]
 
 object L2ConformanceValidator extends STSL2.Validator {
-    override final type Error = String
-
-    override def validate(context: Context, state: State, event: Event)(using
-        v1: L2ConformanceValidator[Transaction]
-    )(using v2: L2ConformanceValidator[TransactionOutput]): Either[String, Unit] = event match {
-        case L2EventTransaction(tx) => v1.l2Validate(tx)
-        case L2EventWithdrawal(tx)  => v1.l2Validate(tx)
+    override def validate(context: Context, state: State, event: Event): Result = event match {
+        case L2EventTransaction(tx) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+        case L2EventWithdrawal(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
         case L2EventGenesis(resolvedSeq) =>
-           resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
-                if acc.isLeft then acc else v2.l2Validate(resolved._2)
-            )
+            mapLeft(_.toString)(resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
+                if acc.isLeft then acc else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
+            ))
     }
 }
 
@@ -60,8 +56,8 @@ def validateEquals[T](msg: String)(actual: T)(expected: T): Either[String, Unit]
 given L2ConformanceValidator[Address] with
     /** L2 address must be Shelley addresses without delegation parts. */
     def l2Validate(addr: Address): Either[String, Unit] = addr match {
-        case (shelley: ShelleyAddress) =>
-            if shelley.delegation != Null then Left("Address has a delegation, but shouldn't")
+        case shelley: Address.Shelley =>
+            if shelley.address.delegation != Null then Left("Address has a delegation, but shouldn't")
             else Right(())
         case _ => Left("Address is not shelley")
     }
@@ -105,16 +101,14 @@ given L2ConformanceValidator[RedeemerTag] with
 
 given L2ConformanceValidator[Redeemer] with
     /** Redeemer tag must be spending */
-    def l2Validate(l1: Redeemer)(using
-        v: L2ConformanceValidator[RedeemerTag]
-    ): Either[String, Unit] =
-        v.l2Validate(l1.tag)
+    def l2Validate(l1: Redeemer): Either[String, Unit] =
+        given_L2ConformanceValidator_RedeemerTag.l2Validate(l1.tag)
 
 given L2ConformanceValidator[Redeemers] with
-    def l2Validate(l1: Redeemers)(using v: L2ConformanceValidator[Redeemer]): Either[String, Unit] =
+    def l2Validate(l1: Redeemers): Either[String, Unit] =
         // N.B.: I would have liked to use `traverse`, but I couldn't quite figure out how
         l1.toSeq.foldLeft[Either[String, Unit]](Right(()))((acc, redeemer) =>
-            if acc.isLeft then acc else v.l2Validate(redeemer)
+            if acc.isLeft then acc else given_L2ConformanceValidator_Redeemer.l2Validate(redeemer)
         )
 
 given L2ConformanceValidator[UtxoEnv] with
@@ -123,12 +117,10 @@ given L2ConformanceValidator[UtxoEnv] with
         if l1.certState != CertState.empty then Left("CertState not empty") else Right(())
 
 given L2ConformanceValidator[Transaction] with
-    def l2Validate(l1: Transaction)(using
-        v1: L2ConformanceValidator[TransactionBody]
-    )(using v2: L2ConformanceValidator[TransactionWitnessSet]): Either[String, Unit] =
+    def l2Validate(l1: Transaction): Either[String, Unit] =
         for
-            _ <- v1.l2Validate(l1.body.value)
-            _ <- v2.l2Validate(l1.witnessSet)
+            _ <- given_L2ConformanceValidator_TransactionBody.l2Validate(l1.body.value)
+            _ <- given_L2ConformanceValidator_TransactionWitnessSet.l2Validate(l1.witnessSet)
         yield Right(())
 
 given L2ConformanceValidator[TransactionBody] with
@@ -141,7 +133,7 @@ given L2ConformanceValidator[TransactionBody] with
       */
     def l2Validate(
         l1: TransactionBody
-    )(using v: L2ConformanceValidator[TransactionOutput]): Either[String, Unit] =
+    ): Either[String, Unit] =
         for
             // Validate prohibited fields from L1 transaction
             _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
@@ -158,7 +150,7 @@ given L2ConformanceValidator[TransactionBody] with
             // Validate nested fields from L1 transaction type
             // N.B.: I would have liked to use `traverse`, but I couldn't quite figure out how
             _ <- l1.outputs.foldLeft[Either[String, Unit]](Right(()))((acc, sto) => {
-                if acc.isLeft then acc else v.l2Validate(sto.value)
+                if acc.isLeft then acc else given_L2ConformanceValidator_TransactionOutput.l2Validate(sto.value)
             })
         yield ()
 

@@ -129,7 +129,7 @@ object BlockValidator:
                             case Right(newState) => state = newState
                             // FIXME: toString()
                             case Left(err) =>
-                                break(Some(Invalid(L2EventNotValid(tx.getEventId, err))))
+                                break(Some(Invalid(L2EventNotValid(tx.getEventId, err.toString))))
                     case wd: L2EventWithdrawal =>
                         HydrozoaL2Mutator.transit(l2Ledger._1, state, wd) match
                             case Right(newState) =>
@@ -143,7 +143,7 @@ object BlockValidator:
 
                             case Left(err) =>
                                 // FIXME: toString()
-                                break(Some(Invalid(L2EventNotValid(wd.getEventId, err))))
+                                break(Some(Invalid(L2EventNotValid(wd.getEventId, err.toString))))
                 }
                 None
 

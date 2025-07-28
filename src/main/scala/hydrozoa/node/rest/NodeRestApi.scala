@@ -8,6 +8,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
 }
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
+import hydrozoa.l2.consensus.network.{*, given}
 import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
@@ -166,7 +167,7 @@ given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
     JsonCodecMaker.make
 
 given submitRequestL2Schema: Schema[SubmitRequestL2] =
-    Schema.derived[SubmitRequestL2]
+    Schema.binary[SubmitRequestL2]
 
 given txIdSchema: Schema[TxId] =
     Schema.derived[TxId]

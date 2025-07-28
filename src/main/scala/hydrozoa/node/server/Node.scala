@@ -168,12 +168,17 @@ class Node:
     def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
-        val event = req match
-            case Transaction(tx) => tx
-            case Withdrawal(wd)  => wd
+        req match
+            case Transaction(tx) => {
+                network.tell(_.reqEventL2(ReqEventL2(tx)))
+                Right(TxId(tx.getEventId.toHex))
+            }
+            case Withdrawal(wd)  => {
+                network.tell(_.reqEventL2(ReqEventL2(wd)))
+                Right(TxId(wd.getEventId.toHex))
+            }
 
-        network.tell(_.reqEventL2(ReqEventL2(event)))
-        Right(TxId(event.getEventId.toHex))
+    
     end submitL2
 
     /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is

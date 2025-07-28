@@ -16,7 +16,7 @@ final case class L2EventTransaction(transaction: Transaction) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
     def volume : Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
-case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
+final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
 }
 
@@ -24,7 +24,7 @@ case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
   * outputs. The TxId of a Genesis Event comes from sorting the TxIds of the absorbed UTxOs,
   * encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
   */
-case class L2EventGenesis(utxos: Seq[(TransactionInput, TransactionOutput)]) extends L2Event {
+final case class L2EventGenesis(utxos: Seq[(TransactionInput, TransactionOutput)]) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = Hash(
       blake2b_256(
         ByteString.fromArray(
