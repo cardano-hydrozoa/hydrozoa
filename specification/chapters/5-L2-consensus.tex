@@ -105,7 +105,7 @@ To submit a new L2 transaction to the head, the submitting peer must broadcast t
   \T{ReqTx} \coloneq \;\bigr\{\; \T{tx} :: \T{Tx^{L2}} \;\bigr\}
 \end{equation*}
 
-On receiving a \code{ReqTx} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in  in its head state (\cref{h:l2-head-state}):
+On receiving a \code{ReqTx} at time \code{timeReceived}, if the transaction body hash is valid, the receiving peer must append the following L2 event to the \code{eventsL2} table in  in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
@@ -129,7 +129,7 @@ To submit a new L2 withdrawal to the head, the submitting peer must broadcast th
   \T{ReqWithdrawal} \coloneq \;\bigr\{\; \T{withdrawal} :: \T{Tx^{L2W}} \;\bigr\}
 \end{equation*}
 
-On receiving a \code{ReqWithdrawal} at time \code{timeReceived}, the receiving peer must append the following L2 event to the \code{eventsL2} table in its head state (\cref{h:l2-head-state}):
+On receiving a \code{ReqWithdrawal} at time \code{timeReceived}, if the transaction body hash is valid, the receiving peer must append the following L2 event to the \code{eventsL2} table in its head state (\cref{h:l2-head-state}):
 \begin{equation*}
   \left\{
   \begin{array}{lll}
