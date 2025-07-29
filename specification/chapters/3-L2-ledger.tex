@@ -39,7 +39,16 @@ but with the following additions:
       Hydrozoa's L1 scripts are not authorized to mint or burn arbitrary user tokens onchain, so enforcing such events is impossible when settling the L2 state on L1.
       Thus, L2 transactions cannot mint or burn tokens.%
       \footnote{In future work (\cref{h:future-work-minting}), Hydrozoa may implement support for minting and burning on L2.}
-    \item[Different network ID.] Hydrozoa L2 transactions and utxo addresses use a different network ID to distinguish them from their Cardano mainnet counterparts.
+    \item[No collateral on L2.]
+      Phase-2 scripts (e.g. Plutus) can potentially have arbitrary resource costs (up to the Cardano's ExUnits limits for txs), but block producers do not receive normal fees from transaction that fail phase-2 validation.
+      To cover the resource costs incurred for such failing phase-2 validations and to prevent denial-of-service attacks using such transactions, Cardano requires collateral to be provided in all transactions containing phase-2 scripts.
+
+      However, in Hydrozoa's unanimous consensus protocol, any peer can deny service simply by stopping its responses to L2 messages.
+      Furthermore, a peer can disconnect from the source of too many transactions failing phase-2 validation, mitigating the incurred resource costs.
+      Therefore, Hydrozoa does not need collateral inputs, fees, and outputs on L2.
+    \item[POSIX and time-validity intervals.]
+      Hydrozoa uses POSIX for time-validity interval bounds on L2.
+      An L2 transaction or withdrawal can be included in a block's valid events if the block's creation time falls within the transaction or withdrawal's time-validity interval.
 \end{description}
 
 \section{Utxo set}%
@@ -120,11 +129,11 @@ In the following type definition, we use these notational conventions:
     \T{TxBody^{L2}} \coloneq\;& \left\{
     \begin{array}{lll}
       \T{spend\_inputs} &::& \T{Set \; OutputRef} \\
-        \T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
+        \varnothing\;\T{collateral\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
         \T{reference\_inputs} &::& \quad?\;\T{Set \; OutputRef} \\
         \T{outputs} &::& \T{[Output^{L2}]} \\
-        \T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
-        \T{total\_collateral} &::& \quad?\;\T{Coin} \\
+        \varnothing\;\T{collateral\_return} &::& \quad?\;\T{Output^{L2}} \\
+        \varnothing\;\T{total\_collateral} &::& \quad?\;\T{Coin} \\
         \varnothing\;\T{certificates} &::& \quad?\;\T{[ Set \; Certificate ]} \\
         \varnothing\;\T{withdrawals} &::& \quad?\;\T{Map \; RewardAccount \; Coin} \\
         \T{fee} &::& \T{Coin} \\
@@ -150,6 +159,18 @@ In the following type definition, we use these notational conventions:
 \end{align*}
 \endgroup
 
+Cardano's ledger rules do not allow omitting the \code{collateral\_inputs}, \code{collateral\_return}, and \code{total\_collateral} fields in transactions containing Plutus scripts.
+Thus, we \emph{deactivate} the following Cardano ledger rules when validating L2 transactions:
+\begin{itemize}
+  \item Minimum collateral amount
+  \item Non-empty collateral inputs (if Plutus scripts are used)
+  \item Collateral balancing:
+    \begin{equation*}
+      \sum \T{lovelace} (\T{collateral\_inputs}) =
+      \T{lovelace} (\T{collateral\_return}) + \T{total\_collateral}
+    \end{equation*}
+\end{itemize}
+
 \section{Withdrawal}%
 \label{h:ledger-withdrawal}%
 
@@ -158,7 +179,6 @@ The L2 ledger rules for withdrawals are similar to transactions but with the fol
 \begin{description}
   \item[No outputs.] Withdrawals cannot create utxos in \code{utxosActive}.
   \item[No fees.] Withdrawals do not pay transaction fees.
-  \item[No collateral.] Withdrawals do not provide collateral for phase-2 validation.
   \item[No metadata.] Withdrawals cannot contain transaction metadata.
 \end{description}
 
@@ -199,26 +219,15 @@ We can express the rules for L2 withdrawals (\codeMathTt{Tx^{L2W}}) as further r
 \end{align*}
 \endgroup
 
-Unfortunately, Cardano's ledger rules do not allow the \code{fee} to be zero, and they do not allow the \code{collateral\_inputs}, \code{collateral\_return}, and \code{total\_collateral} fields to be omitted in transactions containing Plutus scripts.
-Thus, when validating L2 withdrawals, we must \emph{deactivate} the following Cardano ledger rules:
+Cardano's ledger rules do not allow the \code{fee} to be zero. Thus, we \emph{deactivate} the following Cardano ledger rules when validating L2 withdrawals, in addition to the rules deactivated for L2 transactions:
 \begin{itemize}
   \item Minimum fee amount
-  \item Minimum collateral amount
-  \item Non-empty collateral inputs (if Plutus scripts are used)
-  \item Collateral balancing:
-    \begin{equation*}
-      \sum \T{lovelace} (\T{collateral\_inputs}) =
-      \T{lovelace} (\T{collateral\_return}) + \T{total\_collateral}
-    \end{equation*}
   \item Transaction balancing:
     \begin{equation*}
       \sum \T{value} (\T{inputs}) + \T{mint} =
       \sum \T{value} (\T{outputs}) + \T{fee}
     \end{equation*}
 \end{itemize}
-
-Theoretically, we could effectively deactivate the minimum fee, minimum collateral, and collateral balancing rules by setting specific protocol parameters to zero.
-However, since protocol parameters do not affect the other rules, forking Cardano's ledger rules is unavoidable for L2 withdrawals.
 
 \section{Genesis}%
 \label{h:ledger-genesis}%
