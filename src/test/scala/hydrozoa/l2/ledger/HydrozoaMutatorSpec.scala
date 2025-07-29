@@ -12,7 +12,6 @@ import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Gen, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
@@ -36,7 +35,7 @@ through bloxbean
 val alice: TestPeer = TestPeer.Alice
 val bob: TestPeer = TestPeer.Bob
 
-def addressFromPeer(peer: TestPeer): Address = Shelley(
+def addressFromPeer(peer: TestPeer): Address = (
   ShelleyAddress(
     network = Mainnet,
     payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
@@ -66,7 +65,7 @@ val genDeposit: Gen[(TransactionInput, TransactionOutput)] =
         )
 
         txOut = Babbage(
-          address = Shelley(
+          address = (
             ShelleyAddress(
               network = Mainnet,
               payment = Key(pkh),

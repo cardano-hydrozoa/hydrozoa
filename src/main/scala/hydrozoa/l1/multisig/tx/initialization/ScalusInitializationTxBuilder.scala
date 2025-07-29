@@ -9,11 +9,12 @@ import hydrozoa.{AddressBech, AddressBechL1, Tx}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+
+import scala.collection.immutable.SortedMap
 
 class ScalusInitializationTxBuilder(backendService: BackendService) extends InitTxBuilder {
 
@@ -31,7 +32,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     val headNativeScript = mkHeadNativeScript(recipe.peers)
 
                     // Put the head address of the native script
-                    val headAddress: Address = Shelley(
+                    val headAddress: Address = (
                       ShelleyAddress(
                         network = recipe.network.toScalus,
                         payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
@@ -42,17 +43,23 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     // singleton beacon token minted by the native script with the TN being the hash of the
                     // seed utxo
                     // TODO: factor out "mkSingleToken"
-                    val beaconToken: MultiAsset = Map(
-                      (
-                        headNativeScript.scriptHash,
-                        Map(
+                    val beaconToken: MultiAsset = MultiAsset(
+                      SortedMap.from(
+                        Seq(
                           (
-                            AssetName(
-                              ByteString.fromHex(
-                                mkBeaconTokenName(recipe.seedUtxo).tokenNameHex.drop(2)
+                            headNativeScript.scriptHash,
+                            SortedMap.from(
+                              Seq(
+                                (
+                                  AssetName(
+                                    ByteString.fromHex(
+                                      mkBeaconTokenName(recipe.seedUtxo).tokenNameHex.drop(2)
+                                    )
+                                  ),
+                                  1L
+                                )
                               )
-                            ),
-                            1
+                            )
                           )
                         )
                       )
@@ -74,10 +81,9 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                       // Change is calculated manually here as the seed output's value, minus the
                       // ada put into the head, minus the fee.
                       value = seedOutput.value -
-                          Value(coin = Coin(recipe.coins.toLong), multiAsset = Map.empty) -
+                          Value(coin = Coin(recipe.coins.toLong)) -
                           Value(
                             coin = feeCoin,
-                            multiAsset = Map.empty
                           ),
                       datumOption = None
                     )
@@ -88,7 +94,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                           outputs = IndexedSeq(headOutput, changeOutput).map(Sized(_)),
                           // TODO: we set the fee to 1 ada, but this doesn't need to be
                           fee = feeCoin,
-                          mint = Some(beaconToken)
+                          mint = Some(Mint(beaconToken))
                         )
 
                     val scalusTransaction: Transaction = Transaction(
@@ -101,7 +107,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     (
                       Tx(Cbor.encode(scalusTransaction).toByteArray),
                       headAddress match {
-                          case Shelley(sa) => AddressBech(sa.toBech32.get)
+                          case sa : ShelleyAddress => AddressBech(sa.toBech32.get)
                           // NOTE (Peter, 2025-08-07) I miss monads, how do I do those in scala?
                           case _ => return Left("Hydra Head is not at a Shelly address")
                       }

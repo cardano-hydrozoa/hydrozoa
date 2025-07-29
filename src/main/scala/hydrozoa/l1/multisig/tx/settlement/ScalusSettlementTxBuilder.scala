@@ -114,7 +114,7 @@ class ScalusSettlementTxBuilder(
             resolvedUtxoInputs.foldLeft(Value.zero)((b, to) => b + to.value)
 
         val treasuryValue: Value =
-            inputsValue - withdrawnValue - Value(coin = feeCoin, multiAsset = Map.empty)
+            inputsValue - withdrawnValue - Value(coin = feeCoin)
 
         ////////////////////////////
         // Then construct the output

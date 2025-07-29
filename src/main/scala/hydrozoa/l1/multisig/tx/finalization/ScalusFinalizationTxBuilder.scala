@@ -18,6 +18,8 @@ import hydrozoa.node.state.multisigRegime
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.prelude.log
 
+import scala.collection.immutable.SortedMap
+
 class ScalusFinalizationTxBuilder(
     backendService: BackendService,
     reader: HeadStateReader
@@ -34,9 +36,15 @@ class ScalusFinalizationTxBuilder(
         val beaconTokenPolicyId: PolicyId = headNativeScript.scriptHash
         val beaconTokenName: AssetName =
             reader.multisigRegime(_.beaconTokenName).toScalus
-        val beaconTokenBurn = Map((beaconTokenPolicyId, Map((beaconTokenName, -1.toLong))))
+        val beaconTokenBurn = Mint(
+          MultiAsset(
+            SortedMap.from(
+              Seq((beaconTokenPolicyId, SortedMap.from(Seq((beaconTokenName, -1.toLong)))))
+            )
+          )
+        )
 
-        val treasuryUtxoId =  reader.multisigRegimeReader(_.treasuryUtxoId)
+        val treasuryUtxoId = reader.multisigRegimeReader(_.treasuryUtxoId)
 
         val treasuryUtxo: TransactionOutput =
             bloxToScalusUtxoQuery(backendService, treasuryUtxoId.toScalus) match {
@@ -51,7 +59,7 @@ class ScalusFinalizationTxBuilder(
                 .map({
                     // Take only the added for the outputs
                     case b: Babbage =>
-                        b.copy(value = b.value.copy(assets = Map.empty))
+                        b.copy(value = b.value.copy(assets = MultiAsset.empty))
                             .asInstanceOf[TransactionOutput]
                     case _ => return Left("L2 utxo not a babbage UTxO")
                 })
@@ -72,7 +80,7 @@ class ScalusFinalizationTxBuilder(
             - valueWithdrawn
             - Value(Coin(0.toLong))
             - Value(feeCoin))
-            .copy(assets = Map.empty)
+            .copy(assets = MultiAsset.empty)
 
         val changeOutput: TransactionOutput = TransactionOutput(
           address = changeAddress,

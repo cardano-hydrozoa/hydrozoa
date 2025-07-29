@@ -56,8 +56,8 @@ private def validateEquals[T](msg: String)(actual: T)(expected: T): Either[Strin
 given L2ConformanceValidator[Address] with
     /** L2 address must be Shelley addresses without delegation parts. */
     def l2Validate(addr: Address): Either[String, Unit] = addr match {
-        case shelley: Address.Shelley =>
-            if shelley.address.delegation != Null then Left("Address has a delegation, but shouldn't")
+        case shelley: ShelleyAddress =>
+            if shelley.delegation != Null then Left("Address has a delegation, but shouldn't")
             else Right(())
         case _ => Left("Address is not shelley")
     }
@@ -139,7 +139,7 @@ given L2ConformanceValidator[TransactionBody] with
             _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
             _ <- validateEquals("Collateral Return Output")(l1.collateralReturnOutput)(None)
             _ <- validateEquals("Total Collateral")(l1.totalCollateral)(None)
-            _ <- validateEquals("Certificates")(l1.certificates)(Set.empty)
+            _ <- validateEquals("Certificates")(l1.certificates)(TaggedSet.empty)
             _ <- validateEquals("Withdrawals")(l1.withdrawals)(None)
             _ <- validateEquals("Fee")(l1.fee)(Coin(0L))
             _ <- validateEquals("Mint")(l1.mint)(None)

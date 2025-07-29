@@ -12,11 +12,7 @@ import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67Beac
 import hydrozoa.l1.rulebased.onchain.TreasuryValidatorScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
-import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
-    containsCurrencySymbol,
-    containsExactlyOneAsset,
-    onlyNonAdaAsset
-}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsCurrencySymbol, containsExactlyOneAsset, onlyNonAdaAsset}
 import hydrozoa.l2.block.BlockTypeL2
 import hydrozoa.{PosixTime, *}
 import scalus.*
@@ -28,7 +24,7 @@ import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, Validator, fail, log, require, given}
+import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
 import scalus.uplc.DeBruijnedProgram
 import scalus.uplc.eval.*
 
@@ -249,7 +245,7 @@ object DisputeResolutionValidator extends Validator:
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
-                treasuryReference.resolved.value.get(headMp).getOrElse(AssocMap.empty).toList match
+                treasuryReference.resolved.value.get(headMp).getOrElse(SortedMap.empty).toList match
                     case List.Cons((tokenName, amount), none) =>
                         require(
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
@@ -417,7 +413,7 @@ object DisputeResolutionValidator extends Validator:
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
                         .find { i =>
-                            i.resolved.value.get(contCs).getOrElse(AssocMap.empty).toList match
+                            i.resolved.value.get(contCs).getOrElse(SortedMap.empty).toList match
                                 case List.Cons((tokenName, amount), none) =>
                                     tokenName.take(4) == cip67BeaconTokenPrefix
                                     && amount == BigInt(1)
@@ -485,7 +481,7 @@ object DisputeResolutionValidator extends Validator:
                 // prefix 4937.
                 val treasuryInput = tx.inputs
                     .find { i =>
-                        i.resolved.value.get(headMp).getOrElse(AssocMap.empty).toList match
+                        i.resolved.value.get(headMp).getOrElse(SortedMap.empty).toList match
                             case List.Cons((tokenName, amount), none) =>
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)

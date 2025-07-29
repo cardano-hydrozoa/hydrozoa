@@ -20,8 +20,8 @@ import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
 import scalus.prelude.Option as SOption
-import scalus.prelude.Option.asScalus
-
+import scalus.prelude.Option.asScala
+import scalus.prelude.asScalus
 import scala.concurrent.duration.DurationInt
 import scala.util.Try
 

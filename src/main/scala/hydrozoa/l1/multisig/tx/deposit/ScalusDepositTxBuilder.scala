@@ -6,7 +6,7 @@ import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{Tx, TxIx, TxL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyPaymentPart, StakePayload}
+import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
 
@@ -22,7 +22,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     // TODO: we set the fee to 1 ada, but this doesn't need to be
                     val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
-                        Value(coin = Coin(recipe.depositAmount.toLong), multiAsset = Map.empty)
+                        Value(coin = Coin(recipe.depositAmount.toLong))
                         
                     // TODO: factor this out or change types. It is shared with the settlement Tx builder    
                     val headAddress: Address =
@@ -37,14 +37,13 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     val changeOutput: TransactionOutput = TransactionOutput(
                       address = utxoFunding.address,
                       value = utxoFunding.value - Value(
-                        coin = feeCoin,
-                        multiAsset = Map.empty
+                        coin = feeCoin
                       ) - depositValue,
                       datumOption = None
                     )
 
                     val requiredSigner : AddrKeyHash  = { utxoFunding.address match
-                            case Address.Shelley(shelleyAddress) =>
+                            case shelleyAddress : ShelleyAddress =>
                                 shelleyAddress.payment match
                                     case ShelleyPaymentPart.Key(hash) => hash
                                     case _ => return Left("deposit not at a pubkey address")
