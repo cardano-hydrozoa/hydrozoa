@@ -43,8 +43,12 @@ but with the following additions:
       Phase-2 scripts (e.g. Plutus) can potentially have arbitrary resource costs (up to the Cardano's ExUnits limits for txs), but block producers do not receive normal fees from transaction that fail phase-2 validation.
       To cover the resource costs incurred for such failing phase-2 validations and to prevent denial-of-service attacks using such transactions, Cardano requires collateral to be provided in all transactions containing phase-2 scripts.
 
-      However, in Hydrozoa's unanimous consensus protocol, any peer can deny service simply by stopping its responses to L2 messages. Furthermore, a peer can disconnect from the source of too many transactions failing phase-2 validation, mitigating the incurred resource costs.
+      However, in Hydrozoa's unanimous consensus protocol, any peer can deny service simply by stopping its responses to L2 messages.
+      Furthermore, a peer can disconnect from the source of too many transactions failing phase-2 validation, mitigating the incurred resource costs.
       Therefore, Hydrozoa does not need collateral inputs, fees, and outputs on L2.
+    \item[POSIX and time-validity intervals.]
+      Hydrozoa uses POSIX for time-validity interval bounds on L2.
+      An L2 transaction or withdrawal can be included in a block's valid events if the block's creation time falls within the transaction or withdrawal's time-validity interval.
 \end{description}
 
 \section{Utxo set}%
