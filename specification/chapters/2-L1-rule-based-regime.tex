@@ -97,7 +97,7 @@ Each vote utxo has this datum type:
       \T{peer} &::& \T{Maybe} \; \T{PubKeyHash} \\
       \T{voteStatus} &::& \T{VoteStatus}
     \end{array}\right\}\\
-  \T{VoteStatus} &\coloneq \T{NoVote} \mid \T{Abstain} \mid \T{Vote} \; \T{VoteDetails} \\
+  \T{VoteStatus} &\coloneq \T{NoVote} \mid \T{Vote} \; \T{VoteDetails} \\
   \T{VoteDetails} &\coloneq \left\{
     \begin{array}{lll}
       \T{utxosActive} &::& \mathcal{RH}_{32} \; \T{UtxoSet^{L2}} \\
@@ -112,7 +112,7 @@ These fields are interpreted as follows:
   \item[link.] An integer that uniquely references another vote utxo by its \code{key}.
   \item[peer.] The public-key hash of the peer (if any) who can cast a vote in this utxo.
   It is only empty for the default vote utxo (with \code{key} 0), which contains a vote that is automatically cast at the transition to the rule-based regime (\cref{h:l1-rule-based-transition}).
-  \item[vote status.] Either no vote, a vote to abstain, or a vote for a minor L2 block.
+  \item[vote status.] Either no vote or a vote for a minor L2 block.
   \item[utxos active.] A 32-byte Merkle root hash (\codeMath{\mathcal{RH}_{32}}) of the L2 ledger's active utxo set, as of the block voted by the peer.
   \item[minor version.] The minor version of the minor L2 block voted by the peer.
   This block's major version must match the major version that the treasury had when it transitioned to the rule-based regime.
@@ -235,7 +235,6 @@ Redeemers:
           \item Let \code{voteOutput} be an output with the same number of (\code{headMp}, \code{disputeId}) tokens and same address as \code{voteInput}.
           It must not hold any other non-ADA tokens.
           \item If \code{voteRedeemer} is provided, the \code{voteStatus} field of \code{voteOutput} must be a \code{Vote} matching \code{voteRedeemer} on the \code{utxosActive} and \code{versionMinor} fields.
-            Otherwise, it must be \code{Abstain}.
           \item All other fields of \code{voteInput} and \code{voteOutput} must match.
         \end{enumerate}
     \end{itemize}
@@ -301,7 +300,7 @@ Redeemers:
             \begin{split}
               &\forall a, b \in \T{VoteDetails}:\\
               &\quad a \T{.minorVersion} \leq b \T{.minorVersion} \implies\\
-              &\qquad \T{NoVote} < \T{Abstain} < \T{Vote} \; a \leq \T{Vote} \; b  
+              &\qquad \T{NoVote} < \T{Vote} \; a \leq \T{Vote} \; b  
             \end{split}
             \end{equation*}
           \item The \code{link} field of \code{removedInput} and \code{continuingOutput} must match.
@@ -324,18 +323,10 @@ Redeemers:
       \item Let \code{headMp}, \code{disputeId}, \code{peersN}, and \code{versionMajor} be the corresponding fields of \code{treasuryInput}.
       \item Let \code{voteInput} be a spent input with (\code{peersN} + 1) tokens of (\code{headMp}, \code{disputeId}) and no other non-ADA tokens.
       \item Let \code{treasuryOutput} be an output with the same address as \code{treasuryInput} and the sum of all tokens (including ADA) in \code{treasuryInput} and \code{voteInput}.
-      \item Let \code{voteStatus} be the corresponding field of \code{voteInput}.
-      \item If \code{voteStatus} is \code{Abstain}:
-        \begin{enumerate}
-          \item The \code{version} field of \code{treasuryOutput} must match (\code{versionMajor}, 0).
-          \item \code{treasuryInput} and \code{treasuryOutput} must match on \code{utxosActive}.
-        \end{enumerate}
-      \item If \code{voteStatus} is \code{Vote}:
-        \begin{enumerate}
-          \item Let \code{versionMinor} be the corresponding field in \code{voteStatus}.
-          \item The \code{version} field of \code{treasuryOutput} must match (\code{versionMajor}, \code{versionMinor}).
-          \item \code{voteStatus} and \code{treasuryOutput} must match on \code{utxosActive}.
-        \end{enumerate}
+      \item Let \code{voteStatus} be the corresponding field of \code{voteInput}. \code{voteStatus} must be \code{Vote}.
+      \item Let \code{versionMinor} be the corresponding field in \code{voteStatus}.
+      \item The \code{version} field of \code{treasuryOutput} must match (\code{versionMajor}, \code{versionMinor}).
+      \item \code{voteStatus} and \code{treasuryOutput} must match on \code{utxosActive}.
       \item \code{treasuryInput} and \code{treasuryOutput} must match on all other fields.
     \end{enumerate}
   \item[Withdraw.] Withdraw treasury funds and update its active utxo set accordingly.
