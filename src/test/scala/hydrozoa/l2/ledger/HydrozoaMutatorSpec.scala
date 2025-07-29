@@ -2,7 +2,11 @@ package hydrozoa.l2.ledger
 
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.transaction.spec.Transaction as BBTransaction
-import hydrozoa.infra.transitionary.{emptyContext, emptyState, emptyTransaction, toScalus}
+import hydrozoa.Wallet
+import hydrozoa.infra.addWitness
+import hydrozoa.infra.transitionary.*
+import hydrozoa.node.TestPeer
+import hydrozoa.node.TestPeer.*
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Gen, Test as ScalaCheckTest}
@@ -13,26 +17,37 @@ import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.HashPurpose.KeyHash
 import scalus.cardano.ledger.HashSize.{given_HashSize_Blake2b_224, given_HashSize_Blake2b_256}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.State
-import scalus.cardano.ledger.*
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 
 import scala.collection.immutable.HashSet
 
-// Some tests require accounts. We could randomly generate these, but I don't see much point in wasting CPU
-// cycles on that. Instead, we will re-use them for each test case.
-val alice: Account = new Account(0)
-val bob: Account = new Account(1)
-def addressFromAccount(acct: Account): Address = Shelley(
+/* TODO
+Look at TestPeer, Wallet.scala, Tx.scala, and use the scalus/hydrozoa stuff to sign the transaction without round-tripping
+through bloxbean
+ */
+
+// For these tests, we assume a 1:1:1 relationship between Peer:Wallet:Address.
+// Note that this is NOT true in production.
+val alice: TestPeer = TestPeer.Alice
+val bob: TestPeer = TestPeer.Bob
+
+def addressFromPeer(peer: TestPeer): Address = Shelley(
   ShelleyAddress(
     network = Mainnet,
-    payment = Key(Hash(blake2b_224(ByteString.fromArray(acct.publicKeyBytes())))),
+    payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
     delegation = Null
   )
 )
+
+// TODO: refactor all of this to make it just use the scalus types.
+def signTx(peer: TestPeer, txUnsigned: Transaction): Transaction =
+    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned.toHydrozoa)
+    addWitness(txUnsigned.toHydrozoa, keyWitness).toScalus
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
   * event
@@ -44,10 +59,12 @@ val genDeposit: Gen[(TransactionInput, TransactionOutput)] =
         )
         pkh: AddrKeyHash <- genByteStringOfN(28).map(Hash.apply[Blake2b_224, KeyHash](_))
         idx: Int <- Gen.choose(0, 1000)
+
         txIn = TransactionInput(
           transactionId = txId,
           index = idx
         )
+
         txOut = Babbage(
           address = Shelley(
             ShelleyAddress(
@@ -63,8 +80,6 @@ val genDeposit: Gen[(TransactionInput, TransactionOutput)] =
     yield (txIn, txOut)
 
 /** Generate a semantically valid, but fully synthetic, nonsensical, genesis event */
-// TODO: This is sort of an abuse of generators; this should be a property test, but
-// I don't know scalacheck yet and I'm just going for a sanity check
 val genL2EventGenesis: Gen[L2EventGenesis] = Gen.sized { numberOfDepositsAbsorbed =>
     if numberOfDepositsAbsorbed == 0 then L2EventGenesis(Seq.empty)
     else {
@@ -83,20 +98,20 @@ val genL2EventGenesis: Gen[L2EventGenesis] = Gen.sized { numberOfDepositsAbsorbe
     }
 }
 
-/** Generate a deposit from a specific payment key account */
-def genL2EventGenesisFromAccount(acct: Account): Gen[L2EventGenesis] = {
+/** Generate a deposit from a specific test peer */
+def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = {
     L2EventGenesis(genL2EventGenesis.sample.get.utxos.map((txIn, txOut) => {
         val babbage = txOut.asInstanceOf[Babbage]
-        (txIn, babbage.copy(address = addressFromAccount(acct)))
+        (txIn, babbage.copy(address = addressFromPeer(peer)))
     }))
 }
 
 /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all inputs with
   * the given key
   */
-def l2EventWithdrawalFromInputsAndAccount(
+def l2EventWithdrawalFromInputsAndPeer(
     inputs: Set[TransactionInput],
-    acct: Account
+    peer: TestPeer
 ): L2EventWithdrawal = {
     val txBody: TransactionBody = TransactionBody(
       inputs = inputs,
@@ -113,27 +128,27 @@ def l2EventWithdrawalFromInputsAndAccount(
         )
 
     }
+
     // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
     // Its probably possible to extract the key and use the crypto primitives from scalus directly
-    L2EventWithdrawal(
-      acct.sign(BBTransaction.deserialize(Cbor.encode(txUnsigned).toByteArray)).toScalus
-    )
+    L2EventWithdrawal(signTx(peer, txUnsigned))
 }
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
-def l2EventTransactionFromInputsAndAccount(
+def l2EventTransactionFromInputsAndPeer(
     inputs: Set[TransactionInput],
     utxoSet: Map[TransactionInput, TransactionOutput],
-    inAcct: Account,
-    outAcct: Account
+    inPeer: TestPeer,
+    outPeer: TestPeer
 ): L2EventTransaction = {
 
     val totalVal: Value = inputs.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
+
     val txBody: TransactionBody = TransactionBody(
       inputs = inputs,
       outputs = IndexedSeq(
         Babbage(
-          address = addressFromAccount(outAcct),
+          address = addressFromPeer(outPeer),
           value = totalVal,
           datumOption = None,
           scriptRef = None
@@ -146,16 +161,12 @@ def l2EventTransactionFromInputsAndAccount(
         Transaction(
           body = KeepRaw(txBody),
           witnessSet = TransactionWitnessSet.empty,
-          isValid = true,
+          isValid = false,
           auxiliaryData = None
         )
-
     }
-    // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
-    // Its probably possible to extract the key and use the crypto primitives from scalus directly
-    L2EventTransaction(
-      inAcct.sign(BBTransaction.deserialize(Cbor.encode(txUnsigned).toByteArray)).toScalus
-    )
+
+    L2EventTransaction(signTx(inPeer, txUnsigned))
 }
 
 class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
@@ -193,15 +204,15 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
 
     })
 
-    property("Alice can withdraw her own genesis utxos")(
-      forAll(genL2EventGenesisFromAccount(alice)) { event =>
+    property("Alice can withdraw her own deposited utxos")(
+      forAll(genL2EventGenesisFromPeer(alice)) { event =>
           val outState =
               for
                   state <- HydrozoaL2Mutator(emptyContext, emptyState, event)
                   state <- HydrozoaL2Mutator(
                     emptyContext,
                     state,
-                    l2EventWithdrawalFromInputsAndAccount(state.utxo.map(_._1).toSet, alice)
+                    l2EventWithdrawalFromInputsAndPeer(state.utxo.map(_._1).toSet, alice)
                   )
               yield state
           outState match {
@@ -214,12 +225,12 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     )
 
     property("Alice cannot withdraw Bob's genesis utxos")({
-        forAll(genL2EventGenesisFromAccount(bob)) { event =>
+        forAll(genL2EventGenesisFromPeer(bob)) { event =>
             // First apply the randomly generated genesis event with Bob's UTxOs
             // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
             val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
             // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
-            val withdrawlEvent = l2EventWithdrawalFromInputsAndAccount(
+            val withdrawlEvent = l2EventWithdrawalFromInputsAndPeer(
               postGenesisState.utxo.map(_._1).toSet,
               alice
             )
@@ -236,7 +247,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
               transactionId = withdrawlEvent.getEventId,
               missingInputsKeyHashes = HashSet(
                 Hash[Blake2b_224, HashPurpose.KeyHash](
-                  blake2b_224(ByteString.fromArray(bob.publicKeyBytes()))
+                  blake2b_224(ByteString.fromArray(TestPeer.mkWallet(bob).exportVerificationKeyBytes.bytes))
                 )
               ),
               missingCollateralInputsKeyHashes = Set.empty,
@@ -265,7 +276,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     })
 
     property("non-existent utxos can't be withdrawn")(
-      forAll(genL2EventGenesisFromAccount(alice)) { event =>
+      forAll(genL2EventGenesisFromPeer(alice)) { event =>
           // First apply the randomly generated genesis event with Alice's UTxOs
           // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
           val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
@@ -273,7 +284,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
           // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
           val allTxInputs = postGenesisState.utxo.map(_._1).toSet
 
-          val withdrawalEvent = l2EventWithdrawalFromInputsAndAccount(
+          val withdrawalEvent = l2EventWithdrawalFromInputsAndPeer(
             allTxInputs,
             alice
           )
@@ -303,24 +314,23 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
       }
     )
 
-    property("correct transaction")(forAll(genL2EventGenesisFromAccount(alice)) { event =>
+    property("correct transaction")(forAll(genL2EventGenesisFromPeer(alice)) { event =>
         val outState =
             for
                 // First apply the randomly generated genesis event with Alice's UTxOs
                 // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
                 postGenesisState <- HydrozoaL2Mutator(emptyContext, emptyState, event)
-
+                
                 // Then generate the transaction event, where Alice tries to send all UTxOs to bob
                 allTxInputs = postGenesisState.utxo.map(_._1).toSet
 
-                transactionEvent = l2EventTransactionFromInputsAndAccount(
+                transactionEvent = l2EventTransactionFromInputsAndPeer(
                   inputs = allTxInputs,
                   utxoSet = postGenesisState.utxo,
-                  inAcct = alice,
-                  outAcct = bob
+                  inPeer = alice,
+                  outPeer = bob
                 )
-                _ = println(transactionEvent.transaction.body.value.outputs)
-
+             
                 // Then attempt to execute the withdrawal on the postGenesisState
                 finalState <- HydrozoaL2Mutator(
                   emptyContext,
@@ -334,7 +344,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
             case Right(outS) =>
                 (outS.certState == emptyState.certState) :| "Successful transaction should not modify cert state" &&
                 (outS.utxo.size == 1) :| "Successful transaction should result in a single utxo" &&
-                (outS.utxo.head._2.address == addressFromAccount(
+                (outS.utxo.head._2.address == addressFromPeer(
                   bob
                 )) :| "Result UTxO should be at Bob's address"
         }
