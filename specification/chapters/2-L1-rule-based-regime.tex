@@ -353,7 +353,7 @@ Redeemers:
         \begin{enumerate}
           \item Let \code{outputL1} be the first element in \code{outputsRemaining}, which must exist.
           \item \code{outputL1} and \code{outputL2} must match on the \code{value}, \code{datum}, and \code{script} fields.
-          \item \code{outputL1} and \code{outputL2} must match on the \code{addr} field by payment credential and staking reference, but not network ID.
+          \item \code{outputL1} and \code{outputL2} must match on the \code{addr} field by payment credential and staking reference.
           \item Update \code{outputsRemaining} by excluding \code{outputL1}.
           \item Update \code{valueTotal} by adding the value of \code{outputL1}.
           \item Update \code{rootHash} by applying the Merkle library's \code{delete} function with the triple:
