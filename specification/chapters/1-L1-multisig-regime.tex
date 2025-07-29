@@ -33,6 +33,15 @@ In the multisig regime, a head's entire L1 state resides in utxos at its native 
     \T{rolloutUtxos} &::& \T{UtxoSet^{L1}}
   \end{array}\right\}
 \end{equation*}
+
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/1-multisig-regime-utxo-state.pdf}}
+\end{center}
+\caption[Multisig regime utxo state on L1.]{The L1 utxo state of the multisig regime.}
+\label{fig:utxo-state-multisig-regime}
+\end{figure}
+
 Among these utxos, the head's treasury utxo is uniquely identified as the one holding the head's beacon token:
 \begin{enumerate}
   \item The policy ID corresponds to the head's native script (in minting policy form).
@@ -94,6 +103,14 @@ Initialization is achieved with a single transaction, multi-signed by all the pe
     \end{equation*}
 \end{itemize}
 
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/2-initialization-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Initialization tx.]{The Hydrozoa head's peers initialize its treasury utxo with an empty L2 ledger.}
+\label{fig:tx-initialization}
+\end{figure}
+
 \section{Deposit}%
 \label{h:l1-multisig-deposit}%
 
@@ -117,6 +134,14 @@ The new utxo in the L2 ledger should contain the same funds as the deposit utxo.
 The \code{refundAddress} and \code{refundDatum} fields define the address and datum to which the deposit's funds should be sent on L1 if the deposit is refunded.
 The funds in the deposit must be sufficient to pay for the refund transaction cost and create the refund utxo.
 
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/3-deposit-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Deposit tx.]{A user places some funds and instructions into a deposit utxo for a Hydrozoa Head.}
+\label{fig:tx-deposit}
+\end{figure}
+
 \section{Refund}%
 \label{h:l1-multisig-refund}%
 
@@ -131,6 +156,14 @@ Doing so ensures that the depositor can still retrieve the deposited funds if th
 
 The L2 consensus protocol (\cref{h:l2-consensus-on-refunds}) allows peers to obtain multi-signed post-dated refund transactions before posting their deposits on L1.
 It also allows them to immediately refund any deposits that its rules disqualify from being absorbed into the treasury.
+
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/4-refund-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Refund tx.]{The peers refund the deposit if it isn't absorbed into the treasury before the user's deadline.}
+\label{fig:tx-refund}
+\end{figure}
 
 \section{Settlement}%
 \label{h:l1-multisig-settlement}%
@@ -150,6 +183,15 @@ The settlement transaction greedily pays out as many withdrawals as it can, usin
 It outputs the remaining withdrawals' aggregate funds as a single rollout utxo, sent to the head's native script address without a datum.
 Rollout transactions iteratively pay out more utxos from the rollout utxo, until all withdrawals are settled (\cref{h:l1-multisig-rollout}).
 
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/5-settlement-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Settlement tx.]{The peers absorb some deposits and pay out some withdrawals from the head's treasury.
+A rollout utxo can be produced to defer payout of some withdrawals for later.}
+\label{fig:tx-settlement}
+\end{figure}
+
 \section{Finalization}%
 \label{h:l1-multisig-finalization}%
 
@@ -164,10 +206,27 @@ The finalization transaction is similar to the settlement transaction, except th
 After the finalization transaction deals with the treasury and immediate/post-dated refund transactions deal with the unabsorbed deposits, no trace of the Hydrozoa head should be left in the L1 ledger.
 Any other utxos that remain at the head's native script address---assumed to be unrelated to the head---can be manually spent by the peers.
 
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/6-finalization-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Finalization tx.]{The peers pay out all remaining funds from the head's treasury.
+A rollout utxo can be produced to defer the payout of some withdrawals for later.}
+\label{fig:tx-finalization}
+\end{figure}
+
 \section{Rollout}%
 \label{h:l1-multisig-rollout}%
 
 The rollout utxo is spent in a rollout transaction, paying out some more withdrawals, and outputting a new rollout utxo with the aggregate funds of the rest of the withdrawals, if any remain.
 Further rollout transactions spend the shrinking rollout utxo, until all the withdrawals have been paid out (\cref{h:deterministic-rollout-rollouts}).
+
+\begin{figure}[H]
+\begin{center}
+\includegraphics[width=\txDiagramScale\linewidth]{\subfix{../images/tx-diagram/7-rollout-tx.pdf}}
+\end{center}
+\caption[Multisig regime: Rollout tx.]{The peers pay out some withdrawals out of a rollout utxo, possibly leaving some for later payout.}
+\label{fig:tx-rollout}
+\end{figure}
 
 \end{document}
