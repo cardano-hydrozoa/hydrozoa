@@ -8,7 +8,7 @@
 The Hydrozoa protocol strives to generate L1 transactions deterministically whenever they require consensus from all peers (i.e., in the multisig regime).
 This determinism allows the L2 consensus protocol and block validation procedure to focus on the essential contents of blocks without getting distracted in verifying the minutiae of the blocks' effects expressed as L1 transactions.
 
-This determinism is easy to accomplish for a refund (\cref{h:l1-multisig-refund}) and a transition to the rule-based regime (\cref{h:l1-rule-based-transition}) because each of those transactions has a bounded number of inputs/outputs that are guaranteed to fit within Cardano's transaction size limit.
+This determinism is easy to accomplish for a refund (\cref{h:l1-multisig-refund}) and the fallback to the rule-based regime (\cref{h:l1-rule-based-fallback}) because each of those transactions has a bounded number of inputs/outputs that are guaranteed to fit within Cardano's transaction size limit.
 On the other hand, settlement of a major block on L1 (\cref{h:l1-multisig-settlement}) may require a large number of L2 withdrawals to be paid out on L1, such that one or more rollout transactions may be needed to handle its overflow of L1 outputs.
 Finalization (\cref{h:l1-multisig-finalization}) is also unconstrained in the number of L2 withdrawals it can pay out.
 

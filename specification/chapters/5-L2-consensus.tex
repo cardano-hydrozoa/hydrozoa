@@ -204,13 +204,13 @@ A block creator's broadcast of a new major block contains the block;
   \T{ReqMajor} \coloneq \;\bigr\{\; \T{block} :: \T{Block} \;\bigr\}
 \end{equation*}
 
-A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout and post-dated transition transactions:
+A peer's first acknowledgment of a major block identifies the block by its header and contains the recipient's signatures for the block's rollout and post-dated fallback transactions:
 \begin{equation*}
   \T{AckMajor1} \coloneq \left\{
   \begin{array}{lll}
     \T{blockHeader} &::& \T{BlockHeader} \\
     \T{rollouts} &::& [\T{Signature}] \\
-    \T{postDatedTransition} &::& \T{Signature}
+    \T{postDatedFallback} &::& \T{Signature}
   \end{array}\right\}
 \end{equation*}
 
