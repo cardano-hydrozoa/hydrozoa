@@ -6,15 +6,17 @@ import hydrozoa.infra.*
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
+import hydrozoa.infra.transitionary.{toHydrozoa, toScalusLedger}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{L2Genesis, SimpleL2Ledger, mkTransactionEvent, mkWithdrawalEvent}
+import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
+import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry, retryEither}
 import scalus.prelude.Option as SOption
@@ -166,12 +168,17 @@ class Node:
     def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
-        val event = req match
-            case Transaction(tx) => mkTransactionEvent(tx)
-            case Withdrawal(wd)  => mkWithdrawalEvent(wd)
+        req match
+            case Transaction(tx) => {
+                network.tell(_.reqEventL2(ReqEventL2(tx)))
+                Right(TxId(tx.getEventId.toHex))
+            }
+            case Withdrawal(wd)  => {
+                network.tell(_.reqEventL2(ReqEventL2(wd)))
+                Right(TxId(wd.getEventId.toHex))
+            }
 
-        network.tell(_.reqEventL2(ReqEventL2(event)))
-        Right(event.getEventId)
+    
     end submitL2
 
     /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
@@ -189,7 +196,7 @@ class Node:
     def produceNextBlockLockstep(
         nextBlockFinal: Boolean,
         quitConsensusImmediately: Boolean = false
-    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
+    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
 
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
@@ -237,9 +244,11 @@ class Node:
                 currentPhase match
                     case Open =>
                         nodeState
-                            .ask(s => s.head.openPhase(os => SimpleL2Ledger.unliftUtxoSet(os.stateL2)))
+                            .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
-                            .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
+                            .map((utxoId, output) =>
+                                utxoId.toHydrozoa -> OutputNoTokens.apply(output.toScalusLedger.toHydrozoa)
+                            )
                     case _ => List.empty
     end stateL2
 

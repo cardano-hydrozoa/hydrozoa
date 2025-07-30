@@ -5,7 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.l1.CardanoL1Mock
 import hydrozoa.l2.consensus.network.transport.SimNetwork
-import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
+import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.server.*
@@ -74,13 +74,13 @@ class LocalFacade(
     override def awaitTxL1(txId: TxId): Option[TxL1] = randomNode.awaitTxL1(txId)
 
     override def submitL2(
-        tx: L2Transaction | L2Withdrawal
+        tx: L2EventTransaction | L2EventWithdrawal
     ): Either[String, TxId] =
         log.info("SUT: submitting L2 transaction/withdrawal...")
 
         val request = tx match
-            case tx: L2Transaction => Transaction(tx)
-            case wd: L2Withdrawal  => Withdrawal(wd)
+            case tx: L2EventTransaction => Transaction(tx)
+            case wd: L2EventWithdrawal  => Withdrawal(wd)
         val ret = randomNode.submitL2(request)
         ret match
             case Left(_)     => ret
@@ -101,7 +101,7 @@ class LocalFacade(
     override def produceBlock(
         nextBlockFinal: Boolean,
         quitConsensusImmediately: Boolean = false
-    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
+    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
               s" nextBlockFinal = $nextBlockFinal, " +

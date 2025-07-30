@@ -1,13 +1,13 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHUTxO}
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
-import hydrozoa.l2.ledger.SimpleL2Ledger.SimpleL2LedgerClass
 import hydrozoa.node.state.*
 import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
@@ -98,7 +98,7 @@ private class FinalBlockConfirmationActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
-        val utxosWithdrawn =
+        val utxosWithdrawn : UtxoSetL2 =
             if stateActor.ask(_.head.finalizingPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.finalizingPhase(_.pendingOwnBlock))
@@ -114,13 +114,10 @@ private class FinalBlockConfirmationActor(
                       )
                     )
 
-                val ledgerL2 = SimpleL2LedgerClass()
-                ledgerL2.replaceUtxosActive(stateL2)
-
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  ledgerL2,
+                  contextAndStateFromV3UTxO(stateL2),
                   Seq.empty,
                   TaggedUtxoSet.apply(),
                   true
@@ -128,7 +125,7 @@ private class FinalBlockConfirmationActor(
                 resolution match
                     case ValidationResolution.Valid(_, _, utxosWithdrawn) =>
                         log.info(s"Final block ${req.block.blockHeader.blockNum} is valid.")
-                        utxosWithdrawn
+                        toHUTxO(utxosWithdrawn)
                     case resolution =>
                         throw RuntimeException(s"Final block validation failed: $resolution")
 

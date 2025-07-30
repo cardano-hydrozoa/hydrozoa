@@ -58,7 +58,7 @@ class ScalusSettlementTxBuilder(
         // This is a resolved list of all the inputs. It is impure; may fail if the lookup fails
         val resolvedUtxoInputs: Seq[TransactionOutput] =
             utxoIds
-                .map(deposit => bloxToScalusUtxoQuery(backendService, deposit))
+                .map(deposit => bloxToScalusUtxoQuery(backendService, deposit.toScalus))
                 .map {
                     case x @ Left(err) =>
                         return Left(
