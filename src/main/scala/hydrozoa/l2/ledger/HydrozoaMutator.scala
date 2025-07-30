@@ -1,6 +1,7 @@
 package hydrozoa.l2.ledger
 
 import scalus.cardano.ledger.TransactionInput
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.*
 
@@ -14,19 +15,7 @@ private object HydrozoaGenesisMutator extends STSL2.Mutator {
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
     private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
-        val genesisId = g.getEventId
-        
-        g.utxos
-            .foldLeft((state, 0))((acc, tiTo) => {
-                val newState = acc._1.copy(utxo =
-                    acc._1.utxo.updated(
-                      key = TransactionInput(transactionId = genesisId, index = acc._2),
-                      value = tiTo._2
-                    )
-                )
-                (newState, acc._2 + 1)
-            })
-            ._1
+        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs)
     }
 
     override def transit(context: Context, state: State, event: Event): Result = event match {

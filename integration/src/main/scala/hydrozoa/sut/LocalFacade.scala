@@ -17,6 +17,12 @@ import ox.resilience.{RetryConfig, retry}
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 
+/**
+ * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
+ * it selects a random peer.
+ * @param peers
+ * @param shutdown
+ */
 class LocalFacade(
     peers: Map[TestPeer, Node],
     shutdown: Long => Unit
@@ -87,10 +93,10 @@ class LocalFacade(
             case Right(txId) =>
                 // Wait till all nodes learn about the submitted event
                 retry(RetryConfig.delayForever(100.millis))({
-                    // println(s"waiting for L2 event id: $txId to propagate over all nodes")
+                    println(s"waiting for L2 event id: $txId to propagate over all nodes")
                     val veracity =
                         peers.values.map(_.nodeState.ask(_.head.openPhase(_.isL2EventInPool(txId))))
-                    // println(s"$veracity")
+                    println(s"$veracity")
                     if (!veracity.forall(e => e)) throw IllegalStateException()
                 })
                 ret

@@ -76,12 +76,23 @@ val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Conversions
 
+///////////////////////////////////////////////////////
+// TxId
+
+extension (txId : TxId) {
+    def toScalus : TransactionHash = Hash(ByteString.fromHex(txId.hash))
+}
+
+extension (th : TransactionHash){
+    def toHydrozoa : TxId = TxId(th.toHex)
+}
+
 ////////////////////////////////////////////////////////
 // TransactionInput
 extension [L <: AnyLayer](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
-          transactionId = Hash(ByteString.fromHex(utxo.txId.hash)),
+          transactionId = utxo.txId.toScalus,
           index = utxo.outputIx.ix
         )
 }

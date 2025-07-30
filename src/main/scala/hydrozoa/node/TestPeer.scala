@@ -4,8 +4,16 @@ import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.infra.{WalletModuleBloxbean, toBloxbean}
+import hydrozoa.node.TestPeer.account
 import hydrozoa.node.state.WalletId
 import hydrozoa.{Wallet, networkL1static}
+import scalus.builtin.Builtins.blake2b_224
+import scalus.builtin.ByteString
+import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.ledger.Hash
 
 import scala.collection.mutable
 
@@ -65,3 +73,12 @@ extension [K, V](map: mutable.Map[K, V])
             missing
         case Some(value) => value
     }
+
+
+def addressFromPeer(peer: TestPeer): Address = (
+    ShelleyAddress(
+        network = Testnet,
+        payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
+        delegation = Null
+    )
+    )
