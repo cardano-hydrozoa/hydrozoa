@@ -37,13 +37,13 @@ import hydrozoa.l1.rulebased.onchain.{
     TreasuryValidatorScript,
     hashVerificationKey
 }
+import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
 import hydrozoa.l1.rulebased.tx.vote.{VoteTxBuilder, VoteTxRecipe}
 import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.commitment.infG2hex
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.ledger.{
     L2Event,
@@ -53,6 +53,8 @@ import hydrozoa.l2.ledger.{
     L2EventWithdrawal,
     l2EventLabel
 }
+import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqDeinit}
+import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.TestPeer
 import hydrozoa.UtxoMap
@@ -72,6 +74,7 @@ import scala.CanEqual.derived
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
+import scala.util.Try
 
 enum HeadPhase derives CanEqual:
     case Initializing
@@ -201,9 +204,10 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
       */
     def tryProduceBlock(
         nextBlockFinal: Boolean,
-        force: Boolean = false,
-        quitConsensusImmediately: Boolean
+        force: Boolean = false
     ): Either[String, Block]
+
+    def runTestDispute(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
     def stateL2: Map[v3.TxOutRef, v3.TxOut]
@@ -249,6 +253,11 @@ class HeadStateGlobal(
     def setCardano(cardano: ActorRef[CardanoL1]): Unit =
         this.cardano = cardano
 
+    private var network: ActorRef[HeadPeerNetwork] = _
+
+    def setNetwork(network: ActorRef[HeadPeerNetwork]) =
+        this.network = network
+
     // TODO: remove
 
     private var voteTxBuilder: VoteTxBuilder = _
@@ -267,6 +276,10 @@ class HeadStateGlobal(
     private var withdrawTxBuilder: WithdrawTxBuilder = _
 
     def setWithdrawTxBuilder(builder: WithdrawTxBuilder): Unit = this.withdrawTxBuilder = builder
+
+    private var deinitTxBuilder: DeinitTxBuilder = _
+
+    def setDeinitTxBuilder(builder: DeinitTxBuilder): Unit = this.deinitTxBuilder = builder
 
     //
 
@@ -342,7 +355,10 @@ class HeadStateGlobal(
     override def openPhase[A](foo: OpenPhase => A): A =
         headPhase match
             case Open => foo(OpenPhaseImpl())
-            case _    => throw IllegalStateException("The head is not in Open phase.")
+            case _ =>
+                val msg = "The head is not in Open phase."
+                log.error(msg)
+                throw RuntimeException(msg)
 
     override def finalizingPhase[A](foo: FinalizingPhase => A): A =
         headPhase match
@@ -483,16 +499,8 @@ class HeadStateGlobal(
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
-            force: Boolean = false,
-            // This is a test-only flag that forces the node to submit fallback
-            // and other role-based regime txs immediately (when applying the block record).
-            quitConsensusImmediately: Boolean = false
+            force: Boolean = false
         ): Either[String, Block] = {
-            // The testing facade calls tryProduceBlock on all nodes every time
-            // a test suite wants to produce a block.
-            // This has twofold effect:
-            // 1. Sets `quitConsensusImmediately` flag (on all nodes).
-            self.mbQuitConsensusImmediately = Some(quitConsensusImmediately)
             // 2. The leader produces the block and starts consensus on it.
             if (self.autonomousBlocks || force)
                 && this.isBlockLeader && !this.isBlockPending
@@ -533,7 +541,6 @@ class HeadStateGlobal(
                 val msg = s"Block is not going to be produced: " +
                     s"autonomousBlocks=${self.autonomousBlocks} " +
                     s"force=$force " +
-                    s"quitConsensusImmedaitely=$quitConsensusImmediately " +
                     s"isBlockLeader=${this.isBlockLeader} " +
                     s"isBlockPending=${this.isBlockPending} "
                 log.info(msg)
@@ -660,300 +667,6 @@ class HeadStateGlobal(
                 case _ =>
             }
 
-            // Test dispute routine
-            def runTestDispute() = {
-
-                // Submit fallback tx
-                // TODO: wait till validity range is hit
-                val fallbackTx = l2LastMajorRecord.l1PostDatedEffect.get
-                val fallbackTxHash = txHash(fallbackTx)
-                log.info(s"Submitting fallback tx: $fallbackTxHash")
-                val fallbackResult = cardano.ask(_.submit(fallbackTx))
-                log.info(s"fallbackResult = $fallbackResult")
-                // Since fallback is the same tx for all nodes, we can use awaitTx here.
-                cardano.ask(_.awaitTx(fallbackTxHash))
-
-                // Build and submit a vote
-                // The idea for testing (tallying) is as follows:
-                // every node should submit a minor block they produced.
-                val turn = self.blockLeadTurn.get
-                val voteBlock = blocksConfirmedL2.clone().dropRightInPlace(turn).lastOption.get
-
-                log.info(s"voteBlock = $voteBlock")
-
-                voteBlock.block.blockHeader.blockType match {
-                    // Voting is possible
-                    case Minor =>
-                        // Temporary code for building Vote tx
-                        val disputeAddress = DisputeResolutionScript.address(networkL1static)
-                        val voteUtxoId =
-                            cardano
-                                .ask(_.utxosAtAddress(disputeAddress))
-                                .find(u =>
-                                    val datum = getVoteDatum(u)
-                                    // TODO better way to get own key, which should be always defined
-                                    val value = headPeerVKs.get(ownPeer).get
-                                    val ownVk = hashVerificationKey(value)
-                                    datum.peer.isDefined &&
-                                    datum.peer.get == ownVk
-                                ) match {
-                                case Some(utxo) =>
-                                    UtxoIdL1.apply(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
-                                case None => throw RuntimeException("Vote UTxO was not found")
-                            }
-
-                        val ownAddress = AddressBech[L1](
-                          account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
-                        )
-
-                        // Temporarily
-                        val ownAccount = account(TestPeer.valueOf(ownPeer.name))
-
-                        val unresolvedTreasuryUtxo = UtxoIdL1.apply(fallbackTxHash, TxIx(0))
-                        val recipe = VoteTxRecipe(
-                          voteUtxoId,
-                          // treasury is always the first output, though this is arguably not the best way to get it
-                          unresolvedTreasuryUtxo,
-                          mkOnchainBlockHeader(voteBlock.block.blockHeader),
-                          voteBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
-                          ownAddress,
-                          ownAccount
-                        )
-                        log.info(s"Vote tx recipe: $recipe")
-                        val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
-                        val voteTxHash = txHash(voteTx)
-                        log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
-
-                        log.info(s"Submitting vote tx: $voteTxHash")
-                        val voteResult = cardano.ask(_.submit(voteTx))
-                        log.info(s"voteResult = $voteResult")
-                        cardano.ask(_.awaitTx(voteTxHash))
-
-                        runTallying(unresolvedTreasuryUtxo, ownAccount)
-
-                        runResolution(unresolvedTreasuryUtxo, ownAccount)
-
-                        // Waiting till the resolved treasury appears
-                        val resolvedTreasury = retry(RetryConfig.delayForever(3.seconds)) {
-
-                            log.info("Checking for resolved treasury utxo")
-                            val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
-                            val beaconTokenUnit = encodeHex(
-                              this.headMintingPolicy.bytes ++ decodeHex(
-                                this.beaconTokenName.tokenNameHex
-                              )
-                            )
-
-                            // TODO: use more effective endpoint that based on vote tokens' assets.
-                            cardano
-                                .ask(_.utxosAtAddress(treasuryAddress))
-                                .find(u =>
-                                    fromData[TreasuryDatum](
-                                      Interop.toScalusData(
-                                        PlutusData
-                                            .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
-                                      )
-                                    ) match {
-                                        case Resolved(_) =>
-                                            u.getAmount.asScala
-                                                .map(_.getUnit)
-                                                .contains(beaconTokenUnit)
-                                        case _ => false
-                                    }
-                                ) match {
-                                case Some(utxo) =>
-                                    UtxoIdL1(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
-                                case None =>
-                                    log.info("Resolved treasury utxo was not found")
-                                    // just wait
-                                    throw RuntimeException(
-                                      "Waiting for resolved treasury"
-                                    )
-                            }
-                        }
-
-                        // The condition is not required, just a way to speed up tests a tad and simplify logs
-                        if (turn == 0) runWithdraw(resolvedTreasury, ownAccount)
-
-                    // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
-                    // (Should not happen)
-                    case _ => throw RuntimeException("Vote block is not a minor block, can't vote")
-                }
-
-                def getVoteDatum(a: model.Utxo) = {
-                    fromData[VoteDatum](
-                      Interop.toScalusData(
-                        PlutusData
-                            .deserialize(HexUtil.decodeHexString(a.getInlineDatum))
-                      )
-                    )
-                }
-
-                def getVoteUtxos: List[BBUtxo] = {
-                    val voteTokenName = extractVoteTokenNameFromFallbackTx(
-                      l2LastMajorRecord.l1PostDatedEffect.get
-                    )
-
-                    val disputeAddress = DisputeResolutionScript.address(networkL1static)
-
-                    // Returns L1 state - a list of vote utxos sorted in ascending key order.
-                    // TODO: use more effective endpoint that based on vote tokens' assets.
-                    val sortedVoteUtxoIds =
-                        cardano
-                            .ask(_.utxosAtAddress(disputeAddress))
-                            .filter(u =>
-                                val voteTokenUnit = encodeHex(
-                                  this.headMintingPolicy.bytes
-                                ) + voteTokenName.tokenNameHex
-                                val units = u.getAmount.asScala.map(_.getUnit)
-                                units.contains(voteTokenUnit)
-                            )
-                            .sortWith((a, b) =>
-                                val datumA = getVoteDatum(a)
-                                val datumB = getVoteDatum(b)
-                                datumA.key < datumB.key
-                            )
-
-                    log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
-                    sortedVoteUtxoIds
-                }
-
-                // Move to Tx.scala-like module
-                def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
-                  utxo.getTxHash |> TxId.apply,
-                  utxo.getOutputIndex |> TxIx.apply
-                )
-
-                def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
-
-                    type TallyTx = TxL1
-
-                    def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
-                        case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
-                        case _            => List.empty
-
-                    def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
-                        val recipe = TallyTxRecipe(
-                          getUtxoId(voteA),
-                          getUtxoId(voteB),
-                          unresolvedTreasuryUtxo,
-                          ownAccount
-                        )
-                        tallyTxBuilder.buildTallyTxDraft(recipe) match {
-                            case Right(tx) => tx
-                            case Left(err) =>
-                                log.error(err)
-                                throw RuntimeException(err)
-                        }
-                    }
-
-                    retry(RetryConfig.delayForever(3.seconds)) {
-                        log.info("Running tallying...")
-                        val txs = getVoteUtxos |> makeTallies
-                        log.debug(s"tallying round txs are: ${txs.map(serializeTxHex)}")
-                        if txs.isEmpty then ()
-                        else {
-                            txs.foreach(t => cardano.ask(_.submit(t)))
-                            throw RuntimeException(
-                              "Some tallying txs have been submitted, the next round is needed"
-                            )
-                        }
-                    }
-                }
-
-                def runResolution(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
-                    getVoteUtxos match {
-                        case talliedVoteUtxo :: Nil =>
-                            val talliedVote = getUtxoId(talliedVoteUtxo)
-                            val recipe =
-                                ResolutionTxRecipe(talliedVote, unresolvedTreasuryUtxo, ownAccount)
-
-                            val resolutionTx = resolutionTxBuilder.buildResolutionTx(recipe) match {
-                                case Right(tx) => tx
-                                case Left(err) =>
-                                    log.error(err)
-                                    throw RuntimeException(err)
-                            }
-
-                            log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
-                            val submitResult = cardano.ask(_.submit(resolutionTx))
-                            log.info(
-                              s"resolution tx submit result (might be left for some nodes): $submitResult"
-                            )
-
-                            retry(RetryConfig.delayForever(3.seconds)) {
-                                log.info("Running resolving...")
-                                val votes = getVoteUtxos
-                                log.debug(s"votes number is: ${votes.length}")
-                                if votes.isEmpty then ()
-                                else {
-                                    // just wait
-                                    throw RuntimeException(
-                                      "Still see votes, waiting for the resolution tx to get through"
-                                    )
-                                }
-                            }
-                        case _vote1 :: _vote2 :: _vs =>
-                            val msg = "More than one vote."
-                            log.error(msg)
-                            throw RuntimeException(msg)
-                        case Nil =>
-                            log.info("No votes found, likely resolution has been done.")
-                    }
-                }
-
-                def runWithdraw(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
-
-                    log.info("Running withdraw...")
-
-                    // TODO: at this point a specific set of utxos should be restored
-                    // Now, for testing we are assuming we can just use L2 ledger directly.
-                    // Also, we now try to withdraw all utxos from the ledger in one go.
-                    val utxos: UtxoSet[L2] = UtxoSet.apply(map =
-                        (stateL2.map((ti, to) =>
-                            (ti.toScalusLedger.toHydrozoa[L2], to.toScalusLedger.toHydrozoa[L2])
-                        ))
-                    )
-                    // Since we are removing all utxos, proof := g2
-                    val proof = G2.generator.toCompressedByteString.toHex
-
-                    val recipe = WithdrawTxRecipe(
-                      utxos,
-                      resolvedTreasury,
-                      proof,
-                      ownAccount
-                    )
-
-                    log.info(s"Withdraw tx recipe: $recipe")
-
-                    val withdrawTx = withdrawTxBuilder.buildWithdrawTx(recipe) match {
-                        case Right(tx) => tx
-                        case Left(err) =>
-                            log.error(err)
-                            throw RuntimeException(err)
-                    }
-
-                    log.info(s"Withdraw tx is: ${serializeTxHex(withdrawTx)}")
-                    val submitResult = cardano.ask(_.submit(withdrawTx))
-                    log.info(s"Withdraw tx submission result is: $submitResult")
-                    submitResult match {
-                        case Right(txHash) =>
-                            log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
-                            cardano.ask(_.awaitTx(txHash))
-                        case Left(err) =>
-                            log.error(s"Withdraw tx submission failed with: $err")
-                            throw RuntimeException(err)
-                    }
-                }
-            }
-            end runTestDispute
-
-            // FIXME: this should be removed in the production version (or moved somewhere)
-            if isQuitConsensusImmediately then {
-                log.warn("Running test dispute")
-                runTestDispute()
-            }
-
             // Done
             log.info(
               s"nextBlockNum: $nextBlockNum, isBlockLeader: ${this.isBlockLeader}, isBlockPending: ${this.isBlockPending}"
@@ -1040,6 +753,330 @@ class HeadStateGlobal(
             self.headPhase = Finalizing
             log.info("Try to produce the final block...")
             tryProduceBlock(true)
+
+        override def runTestDispute(): Unit = {
+
+            // Submit fallback tx
+            // TODO: wait till validity range is hit
+            val fallbackTx = l2LastMajorRecord.l1PostDatedEffect.get
+            val fallbackTxHash = txHash(fallbackTx)
+            log.info(s"Submitting fallback tx: $fallbackTxHash")
+            val fallbackResult = cardano.ask(_.submit(fallbackTx))
+            log.info(s"fallbackResult = $fallbackResult")
+            // Since fallback is the same tx for all nodes, we can use awaitTx here.
+            cardano.ask(_.awaitTx(fallbackTxHash))
+
+            // Build and submit a vote
+            // The idea for testing (tallying) is as follows:
+            // every node should submit a minor block they produced.
+            val turn = self.blockLeadTurn.get
+            val voteBlock = blocksConfirmedL2.clone().dropRightInPlace(turn).lastOption.get
+
+            log.info(s"voteBlock = $voteBlock")
+
+            voteBlock.block.blockHeader.blockType match {
+                // Voting is possible
+                case Minor =>
+                    // Temporary code for building Vote tx
+                    val disputeAddress = DisputeResolutionScript.address(networkL1static)
+                    val voteUtxoId =
+                        cardano
+                            .ask(_.utxosAtAddress(disputeAddress))
+                            .find(u =>
+                                val datum = getVoteDatum(u)
+                                // TODO better way to get own key, which should be always defined
+                                val value = headPeerVKs(ownPeer)
+                                val ownVk = hashVerificationKey(value)
+                                datum.peer.isDefined &&
+                                datum.peer.get == ownVk
+                            ) match {
+                            case Some(utxo) =>
+                                UtxoIdL1.apply(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                            case None => throw RuntimeException("Vote UTxO was not found")
+                        }
+
+                    val ownAddress = AddressBech[L1](
+                      account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
+                    )
+
+                    // Temporarily
+                    val ownAccount = account(TestPeer.valueOf(ownPeer.name))
+
+                    val unresolvedTreasuryUtxo = UtxoIdL1.apply(fallbackTxHash, TxIx(0))
+                    val recipe = VoteTxRecipe(
+                      voteUtxoId,
+                      // treasury is always the first output, though this is arguably not the best way to get it
+                      unresolvedTreasuryUtxo,
+                      mkOnchainBlockHeader(voteBlock.block.blockHeader),
+                      voteBlock.l1Effect.asInstanceOf[MinorBlockL1Effect],
+                      ownAddress,
+                      ownAccount
+                    )
+                    log.info(s"Vote tx recipe: $recipe")
+                    val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
+                    val voteTxHash = txHash(voteTx)
+                    log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
+
+                    log.info(s"Submitting vote tx: $voteTxHash")
+                    val voteResult = cardano.ask(_.submit(voteTx))
+                    log.info(s"voteResult = $voteResult")
+                    cardano.ask(_.awaitTx(voteTxHash))
+
+                    runTallying(unresolvedTreasuryUtxo, ownAccount)
+
+                    runResolution(unresolvedTreasuryUtxo, ownAccount)
+
+                    // Waiting till the resolved treasury appears
+                    val resolvedTreasuryE = Try(retry(RetryConfig.delay(10, 1.second)) {
+
+                        log.info("Checking for resolved treasury utxo")
+                        val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
+                        val beaconTokenUnit = encodeHex(
+                          this.headMintingPolicy.bytes ++ decodeHex(
+                            this.beaconTokenName.tokenNameHex
+                          )
+                        )
+
+                        // TODO: use more effective endpoint that based on vote tokens' assets.
+                        cardano
+                            .ask(_.utxosAtAddress(treasuryAddress))
+                            .find(u =>
+                                fromData[TreasuryDatum](
+                                  Interop.toScalusData(
+                                    PlutusData
+                                        .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
+                                  )
+                                ) match {
+                                    case Resolved(_) =>
+                                        u.getAmount.asScala
+                                            .map(_.getUnit)
+                                            .contains(beaconTokenUnit)
+                                    case _ => false
+                                }
+                            ) match {
+                            case Some(utxo) =>
+                                UtxoIdL1(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                            case None =>
+                                log.info("Resolved treasury utxo was not found")
+                                // just wait
+                                throw RuntimeException(
+                                  "Waiting for resolved treasury"
+                                )
+                        }
+                    }).toEither
+
+                    resolvedTreasuryE match {
+                        case Left(err) =>
+                            log.warn(
+                              "Resolved treasury didn't appear in the set retry timeout, skippin the rest"
+                            )
+                        case Right(resolvedTreasury) =>
+                            // The condition is not required, just a way to speed up tests a tad and simplify logs
+                            if (turn == 0) {
+                                val withdrawalTxHash = runWithdrawal(resolvedTreasury, ownAccount)
+                                // The rest of treasury should be always the first output
+                                val restTreasury = UtxoIdL1(withdrawalTxHash, TxIx(0))
+                                runDeinit(restTreasury, ownAccount)
+                            }
+                    }
+
+                // Voting is not possible, the only way to go is to wait until dispute is over by its timeout.
+                // (Should not happen)
+                case _ =>
+                    // Keeping one NoVote
+                    log.info("Skipping voting in favor of other votes");
+            }
+
+            def getVoteDatum(a: model.Utxo) = {
+                fromData[VoteDatum](
+                  Interop.toScalusData(
+                    PlutusData
+                        .deserialize(HexUtil.decodeHexString(a.getInlineDatum))
+                  )
+                )
+            }
+
+            def getVoteUtxos: List[BBUtxo] = {
+                val voteTokenName = extractVoteTokenNameFromFallbackTx(
+                  l2LastMajorRecord.l1PostDatedEffect.get
+                )
+
+                val disputeAddress = DisputeResolutionScript.address(networkL1static)
+
+                // Returns L1 state - a list of vote utxos sorted in ascending key order.
+                // TODO: use more effective endpoint that based on vote tokens' assets.
+                val sortedVoteUtxoIds =
+                    cardano
+                        .ask(_.utxosAtAddress(disputeAddress))
+                        .filter(u =>
+                            val voteTokenUnit = encodeHex(
+                              this.headMintingPolicy.bytes
+                            ) + voteTokenName.tokenNameHex
+                            val units = u.getAmount.asScala.map(_.getUnit)
+                            units.contains(voteTokenUnit)
+                        )
+                        .sortWith((a, b) =>
+                            val datumA = getVoteDatum(a)
+                            val datumB = getVoteDatum(b)
+                            datumA.key < datumB.key
+                        )
+
+                log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
+                sortedVoteUtxoIds
+            }
+
+            // Move to Tx.scala-like module
+            def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
+              utxo.getTxHash |> TxId.apply,
+              utxo.getOutputIndex |> TxIx.apply
+            )
+
+            def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
+
+                type TallyTx = TxL1
+
+                def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
+                    case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
+                    case _            => List.empty
+
+                def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
+                    val recipe = TallyTxRecipe(
+                      getUtxoId(voteA),
+                      getUtxoId(voteB),
+                      unresolvedTreasuryUtxo,
+                      ownAccount
+                    )
+                    tallyTxBuilder.buildTallyTxDraft(recipe) match {
+                        case Right(tx) => tx
+                        case Left(err) =>
+                            log.error(err)
+                            throw RuntimeException(err)
+                    }
+                }
+
+                Try(retry(RetryConfig.delay(10, 1.second)) {
+                    log.info("Running tallying...")
+                    val txs = getVoteUtxos |> makeTallies
+                    log.debug(s"tallying round txs are: ${txs.map(serializeTxHex)}")
+                    if txs.isEmpty then ()
+                    else {
+                        txs.foreach(t => cardano.ask(_.submit(t)))
+                        throw RuntimeException(
+                          "Some tallying txs have been submitted, the next round is needed"
+                        )
+                    }
+                }).toEither
+            }
+
+            def runResolution(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
+                getVoteUtxos match {
+                    case talliedVoteUtxo :: Nil =>
+                        val talliedVote = getUtxoId(talliedVoteUtxo)
+                        val recipe =
+                            ResolutionTxRecipe(talliedVote, unresolvedTreasuryUtxo, ownAccount)
+
+                        val resolutionTx = resolutionTxBuilder.buildResolutionTx(recipe) match {
+                            case Right(tx) => tx
+                            case Left(err) =>
+                                log.error(err)
+                                throw RuntimeException(err)
+                        }
+
+                        log.info(s"Resolution tx is: ${serializeTxHex(resolutionTx)}")
+                        val submitResult = cardano.ask(_.submit(resolutionTx))
+                        log.info(
+                          s"resolution tx submit result (might be left for some nodes): $submitResult"
+                        )
+
+                        Try(retry(RetryConfig.delay(10, 1.second)) {
+                            log.info("Running resolving...")
+                            val votes = getVoteUtxos
+                            log.debug(s"votes number is: ${votes.length}")
+                            if votes.isEmpty then ()
+                            else {
+                                // just wait
+                                throw RuntimeException(
+                                  "Still see votes, waiting for the resolution tx to get through"
+                                )
+                            }
+                        }).toEither
+
+                    case _vote1 :: _vote2 :: _vs =>
+                        val msg = "More than one vote."
+                        log.error(msg)
+                        throw RuntimeException(msg)
+                    case Nil =>
+                        log.info("No votes found, likely resolution has been done.")
+                }
+            }
+
+            def runWithdrawal(resolvedTreasury: UtxoIdL1, ownAccount: Account): TxId = {
+
+                log.info("Running withdraw...")
+
+                // TODO: at this point a specific set of utxos should be restored
+                // Now, for testing we are assuming we can just use L2 ledger directly.
+                // Also, we now try to withdraw all utxos from the ledger in one go.
+                val utxos = stateL2
+                // Since we are removing all utxos, proof := g2
+                val proof = G2.generator.toCompressedByteString.toHex
+
+                val recipe = WithdrawTxRecipe(
+                  toHUTxO(contextAndStateFromV3UTxO(utxos)._2.utxo),
+                  resolvedTreasury,
+                  proof,
+                  ownAccount
+                )
+
+                log.info(s"Withdraw tx recipe: $recipe")
+
+                val withdrawTx = withdrawTxBuilder.buildWithdrawTx(recipe) match {
+                    case Right(tx) => tx
+                    case Left(err) =>
+                        log.error(err)
+                        throw RuntimeException(err)
+                }
+
+                log.info(s"Withdraw tx is: ${serializeTxHex(withdrawTx)}")
+                val submitResult = cardano.ask(_.submit(withdrawTx))
+                log.info(s"Withdraw tx submission result is: $submitResult")
+                submitResult match {
+                    case Right(txHash) =>
+                        log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
+                        cardano.ask(_.awaitTx(txHash))
+                        txHash
+                    case Left(err) =>
+                        log.error(s"Withdraw tx submission failed with: $err")
+                        throw RuntimeException(err)
+                }
+            }
+
+            def runDeinit(resolvedTreasury: UtxoIdL1, ownAccount: Account): Unit = {
+                // Build and propose a deinit transaction.
+                // For testing purposes we are going to build a tx that:
+                // - sends all funds from the treasury to the initial seeder
+                // - burns all head tokens
+                val recipe = DeinitTxRecipe(
+                  resolvedTreasury,
+                  self.seedAddress,
+                  self.headNativeScript,
+                  self.headMintingPolicy,
+                  ownAccount
+                )
+
+                val Right(deinitTxDraft) = deinitTxBuilder.buildDeinitTxDraft(recipe)
+
+                val headPeers = this.headPeers
+
+                // Fire and forget for now, arguably should be .ask
+                network.tell(_.reqDeinit(ReqDeinit(deinitTxDraft, headPeers)))
+                log.info("Waiting for the deinit tx...")
+                cardano.ask(
+                  _.awaitTx(txHash(deinitTxDraft), RetryConfig.delay(10, 1.second))
+                )
+            }
+        }
+        end runTestDispute
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
         def stateL2: Map[v3.TxOutRef, v3.TxOut] =

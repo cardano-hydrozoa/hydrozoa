@@ -21,7 +21,7 @@ import scalus.ledger.api.Timelock.{AllOf, Signature}
   *   serialized native script
   */
 def mkHeadNativeScript(
-    vKeys: Set[VerificationKeyBytes],
+    vKeys: Set[VerificationKeyBytes]
 ): Script.Native =
     Script.Native(
       AllOf(

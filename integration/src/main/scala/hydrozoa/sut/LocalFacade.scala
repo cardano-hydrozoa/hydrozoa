@@ -106,12 +106,10 @@ class LocalFacade(
 
     override def produceBlock(
         nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
-              s" nextBlockFinal = $nextBlockFinal, " +
-              s" quitConsensusImmediately = $quitConsensusImmediately"
+              s" nextBlockFinal = $nextBlockFinal"
         )
 
         // Here we run requests to all nodes in parallel.
@@ -121,25 +119,40 @@ class LocalFacade(
         // and also allow to propagate flags like quitConsensusImmediately
         // to all nodes.
         val requests = peers.values
-            .map(node =>
-                () => node.produceNextBlockLockstep(nextBlockFinal, quitConsensusImmediately)
-            )
+            .map(node => () => node.produceNextBlockLockstep(nextBlockFinal))
             .toSeq
 
         val answers = supervised(
           par(requests)
         )
 
+        log.info("Got all requests from nodes.")
+
         answers.find(a => a.isRight) match
             case None =>
                 answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
                 Left("Block can't be produced at the moment")
-            case Some(answer) => Right(answer.right.get)
+            case Some(answer) =>
+                log.info(
+                  s"Block details are here #${answer.right.get._1.block.blockHeader.blockNum}"
+                )
+                Right(answer.right.get)
+
+    override def runDispute(): Unit =
+        log.info("running test dispute...")
+        val requests = peers.values
+            .map(node => () => node.runDispute())
+            .toSeq
+
+        val _ = supervised(
+          par(requests)
+        )
 
     override def shutdownSut(): Unit =
         log.info("shutting SUT down...")
         shutdown(Thread.currentThread().threadId())
 
+// This might be just a boolean flag, we don't need thread ids here anymore
 val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
@@ -182,12 +195,14 @@ object LocalFacade:
                         }
                     )
 
-                    // Wait for shutdown flag
+                    // Wait for any shutdown flag
                     retry(RetryConfig.delayForever(50.millis))(
-                      if (!shutdownFlag.contains(Thread.currentThread().threadId()))
+                      if (shutdownFlag.isEmpty) {
+                          // log.warn(s"Keep going, no shutdown flags: ${shutdownFlag}")
                           throw RuntimeException()
+                      }
                     )
-                    println(s"thread=${Thread.currentThread().threadId()} is done")
+                    println(s"Exiting facade's thread=${Thread.currentThread().threadId()}")
                 }
         }
 
@@ -197,9 +212,7 @@ object LocalFacade:
         retry(RetryConfig.delayForever(100.millis))(
           {
               val nodeSize = synchronized(nodes.size)
-              if (nodeSize < peers.size) then
-                  // println(s"nodeSize=${nodeSize}")
-                  throw RuntimeException()
+              if (nodeSize < peers.size) then throw RuntimeException()
           }
         )
 

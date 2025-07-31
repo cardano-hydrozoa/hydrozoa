@@ -7,11 +7,12 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.toEither
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
-import hydrozoa.l1.multisig.tx.deposit.{ScalusDepositTxBuilder, DepositTxBuilder}
-import hydrozoa.l1.multisig.tx.finalization.{ScalusFinalizationTxBuilder, FinalizationTxBuilder}
-import hydrozoa.l1.multisig.tx.initialization.{ScalusInitializationTxBuilder, InitTxBuilder}
-import hydrozoa.l1.multisig.tx.refund.{ScalusRefundTxBuilder, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, ScalusDepositTxBuilder}
+import hydrozoa.l1.multisig.tx.finalization.{FinalizationTxBuilder, ScalusFinalizationTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, ScalusInitializationTxBuilder}
+import hydrozoa.l1.multisig.tx.refund.{RefundTxBuilder, ScalusRefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{ScalusSettlementTxBuilder, SettlementTxBuilder}
+import hydrozoa.l1.rulebased.tx.deinit.BloxBeanDeinitTxBuilder
 import hydrozoa.l1.rulebased.tx.fallback.{BloxBeanFallbackTxBuilder, FallbackTxBuilder}
 import hydrozoa.l1.rulebased.tx.resolution.BloxBeanResolutionTxBuilder
 import hydrozoa.l1.rulebased.tx.tally.{BloxBeanTallyTxBuilder, TallyTxBuilder}
@@ -116,7 +117,8 @@ object HydrozoaNode extends OxApp:
                   voteTxBuilder,
                   tallyTxBuilder,
                   resolutionTxBuilder,
-                  withdrawTxBuilder
+                  withdrawTxBuilder,
+                  deinitTxBuilder
                 ) = mkTxBuilders(backendService, nodeState)
 
                 val nodeStateActor = Actor.create(nodeState)
@@ -153,11 +155,13 @@ object HydrozoaNode extends OxApp:
 
                 // Static actors for node state
                 val multisigL1EventSource = new MultisigL1EventSource(nodeStateActor, cardanoActor)
+                nodeState.setNetwork(networkActor)
                 nodeState.setMultisigL1EventSource(Actor.create(multisigL1EventSource))
                 nodeState.setVoteTxBuilder(voteTxBuilder)
                 nodeState.setTallyTxBuilder(tallyTxBuilder)
                 nodeState.setResolutionTxBuilder(resolutionTxBuilder)
                 nodeState.setWithdrawTxBuilder(withdrawTxBuilder)
+                nodeState.setDeinitTxBuilder(deinitTxBuilder)
 
                 val blockProducer = new BlockProducer()
                 blockProducer.setNetworkRef(networkActor)
@@ -273,6 +277,10 @@ def mkTxBuilders(
       backendService,
       mbTreasuryScriptRefUtxoId
     )
+    val deinitTxBuilder = BloxBeanDeinitTxBuilder(
+      backendService,
+      mbTreasuryScriptRefUtxoId
+    )
 
     (
       initTxBuilder,
@@ -284,7 +292,8 @@ def mkTxBuilders(
       voteTxBuilder,
       tallyTxBuilder,
       resolutionTxBuilder,
-      withdrawTxBuilder
+      withdrawTxBuilder,
+      deinitTxBuilder
     )
 
 end mkTxBuilders

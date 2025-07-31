@@ -31,14 +31,14 @@ trait HydrozoaFacade:
     /** Ask for a next block in a lockstep manner. Used only for testing.
       * @param nextBlockFinal
       *   request the network to close the head with the next block
-      * @param quitConsensusImmediately
-      *   whether the node should skip sending AckMajor2 so nodes can submit post-dated fallback
-      *   transaction
       * @return
       */
     def produceBlock(
         nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])]
+
+    /** Runs test dispute scenario. Used only for testing.
+      */
+    def runDispute(): Unit
 
     def shutdownSut(): Unit

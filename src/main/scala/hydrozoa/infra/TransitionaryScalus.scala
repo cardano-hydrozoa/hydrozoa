@@ -17,6 +17,7 @@ import hydrozoa.{
     TokenName,
     Tokens,
     Tx,
+    TxAny,
     TxId,
     TxIx,
     TxL1,
@@ -28,7 +29,7 @@ import hydrozoa.{
 }
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
-import scalus.builtin.{ByteString}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.Network.{Mainnet, Testnet}
@@ -186,6 +187,7 @@ extension (addr: v3.Address) {
             delegation = ShelleyDelegationPart.Null
           )
         )
+
 }
 
 /** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
@@ -278,10 +280,12 @@ extension (v: v3.Value) {
 
         // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
         // about ambiguous instances. Doing it in the definition of ma1 helps inference.
-        def listToSeq[A] (l : prelude.List[A]):Seq[A] =
+        def listToSeq[A](l: prelude.List[A]): Seq[A] =
             l.foldLeft(Seq.empty)(_.appended(_))
 
-        val ma1 = MultiAsset(SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2)))))))
+        val ma1 = MultiAsset(
+          SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
+        )
 
         Value(coin = coins, multiAsset = ma1)
     }

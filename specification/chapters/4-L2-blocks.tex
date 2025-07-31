@@ -108,7 +108,7 @@ These fields are interpreted as follows:
         the peers must wait for this non-negative time duration before attempting to absorb it into the head's treasury.
       \item[deposit margin expiry.] If no more than this non-negative time duration is left before an L1 deposit's deadline, the peers must not attempt to absorb it into the head's treasury.
       \item[multisig regime keep-alive.] If this non-negative time duration has passed since the latest confirmed major block's creation, the next block must be major.
-      \item[multisig regime timeout.] If this non-negative time duration has passed since the latest confirmed major block's creation, the head can transition to the rule-based regime with this block's major version.
+      \item[multisig regime timeout.] If this non-negative time duration has passed since the latest confirmed major block's creation, the head can fall back to the rule-based regime with this block's major version.
     \end{description}
   \item[state L1.] The peer's view of the head's L1 utxo state in the multisig regime (\cref{h:l1-multisig-utxo-state}).%
     \footnote{The head's L1 state is only needed to create/validate major and final blocks, which cannot be done when the head is in the L1 rule-based regime.}
@@ -376,20 +376,20 @@ A confirmed major block's L1 effect is a package of L1 transactions, multi-signe
   \begin{array}{lll}
     \T{settlement} &::& \T{Tx^{L1}} \\
     \T{rollouts} &::& [\T{Tx^{L1}}] \\
-    \T{postDatedTransition} &::& \T{Tx^{L1}}
+    \T{postDatedFallback} &::& \T{Tx^{L1}}
   \end{array}\right\}
 \end{equation*}
 These L1 transactions are as follows:
 \begin{description}
   \item[settlement.] The L1 settlement transaction (\cref{h:l1-multisig-settlement}) that absorbs the block's \code{absorbedDeposits} and pays out as many utxos corresponding to the block's \code{utxosWithdrawn} as fit within Cardano's L1 transaction constraints.
   \item[rollouts.] The L1 rollout transactions (\cref{h:l1-multisig-rollout}) that pay out utxos corresponding to the rest of the block's \code{utxosWithdrawn}.
-  \item[post-dated transition.] An L1 transaction that transitions the multisig treasury to the rule-based regime with the block's major version (\cref{h:l1-rule-based-transition}).
+  \item[post-dated fallback.] An L1 transaction that transitions the multisig treasury to the rule-based regime with the block's major version (\cref{h:l1-rule-based-fallback}).
     The transaction's time-validity interval starts at the major block's creation time, shifted forward by the \code{multisigRegimeTimeout} parameter.
 \end{description}
 
 All peers must immediately submit the settlement and rollouts to Cardano L1.
 
-If the post-dated transition becomes valid, all peers must immediately submit it.
+If the post-dated fallback becomes valid, all peers must immediately submit it.
 
 \subsection{Final block -- L1 effect}%
 \label{h:l2-block-effect-final-block}%

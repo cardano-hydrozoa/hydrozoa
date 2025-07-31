@@ -62,8 +62,8 @@ Instead of conjuring a complex workaround to enable staking actions on L2, Hydro
 
 Currently, Hydrozoa relies on multi-signed post-dated transactions for two features:
 \begin{itemize}
-  \item Refunding a deposit after its deadline (\cref{h:l1-rule-based-transition}).
-  \item Transitioning the head from the multisig regime to the rule-based regime after the multisig regime timeout (\cref{h:l1-rule-based-transition}).
+  \item Refunding a deposit after its deadline (\cref{h:l1-rule-based-fallback}).
+  \item Fallback to the rule-based regime after the multisig regime timeout (\cref{h:l1-rule-based-fallback}).
 \end{itemize}
 These transactions must be multi-signed because they spend utxos from the head's multisig native address.
 However, they are only intended as a fallback when the peers fail to reach a timely consensus on the preferred alternatives. For this reason, the L2 consensus protocol requires them to be post-dated; in this way, they can be multi-signed ahead of time while the peers can still reach a timely consensus.
@@ -87,7 +87,7 @@ With observer scripts, we can redefine the head's native script as follows:
 \end{split}
 \end{equation*}
 
-This new observer script can classify its spent input as the treasury utxo or a deposit utxo. Then, it can decide whether to allow the rule-based transition or refund by comparing the transaction's time validity lower bound to the datum.
+This new observer script can classify its spent input as the treasury utxo or a deposit utxo. Then, it can decide whether to allow the rule-based fallback or refund by comparing the transaction's time validity lower bound to the datum.
 In other words, it allows a rule-based exit from a state managed by a native script.
 
 \subsection{Fragmented treasury}%
@@ -98,7 +98,7 @@ In other words, a Hydrozoa head that stores its entire treasury in a single utxo
 
 Given the somewhat transient nature of state channels and the small numbers, we do not expect this constraint to affect most typical Hydrozoa use cases.
 However, if this becomes a problem, we could explore how to fragment a Hydrozoa head's treasury across multiple utxos.
-Observer scripts are helpful for fragmented treasuries because they facilitate an orderly transition of treasury fragments to the rule-based regime.
+Observer scripts are helpful for fragmented treasuries because they facilitate an orderly fallback of treasury fragments to the rule-based regime.
 
 \section{Hydrozoa network and L2 interoperability}%
 \label{h:hydrozoa-network-l2-interoperability}%

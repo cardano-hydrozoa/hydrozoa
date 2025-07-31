@@ -193,22 +193,21 @@ class Node:
       */
     def produceNextBlockLockstep(
         nextBlockFinal: Boolean,
-        quitConsensusImmediately: Boolean = false
     ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
-
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
           "Autonomous block production should be turned off to use this function"
         )
 
         log.info(
-          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal, quitConsensusImmediately=$quitConsensusImmediately..."
+          s"Calling tryProduceBlock in lockstep, nextBlockFinal=$nextBlockFinal..."
         )
+
         val errorOrBlock = nodeState.ask(_.head.currentPhase) match
             case Open =>
                 nodeState.ask(
                   _.head.openPhase(
-                    _.tryProduceBlock(nextBlockFinal, true, quitConsensusImmediately)
+                    _.tryProduceBlock(nextBlockFinal, true)
                   )
                 ) match
                     case Left(err)    => Left(err)
@@ -222,17 +221,22 @@ class Node:
         errorOrBlock match
             case Left(err) => Left(err)
             case Right(block) =>
-                val effects = retryEither(RetryConfig.delay(100, 100.millis)) {
+                val effects = retryEither(RetryConfig.delay(20, 100.millis)) {
+                    log.info("Trying to obtain block results...")
                     nodeState
                         .ask(_.head.getBlockRecord(block))
                         .toRight(
-                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 10 secs of waiting"
+                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 20 secs of waiting"
                         )
                 }
 
                 effects match
                     case Left(err)                     => Left(err)
                     case Right(blockRecord, mbGenesis) => Right(blockRecord, mbGenesis)
+
+    def runDispute() =
+        log.warn("Running test dispute routine...")
+        nodeState.ask(_.head.openPhase(_.runTestDispute()))
 
     def stateL2(): StateL2Response =
         nodeState.ask(_.mbInitializedOn) match // FIXME: slight abuse
