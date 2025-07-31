@@ -31,6 +31,7 @@ final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
   */
 final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutput)])
     extends L2Event {
+    require(utxosL1.nonEmpty, "L2EventGenesis must consume at least one L1 deposit")
 
     /** The list of UTxOs that should appear on L2 corresponding to this genesis event. Malformed
       * deposit UTxOs (non-Babbage outputs or with invalid datums) are skipped.

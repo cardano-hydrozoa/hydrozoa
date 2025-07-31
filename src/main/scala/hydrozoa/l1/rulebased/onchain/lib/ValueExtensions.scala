@@ -12,7 +12,7 @@ object ValueExtensions:
 
         def containsCurrencySymbol(cs: CurrencySymbol): Boolean =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
+            val List.Cons(_, tokens) = self.toSortedMap.toList: @unchecked
             tokens.map(_._1).contains(cs)
 
         // Is it useful? get(cs).getOrElse(AssocMap.empty) does the same job
@@ -33,7 +33,7 @@ object ValueExtensions:
             amount: BigInt
         ): Boolean =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
+            val List.Cons(_, tokens) = self.toSortedMap.toList: @unchecked
             tokens match
                 case List.Cons((cs_, names), otherSymbols) =>
                     if otherSymbols.isEmpty then
@@ -51,7 +51,7 @@ object ValueExtensions:
           */
         def onlyNonAdaAsset: (CurrencySymbol, TokenName, BigInt) =
             // Split away ada which always comes first
-            val List.Cons(_, tokens) = self.toList: @unchecked
+            val List.Cons(_, tokens) = self.toSortedMap.toList: @unchecked
 
             tokens match
                 case List.Cons((cs, names), otherSymbols) =>

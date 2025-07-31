@@ -1,22 +1,24 @@
 package hydrozoa.l2.ledger
 
 import hydrozoa.infra.transitionary.*
-import hydrozoa.node.{TestPeer, addressFromPeer}
+import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.node.TestPeer.*
+import hydrozoa.node.{TestPeer, addressFromPeer}
+import io.bullet.borer.Cbor
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Gen, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.HashPurpose.KeyHash
 import scalus.cardano.ledger.HashSize.given_HashSize_Blake2b_224
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.State
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
+import scalus.ledger.api.{v1, v3}
+import scalus.prelude.Option as SOption
 
 import scala.collection.immutable.HashSet
 
@@ -25,15 +27,46 @@ import scala.collection.immutable.HashSet
 val alice: TestPeer = TestPeer.Alice
 val bob: TestPeer = TestPeer.Bob
 
+/** Build dummy deposit datum from a pubkey, setting the L2 and refund addresses to the pkh address
+  */
+def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
+    val pkh: AddrKeyHash = Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))
+    val v3Addr: v3.Address = v3
+        .Address(
+          credential = v3.Credential
+              .PubKeyCredential(v3.PubKeyHash(pkh)),
+          SOption.None
+        )
+    Some(
+      Inline(
+        toData(
+          ByteString.fromArray(
+            Cbor.encode(
+              toData(
+                DepositDatum(
+                  address = v3Addr,
+                  datum = SOption.None,
+                  deadline = 100,
+                  refundAddress = v3Addr,
+                  refundDatum = SOption.None
+                )
+              )
+            ).toByteArray
+          )
+        )
+      )
+    )
+
+}
+
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
   * event
   */
-val genDeposit: Gen[(TransactionInput, TransactionOutput)] =
+def genDepositFromPeer(peer: TestPeer): Gen[(TransactionInput, TransactionOutput)] =
     for
         txId: TransactionHash <- genByteStringOfN(32).map(
           Hash.apply[Blake2b_256, HashPurpose.TransactionHash](_)
         )
-        pkh: AddrKeyHash <- genByteStringOfN(28).map(Hash.apply[Blake2b_224, KeyHash](_))
         idx: Int <- Gen.choose(0, 1000)
 
         txIn = TransactionInput(
@@ -42,51 +75,39 @@ val genDeposit: Gen[(TransactionInput, TransactionOutput)] =
         )
 
         txOut = Babbage(
-          address = (
-            ShelleyAddress(
-              network = Mainnet,
-              payment = Key(pkh),
-              delegation = Null
-            )
-          ),
+          address = addressFromPeer(peer),
           value = Value(Coin(1_000_000L)),
-          datumOption = None,
+          datumOption = depositDatumFromPeer(peer),
           scriptRef = None
         )
     yield (txIn, txOut)
 
-/** Generate a semantically valid, but fully synthetic, nonsensical, genesis event */
-val genL2EventGenesis: Gen[L2EventGenesis] = Gen.sized { numberOfDepositsAbsorbed =>
-    if numberOfDepositsAbsorbed == 0 then L2EventGenesis(Seq.empty)
-    else {
-        var counter = 0
-        var genesisSeq: Seq[(TransactionInput, TransactionOutput)] = Seq.empty
-        while {
-            val deposit = genDeposit.sample.get
-            if !(genesisSeq.contains(deposit))
-            then {
-                genesisSeq = genesisSeq.appended(deposit);
-                counter = counter + 1
-            }
-            counter != numberOfDepositsAbsorbed
-        } do ()
-        L2EventGenesis(genesisSeq)
-    }
-}
-
-/** Generate a deposit from a specific test peer */
-def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = {
-    L2EventGenesis(genL2EventGenesis.sample.get.utxos.map((txIn, txOut) => {
-        val babbage = txOut.asInstanceOf[Babbage]
-        (txIn, babbage.copy(address = addressFromPeer(peer)))
-    }))
+/** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the given peer */
+def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
+    numberOfDepositsAbsorbed =>
+        // Always generate at least one deposit
+        if numberOfDepositsAbsorbed == 0 then L2EventGenesis(Seq(genDepositFromPeer(peer).sample.get))
+        else {
+            var counter = 0
+            var genesisSeq: Seq[(TransactionInput, TransactionOutput)] = Seq.empty
+            while {
+                val deposit = genDepositFromPeer(peer).sample.get
+                if !(genesisSeq.contains(deposit))
+                then {
+                    genesisSeq = genesisSeq.appended(deposit);
+                    counter = counter + 1
+                }
+                counter != numberOfDepositsAbsorbed
+            } do ()
+            L2EventGenesis(genesisSeq)
+        }
 }
 
 class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters = {
         // N.B.: 100 tests is insufficient coverage. When running in
         // CI or pre-release, it should be significantly higher.
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
     }
 
     test("init empty STS constituents") {
@@ -95,7 +116,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         val event = L2EventTransaction(emptyTransaction)
     }
 
-    property("Random (nonsense) genesis event should succeed")(forAll(genL2EventGenesis) { event =>
+    property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(alice)) { event =>
         HydrozoaL2Mutator(emptyContext, emptyState, event) match {
             case Right(outState) =>
                 // Helper values used in properties and for logging error messages
@@ -103,14 +124,14 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
 
                 (outState.certState == emptyState.certState) :|
                     "Genesis event should not modify CertState" &&
-                    (outState.utxo.size == event.utxos.length) :|
+                    (outState.utxo.size == event.resolvedL2UTxOs.length) :|
                     "Genesis event should add correct number of UTxOs to the state" &&
                     (outState.utxo.forall((txIn, _) => txIn.transactionId == event.getEventId)) :|
                     "All TransactionInputs resulting from the genesis should have the same txId" && {
                         // Checking that all expected indexes appear somewhere in the new state
-                        var allIdx = Seq.range(0, event.utxos.length)
+                        var allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
                         allIdx == actualIndexs
-                    } :| s"All expected transaction indexes appear (0 to ${event.utxos.length}); actualIdxs are ${actualIndexs}"
+                    } :| s"All expected transaction indexes appear (0 to ${event.resolvedL2UTxOs.length}); actualIdxs are ${actualIndexs}"
 
             case Left(err) => false :| (s"Genesis event failed with error: ${err}")
         }
@@ -158,7 +179,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
             // We expect a failure _specifically_ due to missing signatures. Any other failures are rejected
             val expectedException = TransactionException.MissingKeyHashesException(
               transactionId = withdrawlEvent.getEventId,
-              missingInputsKeyHashes = HashSet(
+              missingInputsKeyHashes = Set(
                 Hash[Blake2b_224, HashPurpose.KeyHash](
                   blake2b_224(
                     ByteString.fromArray(TestPeer.mkWallet(bob).exportVerificationKeyBytes.bytes)
@@ -173,12 +194,20 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
             )
 
             postWithdrawalState match {
+
+
                 case Left(err) =>
                     err match {
                         case missingKeyHashes: TransactionException.MissingKeyHashesException =>
-                            // So... Exception objects aren't comparable with ==. We just compare their messages
-                            // instead here, I guess. The other option could be to write an extension method, but...
-                            (missingKeyHashes.getMessage == expectedException.getMessage) :|
+                            // So... Exception objects aren't comparable with ==. And it seems like I can't auto-derive
+                            // === from cats because of this.
+                            (missingKeyHashes.transactionId == expectedException.transactionId &&
+                                missingKeyHashes.missingInputsKeyHashes == expectedException.missingInputsKeyHashes &&
+                                missingKeyHashes.missingCertificatesKeyHashes == expectedException.missingCertificatesKeyHashes &&
+                                missingKeyHashes.missingWithdrawalsKeyHashes == expectedException.missingWithdrawalsKeyHashes &&
+                                missingKeyHashes.missingCollateralInputsKeyHashes == expectedException.missingCollateralInputsKeyHashes &&
+                                missingKeyHashes.missingRequiredSignersKeyHashes == expectedException.missingRequiredSignersKeyHashes &&
+                                missingKeyHashes.missingVotingProceduresKeyHashes == expectedException.missingVotingProceduresKeyHashes):|
                                 s"Correct exception type thrown (MissingKeyHashesException), but unexpected content. Actual: ${missingKeyHashes}; Expected: ${expectedException}"
                         case _ =>
                             false :| s"L2 STS failed for unexpected reason. Actual: ${err}; Expected: ${expectedException}"

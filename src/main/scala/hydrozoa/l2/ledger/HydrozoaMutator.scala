@@ -45,9 +45,7 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
                 _ <- helper(OutputsHaveNotEnoughCoinsValidator)
                 _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
                 _ <- helper(OutsideValidityIntervalValidator)
-                // FIXME: This one is currently broken. The `map` over the `Set` isn't functorial, so outputs with
-                // the duplicate values get discarded
-                //  _ <- helper(ValueNotConservedUTxOValidator)
+                _ <- helper(ValueNotConservedUTxOValidator)
                 _ <- helper(VerifiedSignaturesInWitnessesValidator)
                 /* Not yet implemented validators (2025-07-22)
                 _ <- helper(ExactSetOfRedeemersValidator)

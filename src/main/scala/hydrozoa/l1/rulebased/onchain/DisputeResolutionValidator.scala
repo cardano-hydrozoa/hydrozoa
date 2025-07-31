@@ -245,7 +245,7 @@ object DisputeResolutionValidator extends Validator:
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
-                treasuryReference.resolved.value.get(headMp).getOrElse(SortedMap.empty).toList match
+                treasuryReference.resolved.value.toSortedMap.get(headMp).getOrElse(SortedMap.empty).toList match
                     case List.Cons((tokenName, amount), none) =>
                         require(
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
@@ -413,7 +413,7 @@ object DisputeResolutionValidator extends Validator:
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
                         .find { i =>
-                            i.resolved.value.get(contCs).getOrElse(SortedMap.empty).toList match
+                            i.resolved.value.toSortedMap.get(contCs).getOrElse(SortedMap.empty).toList match
                                 case List.Cons((tokenName, amount), none) =>
                                     tokenName.take(4) == cip67BeaconTokenPrefix
                                     && amount == BigInt(1)
@@ -481,7 +481,7 @@ object DisputeResolutionValidator extends Validator:
                 // prefix 4937.
                 val treasuryInput = tx.inputs
                     .find { i =>
-                        i.resolved.value.get(headMp).getOrElse(SortedMap.empty).toList match
+                        i.resolved.value.toSortedMap.get(headMp).getOrElse(SortedMap.empty).toList match
                             case List.Cons((tokenName, amount), none) =>
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)

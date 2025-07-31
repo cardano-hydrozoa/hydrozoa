@@ -79,12 +79,12 @@ val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
 ///////////////////////////////////////////////////////
 // TxId
 
-extension (txId : TxId) {
-    def toScalus : TransactionHash = Hash(ByteString.fromHex(txId.hash))
+extension (txId: TxId) {
+    def toScalus: TransactionHash = Hash(ByteString.fromHex(txId.hash))
 }
 
-extension (th : TransactionHash){
-    def toHydrozoa : TxId = TxId(th.toHex)
+extension (th: TransactionHash) {
+    def toHydrozoa: TxId = TxId(th.toHex)
 }
 
 ////////////////////////////////////////////////////////
@@ -270,9 +270,9 @@ def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
 
 extension (v: v3.Value) {
     def toScalusLedger: Value = {
-        val coins: Coin = Coin(v.toList.head._2.toList.head._2.toLong)
+        val coins: Coin = Coin(v.flatten.head._3.toLong)
         val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
-            v.toList.tail.map((cs, assocMap) =>
+            v.toSortedMap.toList.tail.map((cs, assocMap) =>
                 (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
             )
 
@@ -296,12 +296,12 @@ extension (ma: MultiAsset) {
 
 def htokensToMultiAsset(tokens: Tokens): MultiAsset = {
     MultiAsset(
-        (SortedMap.from(
+      (SortedMap.from(
         tokens.map((cs, tnAndQ) =>
             (cs.toScalus, SortedMap.from(tnAndQ.map((tn, q) => (tn.toScalus, q.toLong))))
         )
-      )
-    ))
+      ))
+    )
 }
 
 /////////////////////////////////////////////
