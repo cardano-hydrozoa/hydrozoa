@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.contextAndStateFromV3UTxO
+import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toV3UTxO}
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
@@ -61,10 +61,10 @@ private class MinorBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         // Block validation (the leader can skip validation since its own block).
-        val (utxosActive : Map[v3.TxOutRef, v3.TxOut], _, _, isNextBlockFinal) =
+        val (utxosActive: Map[v3.TxOutRef, v3.TxOut], _, _, isNextBlockFinal) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
-                val (ownBlock, isFinalizationRequested) = stateActor.ask(
+                val (ownBlock: OwnBlock, isFinalizationRequested) = stateActor.ask(
                   _.head.openPhase(open => (open.pendingOwnBlock, open.isNextBlockFinal))
                 )
                 (
@@ -92,18 +92,18 @@ private class MinorBlockConfirmationActor(
                           )
                       )
                     )
-                
+
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                    contextAndStateFromV3UTxO(stateL2),
+                  contextAndStateFromV3UTxO(stateL2),
                   poolEventsL2,
                   depositUtxos, // FIXME: do we need it for a minor block?
                   false // minor is not a final
                 )
                 resolution match
                     case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
-                        (utxosActive, mbGenesis, utxosWithdrawn, isFinalizationRequested)
+                        (toV3UTxO(utxosActive), mbGenesis, utxosWithdrawn, isFinalizationRequested)
                     case resolution =>
                         throw RuntimeException(s"Minor block validation failed: $resolution")
 

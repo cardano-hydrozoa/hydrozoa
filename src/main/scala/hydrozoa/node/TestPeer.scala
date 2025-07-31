@@ -75,7 +75,7 @@ extension [K, V](map: mutable.Map[K, V])
     }
 
 
-def addressFromPeer(peer: TestPeer): Address = (
+def addressFromPeer(peer: TestPeer): ShelleyAddress = (
     ShelleyAddress(
         network = Testnet,
         payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),

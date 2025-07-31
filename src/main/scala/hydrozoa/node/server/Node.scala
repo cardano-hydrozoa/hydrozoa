@@ -19,6 +19,7 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.builtin.Data
+import scalus.ledger.api.v3.{TxOut, TxOutRef}
 import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt
@@ -239,15 +240,20 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open =>
-                        nodeState
+                    case Open => {
+                        val stateL2 = nodeState
                             .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
+                        stateL2
                             .map((utxoId, output) =>
-                                utxoId.toHydrozoa -> OutputNoTokens.apply(
-                                  output.toScalusLedger.toHydrozoa
-                                )
+                                val convertedUtxoId = utxoId.toHydrozoa[L2]
+                                val scalusOutput = output.toScalusLedger
+                                val hydrozoaOutput = scalusOutput.toHydrozoa[L2]
+                                val outputNoTokens = OutputNoTokens.apply(hydrozoaOutput)
+                                convertedUtxoId -> outputNoTokens
                             )
+
+                    }
                     case _ => List.empty
     end stateL2
 
