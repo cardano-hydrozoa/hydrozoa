@@ -20,8 +20,6 @@ import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as SOption
 
-import scala.collection.immutable.HashSet
-
 // For these tests, we assume a 1:1:1 relationship between Peer:Wallet:Address.
 // Note that this is NOT true in production.
 val alice: TestPeer = TestPeer.Alice
@@ -82,11 +80,14 @@ def genDepositFromPeer(peer: TestPeer): Gen[(TransactionInput, TransactionOutput
         )
     yield (txIn, txOut)
 
-/** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the given peer */
+/** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the
+  * given peer
+  */
 def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
     numberOfDepositsAbsorbed =>
         // Always generate at least one deposit
-        if numberOfDepositsAbsorbed == 0 then L2EventGenesis(Seq(genDepositFromPeer(peer).sample.get))
+        if numberOfDepositsAbsorbed == 0 then
+            L2EventGenesis(Seq(genDepositFromPeer(peer).sample.get))
         else {
             var counter = 0
             var genesisSeq: Seq[(TransactionInput, TransactionOutput)] = Seq.empty
@@ -195,7 +196,6 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
 
             postWithdrawalState match {
 
-
                 case Left(err) =>
                     err match {
                         case missingKeyHashes: TransactionException.MissingKeyHashesException =>
@@ -207,7 +207,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                                 missingKeyHashes.missingWithdrawalsKeyHashes == expectedException.missingWithdrawalsKeyHashes &&
                                 missingKeyHashes.missingCollateralInputsKeyHashes == expectedException.missingCollateralInputsKeyHashes &&
                                 missingKeyHashes.missingRequiredSignersKeyHashes == expectedException.missingRequiredSignersKeyHashes &&
-                                missingKeyHashes.missingVotingProceduresKeyHashes == expectedException.missingVotingProceduresKeyHashes):|
+                                missingKeyHashes.missingVotingProceduresKeyHashes == expectedException.missingVotingProceduresKeyHashes) :|
                                 s"Correct exception type thrown (MissingKeyHashesException), but unexpected content. Actual: ${missingKeyHashes}; Expected: ${expectedException}"
                         case _ =>
                             false :| s"L2 STS failed for unexpected reason. Actual: ${err}; Expected: ${expectedException}"
@@ -266,7 +266,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 postGenesisState <- HydrozoaL2Mutator(emptyContext, emptyState, event)
 
                 // Then generate the transaction event, where Alice tries to send all UTxOs to bob
-                allTxInputs = postGenesisState.utxo.map(_._1).toSet
+                allTxInputs = postGenesisState.utxo.keySet
 
                 transactionEvent = l2EventTransactionFromInputsAndPeer(
                   inputs = allTxInputs,

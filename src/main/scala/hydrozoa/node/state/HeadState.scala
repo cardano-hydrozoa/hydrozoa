@@ -785,7 +785,7 @@ class HeadStateGlobal(
                             .find(u =>
                                 val datum = getVoteDatum(u)
                                 // TODO better way to get own key, which should be always defined
-                                val value = headPeerVKs.get(ownPeer).get
+                                val value = headPeerVKs(ownPeer)
                                 val ownVk = hashVerificationKey(value)
                                 datum.peer.isDefined &&
                                 datum.peer.get == ownVk
@@ -1017,12 +1017,12 @@ class HeadStateGlobal(
                 // TODO: at this point a specific set of utxos should be restored
                 // Now, for testing we are assuming we can just use L2 ledger directly.
                 // Also, we now try to withdraw all utxos from the ledger in one go.
-                val utxos = stateL2.flushAndGetState
+                val utxos = stateL2
                 // Since we are removing all utxos, proof := g2
                 val proof = G2.generator.toCompressedByteString.toHex
 
                 val recipe = WithdrawTxRecipe(
-                  utxos,
+                  toHUTxO(contextAndStateFromV3UTxO(utxos)._2.utxo),
                   resolvedTreasury,
                   proof,
                   ownAccount

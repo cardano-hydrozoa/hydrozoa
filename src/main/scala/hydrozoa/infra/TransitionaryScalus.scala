@@ -105,9 +105,6 @@ extension (ti: TransactionInput) {
     )
 }
 
-
-
-
 //////////////////////////////////////////////////////
 // Transaction Output
 
@@ -132,9 +129,6 @@ extension (to: v3.TxOut) {
         )
     }
 }
-
-
-
 
 extension [L <: hydrozoa.AnyLayer](output: Output[L]) {
     def toScalus: TransactionOutput = {
@@ -177,7 +171,6 @@ extension (to: TransactionOutput) {
 extension [L <: hydrozoa.AnyLayer](address: AddressBech[L]) {
     def toScalus: Address = Address.fromBech32(address.bech32)
 }
-
 
 // FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
 extension (addr: v3.Address) {
@@ -268,7 +261,6 @@ extension (tn: TokenName) {
     }
 }
 
-
 extension (an: AssetName) {
     def toHydrozoa: TokenName = TokenName(s"0x${an.bytes.toHex}")
 }
@@ -288,10 +280,12 @@ extension (v: v3.Value) {
 
         // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
         // about ambiguous instances. Doing it in the definition of ma1 helps inference.
-        def listToSeq[A] (l : prelude.List[A]):Seq[A] =
+        def listToSeq[A](l: prelude.List[A]): Seq[A] =
             l.foldLeft(Seq.empty)(_.appended(_))
 
-        val ma1 = MultiAsset(SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2)))))))
+        val ma1 = MultiAsset(
+          SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
+        )
 
         Value(coin = coins, multiAsset = ma1)
     }

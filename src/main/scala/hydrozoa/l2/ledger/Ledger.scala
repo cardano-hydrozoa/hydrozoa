@@ -1,47 +1,19 @@
 package hydrozoa.l2.ledger
 
-import cats.Traverse
-import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{
-    Piper,
-    decodeBech32AddressL2,
-    decodeHex,
-    encodeHex,
-    plutusAddressAsL2,
-    txHash
-}
-import hydrozoa.l1.multisig.state.depositDatum
-import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
+import hydrozoa.infra.encodeHex
 import hydrozoa.l2.commitment.infG2Point
 import hydrozoa.l2.ledger
-import hydrozoa.l2.ledger.*
+import scalus.builtin.BLS12_381_G2_Element
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.Data.toData
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Address, Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.RedeemerTag.Spend
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.*
-import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum}
-import scalus.ledger.api.v2.TxOut
 import scalus.ledger.api.v3
-import scalus.ledger.api.v3.{TxInInfo, TxOutRef, Address as APIAddress}
-import scalus.ledger.babbage.ProtocolParams
-import scalus.prelude.List.{Cons, asScala}
-import scalus.prelude.Option.{None as SNone, Some as SSome}
-import scalus.prelude.crypto.bls12_381.G1
-import scalus.prelude.{AssocMap, asScalus, List as SList, Option as SOption, given}
+import scalus.ledger.api.v3.TxInInfo
+import scalus.prelude.{asScalus, List as SList}
 import supranational.blst.{P1, P2, Scalar}
 
 import java.math.BigInteger
-import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
-
-
 
 ////////////////////////////////////////
 // Layer 2 state transition system
@@ -114,12 +86,14 @@ def getUtxosActiveCommitment(utxo: UTxO): IArray[Byte] = {
     val elemsRaw = utxo.toList
         .map(e => blake2b_224(serialiseData(toPlutus(e._1, e._2).toData)).toHex)
         .asScalus
+    println(s"utxos active hashes raw: $elemsRaw")
 
     val elems = utxo.toList
         .map(e =>
             Scalar().from_bendian(blake2b_224(serialiseData(toPlutus(e._1, e._2).toData)).bytes)
         )
         .asScalus
+    println(s"utxos active hashes: ${elems.map(e => BigInt.apply(e.to_bendian()))}")
 
     val setup = mkDummySetupG2(elems.length.toInt)
 
@@ -128,6 +102,7 @@ def getUtxosActiveCommitment(utxo: UTxO): IArray[Byte] = {
 
     val commitmentPoint = getG2Commitment(setup, elems)
     val commitment = IArray.unsafeFromArray(commitmentPoint.compress())
+    println(s"Commitment: ${(encodeHex(commitment))}")
     commitment
 }
 
