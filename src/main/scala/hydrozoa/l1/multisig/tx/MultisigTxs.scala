@@ -8,6 +8,7 @@ sealed trait InitializationTxTag extends MultisigTxTag
 sealed trait PostDatedRefundTxTag extends MultisigTxTag
 sealed trait SettlementTxTag extends MultisigTxTag
 sealed trait FinalizationTxTag extends MultisigTxTag
+sealed trait DeinitTxTag extends MultisigTxTag
 
 type MultisigTx[+T <: MultisigTxTag] = TxL1
 
@@ -15,6 +16,7 @@ type InitTx = MultisigTx[InitializationTxTag]
 type PostDatedRefundTx = MultisigTx[PostDatedRefundTxTag]
 type SettlementTx = MultisigTx[SettlementTxTag]
 type FinalizationTx = MultisigTx[FinalizationTxTag]
+type DeinitTx = MultisigTx[DeinitTxTag]
 
 object MultisigTx:
     inline def apply[T <: MultisigTxTag](tx: TxL1): MultisigTx[T] = tx

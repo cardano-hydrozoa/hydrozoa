@@ -17,6 +17,7 @@ import hydrozoa.{
     TokenName,
     Tokens,
     Tx,
+    TxAny,
     TxId,
     TxIx,
     TxL1,
@@ -28,7 +29,7 @@ import hydrozoa.{
 }
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
-import scalus.builtin.{ByteString}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.Network.{Mainnet, Testnet}
@@ -104,6 +105,9 @@ extension (ti: TransactionInput) {
     )
 }
 
+
+
+
 //////////////////////////////////////////////////////
 // Transaction Output
 
@@ -128,6 +132,9 @@ extension (to: v3.TxOut) {
         )
     }
 }
+
+
+
 
 extension [L <: hydrozoa.AnyLayer](output: Output[L]) {
     def toScalus: TransactionOutput = {
@@ -171,6 +178,7 @@ extension [L <: hydrozoa.AnyLayer](address: AddressBech[L]) {
     def toScalus: Address = Address.fromBech32(address.bech32)
 }
 
+
 // FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
 extension (addr: v3.Address) {
     def toScalusLedger: Address =
@@ -186,6 +194,7 @@ extension (addr: v3.Address) {
             delegation = ShelleyDelegationPart.Null
           )
         )
+
 }
 
 /** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
@@ -258,6 +267,7 @@ extension (tn: TokenName) {
         AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2)))
     }
 }
+
 
 extension (an: AssetName) {
     def toHydrozoa: TokenName = TokenName(s"0x${an.bytes.toHex}")

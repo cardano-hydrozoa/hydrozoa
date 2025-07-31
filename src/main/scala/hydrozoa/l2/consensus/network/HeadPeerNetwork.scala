@@ -56,6 +56,8 @@ trait HeadPeerNetwork {
     def reqMajor(req: ReqMajor): Unit
 
     def reqFinal(req: ReqFinal): Unit
+
+    def reqDeinit(req: ReqDeinit): Unit
 }
 
 /** ------------------------------------------------------------------------------------------
@@ -371,6 +373,41 @@ given ackFinal2Schema: Schema[AckFinal2] =
 // FIXME: remove, currently used in ReqAux
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
+
+
+/** ------------------------------------------------------------------------------------------
+  * ReqDeinit
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class ReqDeinit(
+    deinitTx: TxL1,
+    // TODO: this should not be here. I added it to avoid calling HeadState from the actor
+    //   since I saw a deadlock once I tried. We have to figure it out, since the actor
+    //   needs the state to effectively deinit the head.
+    headPeers: Set[WalletId]
+) extends Req:
+    type ackType = AckDeinit
+    type resultType = Unit
+
+given reqDeinitCodec: JsonValueCodec[ReqDeinit] =
+    JsonCodecMaker.make
+
+given reqDeinitSchema: Schema[ReqDeinit] =
+    Schema.derived[ReqDeinit]
+
+/** ------------------------------------------------------------------------------------------
+  * AckDeinit
+  * ------------------------------------------------------------------------------------------
+  */
+
+case class AckDeinit(peer: WalletId, signature: TxKeyWitness) extends Ack
+
+given ackDeinitCodec: JsonValueCodec[AckDeinit] =
+    JsonCodecMaker.make
+
+given ackDeinitSchema: Schema[AckDeinit] =
+    Schema.derived[AckDeinit]
 
 /////////////////////////////////////////
 // Scala schemas/json codecs; should be superseded by CIP-0116 compliant instances

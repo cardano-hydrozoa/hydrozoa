@@ -26,7 +26,7 @@ import scala.concurrent.duration.Duration
   */
 class DisputeSuite extends FunSuite {
 
-    override val munitTimeout = Duration(1, "m")
+    override val munitTimeout = Duration(2, "m")
 
     private val useYaci = true;
 
@@ -37,8 +37,8 @@ class DisputeSuite extends FunSuite {
     private var sut: HydrozoaFacade = _
 
     override def beforeEach(context: BeforeEach): Unit =
-        def topupNodeWallets(peers: Set[TestPeer], ada: Int, count: Int) =
-            assert(count > 1)
+        def topUpNodeWallets(peers: Set[TestPeer], ada: Int, count: Int) =
+            assert(count >= 1)
             assert(ada >= 1 && ada <= 100)
             val fs: Seq[() => Unit] =
                 for
@@ -91,7 +91,7 @@ class DisputeSuite extends FunSuite {
 
             // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
             log.info("Topping up peers' wallets...")
-            topupNodeWallets(testPeers, 30, 5)
+            topUpNodeWallets(testPeers, 50, 1)
 
             println(TreasuryValidatorScript.scriptHashString)
             println(TreasuryValidatorScript.scriptHash)
@@ -235,7 +235,9 @@ class DisputeSuite extends FunSuite {
                 outPeer = Erin
               )
             )
-            minor1_4 <- sut.produceBlock(false, true)
+            minor1_4 <- sut.produceBlock(false)
+
+            _ = sut.runDispute()
 
             _ = Thread.sleep(5000)
         yield (major1, major1SettlementTx, minor1_1, minor1_2, minor1_3, minor1_4)

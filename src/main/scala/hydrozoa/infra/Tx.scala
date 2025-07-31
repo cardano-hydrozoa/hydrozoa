@@ -7,7 +7,10 @@ import com.bloxbean.cardano.client.spec.Era
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
-import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScript as BBNativeScript}
+import com.bloxbean.cardano.client.transaction.spec.script.{
+    ScriptAll,
+    NativeScript as BBNativeScript
+}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.*
@@ -153,12 +156,10 @@ def numberOfSignatories(nativeScript: BBNativeScript): Int =
         case scriptAll: ScriptAll => scriptAll.getScripts.size()
         case _                    => 0
 
-
 def numberOfSignatories(nativeScript: Native): Int =
     nativeScript.script match
         case scriptAll: AllOf => scriptAll.scripts.size
-        case _ => 0
-
+        case _                => 0
 
 def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): TokenName =
     val mint = Transaction.deserialize(fallbackTx.bytes).getBody.getMint.asScala.toList

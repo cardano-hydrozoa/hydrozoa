@@ -8,9 +8,21 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{HydrozoaBuilderBackendService, Piper, decodeHex, encodeHex, mkBuilder, numberOfSignatories}
+import hydrozoa.infra.{
+    HydrozoaBuilderBackendService,
+    Piper,
+    decodeHex,
+    encodeHex,
+    mkBuilder,
+    numberOfSignatories
+}
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
-import hydrozoa.l1.rulebased.onchain.{mkDefVoteDatum, mkTreasuryDatumUnresolved, mkVoteDatum, mkVoteTokenName}
+import hydrozoa.l1.rulebased.onchain.{
+    mkDefVoteDatum,
+    mkTreasuryDatumUnresolved,
+    mkVoteDatum,
+    mkVoteTokenName
+}
 import hydrozoa.{TxId, TxIx, TxL1, UtxoIdL1}
 import scalus.prelude.asScalus
 import scalus.bloxbean.*
@@ -46,13 +58,14 @@ class BloxBeanFallbackTxBuilder(
           )
         )
 
-        // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from 
-        // scalus's `Native` to BB's `NativeScript`. 
+        // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from
+        // scalus's `Native` to BB's `NativeScript`.
         val hnsCborAsByteArray: Array[Byte] = r.headNativeScript.bytes
-        val hnsCborArray = CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
+        val hnsCborArray =
+            CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
         val headNativeScript =
             NativeScript.deserialize(hnsCborArray)
-            
+
         // Calculate dispute id
         val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(multisigTreasuryUtxo.getTxHash), TxIx(0)))
 

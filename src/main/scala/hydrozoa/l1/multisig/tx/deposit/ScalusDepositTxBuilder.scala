@@ -23,8 +23,6 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
                         Value(coin = Coin(recipe.depositAmount.toLong))
-                        
-                    // TODO: factor this out or change types. It is shared with the settlement Tx builder    
                     val headAddress: Address =
                         Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
 
@@ -49,7 +47,6 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                                     case _ => return Left("deposit not at a pubkey address")
                             case _ => return Left("Could not get key hash for required signer")
                     }
-
 
                     val txBody = emptyTxBody.copy(
                       inputs = Set(recipe.deposit.toScalus),
