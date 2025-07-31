@@ -4,11 +4,11 @@
 
 package hydrozoa.infra.transitionary
 
-import hydrozoa.infra.toBloxbean
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.transaction.spec.Transaction as BBTransaction
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{Piper, addressToBloxbean, plutusAddressAsL2, toEither}
+import hydrozoa.infra.{Piper, toEither}
 import hydrozoa.{
     AddressBech,
     AnyLayer,
@@ -16,25 +16,23 @@ import hydrozoa.{
     Output,
     TokenName,
     Tokens,
-    TxAny,
+    Tx,
     TxId,
     TxIx,
     TxL1,
     UtxoId,
     UtxoSet,
-    hydrozoaL2Network,
     networkL1static,
     Network as HNetwork,
     PolicyId as HPolicyId
 }
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
-import scalus.builtin.ByteString
+import scalus.builtin.{ByteString}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
-import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.{Mainnet, Testnet}
-import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.DatumOption.Inline
@@ -52,76 +50,83 @@ import scalus.{ledger, prelude}
 
 import scala.collection.immutable.SortedMap
 
+//////////////////////////////////
+// "Empty" values used for building up real values and for testing
+
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = Set.empty,
   outputs = IndexedSeq.empty,
-  fee = Coin(0),
-  ttl = None,
-  certificates = Set.empty,
-  withdrawals = None,
-  auxiliaryDataHash = None,
-  validityStartSlot = None,
-  mint = None,
-  scriptDataHash = None,
-  collateralInputs = Set.empty,
-  requiredSigners = Set.empty,
-  networkId = None,
-  collateralReturnOutput = None,
-  totalCollateral = None,
-  referenceInputs = Set.empty,
-  votingProcedures = None,
-  proposalProcedures = Set.empty,
-  currentTreasuryValue = None,
-  donation = None
+  fee = Coin(0)
 )
 
+val emptyTransaction: Transaction = {
+    Transaction(
+      body = KeepRaw(emptyTxBody),
+      witnessSet = TransactionWitnessSet.empty,
+      isValid = false,
+      auxiliaryData = None
+    )
+}
+
+val emptyContext: Context =
+    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+
+val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Conversions
+
+///////////////////////////////////////////////////////
+// TxId
+
+extension (txId: TxId) {
+    def toScalus: TransactionHash = Hash(ByteString.fromHex(txId.hash))
+}
+
+extension (th: TransactionHash) {
+    def toHydrozoa: TxId = TxId(th.toHex)
+}
+
+////////////////////////////////////////////////////////
+// TransactionInput
 extension [L <: AnyLayer](utxo: UtxoId[L]) {
     def toScalus: TransactionInput =
         TransactionInput(
-          transactionId = Hash(ByteString.fromHex(utxo.txId.hash)),
+          transactionId = utxo.txId.toScalus,
           index = utxo.outputIx.ix
         )
 }
 
-extension [L <: hydrozoa.AnyLayer](address: AddressBech[L]) {
-    def toScalus: Address = Address.fromBech32(address.bech32)
-}
-
-extension (p: HPolicyId) {
-    def toScalus: PolicyId = {
-        Hash(ByteString.fromHex(p.policyId))
-    }
-}
-
-extension (p: PolicyId) {
-    def toHydrozoa: HPolicyId = {
-        HPolicyId(p.toHex)
-    }
-}
-
-extension (tn: TokenName) {
-    // Token Name comes prepended with a 0x; we drop it
-    def toScalus: AssetName = {
-        AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2)))
-    }
-}
-
-extension (an: AssetName) {
-    def toHydrozoa: TokenName = TokenName(s"0x${an.bytes.toHex}")
-}
-
-extension (ma: MultiAsset) {
-    def toHydrozoa: Tokens =
-        ma.map((k, v) => (k.toHydrozoa, v.map((k1, v1) => (k1.toHydrozoa, BigInt(v1)))))
-}
-
-def htokensToMultiAsset(tokens: Tokens): MultiAsset = {
-    Map.from(
-      tokens.map((cs, tnAndQ) =>
-          (cs.toScalus, Map.from(tnAndQ.map((tn, q) => (tn.toScalus, q.toLong))))
-      )
+extension (ti: TransactionInput) {
+    def toHydrozoa[L <: AnyLayer]: UtxoId[L] = UtxoId(
+      txId = TxId(ti.transactionId.toHex),
+      outputIx = TxIx(ti.index)
     )
+}
 
+//////////////////////////////////////////////////////
+// Transaction Output
+
+extension (to: v3.TxOut) {
+    def toScalusLedger: TransactionOutput = {
+        Babbage(
+          address = to.address.toScalusLedger,
+          value = to.value.toScalusLedger,
+          datumOption = to.datum match {
+              case NoOutputDatum  => None
+              case OutputDatum(d) => Some(Inline(d))
+              case _              => throw new RuntimeException("invalid datum")
+          },
+          scriptRef = to.referenceScript match {
+              case Option.None => None
+              // The v3TxOut contains a script hash, but the ledger type contains the actual script.
+              // We can't recover the full script from the hash, so we throw.
+              // Maybe in the future we can pass in the script separately and ensure the hashes match
+              case Option.Some(sr) =>
+                  throw new RuntimeException("v3 TxOut has a reference script hash, but can't")
+          }
+        )
+    }
 }
 
 extension [L <: hydrozoa.AnyLayer](output: Output[L]) {
@@ -145,37 +150,6 @@ extension [L <: hydrozoa.AnyLayer](output: Output[L]) {
     }
 }
 
-extension [HF, P](hash: Hash[HF, P]) {
-    def toIArray: IArray[Byte] =
-        IArray.from(hash.bytes)
-}
-
-extension (native: Native) {
-    def toHydrozoaNativeScript: NativeScript = {
-        NativeScript(native.script.toCbor)
-    }
-}
-extension (native: NativeScript) {
-    def toScalusNativeScript: Native = {
-        Cbor.decode(native.bytes).to[Native].value
-    }
-}
-
-extension (network: HNetwork) {
-    def toScalus: Network = {
-        if network.networkId == 1
-        then Mainnet
-        else Testnet
-    }
-}
-
-extension (ti: TransactionInput) {
-    def toHydrozoa[L <: AnyLayer]: UtxoId[L] = UtxoId(
-      txId = TxId(ti.transactionId.toHex),
-      outputIx = TxIx(ti.index)
-    )
-}
-
 extension (to: TransactionOutput) {
     def toHydrozoa[L <: AnyLayer]: Output[L] = Output(
       address = AddressBech[L](
@@ -190,46 +164,28 @@ extension (to: TransactionOutput) {
     )
 }
 
-// REVIEW (Peter, 2025-07-11): This was adapted from Claude on 2025-07-11
-// I don't really understand what its doing.
-extension (tx: TxL1) {
-    def toScalus: Transaction = {
-        given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
-        Cbor.decode(tx.bytes).to[Transaction].value
-    }
+////////////////////////////////////////////////////
+// Address
+
+extension [L <: hydrozoa.AnyLayer](address: AddressBech[L]) {
+    def toScalus: Address = Address.fromBech32(address.bech32)
 }
 
-// Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
-def bloxToScalusUtxoQuery(
-    backendService: BackendService,
-    input: TransactionInput
-): Either[String, TransactionOutput] = {
-    backendService.getUtxoService
-        .getTxOutput(input.transactionId.toHex, input.index)
-        .toEither match {
-        case Left(err) => Left("[bloxToScalusUtxoQuery]: Querying failed: " ++ err)
-        case Right(utxo) =>
-            Right({
-
-                println(utxo.getAddress)
-                val outAddress = Address.fromBech32(utxo.getAddress)
-                val outVal: Value = utxo.toValue.toLedgerValue
-                val outDat = scala
-                    .Option(utxo.getInlineDatum)
-                    .map(hex =>
-                        hex |> HexUtil.decodeHexString
-                            |> PlutusData.deserialize
-                            |> Interop.toScalusData
-                            |> DatumOption.Inline.apply
-                    )
-
-                TransactionOutput(
-                  address = outAddress,
-                  value = outVal,
-                  datumOption = outDat
-                )
-            })
-    }
+// FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
+extension (addr: v3.Address) {
+    def toScalusLedger: Address =
+        (
+          ShelleyAddress(
+            network = networkL1static.toScalus,
+            payment = addr.credential match {
+                case PubKeyCredential(pkc) =>
+                    ShelleyPaymentPart.Key(Hash(ByteString.fromArray(pkc.hash.bytes)))
+                case ScriptCredential(sc) =>
+                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(sc.bytes)))
+            },
+            delegation = ShelleyDelegationPart.Null
+          )
+        )
 }
 
 /** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
@@ -269,6 +225,137 @@ def v1AddressToLedger(address: v1.Address, network: Network): ShelleyAddress = {
     ShelleyAddress(network = network, payment = paymentPart, delegation = delegationPart)
 }
 
+//////////////////////////////////////////////////
+// Hashes/PolicyId
+
+extension [HF, P](hash: Hash[HF, P]) {
+    def toIArray: IArray[Byte] =
+        IArray.from(hash.bytes)
+}
+
+extension (p: HPolicyId) {
+    def toScalus: PolicyId = {
+        Hash(ByteString.fromHex(p.policyId))
+    }
+}
+
+extension (p: PolicyId) {
+    def toHydrozoa: HPolicyId = {
+        HPolicyId(p.toHex)
+    }
+}
+
+def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
+    Hash(ByteString.fromArray(cs.bytes))
+}
+
+//////////////////////////////////////////////////
+// Token Name
+
+extension (tn: TokenName) {
+    // Token Name comes prepended with a 0x; we drop it
+    def toScalus: AssetName = {
+        AssetName(ByteString.fromHex(tn.tokenNameHex.drop(2)))
+    }
+}
+
+extension (an: AssetName) {
+    def toHydrozoa: TokenName = TokenName(s"0x${an.bytes.toHex}")
+}
+
+def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
+
+///////////////////////////////////////
+// Value/MultiAsset Map
+
+extension (v: v3.Value) {
+    def toScalusLedger: Value = {
+        val coins: Coin = Coin(v.flatten.head._3.toLong)
+        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
+            v.toSortedMap.toList.tail.map((cs, assocMap) =>
+                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
+            )
+
+        // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
+        // about ambiguous instances. Doing it in the definition of ma1 helps inference.
+        def listToSeq[A] (l : prelude.List[A]):Seq[A] =
+            l.foldLeft(Seq.empty)(_.appended(_))
+
+        val ma1 = MultiAsset(SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2)))))))
+
+        Value(coin = coins, multiAsset = ma1)
+    }
+}
+
+extension (ma: MultiAsset) {
+    def toHydrozoa: Tokens =
+        ma.assets.unsorted.map((k, v) =>
+            (k.toHydrozoa, v.unsorted.map((k1, v1) => (k1.toHydrozoa, BigInt(v1))))
+        )
+}
+
+def htokensToMultiAsset(tokens: Tokens): MultiAsset = {
+    MultiAsset(
+      (SortedMap.from(
+        tokens.map((cs, tnAndQ) =>
+            (cs.toScalus, SortedMap.from(tnAndQ.map((tn, q) => (tn.toScalus, q.toLong))))
+        )
+      ))
+    )
+}
+
+/////////////////////////////////////////////
+// Scripts
+
+extension (native: Native) {
+    def toHydrozoaNativeScript: NativeScript = {
+        NativeScript(native.script.toCbor)
+    }
+}
+extension (native: NativeScript) {
+    def toScalusNativeScript: Native = {
+        Cbor.decode(native.bytes).to[Native].value
+    }
+}
+
+////////////////////////////////////////////
+// Network
+
+extension (network: HNetwork) {
+    def toScalus: Network = {
+        if network.networkId == 1
+        then Mainnet
+        else Testnet
+    }
+}
+
+//////////////////////////////////////////////
+// Transaction
+
+extension (tx: TxL1) {
+    def toScalus: Transaction = {
+        given OriginalCborByteArray = OriginalCborByteArray(tx.bytes)
+        Cbor.decode(tx.bytes).to[Transaction].value
+    }
+}
+
+extension (tx: BBTransaction) {
+    def toScalus: Transaction = {
+        val s = tx.serialize()
+        given OriginalCborByteArray = OriginalCborByteArray(s)
+        Cbor.decode(s).to[Transaction].value
+    }
+}
+
+extension (tx: Transaction) {
+    def toHydrozoa[L <: AnyLayer]: Tx[L] = {
+        Tx(Cbor.encode(tx).toByteArray)
+    }
+}
+
+//////////////////////////////////////////////
+// UTxO Set
+
 extension [L <: AnyLayer](us: UtxoSet[L]) {
     def toScalus: UTxO = us.utxoMap.map((k, v) => (k.toScalus, v.toScalus))
 }
@@ -289,75 +376,14 @@ def toHUTxO[L <: AnyLayer](utxo: UTxO): UtxoSet[L] = {
     UtxoSet(map = utxo.map((ti, to) => (ti.toHydrozoa[L], to.toHydrozoa[L])))
 }
 
+////////////////////////////////////////////////
+// TxOut Ref
+
 extension (txor: v3.TxOutRef) {
     def toScalusLedger: TransactionInput =
         TransactionInput(transactionId = Hash(txor.id.hash), index = txor.idx.toInt)
     def toHydrozoa[L <: AnyLayer]: UtxoId[L] =
-        UtxoId[L](txId = TxId(txor.id.hash.toHex), outputIx = TxIx(txor.idx.toInt))    
-}
-
-// FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
-extension (addr: v3.Address) {
-    def toScalusLedger: Address =
-        Shelley(
-          ShelleyAddress(
-            network = networkL1static.toScalus,
-            payment = addr.credential match {
-                case PubKeyCredential(pkc) =>
-                    ShelleyPaymentPart.Key(Hash(ByteString.fromArray(pkc.hash.bytes)))
-                case ScriptCredential(sc) =>
-                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(sc.bytes)))
-            },
-            delegation = ShelleyDelegationPart.Null
-          )
-        )
-}
-
-def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
-    Hash(ByteString.fromArray(cs.bytes))
-}
-
-def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
-
-def listToMap[A, B](lop: prelude.List[(A, B)]): Map[A, B] = {
-    lop.foldLeft(Map.empty)((m, ab) => m.updated(ab._1, ab._2))
-}
-
-extension (v: v3.Value) {
-    def toScalusLedger: Value = {
-        val coins: Coin = Coin(v.toList.head._2.toList.head._2.toLong)
-        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
-            v.toList.tail.map((cs, assocMap) =>
-                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
-            )
-        val ma1 = listToMap(ma0.map(x => (x._1, listToMap(x._2))))
-
-        Value(coin = coins, multiAsset = ma1)
-    }
-}
-
-extension (to: v3.TxOut) {
-    def toScalusLedger: TransactionOutput = {
-        Babbage(
-          address = to.address.toScalusLedger,
-          value = to.value.toScalusLedger,
-          datumOption = to.datum match {
-              case NoOutputDatum  => None
-              case OutputDatum(d) => Some(Inline(d))
-              case _              => throw new RuntimeException("invalid datum")
-          },
-          scriptRef = to.referenceScript match {
-              case Option.None => None
-              // The v3TxOut contains a script hash, but the ledger type contains the actual script.
-              // We can't recover the full script from the hash, so we throw.
-              // Maybe in the future we can pass in the script separately and ensure the hashes match
-              case Option.Some(sr) =>
-                  throw new RuntimeException("v3 TxOut has a reference script hash, but can't")
-          }
-        )
-
-    }
-
+        UtxoId[L](txId = TxId(txor.id.hash.toHex), outputIx = TxIx(txor.idx.toInt))
 }
 
 // Adaptor from old ledger to new ledger "state"
@@ -378,4 +404,40 @@ def contextAndStateFromV3UTxO(v3utxo: Map[v3.TxOutRef, v3.TxOut]): (Context, Sta
       Context(fee = Coin(0L), env = UtxoEnv.default),
       State(utxo = v3utxo.map((k, v) => (k.toScalusLedger, v.toScalusLedger)), certState = cs)
     )
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Helper functions
+
+// Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
+def bloxToScalusUtxoQuery(
+    backendService: BackendService,
+    input: TransactionInput
+): Either[String, TransactionOutput] = {
+    backendService.getUtxoService
+        .getTxOutput(input.transactionId.toHex, input.index)
+        .toEither match {
+        case Left(err) => Left("[bloxToScalusUtxoQuery]: Querying failed: " ++ err)
+        case Right(utxo) =>
+            Right({
+
+                println(utxo.getAddress)
+                val outAddress = Address.fromBech32(utxo.getAddress)
+                val outVal: Value = utxo.toValue.toLedgerValue
+                val outDat = scala
+                    .Option(utxo.getInlineDatum)
+                    .map(hex =>
+                        hex |> HexUtil.decodeHexString
+                            |> PlutusData.deserialize
+                            |> Interop.toScalusData
+                            |> DatumOption.Inline.apply
+                    )
+
+                TransactionOutput(
+                  address = outAddress,
+                  value = outVal,
+                  datumOption = outDat
+                )
+            })
+    }
 }

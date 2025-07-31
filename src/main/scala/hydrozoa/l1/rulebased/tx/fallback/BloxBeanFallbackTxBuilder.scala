@@ -12,9 +12,9 @@ import hydrozoa.infra.{HydrozoaBuilderBackendService, Piper, decodeHex, encodeHe
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
 import hydrozoa.l1.rulebased.onchain.{mkDefVoteDatum, mkTreasuryDatumUnresolved, mkVoteDatum, mkVoteTokenName}
 import hydrozoa.{TxId, TxIx, TxL1, UtxoIdL1}
+import scalus.prelude.asScalus
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
-import scalus.prelude.List.asScalus
 import co.nstant.in.cbor.model.Array as CborArray
 
 import java.math.BigInteger

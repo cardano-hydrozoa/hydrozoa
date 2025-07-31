@@ -1,6 +1,7 @@
 package hydrozoa.l2.ledger
 
 import scalus.cardano.ledger.TransactionInput
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.*
 
@@ -14,19 +15,7 @@ private object HydrozoaGenesisMutator extends STSL2.Mutator {
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
     private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
-        val genesisId = g.getEventId
-        
-        g.utxos
-            .foldLeft((state, 0))((acc, tiTo) => {
-                val newState = acc._1.copy(utxo =
-                    acc._1.utxo.updated(
-                      key = TransactionInput(transactionId = genesisId, index = acc._2),
-                      value = tiTo._2
-                    )
-                )
-                (newState, acc._2 + 1)
-            })
-            ._1
+        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs)
     }
 
     override def transit(context: Context, state: State, event: Event): Result = event match {
@@ -40,7 +29,7 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
         case L2EventTransaction(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                mapLeft(_.toString)(v.validate(context, state, event))
+                (v.validate(context, state, event))
             for
                 // Upstream validators (applied alphabetically for ease of comparison in a file browser
                 // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
@@ -48,14 +37,13 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
                 _ <- helper(AllInputsMustBeInUtxoValidator)
                 _ <- helper(EmptyInputsValidator)
                 _ <- helper(InputsAndReferenceInputsDisjointValidator)
-                _ <- helper(VerifiedSignaturesInWitnessesValidator)
                 _ <- helper(MissingKeyHashesValidator)
                 _ <- helper(MissingOrExtraScriptHashesValidator)
                 _ <- helper(NativeScriptsValidator)
-                _ <- helper(TransactionSizeValidator)
                 _ <- helper(OutputsHaveNotEnoughCoinsValidator)
                 _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
                 _ <- helper(OutsideValidityIntervalValidator)
+                _ <- helper(TransactionSizeValidator) // Do we need this?
                 _ <- helper(ValueNotConservedUTxOValidator)
                 _ <- helper(VerifiedSignaturesInWitnessesValidator)
                 /* Not yet implemented validators (2025-07-22)
@@ -66,10 +54,10 @@ private object HydrozoaTransactionMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- mapLeft(_.toString)(
+                state <- (
                   RemoveInputsFromUtxoMutator.transit(context, state, event)
                 )
-                state <- mapLeft(_.toString)(AddOutputsToUtxoMutator.transit(context, state, event))
+                state <- (AddOutputsToUtxoMutator.transit(context, state, event))
             yield state
         }
         case _ => Right(state)
@@ -81,7 +69,7 @@ private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
         case L2EventWithdrawal(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                mapLeft(_.toString)(v.validate(context, state, event))
+                (v.validate(context, state, event))
 
             for
                 // L2 Native validators
@@ -116,7 +104,7 @@ private object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- mapLeft(_.toString)(
+                state <- (
                   RemoveInputsFromUtxoMutator.transit(context, state, event)
                 )
             yield state

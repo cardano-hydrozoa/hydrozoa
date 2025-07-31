@@ -195,9 +195,9 @@ object BlockValidator:
         mbGenesis =
             if depositsAbsorbed.isEmpty then None
             else
-                val depositsAbsorbedUtxos =
+                val depositsAbsorbedUtxos : List[(TransactionInput, TransactionOutput)] =
                     depositUtxos.unTag.utxoMap
-                        .filter((k, _) => depositsAbsorbed.contains(k))
+                        .filter((k, _) => depositsAbsorbed.contains(k.toScalus))
                         .toList
                         .sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0)
                         .map((ti, to) => (ti.toScalus, to.toScalus))

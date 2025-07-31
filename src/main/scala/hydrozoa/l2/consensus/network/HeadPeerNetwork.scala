@@ -19,7 +19,6 @@ import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString
-import scalus.cardano.address.Address.Shelley
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.address.ShelleyDelegationPart.Null

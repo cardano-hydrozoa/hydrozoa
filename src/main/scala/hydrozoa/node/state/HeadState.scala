@@ -1,5 +1,6 @@
 package hydrozoa.node.state
 
+import hydrozoa.infra.transitionary.toScalus
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.api.model
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
@@ -179,6 +180,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
     def stateL2: Map[v3.TxOutRef, v3.TxOut]
+    // QUESTION: is this supposed to update the stateL2?
     def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2EventGenesis)] = None): Unit
     def applyBlockEvents(
         blockNum: Int,
@@ -477,7 +479,7 @@ class HeadStateGlobal(
             tryProduceBlock(false)
 
         def isL2EventInPool(txId: TxId): Boolean =
-            self.poolEventsL2.map(_.getEventId).contains(txId)
+            self.poolEventsL2.map(_.getEventId).contains(txId.toScalus)
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
@@ -1013,7 +1015,7 @@ class HeadStateGlobal(
             log.info(s"Pool events before removing: ${self.poolEventsL2.size}")
 
             log.info(s"Removing invalid events: $eventsInvalid")
-            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
+            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId.toHydrozoa))
                 |> self.poolEventsL2.subtractAll
 
             log.info(s"Pool events after removing: ${self.poolEventsL2.size}")

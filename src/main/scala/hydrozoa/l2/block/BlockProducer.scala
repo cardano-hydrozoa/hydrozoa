@@ -185,6 +185,7 @@ object BlockProducer:
                     case Right(newState) =>
                         state = newState
                         depositsAbsorbed = depositsSorted.map(_._1)
+                        utxosAdded.addAll(genesis.resolvedL2UTxOs)
                         Some(genesisHash, genesis)
 
                 }

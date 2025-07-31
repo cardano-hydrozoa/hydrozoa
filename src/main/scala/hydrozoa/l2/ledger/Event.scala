@@ -1,12 +1,17 @@
 package hydrozoa.l2.ledger
 
 import hydrozoa.*
-import hydrozoa.l1.multisig.state.depositDatum
+import hydrozoa.l1.multisig.state.{DepositDatum, depositDatum}
 import io.bullet.borer.Cbor
 import scalus.builtin.Builtins.blake2b_256
-import scalus.builtin.ByteString
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.*
 import hydrozoa.infra.{Piper, plutusAddressAsL2}
+import hydrozoa.infra.transitionary.toScalusLedger
+import scalus.builtin.Data.{fromData, toData}
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import hydrozoa.l1.multisig.state.DepositDatum.derived$FromData
 
 // A sum type for ledger events
 sealed trait L2Event:
@@ -14,7 +19,7 @@ sealed trait L2Event:
 
 final case class L2EventTransaction(transaction: Transaction) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
-    def volume : Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
+    def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
 final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
@@ -24,13 +29,55 @@ final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
   * outputs. The TxId of a Genesis Event comes from sorting the TxIds of the absorbed UTxOs,
   * encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
   */
-final case class L2EventGenesis(utxos: Seq[(TransactionInput, TransactionOutput)]) extends L2Event {
+final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutput)])
+    extends L2Event {
+    require(utxosL1.nonEmpty, "L2EventGenesis must consume at least one L1 deposit")
+
+    /** The list of UTxOs that should appear on L2 corresponding to this genesis event. Malformed
+      * deposit UTxOs (non-Babbage outputs or with invalid datums) are skipped.
+      */
+    // FIXME: check if this is really the desired behavior. Should we do something else if we have a malformed
+    // deposit output?
+    val resolvedL2UTxOs: Seq[(TransactionInput, TransactionOutput)] = {
+        val mbL2Outs: Seq[Option[(TransactionInput, TransactionOutput)]] = { 
+            utxosL1.zipWithIndex.map((utxo, idx) => {
+            val l2TxIn = TransactionInput(transactionId = getEventId, index = idx)
+                if !utxo._2.isInstanceOf[Babbage] then None
+                else {
+                    val babbageTxOut = utxo._2.asInstanceOf[Babbage]
+                    babbageTxOut.datumOption match {
+                        case Some(Inline(datum)) =>
+                            // FIXME, seriously: this is chaotic. We previously were using `ByteString` to represent datums,
+                            // and because of that, they got serialized as Bytestrings. Thus, the datum on the deposit
+                            // utxo is serialized _as a bytestring that contains the cbor for the actual datum_.
+                            val dd: DepositDatum = fromData(Data.fromCbor(fromData[ByteString](datum).bytes))
+                            Some(
+                              l2TxIn,
+                              Babbage(
+                                address = dd.address.toScalusLedger,
+                                value = Value(babbageTxOut.value.coin),
+                                datumOption = dd.datum.asScala.map(bs => Inline(Data.fromCbor(bs.bytes))),
+                                scriptRef = None
+                              )
+                            )
+
+                        case _ => None
+                    }
+                }
+            }
+            )
+            
+        }
+        mbL2Outs.filter(_.isDefined).map(_.get)
+    }
+        
+
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = Hash(
       blake2b_256(
         ByteString.fromArray(
           // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
           // yet
-          utxos
+          utxosL1
               .map((ti, to) => ti.transactionId.toHex ++ ti.index.toString)
               .sorted
               .flatMap(ti => Cbor.encode(ti).toByteArray)
@@ -38,8 +85,8 @@ final case class L2EventGenesis(utxos: Seq[(TransactionInput, TransactionOutput)
         )
       )
     )
-    def volume : Long = utxos.map((ti, to) => to.value.coin.value).sum
-    
+    def volume: Long = utxosL1.map((ti, to) => to.value.coin.value).sum
+
 }
 
 // Tags used in blocks

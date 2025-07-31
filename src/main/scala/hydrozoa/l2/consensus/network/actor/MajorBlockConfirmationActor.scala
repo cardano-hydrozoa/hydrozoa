@@ -9,13 +9,14 @@ import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.node.state.*
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHydrozoa}
+import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHUTxO, toHydrozoa, toV3UTxO}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.ledger.L2EventGenesis
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.ledger.api.v3
+import scalus.cardano.ledger.TransactionHash
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -33,8 +34,9 @@ private class MajorBlockConfirmationActor(
     override type ReqType = ReqMajor
     override type AckType = AckMajor | AckMajor2
 
+    // Who sets this utxosActive?
     private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
-    private var mbGenesis: Option[(TxId,  L2EventGenesis)] = _
+    private var mbGenesis: Option[(TxId, L2EventGenesis)] = _
     private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
@@ -115,6 +117,8 @@ private class MajorBlockConfirmationActor(
         if ack2.nextBlockFinal then this.finalizeHead = true
     }
 
+    // As far as I can tell, this actor is spawned on demand to handling the validation of 
+    // incoming major blocks.
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
@@ -153,7 +157,13 @@ private class MajorBlockConfirmationActor(
                     resolution match
                         case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
                             log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
-                            Right(utxosActive, mbGenesis, utxosWithdrawn)
+                            Right(
+                              toV3UTxO(utxosActive),
+                              mbGenesis.map((txHash: TransactionHash, eventGenesis) =>
+                                  (TxId(txHash.toHex), eventGenesis)
+                              ),
+                              toHUTxO[L2](utxosWithdrawn)
+                            )
                         case r @ ValidationResolution.NotYetKnownDeposits(depositsUnknown) =>
                             log.warn(
                               s"Validation failed with NotYetKnownDeposits: $depositsUnknown"

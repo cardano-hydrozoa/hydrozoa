@@ -45,10 +45,10 @@ def validateIfPresent[T](
         case None    => Right(())
     }
 
-def validateEquals[T](msg: String)(actual: T)(expected: T): Either[String, Unit] =
+private def validateEquals[T](msg: String)(actual: T)(expected: T): Either[String, Unit] =
     if actual == expected
     then Right(())
-    else Left(s"[${msg}]: actual: ${actual}; expected: ${expected}")
+    else Left(s"[L2Conformance for ${msg}]: actual: ${actual}; expected: ${expected}")
 
 ///////////////
 // Givens
@@ -56,8 +56,8 @@ def validateEquals[T](msg: String)(actual: T)(expected: T): Either[String, Unit]
 given L2ConformanceValidator[Address] with
     /** L2 address must be Shelley addresses without delegation parts. */
     def l2Validate(addr: Address): Either[String, Unit] = addr match {
-        case shelley: Address.Shelley =>
-            if shelley.address.delegation != Null then Left("Address has a delegation, but shouldn't")
+        case shelley: ShelleyAddress =>
+            if shelley.delegation != Null then Left("Address has a delegation, but shouldn't")
             else Right(())
         case _ => Left("Address is not shelley")
     }
@@ -72,15 +72,15 @@ given L2ConformanceValidator[DatumOption] with
 given L2ConformanceValidator[TransactionOutput] with
 
     /** Differs from the L1 Transaction Output in that: \- Only babbage-style outputs are allowed \-
-      * L2 transaction outputs can only contian Ada \- Datums, if present, must be inline \- Only
+      * L2 transaction outputs can only contain Ada \- Datums, if present, must be inline \- Only
       * native scripts or v3 plutus scripts allowed in the script ref
       */
     def l2Validate(l1: TransactionOutput): Either[String, Unit] = {
         for
-            _ <-
-                if !(l1.isInstanceOf[Babbage]) then
-                    Left("Transaction output is not a Babbage output")
-                else Right(())
+            _ <- l1 match {
+                case _ : Babbage => Right(())
+                case _ => Left(s"Transaction output is not a Babbage output. Output is: ${l1}")
+            }
             _ <- validateIfPresent(l1.asInstanceOf[Babbage].datumOption)
             _ <- validateIfPresent(l1.asInstanceOf[Babbage].scriptRef)
         yield ()
@@ -139,11 +139,11 @@ given L2ConformanceValidator[TransactionBody] with
             _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
             _ <- validateEquals("Collateral Return Output")(l1.collateralReturnOutput)(None)
             _ <- validateEquals("Total Collateral")(l1.totalCollateral)(None)
-            _ <- validateEquals("Certificates")(l1.certificates)(Set.empty)
+            _ <- validateEquals("Certificates")(l1.certificates)(TaggedSet.empty)
             _ <- validateEquals("Withdrawals")(l1.withdrawals)(None)
             _ <- validateEquals("Fee")(l1.fee)(Coin(0L))
             _ <- validateEquals("Mint")(l1.mint)(None)
-            _ <- validateEquals("Voting Procedures")(l1.votingProcedures)(Map.empty)
+            _ <- validateEquals("Voting Procedures")(l1.votingProcedures)(None)
             _ <- validateEquals("Proposal Procedures")(l1.proposalProcedures)(Set.empty)
             _ <- validateEquals("Current Treasury Value")(l1.currentTreasuryValue)(None)
             _ <- validateEquals("Donation")(l1.donation)(None)

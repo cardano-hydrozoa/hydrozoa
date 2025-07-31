@@ -31,10 +31,10 @@ import scalus.ledger.api.v2.TxOut
 import scalus.ledger.api.v3
 import scalus.ledger.api.v3.{TxInInfo, TxOutRef, Address as APIAddress}
 import scalus.ledger.babbage.ProtocolParams
-import scalus.prelude.List.{Cons, asScala, asScalus}
+import scalus.prelude.List.{Cons, asScala}
 import scalus.prelude.Option.{None as SNone, Some as SSome}
 import scalus.prelude.crypto.bls12_381.G1
-import scalus.prelude.{AssocMap, List as SList, Option as SOption, given}
+import scalus.prelude.{AssocMap, asScalus, List as SList, Option as SOption, given}
 import supranational.blst.{P1, P2, Scalar}
 
 import java.math.BigInteger
