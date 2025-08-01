@@ -10,7 +10,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.ConsensusDispatcher
-import hydrozoa.l2.consensus.network.*
+import hydrozoa.l2.consensus.network.{*, given}
 import hydrozoa.node.TestPeer
 import ox.*
 import ox.channels.*

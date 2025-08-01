@@ -3,22 +3,24 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
+import hydrozoa.infra.transitionary.{toHydrozoa, toScalusLedger}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.l2.ledger.{L2Genesis, mkTransactionEvent, mkWithdrawalEvent}
+import hydrozoa.l2.ledger.L2EventGenesis
 import hydrozoa.node.rest.SubmitRequestL2.{Transaction, Withdrawal}
 import hydrozoa.node.rest.{StateL2Response, SubmitRequestL2}
 import hydrozoa.node.server.DepositError
 import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
-import ox.resilience.{RetryConfig, retry, retryEither}
-import scalus.prelude.Option as SOption
-import scalus.prelude.Option.asScalus
+import ox.resilience.{RetryConfig, retryEither}
+import scalus.builtin.Data
+import scalus.ledger.api.v3.{TxOut, TxOutRef}
+import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt
 import scala.util.Try
@@ -121,10 +123,10 @@ class Node:
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
           decodeBech32AddressL2(r.address),
-          (r.datum.map(datumByteString)).asScalus,
+          r.datum.map(datumByteString).asScalus,
           BigInt.apply(0), // deadline,
           decodeBech32AddressL1(r.refundAddress),
-          (r.datum.map(datumByteString)).asScalus
+          r.datum.map(datumByteString).asScalus
         )
 
         val depositTxRecipe =
@@ -166,12 +168,15 @@ class Node:
     def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
 
     def submitL2(req: SubmitRequestL2): Either[String, TxId] =
-        val event = req match
-            case Transaction(tx) => mkTransactionEvent(tx)
-            case Withdrawal(wd)  => mkWithdrawalEvent(wd)
+        req match
+            case Transaction(tx) =>
+                network.tell(_.reqEventL2(ReqEventL2(tx)))
+                Right(TxId(tx.getEventId.toHex))
 
-        network.tell(_.reqEventL2(ReqEventL2(event)))
-        Right(event.getEventId)
+            case Withdrawal(wd) =>
+                network.tell(_.reqEventL2(ReqEventL2(wd)))
+                Right(TxId(wd.getEventId.toHex))
+
     end submitL2
 
     /** Tries to make a block, and if it succeeds, tries to wait until consensus on the block is
@@ -187,9 +192,8 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])] =
-
+        nextBlockFinal: Boolean,
+    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
           "Autonomous block production should be turned off to use this function"
@@ -240,12 +244,20 @@ class Node:
             case Some(_) =>
                 val currentPhase = nodeState.ask(s => s.reader.currentPhase)
                 currentPhase match
-                    case Open =>
-                        nodeState
-                            .ask(_.head.openPhase(_.stateL2.getState))
-                            .utxoMap
+                    case Open => {
+                        val stateL2 = nodeState
+                            .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
-                            .map((utxoId, output) => utxoId -> OutputNoTokens.apply(output))
+                        stateL2
+                            .map((utxoId, output) =>
+                                val convertedUtxoId = utxoId.toHydrozoa[L2]
+                                val scalusOutput = output.toScalusLedger
+                                val hydrozoaOutput = scalusOutput.toHydrozoa[L2]
+                                val outputNoTokens = OutputNoTokens.apply(hydrozoaOutput)
+                                convertedUtxoId -> outputNoTokens
+                            )
+
+                    }
                     case _ => List.empty
     end stateL2
 

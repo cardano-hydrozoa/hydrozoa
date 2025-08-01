@@ -1,5 +1,7 @@
 package hydrozoa.l2.block
 
+import hydrozoa.infra.transitionary.{emptyTransaction, emptyTxBody}
+import scalus.cardano.ledger.{KeepRaw, Transaction, TransactionInput, TransactionWitnessSet}
 import hydrozoa.{TxId, TxIx, UtxoIdL1}
 
 class BlockBuilderSpec extends munit.ScalaCheckSuite {
@@ -24,7 +26,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
 
     test("minor block") {
         val minorBlock =
-            BlockBuilder().blockNum(42).versionMajor(5).withTransaction(TxId("tx1hash")).build;
+            BlockBuilder().blockNum(42).versionMajor(5).withTransaction(emptyTransaction.id).build;
         println(minorBlock)
     }
 
@@ -39,7 +41,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
           BlockBuilder().majorBlock
               .blockNum(42)
               .versionMajor(5)
-              .withWithdrawal(TxId("wd1hash"))
+              .withWithdrawal(emptyTransaction.id)
               .build
         );
     }
@@ -49,7 +51,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
           BlockBuilder().finalBlock
               .blockNum(42)
               .versionMajor(5)
-              .withWithdrawal(TxId("wd1hash"))
+              .withWithdrawal(emptyTransaction.id)
               .build
         );
     }
@@ -73,7 +75,7 @@ class BlockBuilderSpec extends munit.ScalaCheckSuite {
           BlockBuilder().majorBlock
               .blockNum(42)
               .versionMajor(5)
-              .withDeposit(UtxoIdL1(TxId("wd1hash"), TxIx(0)))
+              .withDeposit(TransactionInput(transactionId = emptyTransaction.id, index = 0))
               .build
         );
     }

@@ -12,13 +12,16 @@ import com.bloxbean.cardano.client.transaction.spec.script.{
     NativeScript as BBNativeScript
 }
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toHydrozoa
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
+import hydrozoa.node.TestPeer
 import scalus.bloxbean.Interop
 import scalus.builtin.Data
 import scalus.cardano.ledger.Script.Native
 import scalus.ledger.api.Timelock.AllOf
+import scalus.cardano.ledger.Transaction as STransaction
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -167,3 +170,4 @@ def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): TokenName =
         // skip leading `0x` BB adds to token names
         .substring(2)
         |> TokenName.apply
+

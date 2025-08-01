@@ -21,7 +21,8 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{
 import scalus.bloxbean.*
 import scalus.builtin.ByteString
 import scalus.builtin.Data.{fromData, toData}
-import scalus.prelude.List.asScalus
+import scalus.prelude.List.asScala
+import scalus.prelude.asScalus
 
 import scala.jdk.CollectionConverters.*
 

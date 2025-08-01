@@ -283,7 +283,7 @@ object TreasuryValidator extends Validator:
                 // Let headId be the asset name of the only headMp token in treasuryInput with CIP-67
                 // prefix 4937.
                 val headId: TokenName =
-                    treasuryInput.value
+                    treasuryInput.value.toSortedMap
                         .get(headMp)
                         .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
@@ -299,7 +299,7 @@ object TreasuryValidator extends Validator:
                 //   Ideally we need to use treasury for fees.
                 val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
                 require(
-                  treasuryOutput.value
+                  treasuryOutput.value.toSortedMap
                       .get(headMp)
                       .getOrFail(WithdrawBeaconTokenShouldBePreserved)
                       .get(headId)
@@ -383,7 +383,7 @@ object TreasuryValidator extends Validator:
                     .getOrFail("Impossible happened: own input was not found")
                     .resolved
 
-                val headTokensInput = treasuryInput.value
+                val headTokensInput = treasuryInput.value.toSortedMap
                     .get(headMp)
                     .getOrFail(DeinitTokensNotFound)
 
@@ -394,7 +394,7 @@ object TreasuryValidator extends Validator:
                 )
 
                 // All head tokens should be burned
-                val headTokensMint = (-tx.mint)
+                val headTokensMint = (-tx.mint).toSortedMap
                     .get(headMp)
                     .getOrFail(DeinitTokensNotBurned)
 

@@ -26,7 +26,7 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
 
     private final UtxoSupplier utxoSupplier;
     
-    private boolean ignoreUtxosWithDatumHash;
+    private final boolean ignoreUtxosWithDatumHash;
 
     public InclusiveUtxoSelectionStrategyImpl(UtxoSupplier utxoSupplier) {
         this(utxoSupplier, true);

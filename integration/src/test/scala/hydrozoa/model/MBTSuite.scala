@@ -3,40 +3,23 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toHydrozoaNativeScript, toScalus}
-import hydrozoa.infra.{
-    NoMatch,
-    PSStyleAssoc,
-    Piper,
-    TooManyMatches,
-    decodeBech32AddressL1,
-    decodeBech32AddressL2,
-    onlyOutputToAddress,
-    serializeTxHex,
-    txHash
-}
+import hydrozoa.infra.transitionary.{contextAndStateFromHUTxO, toHUTxO, toHydrozoa, toHydrozoaNativeScript, toScalus, toV3UTxO}
+import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{
-    InitTxBuilder,
-    InitTxRecipe,
-    ScalusInitializationTxBuilder
-}
-import hydrozoa.l1.multisig.tx.refund.{
-    PostDatedRefundRecipe,
-    RefundTxBuilder,
-    ScalusRefundTxBuilder
-}
+import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
+import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder, ScalusRefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
+import Tuple.canEqualTuple
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
-import hydrozoa.node.TestPeer
+import hydrozoa.node.{TestPeer, addressFromPeer, signTx}
 import hydrozoa.node.TestPeer.{account, mkWallet}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
@@ -49,6 +32,10 @@ import org.scalacheck.commands.Commands
 import org.scalacheck.rng.Seed
 import org.scalacheck.util.{ConsoleReporter, Pretty}
 import org.scalacheck.{Gen, Prop, Properties, Test}
+import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Coin, KeepRaw, Sized, Transaction, TransactionBody, TransactionOutput, TransactionWitnessSet, Value}
 import scalus.prelude.Option as ScalusOption
 import sttp.client4.Response
 import sttp.client4.quick.*
@@ -128,11 +115,11 @@ object MBTSuite extends Commands:
                 )
             case Shutdown => NoOp0(cnt.incrementAndGet())
 
+    /** Picks a random peer and a random pre-seeded UTxO to iniitialize the head */
     def genInitializeCommand(s: State): Gen[InitializeCommand] =
         val initiator = s.knownPeers.head
-        val account = TestPeer.account(initiator)
         val l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
-        val utxoIds = l1.utxoIdsByAddress(AddressBech[L1](account.toString))
+        val utxoIds = l1.utxoIdsByAddress(AddressBech[L1](addressFromPeer(initiator).toBech32.get))
 
         for
             numberOfHeadPeers <- Gen.chooseNum(0, s.knownPeers.tail.size)
@@ -144,14 +131,12 @@ object MBTSuite extends Commands:
 
         for
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
-            depositorAccount = TestPeer.account(depositor)
-            depositorAddressL1 = AddressBech[L1](depositorAccount.toString) // FIXME: extension
+            depositorAddressL1 = AddressBech[L1](addressFromPeer(depositor).toBech32.get) // FIXME: extension
             l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
             (seedUtxoId, coins) <- Gen.oneOf(l1.utxoIdsAdaAtAddress(depositorAddressL1))
 
             recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
-            recipientAccount = TestPeer.account(recipient)
-            recipientAddressL2 = AddressBech[L2](depositorAccount.toString) // FIXME: extension
+            recipientAddressL2 = AddressBech[L2](addressFromPeer(recipient).toBech32.get) // FIXME: extension
             depositAmount: BigInt <- Gen.choose(
                 BigInt.apply(5_000_000).min(coins),
                 BigInt.apply(100_000_000).min(coins)
@@ -166,12 +151,12 @@ object MBTSuite extends Commands:
         )
 
     def genTransactionL2(s: State): Gen[TransactionL2Command] =
-        val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(s.utxosActiveL2)
+        val state = (s.utxosActiveL2)
 
         for
             numberOfInputs <- Gen.choose(1, 5.min(s.utxosActiveL2.size))
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-            totalCoins = inputs.map(l2.getOutput(_).coins).sum.intValue
+            totalCoins = inputs.map(state(_).coins).sum.intValue
 
             outputCoins <- Gen.tailRecM[List[Int], List[Int]](List.empty){
                 tails =>
@@ -186,16 +171,65 @@ object MBTSuite extends Commands:
 
             recipients <- Gen.containerOfN[List, TestPeer](outputCoins.length, Gen.oneOf(s.headPeers))
 
-            outputs = outputCoins
-                .zip(recipients.map(account(_).toString |> AddressBech[L2].apply))
-                .map((coins, address) => OutputNoTokens.apply(address, coins))
-        yield TransactionL2Command(cnt.incrementAndGet(), L2Transaction(inputs.toList, outputs))
+            outputs : IndexedSeq[Sized[TransactionOutput]] =
+                outputCoins
+                .zip(recipients.map(addressFromPeer(_)))
+                .map((coins, addr) => Babbage(address = addr, value = Value(Coin(coins.toLong)),
+                    datumOption = None, scriptRef = None)).toIndexedSeq.map(Sized(_))
+
+            txBody : TransactionBody = TransactionBody(
+              inputs = inputs.map(_.toScalus).toSet,
+                outputs = outputs,
+                fee = Coin(0L)
+            )
+
+            neededSigners : Set[TestPeer] = {
+                // Generate a lookup table mapping addresses to peers.
+                // (We can probably move this outside of the generator for a speedup)
+              val addrMap : Map[AddressBechL2, TestPeer] = {
+                  s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+              }
+
+                // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
+                // a single element for the required signer. This is the desired behavior
+                txBody.inputs.map(ti => addrMap(s.utxosActiveL2(ti.toHydrozoa).address))
+            }
+
+            txUnsigned : Transaction = Transaction(body = KeepRaw(txBody), witnessSet = TransactionWitnessSet.empty,
+                isValid = true, auxiliaryData = None)
+
+            tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
+        yield TransactionL2Command(cnt.incrementAndGet(), L2EventTransaction(tx))
 
     def genL2Withdrawal(s: State): Gen[WithdrawalL2Command] =
         for
             numberOfInputs <- Gen.choose(1, 3.min(s.utxosActiveL2.size))
             inputs <- Gen.pick(numberOfInputs, s.utxosActiveL2.keySet)
-        yield WithdrawalL2Command(cnt.incrementAndGet(), L2Withdrawal(inputs.toList))
+
+            txBody : TransactionBody = TransactionBody(
+                inputs = inputs.map(_.toScalus).toSet,
+                outputs = IndexedSeq.empty,
+                fee = Coin(0L)
+            )
+
+            neededSigners : Set[TestPeer] = {
+                // Generate a lookup table mapping addresses to peers.
+                // (We can probably move this outside of the generator for a speedup)
+                val addrMap : Map[AddressBechL2, TestPeer] = {
+                    s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+                }
+
+                // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
+                // a single element for the required signer. This is the desired behavior
+                txBody.inputs.map(ti => addrMap(s.utxosActiveL2(ti.toHydrozoa).address))
+            }
+
+            txUnsigned : Transaction = Transaction(body = KeepRaw(txBody), witnessSet = TransactionWitnessSet.empty,
+                isValid = true, auxiliaryData = None)
+
+            tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
+
+        yield WithdrawalL2Command(cnt.incrementAndGet(), L2EventWithdrawal(tx))
 
     def genCreateBlock(s: State): Gen[ProduceBlockCommand] =
         // TODO: take it up
@@ -301,7 +335,7 @@ object MBTSuite extends Commands:
                     (otherHeadPeers + initiator).map(tp =>
                         mkWallet(tp).exportVerificationKeyBytes
                     )
-   
+
                 // Recipe to build init initTx
                 val initTxRecipe = InitTxRecipe(
                   networkL1static,
@@ -314,14 +348,14 @@ object MBTSuite extends Commands:
                 val backendService = BackendServiceMock(l1Mock, state.pp)
                 val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
                 val Right(initTx, headAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
-                
+
                 // FIXME: the native script is now constructed inside the initTxBuilder;
                 // thus, this value is redundant and is only being created for compatibility during refactoring
-                // If its truly necessary to carry it around in the Hydrozoa state, then 
+                // If its truly necessary to carry it around in the Hydrozoa state, then
                 // we should pass it in the initTxRecipe; otherwise, we should take it out of
                 // the head state.
                 val headMultisigScript = mkHeadNativeScript(pubKeys)
-                
+
                 log.info(s"Init initTx: ${serializeTxHex(initTx)}")
                 val txId = txHash(initTx)
                 log.info(s"Init initTx hash: $txId")
@@ -426,7 +460,6 @@ object MBTSuite extends Commands:
 
             val refundTxBuilder: RefundTxBuilder = ScalusRefundTxBuilder(backendService, nodeStateReader)
 
-            
             val Right(refundTxDraft) =
                 refundTxBuilder.mkPostDatedRefundTxDraft(
                     PostDatedRefundRecipe(depositTxDraft.toScalus, index, l1Mock.network.toScalus)
@@ -495,7 +528,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class TransactionL2Command(override val id: Int, simpleTransaction: L2Transaction) extends Command0(id):
+    class TransactionL2Command(override val id: Int, simpleTransaction: L2EventTransaction) extends Command0(id):
 
         private val log = Logger(getClass)
 
@@ -507,7 +540,7 @@ object MBTSuite extends Commands:
 
         override def nextState(state: HydrozoaState): HydrozoaState =
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(mkTransactionEvent(simpleTransaction))
+                poolEvents = state.poolEvents ++ Seq(simpleTransaction)
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
@@ -524,7 +557,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: L2Withdrawal) extends Command0(id):
+    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: L2EventWithdrawal) extends Command0(id):
 
         private val log = Logger(getClass)
 
@@ -536,7 +569,7 @@ object MBTSuite extends Commands:
 
         override def nextState(state: HydrozoaState): HydrozoaState =
             state.copy(
-                poolEvents = state.poolEvents ++ Seq(mkWithdrawalEvent(simpleWithdrawal))
+                poolEvents = state.poolEvents ++ Seq((simpleWithdrawal))
             )
 
         override def preCondition(state: HydrozoaState): Boolean =
@@ -556,32 +589,34 @@ object MBTSuite extends Commands:
 
         private val log = Logger(getClass)
 
-        override type Result = Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
+        override type Result = Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])]
 
         override def toString: String = s"($id) Produce block command {finalization = $finalization}"
 
+        // Given a current hydrozoa state, try to produce a block.
         override def runState(
             state: HydrozoaState
         ): (Result, HydrozoaState) =
 
-            // Produce block
-            val l2 = HydrozoaL2Ledger.mkLedgerForBlockProducer(state.utxosActiveL2)
+            // First build the current Context and State from the L2 active utxo set
+            val l2 = contextAndStateFromHUTxO(state.utxosActiveL2)
 
             // TODO: move to the block producer?
-            val sortedPoolEvents = state.poolEvents.sortBy(_.getEventId.hash)
+            // Then look at the pool events
+            val sortedPoolEvents = state.poolEvents.sortBy(_.getEventId)
 
-            log.info(s"Model pool events for block production: ${state.poolEvents.map(_.getEventId.hash)}")
-            log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents.map(_.getEventId.hash)}")
+            log.info(s"Model pool events for block production: ${state.poolEvents.map(_.getEventId)}")
+            log.info(s"Model pool events for block production (sorted): ${sortedPoolEvents.map(_.getEventId)}")
 
             val finalizing = state.headPhase.get == Finalizing
 
             val maybeNewBlock = BlockProducer.createBlock(
-                l2,
-                if finalizing then Seq.empty else sortedPoolEvents,
-                if finalizing then TaggedUtxoSet.apply() else state.depositUtxos,
-                state.l2Tip.blockHeader,
-                timeCurrent,
-                finalizing
+                l2Ledger = l2,
+                poolEvents = if finalizing then Seq.empty else sortedPoolEvents,
+                depositsPending = if finalizing then TaggedUtxoSet.apply() else state.depositUtxos,
+                prevHeader = state.l2Tip.blockHeader,
+                timeCreation = timeCurrent,
+                finalizing = finalizing
             )
 
             maybeNewBlock match
@@ -597,10 +632,10 @@ object MBTSuite extends Commands:
                     val settlementTxBuilder = ScalusSettlementTxBuilder(backendService, nodeStateReader)
                     val finalizationTxBuilder = ScalusFinalizationTxBuilder(backendService, nodeStateReader)
 
-                    val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, utxosWithdrawn)
+                    val l1Effect = BlockEffect.mkL1BlockEffectModel(settlementTxBuilder, finalizationTxBuilder, block, toHUTxO(utxosWithdrawn))
                     val l2Effect: L2BlockEffect = block.blockHeader.blockType match
-                        case Minor => Some(utxosActive)
-                        case Major => Some(utxosActive)
+                        case Minor => Some(toV3UTxO(utxosActive))
+                        case Major => Some(toV3UTxO(utxosActive))
                         case Final => None
 
                     val record = BlockRecord(block, l1Effect, None, l2Effect)
@@ -608,11 +643,6 @@ object MBTSuite extends Commands:
                     // Calculate new state
                     // Submit L1
                     (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
-
-                    if (block.blockHeader.blockType == Final)
-                        val _ = l2.flushAndGetState
-                    else
-                        l2Effect.foreach(l2.replaceUtxosActive)
 
                     // TODO: delete block events (both valid and invalid)
                     val blockEvents = block.blockBody.eventsValid.map(_._1) ++ block.blockBody.eventsInvalid.map(_._1)
@@ -638,10 +668,10 @@ object MBTSuite extends Commands:
                         knownTxs = l1Mock.getKnownTxs,
                         treasuryUtxoId = treasuryUtxoId,
                         utxosActive = l1Mock.getUtxosActive,
-                        utxosActiveL2 = l2.getUtxosActive |> HydrozoaL2Ledger.unliftUtxoSet
+                        utxosActiveL2 = toHUTxO[L2](utxosActive).utxoMap
                     )
 
-                    Right(record, mbGenesis) /\ newState
+                    Right(record, mbGenesis.map((hash, l2genesis) => hash.toHydrozoa -> l2genesis)) /\ newState
 
         override def postConditionSuccess(
             expectedResult: Result,
@@ -671,15 +701,20 @@ object MBTSuite extends Commands:
                             && ("Minor version should be the same"
                             |: cmpLabel(this.id, header.versionMinor, eHeader.versionMinor))
                             && ("Valid events should be the same"
-                            |: cmpLabel(this.id, body.eventsValid, eBody.eventsValid))
+                            // FIXME: I resorted to comparing these as strings because CanEqual wasn't found to sequences of tuples containing the same types??
+                            // I think its because the `Hash` type doesn't have an CanEquals implicit?
+                            |: cmpLabel(this.id, body.eventsValid.map((th, el) => th.toHex ++ el.toString), eBody.eventsValid.map((th, el) => th.toHex ++ el.toString)))
+                            // FIXME
                             && ("Invalid events should be the same"
-                            |: cmpLabel(this.id, body.eventsInvalid, eBody.eventsInvalid))
+                            |: cmpLabel(this.id, body.eventsInvalid.map((th, el) => th.toHex ++ el.toString), eBody.eventsInvalid.map((th, el) => th.toHex ++ el.toString)))
+                            // FIXME
                             && ("Deposit absorbed should be the same"
-                            |: cmpLabel(this.id, body.depositsAbsorbed.toSet, eBody.depositsAbsorbed.toSet))
+                            |: cmpLabel(this.id, body.depositsAbsorbed.toSet.map(ti => ti.toString), eBody.depositsAbsorbed.toSet.map(ti => ti.toString)))
                             && ("Blocks should be the same"
                             |: cmpLabel(this.id, body, eBody))
                             && ("Genesis should be the same"
-                            |: cmpLabel(this.id, mbGenesis, expectedMbGenesis))
+                            // FIXME
+                            |: cmpLabel(this.id, mbGenesis.map((txId, leg) => txId.hash ++ leg.getEventId.toString), expectedMbGenesis.map((txId, leg) => txId.hash ++ leg.getEventId.toString)))
                             && ("L1 effect tx hashes should be the same"
                             |:
                                 // NB: Implication arrow: if the lhs exepression is false, the
@@ -952,14 +987,14 @@ trait CmdLineParser {
     val opts: Set[Opt[?]]
 
     private def getOpt(s: String) = {
-        if (s == null || s.length == 0 || s.charAt(0) != '-') None
+        if (s == null || s.isEmpty || s.charAt(0) != '-') None
         else opts.find(_.names.contains(s.drop(1)))
     }
 
     private def getStr(s: String) = Some(s)
 
     private def getInt(s: String) =
-        if (s != null && s.length > 0 && s.forall(_.isDigit)) Some(s.toInt)
+        if (s != null && s.nonEmpty && s.forall(_.isDigit)) Some(s.toInt)
         else None
 
     private def getFloat(s: String) =
@@ -1012,34 +1047,34 @@ trait CmdLineParser {
 
 object CmdLineParser extends CmdLineParser{
     object OptMinSuccess extends IntOpt {
-        val default = Parameters.default.minSuccessfulTests
+        val default: Int = Parameters.default.minSuccessfulTests
         val names: Set[String] = Set("minSuccessfulTests", "s")
         val help = "Number of tests that must succeed in order to pass a property"
     }
 
     object OptMaxDiscardRatio extends FloatOpt {
-        val default = Parameters.default.maxDiscardRatio
+        val default: Float = Parameters.default.maxDiscardRatio
         val names: Set[String] = Set("maxDiscardRatio", "r")
-        val help =
+        val help: InitializationError =
             "The maximum ratio between discarded and succeeded tests " +
                 "allowed before ScalaCheck stops testing a property. At " +
                 "least minSuccessfulTests will always be tested, though."
     }
 
     object OptMinSize extends IntOpt {
-        val default = Parameters.default.minSize
+        val default: Int = Parameters.default.minSize
         val names: Set[String] = Set("minSize", "n")
         val help = "Minimum data generation size"
     }
 
     object OptMaxSize extends IntOpt {
-        val default = Parameters.default.maxSize
+        val default: Int = Parameters.default.maxSize
         val names: Set[String] = Set("maxSize", "x")
         val help = "Maximum data generation size"
     }
 
     object OptWorkers extends IntOpt {
-        val default = Parameters.default.workers
+        val default: Int = Parameters.default.workers
         val names: Set[String] = Set("workers", "w")
         val help = "Number of threads to execute in parallel for testing"
     }
@@ -1051,7 +1086,7 @@ object CmdLineParser extends CmdLineParser{
     }
 
     object OptPropFilter extends OpStrOptCompat {
-        override val default = Parameters.default.propFilter
+        override val default: Option[InitializationError] = Parameters.default.propFilter
         val names: Set[String] = Set("propFilter", "f")
         val help = "Regular expression to filter properties on"
     }
@@ -1063,7 +1098,7 @@ object CmdLineParser extends CmdLineParser{
     }
 
     object OptDisableLegacyShrinking extends Flag {
-        val default = ()
+        val default: Unit = ()
         val names: Set[String] = Set("disableLegacyShrinking")
         val help = "Disable legacy shrinking using Shrink instances"
     }

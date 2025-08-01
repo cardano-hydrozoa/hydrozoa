@@ -18,7 +18,8 @@ import hydrozoa.{TxL1, UtxoId, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, FromData}
-import scalus.prelude.List.asScalus
+import scalus.prelude.List.asScala
+import scalus.prelude.asScalus
 
 import java.math.BigInteger
 import scala.collection.mutable
