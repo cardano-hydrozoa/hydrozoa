@@ -390,24 +390,21 @@ extension (txor: v3.TxOutRef) {
         UtxoId[L](txId = TxId(txor.id.hash.toHex), outputIx = TxIx(txor.idx.toInt))
 }
 
-// Adaptor from old ledger to new ledger "state"
+/////////////////////////////////////////////////
+// L2 Ledger Context and State
+
+// Adaptor from old ledger to new ledger L2 "state"
 // FIXME: This is a dummy value. The slot config and protocol params should be passed in
 def contextAndStateFromV3UTxO(v3utxo: Map[v3.TxOutRef, v3.TxOut]): (Context, State) = {
-    val cs = CertState(
-      vstate = VotingState(Map.empty),
-      pstate = PoolsState(),
-      dstate = DelegationState(
-        rewards = Map.empty,
-        deposits = Map.empty,
-        stakePools = Map.empty,
-        dreps = Map.empty
-      )
-    )
-
     (
       Context(fee = Coin(0L), env = UtxoEnv.default),
-      State(utxo = v3utxo.map((k, v) => (k.toScalusLedger, v.toScalusLedger)), certState = cs)
+      State(utxo = v3utxo.map((k, v) => (k.toScalusLedger, v.toScalusLedger)), certState = CertState.empty)
     )
+}
+
+def contextAndStateFromHUTxO[L <: AnyLayer](hutxo: Map[UtxoId[L],Output[L]]) : (Context, State) = {
+    (Context(fee = Coin(0L), env = UtxoEnv.default)
+        , State(utxo = hutxo.map((k,v) => (k.toScalus, v.toScalus)), certState = CertState.empty))
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

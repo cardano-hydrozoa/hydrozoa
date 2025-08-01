@@ -8,8 +8,8 @@ import hydrozoa.deploy.mkDeployTx
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither, txHash}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
-import hydrozoa.l2.ledger.{L2EventTransaction, l2EventTransactionFromInputsAndPeer}
-import hydrozoa.node.{TestPeer, addressFromPeer}
+import hydrozoa.l2.ledger.{L2EventTransaction}
+import hydrozoa.node.{TestPeer, addressFromPeer,  l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}

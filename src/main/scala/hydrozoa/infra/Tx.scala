@@ -171,8 +171,3 @@ def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): TokenName =
         .substring(2)
         |> TokenName.apply
 
-
-// TODO: refactor all of this to make it just use the scalus types.
-def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
-    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned.toHydrozoa)
-    addWitness(txUnsigned.toHydrozoa, keyWitness).toScalus

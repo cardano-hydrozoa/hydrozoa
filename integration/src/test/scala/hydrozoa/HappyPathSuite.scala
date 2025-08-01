@@ -3,10 +3,9 @@ package hydrozoa
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.txHash
-import hydrozoa.l2.ledger.l2EventWithdrawalFromInputsAndPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
-import hydrozoa.node.{TestPeer, addressFromPeer}
+import hydrozoa.node.{TestPeer, addressFromPeer, l2EventWithdrawalFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 import scalus.cardano.address.ShelleyAddress

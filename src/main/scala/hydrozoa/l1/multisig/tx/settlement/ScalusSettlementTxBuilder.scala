@@ -58,14 +58,19 @@ class ScalusSettlementTxBuilder(
         // This is a resolved list of all the inputs. It is impure; may fail if the lookup fails
         val resolvedUtxoInputs: Seq[TransactionOutput] =
             utxoIds
-                .map(deposit => bloxToScalusUtxoQuery(backendService, deposit.toScalus))
-                .map {
-                    case x @ Left(err) =>
-                        return Left(
-                          "UTxO input (i.e., deposit or treasury UTxO) not found during settlement transaction. Bloxbean error: " ++ x.toString
-                        )
-                    case Right(output) => output
-                }
+                .map(id =>
+                    bloxToScalusUtxoQuery(backendService, id.toScalus) match {
+                        case x @ Left(err) => {
+                            val isDeposit = r.deposits.contains(id)
+
+                            return Left(
+                              s"${if isDeposit then "Deposit" else "Treasury"} UTxO not found on L1 ledger during settlement transaction. Bloxbean error: " ++ x.toString
+                            )
+                        }
+
+                        case Right(output) => output
+                    }
+                )
                 .toSeq
 
         //////////////////////////////////////////////////////////////////////////

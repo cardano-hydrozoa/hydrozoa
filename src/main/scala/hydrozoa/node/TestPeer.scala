@@ -3,7 +3,9 @@ package hydrozoa.node
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.infra.{WalletModuleBloxbean, toBloxbean}
+import hydrozoa.infra.transitionary.{toHydrozoa, toScalus}
+import hydrozoa.infra.{WalletModuleBloxbean, addWitness, toBloxbean}
+import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.state.WalletId
 import hydrozoa.{Wallet, networkL1static}
@@ -13,7 +15,8 @@ import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger.Hash
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Transaction as STransaction}
 
 import scala.collection.mutable
 
@@ -74,11 +77,78 @@ extension [K, V](map: mutable.Map[K, V])
         case Some(value) => value
     }
 
-
 def addressFromPeer(peer: TestPeer): ShelleyAddress = (
-    ShelleyAddress(
-        network = Testnet,
-        payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
-        delegation = Null
+  ShelleyAddress(
+    network = Testnet,
+    payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
+    delegation = Null
+  )
+)
+
+// TODO: refactor all of this to make it just use the scalus types.
+def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
+    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned.toHydrozoa)
+    addWitness(txUnsigned.toHydrozoa, keyWitness).toScalus
+
+/** Given a set of inputs event, construct a withdrawal event attempting to withdraw all inputs with
+ * the given key
+ */
+def l2EventWithdrawalFromInputsAndPeer(
+                                          inputs: Set[TransactionInput],
+                                          peer: TestPeer
+                                      ): L2EventWithdrawal = {
+    val txBody: TransactionBody = TransactionBody(
+        inputs = inputs,
+        outputs = IndexedSeq.empty,
+        fee = Coin(0L)
     )
+
+    val txUnsigned: STransaction = {
+        STransaction(
+            body = KeepRaw(txBody),
+            witnessSet = TransactionWitnessSet.empty,
+            isValid = true,
+            auxiliaryData = None
+        )
+
+    }
+
+    // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
+    // Its probably possible to extract the key and use the crypto primitives from scalus directly
+    L2EventWithdrawal(signTx(peer, txUnsigned))
+}
+
+/** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
+def l2EventTransactionFromInputsAndPeer(
+                                           inputs: Set[TransactionInput],
+                                           utxoSet: Map[TransactionInput, TransactionOutput],
+                                           inPeer: TestPeer,
+                                           outPeer: TestPeer
+                                       ): L2EventTransaction = {
+
+    val totalVal: Value = inputs.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
+
+    val txBody: TransactionBody = TransactionBody(
+        inputs = inputs,
+        outputs = IndexedSeq(
+            Babbage(
+                address = addressFromPeer(outPeer),
+                value = totalVal,
+                datumOption = None,
+                scriptRef = None
+            )
+        ).map(Sized(_)),
+        fee = Coin(0L)
     )
+
+    val txUnsigned: STransaction = {
+        STransaction(
+            body = KeepRaw(txBody),
+            witnessSet = TransactionWitnessSet.empty,
+            isValid = false,
+            auxiliaryData = None
+        )
+    }
+
+    L2EventTransaction(signTx(inPeer, txUnsigned))
+}

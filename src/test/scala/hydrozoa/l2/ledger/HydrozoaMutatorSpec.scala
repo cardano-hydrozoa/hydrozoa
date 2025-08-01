@@ -3,7 +3,7 @@ package hydrozoa.l2.ledger
 import hydrozoa.infra.transitionary.*
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.{TestPeer, addressFromPeer}
+import hydrozoa.node.{TestPeer, addressFromPeer, l2EventTransactionFromInputsAndPeer, l2EventWithdrawalFromInputsAndPeer}
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Gen, Test as ScalaCheckTest}
