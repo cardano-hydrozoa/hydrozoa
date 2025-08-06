@@ -7,8 +7,8 @@ import hydrozoa.{Tx, TxIx, TxL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 
 class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateReader)
     extends DepositTxBuilder {
@@ -34,14 +34,23 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
 
                     val changeOutput: TransactionOutput = TransactionOutput(
                       address = utxoFunding.address,
-                      value = utxoFunding.value - Value(
-                        coin = feeCoin
-                      ) - depositValue,
+                      value =
+                          try {
+                              utxoFunding.value - Value(
+                                coin = feeCoin
+                              ) - depositValue
+                          } catch {
+                              case _: IllegalArgumentException =>
+                                  return Left(
+                                    s"Malformed value equal to `utxoFunding.value - Value(feeCoin) - depositValue` encountered: utxoFunding.value = ${utxoFunding.value}, depositValue = ${depositValue}, feeCoin = ${feeCoin}"
+                                  )
+                          },
                       datumOption = None
                     )
 
-                    val requiredSigner : AddrKeyHash  = { utxoFunding.address match
-                            case shelleyAddress : ShelleyAddress =>
+                    val requiredSigner: AddrKeyHash = {
+                        utxoFunding.address match
+                            case shelleyAddress: ShelleyAddress =>
                                 shelleyAddress.payment match
                                     case ShelleyPaymentPart.Key(hash) => hash
                                     case _ => return Left("deposit not at a pubkey address")

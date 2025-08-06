@@ -11,12 +11,24 @@ import hydrozoa.node.state.WalletId
 import hydrozoa.{Wallet, networkL1static}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Transaction as STransaction}
+import scalus.cardano.ledger.{
+    Coin,
+    Hash,
+    KeepRaw,
+    Sized,
+    TransactionBody,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    Value,
+    Transaction as STransaction
+}
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 
@@ -62,11 +74,23 @@ object TestPeer:
             )
         )
 
+    private val addressCache: mutable.Map[TestPeer, ShelleyAddress] =
+        mutable.Map.empty.withDefault(peer =>
+            ShelleyAddress(
+              network = Testnet,
+              payment =
+                  Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
+              delegation = Null
+            )
+        )
+
     def account(peer: TestPeer): Account = accountCache.cache(peer)
 
     def mkWallet(peer: TestPeer): Wallet = walletCache.cache(peer)
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
+
+    def address(peer: TestPeer): ShelleyAddress = addressCache.cache(peer)
 
 extension [K, V](map: mutable.Map[K, V])
     def cache(key: K): V = map.get(key) match {
@@ -77,38 +101,30 @@ extension [K, V](map: mutable.Map[K, V])
         case Some(value) => value
     }
 
-def addressFromPeer(peer: TestPeer): ShelleyAddress = (
-  ShelleyAddress(
-    network = Testnet,
-    payment = Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
-    delegation = Null
-  )
-)
-
 // TODO: refactor all of this to make it just use the scalus types.
 def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
     val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned.toHydrozoa)
     addWitness(txUnsigned.toHydrozoa, keyWitness).toScalus
 
 /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all inputs with
- * the given key
- */
+  * the given key
+  */
 def l2EventWithdrawalFromInputsAndPeer(
-                                          inputs: Set[TransactionInput],
-                                          peer: TestPeer
-                                      ): L2EventWithdrawal = {
+    inputs: Set[TransactionInput],
+    peer: TestPeer
+): L2EventWithdrawal = {
     val txBody: TransactionBody = TransactionBody(
-        inputs = inputs,
-        outputs = IndexedSeq.empty,
-        fee = Coin(0L)
+      inputs = inputs,
+      outputs = IndexedSeq.empty,
+      fee = Coin(0L)
     )
 
     val txUnsigned: STransaction = {
         STransaction(
-            body = KeepRaw(txBody),
-            witnessSet = TransactionWitnessSet.empty,
-            isValid = true,
-            auxiliaryData = None
+          body = KeepRaw(txBody),
+          witnessSet = TransactionWitnessSet.empty,
+          isValid = true,
+          auxiliaryData = None
         )
 
     }
@@ -120,33 +136,33 @@ def l2EventWithdrawalFromInputsAndPeer(
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
-                                           inputs: Set[TransactionInput],
-                                           utxoSet: Map[TransactionInput, TransactionOutput],
-                                           inPeer: TestPeer,
-                                           outPeer: TestPeer
-                                       ): L2EventTransaction = {
+    inputs: Set[TransactionInput],
+    utxoSet: Map[TransactionInput, TransactionOutput],
+    inPeer: TestPeer,
+    outPeer: TestPeer
+): L2EventTransaction = {
 
     val totalVal: Value = inputs.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
 
     val txBody: TransactionBody = TransactionBody(
-        inputs = inputs,
-        outputs = IndexedSeq(
-            Babbage(
-                address = addressFromPeer(outPeer),
-                value = totalVal,
-                datumOption = None,
-                scriptRef = None
-            )
-        ).map(Sized(_)),
-        fee = Coin(0L)
+      inputs = inputs,
+      outputs = IndexedSeq(
+        Babbage(
+          address = TestPeer.address(outPeer),
+          value = totalVal,
+          datumOption = None,
+          scriptRef = None
+        )
+      ).map(Sized(_)),
+      fee = Coin(0L)
     )
 
     val txUnsigned: STransaction = {
         STransaction(
-            body = KeepRaw(txBody),
-            witnessSet = TransactionWitnessSet.empty,
-            isValid = false,
-            auxiliaryData = None
+          body = KeepRaw(txBody),
+          witnessSet = TransactionWitnessSet.empty,
+          isValid = false,
+          auxiliaryData = None
         )
     }
 

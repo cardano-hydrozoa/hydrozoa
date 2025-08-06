@@ -25,6 +25,7 @@
             openjdk21
             sbt
             scala-cli
+     	    visualvm
           ];
         };
       })

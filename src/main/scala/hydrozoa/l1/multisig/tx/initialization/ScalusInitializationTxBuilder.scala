@@ -80,11 +80,17 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                       address = seedOutput.address,
                       // Change is calculated manually here as the seed output's value, minus the
                       // ada put into the head, minus the fee.
-                      value = seedOutput.value -
-                          Value(coin = Coin(recipe.coins.toLong)) -
-                          Value(
-                            coin = feeCoin,
-                          ),
+                      value =
+                          try {
+                              seedOutput.value -
+                                  Value(coin = Coin(recipe.coins.toLong)) -
+                                  Value(
+                                    coin = feeCoin
+                                  )
+                          } catch {
+                              case _: IllegalArgumentException =>
+                                  return Left("illegal change value found")
+                          },
                       datumOption = None
                     )
 
@@ -107,7 +113,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     (
                       Tx(Cbor.encode(scalusTransaction).toByteArray),
                       headAddress match {
-                          case sa : ShelleyAddress => AddressBech(sa.toBech32.get)
+                          case sa: ShelleyAddress => AddressBech(sa.toBech32.get)
                           // NOTE (Peter, 2025-08-07) I miss monads, how do I do those in scala?
                           case _ => return Left("Hydra Head is not at a Shelly address")
                       }

@@ -5,7 +5,7 @@ import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.txHash
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
-import hydrozoa.node.{TestPeer, addressFromPeer, l2EventWithdrawalFromInputsAndPeer}
+import hydrozoa.node.{TestPeer, l2EventWithdrawalFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 import scalus.cardano.address.ShelleyAddress
@@ -73,7 +73,7 @@ class HappyPathSuite extends FunSuite {
 
             // Alice's Bech32 address; we'll use this to create the deposit datum and set the address of the
             // l2 UTxO and refund address
-            aliceAddress: String = addressFromPeer(Alice).asInstanceOf[ShelleyAddress].toBech32.get
+            aliceAddress: String = address(Alice).asInstanceOf[ShelleyAddress].toBech32.get
 
             // Deposit change from initialization transaction
             deposit1 <- sut.deposit(

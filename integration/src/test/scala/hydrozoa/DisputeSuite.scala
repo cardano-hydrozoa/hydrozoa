@@ -9,7 +9,7 @@ import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither, txHash}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l2.ledger.{L2EventTransaction}
-import hydrozoa.node.{TestPeer, addressFromPeer,  l2EventTransactionFromInputsAndPeer}
+import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
@@ -133,7 +133,7 @@ class DisputeSuite extends FunSuite {
 
     test("Hydrozoa dispute scenario") {
         val peerBech32Addresses: Map[TestPeer, String] = testPeers.foldLeft(Map.empty)((m, peer) =>
-            m.updated(peer, addressFromPeer(peer).toBech32.get)
+            m.updated(peer, address(peer).toBech32.get)
         )
 
         val result = for

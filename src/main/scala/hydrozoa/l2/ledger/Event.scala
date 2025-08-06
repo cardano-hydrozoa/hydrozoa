@@ -1,17 +1,16 @@
 package hydrozoa.l2.ledger
 
 import hydrozoa.*
-import hydrozoa.l1.multisig.state.{DepositDatum, depositDatum}
+import hydrozoa.infra.transitionary.toScalusLedger
+import hydrozoa.l1.multisig.state.DepositDatum
+import hydrozoa.l1.multisig.state.DepositDatum.derived$FromData
 import io.bullet.borer.Cbor
 import scalus.builtin.Builtins.blake2b_256
+import scalus.builtin.Data.fromData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.*
-import hydrozoa.infra.{Piper, plutusAddressAsL2}
-import hydrozoa.infra.transitionary.toScalusLedger
-import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import hydrozoa.l1.multisig.state.DepositDatum.derived$FromData
 
 // A sum type for ledger events
 sealed trait L2Event:
@@ -39,9 +38,9 @@ final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutpu
     // FIXME: check if this is really the desired behavior. Should we do something else if we have a malformed
     // deposit output?
     val resolvedL2UTxOs: Seq[(TransactionInput, TransactionOutput)] = {
-        val mbL2Outs: Seq[Option[(TransactionInput, TransactionOutput)]] = { 
+        val mbL2Outs: Seq[Option[(TransactionInput, TransactionOutput)]] = {
             utxosL1.zipWithIndex.map((utxo, idx) => {
-            val l2TxIn = TransactionInput(transactionId = getEventId, index = idx)
+                val l2TxIn = TransactionInput(transactionId = getEventId, index = idx)
                 if !utxo._2.isInstanceOf[Babbage] then None
                 else {
                     val babbageTxOut = utxo._2.asInstanceOf[Babbage]
@@ -50,13 +49,15 @@ final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutpu
                             // FIXME, seriously: this is chaotic. We previously were using `ByteString` to represent datums,
                             // and because of that, they got serialized as Bytestrings. Thus, the datum on the deposit
                             // utxo is serialized _as a bytestring that contains the cbor for the actual datum_.
-                            val dd: DepositDatum = fromData(Data.fromCbor(fromData[ByteString](datum).bytes))
+                            val dd: DepositDatum =
+                                fromData(Data.fromCbor(fromData[ByteString](datum).bytes))
                             Some(
                               l2TxIn,
                               Babbage(
                                 address = dd.address.toScalusLedger,
                                 value = Value(babbageTxOut.value.coin),
-                                datumOption = dd.datum.asScala.map(bs => Inline(Data.fromCbor(bs.bytes))),
+                                datumOption =
+                                    dd.datum.asScala.map(bs => Inline(Data.fromCbor(bs.bytes))),
                                 scriptRef = None
                               )
                             )
@@ -64,13 +65,11 @@ final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutpu
                         case _ => None
                     }
                 }
-            }
-            )
-            
+            })
+
         }
         mbL2Outs.filter(_.isDefined).map(_.get)
     }
-        
 
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = Hash(
       blake2b_256(

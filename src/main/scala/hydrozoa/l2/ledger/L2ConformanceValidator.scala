@@ -27,9 +27,12 @@ object L2ConformanceValidator extends STSL2.Validator {
         case L2EventTransaction(tx) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
         case L2EventWithdrawal(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
         case L2EventGenesis(resolvedSeq) =>
-            mapLeft(_.toString)(resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
-                if acc.isLeft then acc else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
-            ))
+            mapLeft(_.toString)(
+              resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
+                  if acc.isLeft then acc
+                  else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
+              )
+            )
     }
 }
 
@@ -78,7 +81,7 @@ given L2ConformanceValidator[TransactionOutput] with
     def l2Validate(l1: TransactionOutput): Either[String, Unit] = {
         for
             _ <- l1 match {
-                case _ : Babbage => Right(())
+                case _: Babbage => Right(())
                 case _ => Left(s"Transaction output is not a Babbage output. Output is: ${l1}")
             }
             _ <- validateIfPresent(l1.asInstanceOf[Babbage].datumOption)
@@ -150,7 +153,8 @@ given L2ConformanceValidator[TransactionBody] with
             // Validate nested fields from L1 transaction type
             // N.B.: I would have liked to use `traverse`, but I couldn't quite figure out how
             _ <- l1.outputs.foldLeft[Either[String, Unit]](Right(()))((acc, sto) => {
-                if acc.isLeft then acc else given_L2ConformanceValidator_TransactionOutput.l2Validate(sto.value)
+                if acc.isLeft then acc
+                else given_L2ConformanceValidator_TransactionOutput.l2Validate(sto.value)
             })
         yield ()
 

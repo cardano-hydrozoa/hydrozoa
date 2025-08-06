@@ -3,11 +3,16 @@ package hydrozoa.l2.ledger
 import hydrozoa.infra.transitionary.*
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.{TestPeer, addressFromPeer, l2EventTransactionFromInputsAndPeer, l2EventWithdrawalFromInputsAndPeer}
+import hydrozoa.node.{
+    TestPeer,
+    l2EventTransactionFromInputsAndPeer,
+    l2EventWithdrawalFromInputsAndPeer
+}
 import io.bullet.borer.Cbor
+import monocle.Iso
+import monocle.syntax.all.*
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Gen, Test as ScalaCheckTest}
-import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
@@ -15,24 +20,19 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.HashPurpose.KeyHash
 import scalus.cardano.ledger.HashSize.given_HashSize_Blake2b_224
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.State
+import scalus.cardano.ledger.rules.{Context, State}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
+import scalus.ledger.api.v1.PubKeyHash
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as SOption
-
-// For these tests, we assume a 1:1:1 relationship between Peer:Wallet:Address.
-// Note that this is NOT true in production.
-val alice: TestPeer = TestPeer.Alice
-val bob: TestPeer = TestPeer.Bob
 
 /** Build dummy deposit datum from a pubkey, setting the L2 and refund addresses to the pkh address
   */
 def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
-    val pkh: AddrKeyHash = Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))
     val v3Addr: v3.Address = v3
         .Address(
           credential = v3.Credential
-              .PubKeyCredential(v3.PubKeyHash(pkh)),
+              .PubKeyCredential(PubKeyHash(address(peer).payment.asHash)),
           SOption.None
         )
     Some(
@@ -73,7 +73,7 @@ def genDepositFromPeer(peer: TestPeer): Gen[(TransactionInput, TransactionOutput
         )
 
         txOut = Babbage(
-          address = addressFromPeer(peer),
+          address = TestPeer.address(peer),
           value = Value(Coin(1_000_000L)),
           datumOption = depositDatumFromPeer(peer),
           scriptRef = None
@@ -104,12 +104,76 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
         }
 }
 
+/** Generate an "attack" that, given a context, state, and L2EventTransaction, returns a tuple
+  * containing:
+  *   - a mutated L2EventTransaction in such a way that a given ledger rule will be violated.
+  *   - the expected error to be raised from the L2 ledger STS when the mutated transaction is
+  *     applied.
+  *
+  * Note that, at this time, only one such attack can be applied at time; applying multiple attacks
+  * and observing the exception would require using `Validation` rather than `Either`, and probably
+  * some threading through of the various mutations to determine the actual context of the errors
+  * raised.
+  */
+def genL2EventTransactionAttack: Gen[
+  (Context, State, L2EventTransaction) => (L2EventTransaction, (String | TransactionException))
+] = {
+
+    // Violates "AllInputsMustBeInUtxoValidator" ledger rule
+    def inputsNotInUtxoAttack: (Context, State, L2EventTransaction) => (
+        L2EventTransaction,
+        (String | TransactionException)
+    ) =
+        (context, state, transaction) => {
+            // Generate a random TxId that is _not_ present in the state
+            val bogusInputId: TransactionHash = Hash(
+              genByteStringOfN(32)
+                  .suchThat(txId =>
+                      !state.utxo.toSeq.map(_._1.transactionId.bytes).contains(txId.bytes)
+                  )
+                  .sample
+                  .get
+            )
+
+            val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
+
+            val newTx: L2EventTransaction =
+                transaction
+                    // First focus on the inputs of the transaction
+                    .focus(_.transaction.body.value.inputs)
+                    // then modify those inputs: the goal is to replace the txId of one input with
+                    // our bogusInputId
+                    .modify(
+                      // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
+                      // so we convert to and from List
+                      _.toList
+                          // Focus on the first element of the list, and...
+                          .focus(_.index(0))
+                          // replace its transactionId with our bogus txId
+                          .replace(bogusTxIn)
+                          .toSet
+                    )
+
+            val expectedException = new TransactionException.BadAllInputsUTxOException(
+              transactionId = newTx.getEventId,
+              missingInputs = Set(bogusTxIn),
+              missingCollateralInputs = Set.empty,
+              missingReferenceInputs = Set.empty
+            )
+            (newTx, expectedException)
+        }
+
+    Gen.oneOf(Seq(inputsNotInUtxoAttack))
+}
+
 class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
-    override def scalaCheckTestParameters = {
-        // N.B.: 100 tests is insufficient coverage. When running in
-        // CI or pre-release, it should be significantly higher.
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
+    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(200)
     }
+
+    // Pre-compute and cache addresses
+    address(Alice)
+    address(Bob)
 
     test("init empty STS constituents") {
         val context = emptyContext
@@ -117,57 +181,62 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         val event = L2EventTransaction(emptyTransaction)
     }
 
-    property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(alice)) { event =>
-        HydrozoaL2Mutator(emptyContext, emptyState, event) match {
-            case Right(outState) =>
-                // Helper values used in properties and for logging error messages
-                val actualIndexs: Seq[Int] = outState.utxo.map((txIn, _) => txIn.index).toSeq.sorted
+    property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(Alice)) {
+        (
+            event =>
+                HydrozoaL2Mutator(emptyContext, emptyState, event) match {
+                    case Right(outState) =>
+                        // Helper values used in properties and for logging error messages
+                        val actualIndexes: Seq[Int] =
+                            outState.utxo.map((txIn, _) => txIn.index).toSeq.sorted
 
-                (outState.certState == emptyState.certState) :|
-                    "Genesis event should not modify CertState" &&
-                    (outState.utxo.size == event.resolvedL2UTxOs.length) :|
-                    "Genesis event should add correct number of UTxOs to the state" &&
-                    (outState.utxo.forall((txIn, _) => txIn.transactionId == event.getEventId)) :|
-                    "All TransactionInputs resulting from the genesis should have the same txId" && {
-                        // Checking that all expected indexes appear somewhere in the new state
-                        var allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
-                        allIdx == actualIndexs
-                    } :| s"All expected transaction indexes appear (0 to ${event.resolvedL2UTxOs.length}); actualIdxs are ${actualIndexs}"
+                        (outState.certState == emptyState.certState) :|
+                            "Genesis event should not modify CertState" &&
+                            (outState.utxo.size == event.resolvedL2UTxOs.length) :|
+                            "Genesis event should add correct number of UTxOs to the state" &&
+                            (outState.utxo.forall((txIn, _) =>
+                                txIn.transactionId == event.getEventId
+                            )) :|
+                            "All TransactionInputs resulting from the genesis should have the same txId" && {
+                                // Checking that all expected indexes appear somewhere in the new state
+                                var allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
+                                allIdx == actualIndexes
+                            } :| s"All expected transaction indexes appear (0 to ${event.resolvedL2UTxOs.length}); actualIdxs are ${actualIndexes}"
 
-            case Left(err) => false :| (s"Genesis event failed with error: ${err}")
-        }
-
+                    case Left(err) => false :| (s"Genesis event failed with error: ${err}")
+                }
+        )
     })
 
     property("Alice can withdraw her own deposited utxos")(
-      forAll(genL2EventGenesisFromPeer(alice)) { event =>
+      forAll(genL2EventGenesisFromPeer(Alice)) { event =>
           val outState =
               for
                   state <- HydrozoaL2Mutator(emptyContext, emptyState, event)
                   state <- HydrozoaL2Mutator(
                     emptyContext,
                     state,
-                    l2EventWithdrawalFromInputsAndPeer(state.utxo.map(_._1).toSet, alice)
+                    l2EventWithdrawalFromInputsAndPeer(state.utxo.keySet, Alice)
                   )
               yield state
           outState match {
               case Left(err) => false :| (s"'genesis => withdraw all' failed with error: ${err}")
               case Right(outS) =>
                   (outS.certState == emptyState.certState) :| "'genesis => withdraw all' should not modify cert state" &&
-                  (outS.utxo.size == 0) :| "'genesis => withdraw all' should leave an empty utxo set"
+                  outS.utxo.isEmpty :| "'genesis => withdraw all' should leave an empty utxo set"
           }
       }
     )
 
     property("Alice cannot withdraw Bob's genesis utxos")({
-        forAll(genL2EventGenesisFromPeer(bob)) { event =>
+        forAll(genL2EventGenesisFromPeer(Bob)) { event =>
             // First apply the randomly generated genesis event with Bob's UTxOs
             // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
             val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
             // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
             val withdrawlEvent = l2EventWithdrawalFromInputsAndPeer(
-              postGenesisState.utxo.map(_._1).toSet,
-              alice
+              postGenesisState.utxo.keySet,
+              Alice
             )
 
             // Then attempt to execute the withdrawal
@@ -181,11 +250,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
             val expectedException = TransactionException.MissingKeyHashesException(
               transactionId = withdrawlEvent.getEventId,
               missingInputsKeyHashes = Set(
-                Hash[Blake2b_224, HashPurpose.KeyHash](
-                  blake2b_224(
-                    ByteString.fromArray(TestPeer.mkWallet(bob).exportVerificationKeyBytes.bytes)
-                  )
-                )
+                Hash(ByteString.fromArray(address(Bob).payment.asHash.bytes))
               ),
               missingCollateralInputsKeyHashes = Set.empty,
               missingVotingProceduresKeyHashes = Set.empty,
@@ -199,38 +264,30 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 case Left(err) =>
                     err match {
                         case missingKeyHashes: TransactionException.MissingKeyHashesException =>
-                            // So... Exception objects aren't comparable with ==. And it seems like I can't auto-derive
-                            // === from cats because of this.
-                            (missingKeyHashes.transactionId == expectedException.transactionId &&
-                                missingKeyHashes.missingInputsKeyHashes == expectedException.missingInputsKeyHashes &&
-                                missingKeyHashes.missingCertificatesKeyHashes == expectedException.missingCertificatesKeyHashes &&
-                                missingKeyHashes.missingWithdrawalsKeyHashes == expectedException.missingWithdrawalsKeyHashes &&
-                                missingKeyHashes.missingCollateralInputsKeyHashes == expectedException.missingCollateralInputsKeyHashes &&
-                                missingKeyHashes.missingRequiredSignersKeyHashes == expectedException.missingRequiredSignersKeyHashes &&
-                                missingKeyHashes.missingVotingProceduresKeyHashes == expectedException.missingVotingProceduresKeyHashes) :|
+                            (missingKeyHashes == expectedException) :|
                                 s"Correct exception type thrown (MissingKeyHashesException), but unexpected content. Actual: ${missingKeyHashes}; Expected: ${expectedException}"
                         case _ =>
                             false :| s"L2 STS failed for unexpected reason. Actual: ${err}; Expected: ${expectedException}"
                     }
                 case Right(_) =>
-                    false :| s"Alice was able to withdraw Bob's genesis UTxOs (i.e., Alice's signature validated on Bob's UTxOs) "
+                    false :| s"Alice was able to withdraw Bob's genesis UTxOs (i.e., Alice's signature validated on Bob's UTxOs)"
             }
 
         }
     })
 
     property("non-existent utxos can't be withdrawn")(
-      forAll(genL2EventGenesisFromPeer(alice)) { event =>
+      forAll(genL2EventGenesisFromPeer(Alice)) { event =>
           // First apply the randomly generated genesis event with Alice's UTxOs
           // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
           val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
 
           // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
-          val allTxInputs = postGenesisState.utxo.map(_._1).toSet
+          val allTxInputs = postGenesisState.utxo.keySet
 
           val withdrawalEvent = l2EventWithdrawalFromInputsAndPeer(
             allTxInputs,
-            alice
+            Alice
           )
 
           // Then attempt to execute the withdrawal on the _original empty state_
@@ -250,7 +307,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
 
           postWithdrawalState match {
               case Left(err) =>
-                  (err.toString == expectedException.toString) :| s"Exception strings don't match. Actual: ${err.toString}; Expected: ${expectedException.toString}"
+                  (err == expectedException) :| s"Exceptions don't match. Actual: ${err.toString}; Expected: ${expectedException.toString}"
               case Right(_) =>
                   false :| s"Alice was able to withdraw non-existent utxos"
           }
@@ -258,7 +315,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
       }
     )
 
-    property("correct transaction")(forAll(genL2EventGenesisFromPeer(alice)) { event =>
+    property("correct transaction")(forAll(genL2EventGenesisFromPeer(Alice)) { event =>
         val outState =
             for
                 // First apply the randomly generated genesis event with Alice's UTxOs
@@ -271,8 +328,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 transactionEvent = l2EventTransactionFromInputsAndPeer(
                   inputs = allTxInputs,
                   utxoSet = postGenesisState.utxo,
-                  inPeer = alice,
-                  outPeer = bob
+                  inPeer = Alice,
+                  outPeer = Bob
                 )
 
                 // Then attempt to execute the withdrawal on the postGenesisState
@@ -288,9 +345,44 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
             case Right(outS) =>
                 (outS.certState == emptyState.certState) :| "Successful transaction should not modify cert state" &&
                 (outS.utxo.size == 1) :| "Successful transaction should result in a single utxo" &&
-                (outS.utxo.head._2.address == addressFromPeer(
-                  bob
+                (outS.utxo.head._2.address == TestPeer.address(
+                  Bob
                 )) :| "Result UTxO should be at Bob's address"
+        }
+
+    })
+
+    property("transaction attack")(forAll(genL2EventGenesisFromPeer(Alice)) { event =>
+        HydrozoaL2Mutator(emptyContext, emptyState, event) match {
+            // This case should not happen (not the focus of the test), but we handle it anyway.
+            case Left(genesisErr) => false :| s"Genesis event failed with error ${genesisErr}"
+            case Right(postGenesisState) => {
+
+                // Then generate the transaction event, where Alice tries to send all UTxOs to bob
+                val allTxInputs = postGenesisState.utxo.keySet
+
+                val transactionEvent = l2EventTransactionFromInputsAndPeer(
+                  inputs = allTxInputs,
+                  utxoSet = postGenesisState.utxo,
+                  inPeer = Alice,
+                  outPeer = Bob
+                )
+
+                // Generate an attack
+                val txAttack = genL2EventTransactionAttack.sample.get
+
+                val (attackedTransaction, expectedError) =
+                    txAttack(emptyContext, postGenesisState, transactionEvent)
+
+                // Then attempt to execute the attacked transaction on the postGenesisState.
+                // This should fail with the expected error.
+                HydrozoaL2Mutator(emptyContext, postGenesisState, attackedTransaction) match {
+                    case Left(actualErr) =>
+                        (actualErr == expectedError) :| s"Actual error does not match expected error. Actual error: ${actualErr}. Expected error: ${expectedError}"
+                    case Right(finalState) =>
+                        false :| s"Expect a failure, but got a success. Final state: ${finalState}. Expected error ${expectedError}"
+                }
+            }
         }
 
     })

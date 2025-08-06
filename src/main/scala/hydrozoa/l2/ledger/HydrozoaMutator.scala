@@ -1,9 +1,7 @@
 package hydrozoa.l2.ledger
 
-import scalus.cardano.ledger.TransactionInput
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.*
+import scalus.cardano.ledger.rules.STS.Validator
 
 /*
 We define three mutators for the three L2 event types (Genesis, Transaction, Withdrawal).
@@ -20,7 +18,7 @@ private object HydrozoaGenesisMutator extends STSL2.Mutator {
 
     override def transit(context: Context, state: State, event: Event): Result = event match {
         case g: L2EventGenesis => Right(addGenesisUtxosToState(g, state))
-        case _ => Right(state)
+        case _                 => Right(state)
     }
 }
 

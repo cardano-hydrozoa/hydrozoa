@@ -1,19 +1,17 @@
 package hydrozoa.demo
 
-import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.transitionary.{toHydrozoa, toScalus}
-import hydrozoa.infra.{Piper, toEither}
 import hydrozoa.l1.CardanoL1YaciDevKit
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
-import hydrozoa.node.{TestPeer, addressFromPeer, signTx}
-import hydrozoa.node.TestPeer.{Alice, Bob, Carol, account}
+import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.HeadPhase
 import hydrozoa.node.state.HeadPhase.Open
+import hydrozoa.node.{TestPeer, signTx}
 import hydrozoa.sut.{HydrozoaFacade, RealFacade}
 import org.scalacheck.Gen
 import org.scalacheck.Gen.Parameters
@@ -23,8 +21,8 @@ import ox.channels.{Actor, ActorRef, Channel}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, KeepRaw, Sized, Transaction, TransactionBody, TransactionOutput, TransactionWitnessSet, Value}
 import sttp.client4.UriContext
 
 import scala.collection.mutable
@@ -187,25 +185,38 @@ object Workload extends OxApp:
               outputCoins.length,
               Gen.oneOf(TestPeer.values)
             )
-            recipients <- Gen.containerOfN[List, TestPeer](outputCoins.length, Gen.oneOf(s.headPeers))
-
-            outputs : IndexedSeq[Sized[TransactionOutput]] =
-                outputCoins
-                    .zip(recipients.map(addressFromPeer))
-                    .map((coins, addr) => Babbage(address = addr, value = Value(Coin(coins.toLong)),
-                        datumOption = None, scriptRef = None)).toIndexedSeq.map(Sized(_))
-
-            txBody : TransactionBody = TransactionBody(
-                inputs = inputs.map(_.toScalus).toSet,
-                outputs = outputs,
-                fee = Coin(0L)
+            recipients <- Gen.containerOfN[List, TestPeer](
+              outputCoins.length,
+              Gen.oneOf(s.headPeers)
             )
 
-            neededSigners : Set[TestPeer] = {
+            outputs: IndexedSeq[Sized[TransactionOutput]] =
+                outputCoins
+                    .zip(recipients.map(TestPeer.address))
+                    .map((coins, addr) =>
+                        Babbage(
+                          address = addr,
+                          value = Value(Coin(coins.toLong)),
+                          datumOption = None,
+                          scriptRef = None
+                        )
+                    )
+                    .toIndexedSeq
+                    .map(Sized(_))
+
+            txBody: TransactionBody = TransactionBody(
+              inputs = inputs.map(_.toScalus).toSet,
+              outputs = outputs,
+              fee = Coin(0L)
+            )
+
+            neededSigners: Set[TestPeer] = {
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
-                val addrMap : Map[AddressBechL2, TestPeer] = {
-                    s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+                val addrMap: Map[AddressBechL2, TestPeer] = {
+                    s.knownPeers.foldLeft(Map.empty)((m, peer) =>
+                        m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer)
+                    )
                 }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
@@ -213,12 +224,15 @@ object Workload extends OxApp:
                 txBody.inputs.map(ti => addrMap(l2state(ti.toHydrozoa).address))
             }
 
-            txUnsigned : Transaction = Transaction(body = KeepRaw(txBody), witnessSet = TransactionWitnessSet.empty,
-                isValid = true, auxiliaryData = None)
+            txUnsigned: Transaction = Transaction(
+              body = KeepRaw(txBody),
+              witnessSet = TransactionWitnessSet.empty,
+              isValid = true,
+              auxiliaryData = None
+            )
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
         yield TransactionL2Command(L2EventTransaction(tx))
-
 
     def genL2Withdrawal(s: HydrozoaState): Gen[WithdrawalL2Command] =
         val l2state = l2State.ask(_.toMap)
@@ -226,17 +240,19 @@ object Workload extends OxApp:
         for
             numberOfInputs <- Gen.choose(1, 3.min(l2state.size))
             inputs <- Gen.pick(numberOfInputs, l2state.keySet)
-            txBody : TransactionBody = TransactionBody(
-                inputs = inputs.map(_.toScalus).toSet,
-                outputs = IndexedSeq.empty,
-                fee = Coin(0L)
+            txBody: TransactionBody = TransactionBody(
+              inputs = inputs.map(_.toScalus).toSet,
+              outputs = IndexedSeq.empty,
+              fee = Coin(0L)
             )
 
-            neededSigners : Set[TestPeer] = {
+            neededSigners: Set[TestPeer] = {
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
-                val addrMap : Map[AddressBechL2, TestPeer] = {
-                    s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+                val addrMap: Map[AddressBechL2, TestPeer] = {
+                    s.knownPeers.foldLeft(Map.empty)((m, peer) =>
+                        m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer)
+                    )
                 }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
@@ -244,12 +260,14 @@ object Workload extends OxApp:
                 txBody.inputs.map(ti => addrMap(l2state(ti.toHydrozoa).address))
             }
 
-            txUnsigned : Transaction = Transaction(body = KeepRaw(txBody), witnessSet = TransactionWitnessSet.empty,
-                isValid = true, auxiliaryData = None)
+            txUnsigned: Transaction = Transaction(
+              body = KeepRaw(txBody),
+              witnessSet = TransactionWitnessSet.empty,
+              isValid = true,
+              auxiliaryData = None
+            )
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
-
-
         yield WithdrawalL2Command(L2EventWithdrawal(tx))
 
     def runCommand(cmd: WorkloadCommand): Unit =

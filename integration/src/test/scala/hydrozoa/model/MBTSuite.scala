@@ -3,27 +3,44 @@ package hydrozoa.model
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{contextAndStateFromHUTxO, toHUTxO, toHydrozoa, toHydrozoaNativeScript, toScalus, toV3UTxO}
-import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, decodeBech32AddressL1, decodeBech32AddressL2, onlyOutputToAddress, serializeTxHex, txHash}
+import hydrozoa.infra.transitionary.*
+import hydrozoa.infra.{
+    NoMatch,
+    PSStyleAssoc,
+    Piper,
+    TooManyMatches,
+    decodeBech32AddressL1,
+    decodeBech32AddressL2,
+    onlyOutputToAddress,
+    serializeTxHex,
+    txHash
+}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
-import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder, ScalusRefundTxBuilder}
+import hydrozoa.l1.multisig.tx.initialization.{
+    InitTxBuilder,
+    InitTxRecipe,
+    ScalusInitializationTxBuilder
+}
+import hydrozoa.l1.multisig.tx.refund.{
+    PostDatedRefundRecipe,
+    RefundTxBuilder,
+    ScalusRefundTxBuilder
+}
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
-import Tuple.canEqualTuple
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
-import hydrozoa.node.{TestPeer, addressFromPeer, signTx}
 import hydrozoa.node.TestPeer.{account, mkWallet}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
+import hydrozoa.node.{TestPeer, signTx}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade, Utils}
 import org.scalacheck.Gen.resize
 import org.scalacheck.Prop.{Result, propBoolean}
@@ -33,14 +50,14 @@ import org.scalacheck.rng.Seed
 import org.scalacheck.util.{ConsoleReporter, Pretty}
 import org.scalacheck.{Gen, Prop, Properties, Test}
 import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, KeepRaw, Sized, Transaction, TransactionBody, TransactionOutput, TransactionWitnessSet, Value}
+import scalus.cardano.ledger.*
 import scalus.prelude.Option as ScalusOption
 import sttp.client4.Response
 import sttp.client4.quick.*
 
 import java.util.concurrent.atomic.AtomicInteger
+import scala.Tuple.canEqualTuple
 import scala.collection.immutable.Set as Opt
 import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
@@ -119,7 +136,7 @@ object MBTSuite extends Commands:
     def genInitializeCommand(s: State): Gen[InitializeCommand] =
         val initiator = s.knownPeers.head
         val l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
-        val utxoIds = l1.utxoIdsByAddress(AddressBech[L1](addressFromPeer(initiator).toBech32.get))
+        val utxoIds = l1.utxoIdsByAddress(AddressBech[L1](TestPeer.address(initiator).toBech32.get))
 
         for
             numberOfHeadPeers <- Gen.chooseNum(0, s.knownPeers.tail.size)
@@ -127,25 +144,30 @@ object MBTSuite extends Commands:
             seedUtxoId <- Gen.oneOf(utxoIds)
         yield InitializeCommand(cnt.incrementAndGet(), initiator, headPeers.toSet, seedUtxoId)
 
+    /** Requires a utxo at the depositor's address that has more than 5 ADA in it (approximately minUTxO + 1 ADA fee) */
     def genDepositCommand(s: State): Gen[DepositCommand] =
 
         for
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
-            depositorAddressL1 = AddressBech[L1](addressFromPeer(depositor).toBech32.get) // FIXME: extension
+            depositorAddressL1 = AddressBech[L1](TestPeer.address(depositor).toBech32.get) // FIXME: extension
             l1 = CardanoL1Mock(s.knownTxs, s.utxosActive)
             (seedUtxoId, coins) <- Gen.oneOf(l1.utxoIdsAdaAtAddress(depositorAddressL1))
+                .suchThat((utxoId, b) => b > 5_000_000)
 
             recipient <- Gen.oneOf(s.knownPeers + s.initiator.get)
-            recipientAddressL2 = AddressBech[L2](addressFromPeer(recipient).toBech32.get) // FIXME: extension
-            depositAmount: BigInt <- Gen.choose(
+            recipientAddressL2 = AddressBech[L2](TestPeer.address(recipient).toBech32.get) // FIXME: extension
+            depositAmountWithFee: BigInt <- Gen.choose(
+                // N.B.: We currently set the fee to a fixed 1 ADA
                 BigInt.apply(5_000_000).min(coins),
                 BigInt.apply(100_000_000).min(coins)
             )
+
         yield DepositCommand(
             cnt.incrementAndGet(),
             depositor,
             seedUtxoId,
-            depositAmount,
+            // this will error if the deposit UTxO has less than 1 ADA in it
+            depositAmountWithFee - 1_000_000,
             recipientAddressL2,
             depositorAddressL1
         )
@@ -173,7 +195,7 @@ object MBTSuite extends Commands:
 
             outputs : IndexedSeq[Sized[TransactionOutput]] =
                 outputCoins
-                .zip(recipients.map(addressFromPeer(_)))
+                .zip(recipients.map(TestPeer.address(_)))
                 .map((coins, addr) => Babbage(address = addr, value = Value(Coin(coins.toLong)),
                     datumOption = None, scriptRef = None)).toIndexedSeq.map(Sized(_))
 
@@ -187,7 +209,7 @@ object MBTSuite extends Commands:
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
               val addrMap : Map[AddressBechL2, TestPeer] = {
-                  s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+                  s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer))
               }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
@@ -216,7 +238,7 @@ object MBTSuite extends Commands:
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
                 val addrMap : Map[AddressBechL2, TestPeer] = {
-                    s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](addressFromPeer(peer).toBech32.get), peer))
+                    s.knownPeers.foldLeft(Map.empty)((m, peer) => m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer))
                 }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
@@ -629,6 +651,7 @@ object MBTSuite extends Commands:
                     val backendService = BackendServiceMock(l1Mock, state.pp)
                     val nodeStateReader = NodeStateReaderMock(state)
 
+                    log.info(s"L1 UTxOS: ${state.utxosActive}")
                     val settlementTxBuilder = ScalusSettlementTxBuilder(backendService, nodeStateReader)
                     val finalizationTxBuilder = ScalusFinalizationTxBuilder(backendService, nodeStateReader)
 
@@ -656,9 +679,8 @@ object MBTSuite extends Commands:
                          ).getOrElse(state.treasuryUtxoId)
 
                     // Why does it typecheck?
-                    //val newDepositUtxos = state.depositUtxos.map.filterNot(block.blockBody.depositsAbsorbed.contains) |> UtxoSet.apply[L1, DepositTag]
                     val newDepositUtxos = state.depositUtxos.unTag.utxoMap
-                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k)) |> TaggedUtxoSet.apply[L1, DepositTag]
+                        .filterNot((k,_) => block.blockBody.depositsAbsorbed.contains(k.toScalus)) |> TaggedUtxoSet.apply[L1, DepositTag]
 
                     val newState = state.copy(
                         depositUtxos = newDepositUtxos,
@@ -672,7 +694,7 @@ object MBTSuite extends Commands:
                     )
 
                     Right(record, mbGenesis.map((hash, l2genesis) => hash.toHydrozoa -> l2genesis)) /\ newState
-
+        
         override def postConditionSuccess(
             expectedResult: Result,
             stateBefore: HydrozoaState,
@@ -1172,11 +1194,8 @@ def cmpLabel[A](id: Int, actual: A, expected: A)(using CanEqual[A, A]): Prop =
 
 object HydrozoaOneNodeWithL1Mock extends Properties0("Hydrozoa One node mode with L1 mock"):
     property("Just works, nothing bad happens") = MBTSuite.property0()
-        .useSeed(Seed.fromBase64("bGr0AUfvwXSFZWTPVyXA9S5fHWn-NsCe3silG6HWbPD=").get)
-
 
 object HydrozoaOneNodeWithYaci extends Properties0("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
     // It doesn't work in fact, since Yaci hangs up once in a while
     property("Just works, nothing bad happens") = MBTSuite.property0()
-//        .useSeed(Seed.fromBase64("QquIyEzeWlhTG6U2J1BLXhOCZxx4eLm9nUDYdlw9LjO=").get)

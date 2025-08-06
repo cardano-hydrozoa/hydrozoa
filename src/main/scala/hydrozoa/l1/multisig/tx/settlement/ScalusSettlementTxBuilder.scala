@@ -1,6 +1,5 @@
 package hydrozoa.l1.multisig.tx.settlement
 
-import scalus.builtin.ByteString
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.Tx
@@ -11,20 +10,12 @@ import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop.toPlutusData
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{
-    Coin,
-    KeepRaw,
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    Value
-}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Address
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.*
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -119,7 +110,13 @@ class ScalusSettlementTxBuilder(
             resolvedUtxoInputs.foldLeft(Value.zero)((b, to) => b + to.value)
 
         val treasuryValue: Value =
-            inputsValue - withdrawnValue - Value(coin = feeCoin)
+            try { inputsValue - withdrawnValue - Value(coin = feeCoin) }
+            catch {
+                case e: IllegalArgumentException =>
+                    return Left(
+                      s"Malformed value equal to `inputsValue - withdrawnValue - Value(coin = feeCoin)` encountered: inputsValue = ${inputsValue}, withdrawnValue = ${withdrawnValue}, feeCoin = ${feeCoin}"
+                    )
+            }
 
         ////////////////////////////
         // Then construct the output
