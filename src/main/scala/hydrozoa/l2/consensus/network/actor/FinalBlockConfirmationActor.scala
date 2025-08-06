@@ -1,6 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHUTxO}
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.FinalizationTx
@@ -97,25 +98,26 @@ private class FinalBlockConfirmationActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
-        val utxosWithdrawn =
+        val utxosWithdrawn : UtxoSetL2 =
             if stateActor.ask(_.head.finalizingPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.finalizingPhase(_.pendingOwnBlock))
                 ownBlock.utxosWithdrawn
             else
-                val (prevHeader, stateL2Cloned) =
+                val (prevHeader, stateL2) =
                     stateActor.ask(
                       _.head.finalizingPhase(head =>
                           (
                             head.l2Tip.blockHeader,
-                            head.stateL2.cloneForBlockProducer(),
+                            head.stateL2,
                           )
                       )
                     )
+
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  stateL2Cloned,
+                  contextAndStateFromV3UTxO(stateL2),
                   Seq.empty,
                   TaggedUtxoSet.apply(),
                   true
@@ -123,7 +125,7 @@ private class FinalBlockConfirmationActor(
                 resolution match
                     case ValidationResolution.Valid(_, _, utxosWithdrawn) =>
                         log.info(s"Final block ${req.block.blockHeader.blockNum} is valid.")
-                        utxosWithdrawn
+                        toHUTxO(utxosWithdrawn)
                     case resolution =>
                         throw RuntimeException(s"Final block validation failed: $resolution")
 

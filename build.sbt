@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.10.1+274-f2c74970-SNAPSHOT"
+val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
 val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
 
 // Latest Scala 3 LTS version
@@ -68,7 +68,9 @@ lazy val core = (project in file("."))
         "org.scalameta" %% "munit" % "1.1.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
         "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
-        "org.scalus" %% "scalus-testkit" % scalusVersion % Test
+        "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
+        "dev.optics" %% "monocle-core" % "3.1.0" % Test,
+        "dev.optics" %% "monocle-macro" % "3.1.0" % Test
       )
     )
 

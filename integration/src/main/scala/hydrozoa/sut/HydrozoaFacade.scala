@@ -1,7 +1,7 @@
 package hydrozoa.sut
 
 import hydrozoa.*
-import hydrozoa.l2.ledger.{L2Genesis, L2Transaction, L2Withdrawal}
+import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.{BlockRecord, WalletId}
@@ -24,7 +24,7 @@ trait HydrozoaFacade:
 
     def awaitTxL1(txId: TxId): Option[TxL1]
 
-    def submitL2(tx: L2Transaction | L2Withdrawal): Either[String, TxId]
+    def submitL2(tx: L2EventTransaction | L2EventWithdrawal): Either[String, TxId]
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]
 
@@ -34,8 +34,8 @@ trait HydrozoaFacade:
       * @return
       */
     def produceBlock(
-        nextBlockFinal: Boolean
-    ): Either[String, (BlockRecord, Option[(TxId, L2Genesis)])]
+        nextBlockFinal: Boolean,
+    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])]
 
     /** Runs test dispute scenario. Used only for testing.
       */

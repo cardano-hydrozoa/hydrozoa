@@ -5,14 +5,16 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither, txHash}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
-import hydrozoa.l2.ledger.L2Transaction
-import hydrozoa.node.TestPeer
+import hydrozoa.l2.ledger.{L2EventTransaction}
+import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
+import scalus.cardano.address.ShelleyAddress
 import sttp.client4.Response
 import sttp.client4.quick.*
 import sttp.model.MediaType.ApplicationJson
@@ -119,7 +121,7 @@ class DisputeSuite extends FunSuite {
         )
 
         // Make SUT
-        log.info("Making a Hydrozoa head uing a local network...")
+        log.info("Making a Hydrozoa head using a local network...")
         sut = LocalFacade.apply(
           testPeers,
           useYaci = useYaci,
@@ -130,6 +132,9 @@ class DisputeSuite extends FunSuite {
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
     test("Hydrozoa dispute scenario") {
+        val peerBech32Addresses: Map[TestPeer, String] = testPeers.foldLeft(Map.empty)((m, peer) =>
+            m.updated(peer, address(peer).toBech32.get)
+        )
 
         val result = for
 
@@ -142,7 +147,6 @@ class DisputeSuite extends FunSuite {
               TxIx(0)
             )
             _ = sut.awaitTxL1(initTxId)
-
             // 2. Make a deposit
             deposit1 <- sut.deposit(
               Alice,
@@ -151,13 +155,9 @@ class DisputeSuite extends FunSuite {
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBech[L2](
-                  "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
-                ),
+                AddressBech[L2](peerBech32Addresses(Alice)),
                 None,
-                AddressBech[L1](
-                  "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
-                ),
+                AddressBech[L1](peerBech32Addresses(Alice)),
                 None
               )
             )
@@ -171,12 +171,10 @@ class DisputeSuite extends FunSuite {
                 TxIx(1),
                 100_000_000,
                 None,
-                AddressBech[L2](
-                  "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
-                ),
+                AddressBech[L2](peerBech32Addresses(Alice)),
                 None,
                 AddressBech[L1](
-                  "addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q"
+                  peerBech32Addresses(Alice)
                 ),
                 None
               )
@@ -191,36 +189,26 @@ class DisputeSuite extends FunSuite {
 
             // L2 tx + minor block 1.1
             utxoL2 = sut.stateL2().head
+
             _ <- sut.submitL2(
-              L2Transaction(
-                List(utxoL2._1),
-                List(
-                  OutputNoTokens(
-                    AddressBech[L2](
-                      "addr_test1qrh3nrahcd0pj6ps3g9htnlw2jjxuylgdhfn2s5rxqyrr43yzewr2766qsfeq6stl65t546cwvclpqm2rpkkxtksgxuq90xn5f"
-                    ),
-                    utxoL2._2.coins,
-                    None
-                  )
-                )
+              l2EventTransactionFromInputsAndPeer(
+                inputs = Set(utxoL2._1.toScalus),
+                utxoSet = sut.stateL2().toMap.map((txIn, txOut) => (txIn.toScalus, txOut.toScalus)),
+                inPeer = Alice,
+                outPeer = Bob
               )
             )
+
             minor1_1 <- sut.produceBlock(false)
 
             // Another L2 tx + minor block 1.2
-            utxoL2 = sut.stateL2().head
+            utxoL2: (UtxoId[L2], OutputL2) = sut.stateL2().head
             _ <- sut.submitL2(
-              L2Transaction(
-                List(utxoL2._1),
-                List(
-                  OutputNoTokens(
-                    AddressBech[L2](
-                      "addr_test1qrzufj3g0ua489yt235wtc3mrjrlucww2tqdnt7kt5rs09grsag6vxw5v053atks5a6whke03cf2qx3h3g2nhsmzwv3sgml3ed"
-                    ),
-                    utxoL2._2.coins,
-                    None
-                  )
-                )
+              l2EventTransactionFromInputsAndPeer(
+                inputs = Set(utxoL2._1.toScalus),
+                utxoSet = sut.stateL2().toMap.map((txIn, txOut) => (txIn.toScalus, txOut.toScalus)),
+                inPeer = Alice,
+                outPeer = Carol
               )
             )
             minor1_2 <- sut.produceBlock(false)
@@ -228,17 +216,11 @@ class DisputeSuite extends FunSuite {
             // Another L2 tx + minor block 1.3
             utxoL2 = sut.stateL2().head
             _ <- sut.submitL2(
-              L2Transaction(
-                List(utxoL2._1),
-                List(
-                  OutputNoTokens(
-                    AddressBech[L2](
-                      "addr_test1qqm87edtdxc7vu2u34dpf9jzzny4qhk3wqezv6ejpx3vgrwt46dz4zq7vqll88fkaxrm4nac0m5cq50jytzlu0hax5xqwlraql"
-                    ),
-                    utxoL2._2.coins,
-                    None
-                  )
-                )
+              l2EventTransactionFromInputsAndPeer(
+                inputs = Set(utxoL2._1.toScalus),
+                utxoSet = sut.stateL2().toMap.map((txIn, txOut) => (txIn.toScalus, txOut.toScalus)),
+                inPeer = Alice,
+                outPeer = Daniella
               )
             )
             minor1_3 <- sut.produceBlock(false)
@@ -246,17 +228,11 @@ class DisputeSuite extends FunSuite {
             // Another L2 tx + minor block 1.4
             utxoL2 = sut.stateL2().head
             _ <- sut.submitL2(
-              L2Transaction(
-                List(utxoL2._1),
-                List(
-                  OutputNoTokens(
-                    AddressBech[L2](
-                      "addr_test1qp0qu4cypvrwn4c7pu50zf3x9qu2drdsk545l5dnsa7a5gsr6htafuvutm36rm23hdnsw7w7r82q4tljuh55drxqt30q6vm8vs"
-                    ),
-                    utxoL2._2.coins,
-                    None
-                  )
-                )
+              l2EventTransactionFromInputsAndPeer(
+                inputs = Set(utxoL2._1.toScalus),
+                utxoSet = sut.stateL2().toMap.map((txIn, txOut) => (txIn.toScalus, txOut.toScalus)),
+                inPeer = Alice,
+                outPeer = Erin
               )
             )
             minor1_4 <- sut.produceBlock(false)

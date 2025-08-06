@@ -11,7 +11,6 @@ import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.address.Address.Shelley
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -56,7 +55,7 @@ class ScalusRefundTxBuilder(
 
         val refundOutput: TransactionOutput =
             TransactionOutput(
-              address = Shelley(v1AddressToLedger(depositDatum.refundAddress, r.network)),
+              address = (v1AddressToLedger(depositDatum.refundAddress, r.network)),
               value = depositOutput.value,
               datumOption = depositDatum.refundDatum.map(bs => Inline(toData(bs))).asScala
             )

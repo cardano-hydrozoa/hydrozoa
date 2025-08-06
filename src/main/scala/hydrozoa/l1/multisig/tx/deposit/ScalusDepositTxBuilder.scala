@@ -6,25 +6,23 @@ import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{Tx, TxIx, TxL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyPaymentPart, StakePayload}
-import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 
 class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateReader)
     extends DepositTxBuilder {
 
     override def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)] = {
 
-        bloxToScalusUtxoQuery(backendService, recipe.deposit) match {
+        bloxToScalusUtxoQuery(backendService, recipe.deposit.toScalus) match {
             case Left(err) => Left(s"Scalus DepositTxBuilder failed: ${err}")
             case Right(utxoFunding) =>
                 Right({
                     // TODO: we set the fee to 1 ada, but this doesn't need to be
                     val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
-                        Value(coin = Coin(recipe.depositAmount.toLong), multiAsset = Map.empty)
-
-                    // TODO: factor this out or change types. It is shared with the settlement Tx builder
+                        Value(coin = Coin(recipe.depositAmount.toLong))
                     val headAddress: Address =
                         Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
 
@@ -36,16 +34,23 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
 
                     val changeOutput: TransactionOutput = TransactionOutput(
                       address = utxoFunding.address,
-                      value = utxoFunding.value - Value(
-                        coin = feeCoin,
-                        multiAsset = Map.empty
-                      ) - depositValue,
+                      value =
+                          try {
+                              utxoFunding.value - Value(
+                                coin = feeCoin
+                              ) - depositValue
+                          } catch {
+                              case _: IllegalArgumentException =>
+                                  return Left(
+                                    s"Malformed value equal to `utxoFunding.value - Value(feeCoin) - depositValue` encountered: utxoFunding.value = ${utxoFunding.value}, depositValue = ${depositValue}, feeCoin = ${feeCoin}"
+                                  )
+                          },
                       datumOption = None
                     )
 
                     val requiredSigner: AddrKeyHash = {
                         utxoFunding.address match
-                            case Address.Shelley(shelleyAddress) =>
+                            case shelleyAddress: ShelleyAddress =>
                                 shelleyAddress.payment match
                                     case ShelleyPaymentPart.Key(hash) => hash
                                     case _ => return Left("deposit not at a pubkey address")

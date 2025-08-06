@@ -1,162 +1,171 @@
 package hydrozoa.l2.ledger
 
-import com.bloxbean.cardano.client.spec.Era
-import com.bloxbean.cardano.client.transaction.spec.*
-import hydrozoa.infra.{Piper, plutusAddressAsL2, txHash}
-import hydrozoa.l1.multisig.state.depositDatum
-import hydrozoa.l2.ledger.simple.SimpleL2Ledger
+/** This module defines the "L2 Ledger". It is almost a direct clone of scalus's upstream "STS"
+  * (state transition system), which is in turn modeled after the `IntersectMBO/cardano-ledger`
+  * haskell repository.
+  *
+  * For a more formal treatment, see
+  * https://github.com/intersectmbo/cardano-ledger/releases/latest/download/small-step-semantics.pdf.
+  * The mapping from this document to our types is:
+  *   - "States" = given by the `State` associated type, in our case the
+  *     `scalus.cardano.ledger.rules.State` type
+  *   - "Transitions" = implementations of the `transit` method on instances of STSL2.Mutator.
+  *   - "Signals" = given by the `Event` associated type, in our case `L2Event`` (as defined in
+  *     `Event.scala`)
+  *   - "Rules" = roughly, a set of calls to implementations of the `validate` method on instances
+  *     of STSL2.Validator (the antecedents), followed by a calls to `transit` functions (the
+  *     consequent).
+  *   - "Environment" = the `Context` associated type, in our case the
+  *     `scalus.cardano.ledger.rules.Context` type
+  *
+  * The overall principle is simple: `validate` checks a `(context, state, event)` tuple for
+  * validity, `transit` takes `(context, state, event)` to a new `state`.
+  *
+  * Where possible, we use the upstream types for representing our own STS. This means that our
+  * State, Context, and Transition types are "too big" -- for instance, our State type contains
+  * information about the UTxO Map, which the L2 Ledger indeed makes use of, but ALSO contains
+  * information about Certificate state, which the L2 Ledger does not support. We do this because we
+  * want to re-use L1 ledger rules directly where possible without having to convert possibly large
+  * data structures (such as the entire utxo map) each time; this is a performance vs type-safety
+  * trade-off that we felt was worth it.
+  *
+  * The validation rules for our STSL2 that are native to hydrozoa (i.e., that do not apply to L1)
+  * can be found in `L2ConformanceValidator.scala`.
+  */
+
 import hydrozoa.*
+import hydrozoa.infra.encodeHex
+import hydrozoa.l2.commitment.infG2Point
+import hydrozoa.l2.ledger
+import scalus.builtin.BLS12_381_G2_Element
+import scalus.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.builtin.Data.toData
+import scalus.cardano.ledger.*
+import scalus.ledger.api.v3
+import scalus.ledger.api.v3.TxInInfo
+import scalus.prelude.{asScalus, List as SList}
+import supranational.blst.{P1, P2, Scalar}
 
-import scala.jdk.CollectionConverters.*
+import java.math.BigInteger
 
-// TODO: this module uses the Bloxbean dep directly
+////////////////////////////////////////
+// Layer 2 state transition system
 
-/** --------------------------------------------------------------------------------------------- L2
-  * Ledger implementation
-  * ---------------------------------------------------------------------------------------------
-  */
+sealed trait STSL2 {
+    final type Context = scalus.cardano.ledger.rules.Context
+    final type State = scalus.cardano.ledger.rules.State
+    // An L2 Event is a Transaction (re-using the L1 transaction type) that can
+    // also absorb deposits or release withdrawals.
+    final type Event = L2Event
+    type Value
+    final type Error = String | TransactionException
+    final type Result = Either[Error, Value]
 
-// This defines the implementation to use as L2 ledger
-val HydrozoaL2Ledger = SimpleL2Ledger
+    def apply(context: Context, state: State, event: Event): Result
 
-/** --------------------------------------------------------------------------------------------- L2
-  * Genesis
-  * ---------------------------------------------------------------------------------------------
-  */
+    protected final def failure(error: Error): Result = Left(error)
+}
 
-// TODO: can be simplified, since inputs and outputs represent the same things
-case class L2Genesis(
-    depositUtxos: List[(UtxoId[L1], Output[L1])],
-    outputs: List[OutputL2]
-) derives CanEqual:
-    def volume(): Long = outputs.map(_.coins).sum.toLong
+object STSL2 {
+    trait Validator extends STSL2 {
+        override final type Value = Unit
 
-object L2Genesis:
-    def apply(ds: List[(UtxoId[L1], Output[L1])]): L2Genesis =
-        L2Genesis(
-          ds,
-          ds.map((_, o) =>
-              val datum = depositDatum(o) match
-                  case Some(datum) => datum
-                  case None =>
-                      throw RuntimeException("deposit UTxO doesn't contain a proper datum")
-              Output.apply(datum.address |> plutusAddressAsL2, o.coins, o.tokens)
-          ).toList
+        def validate(context: Context, state: State, event: Event): Result
+
+        override final def apply(context: Context, state: State, event: Event): Result =
+            validate(context, state, event)
+
+        protected final val success: Result = Right(())
+    }
+
+    trait Mutator extends STSL2 {
+        override final type Value = State
+
+        def transit(context: Context, state: State, event: Event): Result
+
+        override final def apply(context: Context, state: State, event: Event): Result =
+            transit(context, state, event)
+
+        protected final def success(state: State): Result = Right(state)
+    }
+}
+
+////////////////////////////////////////////
+// BLS Stuff
+
+// TODO: this will be gone as soon as we get a setup ceremony up and running.
+val tau = Scalar(BigInteger("42"))
+
+def mkDummySetupG2(n: Int): SList[P2] = {
+    val setup =
+        (1 to n + 1).map(i =>
+            P2.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
         )
+    SList.Cons(P2.generator(), setup.toList.asScalus)
+}
 
-private def mkCardanoTxForL2Genesis(genesis: L2Genesis): TxL2 =
-
-    val depositInputs = genesis.depositUtxos.map { (utxoId, _) =>
-        TransactionInput.builder
-            .transactionId(utxoId.txId.hash)
-            .index(utxoId.outputIx.ix)
-            .build
-    }
-
-    val virtualOutputs = genesis.outputs.map { output =>
-        TransactionOutput.builder
-            .address(output.address.bech32)
-            .value(Value.builder.coin(output.coins.bigInteger).build)
-            .build
-    }
-
-    val body = TransactionBody.builder
-        .inputs(depositInputs.toList.asJava)
-        .outputs(virtualOutputs.asJava)
-        .build
-
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    TxL2(tx.serialize)
-
-def calculateGenesisHash(genesis: L2Genesis): TxId =
-    val cardanoTx = mkCardanoTxForL2Genesis(genesis)
-    txHash(cardanoTx)
-
-def mkGenesisOutputs(genesis: L2Genesis, genesisHash: TxId): UtxoSetL2 =
-    val utxoDiff = genesis.outputs.zipWithIndex
-        .map(output =>
-            val txIn = UtxoIdL2(genesisHash, TxIx(output._2.toChar))
-            val txOut = Output[L2](output._1.address.asL2, output._1.coins, output._1.tokens)
-            (txIn, txOut)
+def mkDummySetupG1(n: Int): SList[P1] = {
+    val setup =
+        (1 to n + 1).map(i =>
+            P1.generator().dup().mult(tau.dup().mul(Scalar(BigInteger(i.toString))))
         )
-    UtxoSet.apply(utxoDiff.toMap)
+    SList.Cons(P1.generator(), setup.toList.asScalus)
+}
 
-/** --------------------------------------------------------------------------------------------- L2
-  * Transaction
-  * ---------------------------------------------------------------------------------------------
-  */
+def getUtxosActiveCommitment(utxo: UTxO): IArray[Byte] = {
+    def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
+        LedgerToPlutusTranslation.getTxInInfoV3(ti, utxo)
 
-case class L2Transaction(
-    // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[UtxoIdL2],
-    outputs: List[OutputNoTokens[L2]]
-):
-    def volume(): Long = outputs.map(_.coins).sum.toLong
+    val elemsRaw = utxo.toList
+        .map(e => blake2b_224(serialiseData(toPlutus(e._1, e._2).toData)).toHex)
+        .asScalus
+    println(s"utxos active hashes raw: $elemsRaw")
 
-/** @param l2Tx
-  * @return
-  */
-private def mkCardanoTxForL2Transaction(l2Tx: L2Transaction): TxL2 =
+    val elems = utxo.toList
+        .map(e =>
+            Scalar().from_bendian(blake2b_224(serialiseData(toPlutus(e._1, e._2).toData)).bytes)
+        )
+        .asScalus
+    println(s"utxos active hashes: ${elems.map(e => BigInt.apply(e.to_bendian()))}")
 
-    val virtualInputs = l2Tx.inputs.map { input =>
-        TransactionInput.builder
-            .transactionId(input._1.hash)
-            .index(input._2.ix.intValue)
-            .build
-    }
+    val setup = mkDummySetupG2(elems.length.toInt)
 
-    val virtualOutputs = l2Tx.outputs.map { output =>
-        TransactionOutput.builder
-            .address(output.address.bech32)
-            .value(Value.builder.coin(output.coins.bigInteger).build)
-            .build
-    }
+    val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
+    setupBS.foreach(println)
 
-    val body = TransactionBody.builder
-        .inputs(virtualInputs.asJava)
-        .outputs(virtualOutputs.asJava)
-        .build
+    val commitmentPoint = getG2Commitment(setup, elems)
+    val commitment = IArray.unsafeFromArray(commitmentPoint.compress())
+    println(s"Commitment: ${(encodeHex(commitment))}")
+    commitment
+}
 
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    TxL2(tx.serialize)
+/*
+ * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
+ * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
+ */
+def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
+    binomial_poly
+        .foldLeft(SList.single(new Scalar(BigInteger("1")))): (acc, term) =>
+            // We need to clone the whole `acc` since `mul` mutates it
+            // and final adding gets mutated `shiftedPoly`
+            val shiftedPoly: SList[Scalar] =
+                SList.Cons(Scalar(BigInteger("0")), acc.map(_.dup))
+            val multipliedPoly = acc.map(s => s.mul(term)).appended(Scalar(BigInteger("0")))
+            SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
+}
 
-// TODO: this arguably can be considered as a ledger's function
-def calculateTxHash(tx: L2Transaction): TxId =
-    val cardanoTx = mkCardanoTxForL2Transaction(tx)
-    val txId = txHash(cardanoTx)
-    txId
+// TODO: use multi-scalar multiplication
+def getG2Commitment(
+    setup: SList[P2],
+    subset: SList[Scalar]
+): P2 = {
+    val subsetInG2 =
+        SList.map2(getFinalPoly(subset), setup): (sb, st) =>
+            st.mult(sb)
 
-/** --------------------------------------------------------------------------------------------- L2
-  * Withdrawal
-  * ---------------------------------------------------------------------------------------------
-  */
+    val zero = infG2Point
+    require(zero.is_inf())
 
-case class L2Withdrawal(
-    // FIXME: Should be Set, using List for now since Set is not supported in Tapir's Schema deriving
-    inputs: List[UtxoIdL2]
-)
-
-/** @param withdrawal
-  * @return
-  */
-private def mkCardanoTxForL2Withdrawal(withdrawal: L2Withdrawal): TxL2 =
-
-    val virtualInputs = withdrawal.inputs.map { input =>
-        TransactionInput.builder
-            .transactionId(input._1.hash)
-            .index(input._2.ix.intValue)
-            .build
-    }
-
-    val body = TransactionBody.builder
-        .inputs(virtualInputs.asJava)
-        .build
-
-    val tx = Transaction.builder.era(Era.Conway).body(body).build
-    Tx[L2](tx.serialize)
-
-// TODO: this arguably can be considered as a ledger's function
-def calculateWithdrawalHash(withdrawal: L2Withdrawal): TxId =
-    val cardanoTx = mkCardanoTxForL2Withdrawal(withdrawal)
-    val txId = txHash(cardanoTx)
-    txId
+    subsetInG2.foldLeft(zero.dup()): (a, b) =>
+        a.add(b)
+}

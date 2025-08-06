@@ -2,21 +2,23 @@ package hydrozoa.l2.block
 
 import hydrozoa.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
-import hydrozoa.l2.ledger.L2EventLabel
-import L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.infra.encodeHex
 import hydrozoa.l2.commitment.{UtxoSetCommitment, infG2}
+import hydrozoa.l2.ledger.L2EventLabel
+import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import scalus.cardano.ledger
+import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 
 case class Block(
     blockHeader: BlockHeader,
     blockBody: BlockBody
 ):
-    def validTransactions: Seq[TxId] =
+    def validTransactions: Seq[TransactionHash] =
         blockBody.eventsValid
             .filter(_._2 == L2EventTransactionLabel)
             .map(_._1)
 
-    def validWithdrawals: Seq[TxId] =
+    def validWithdrawals: Seq[TransactionHash] =
         blockBody.eventsValid
             .filter(_._2 == L2EventWithdrawalLabel)
             .map(_._1)
@@ -39,9 +41,9 @@ enum BlockTypeL2 derives CanEqual:
     case Final
 
 case class BlockBody(
-    eventsValid: Seq[(TxId, L2EventLabel)],
-    eventsInvalid: Seq[(TxId, L2EventLabel)],
-    depositsAbsorbed: Seq[UtxoId[L1]]
+    eventsValid: Seq[(TransactionHash, L2EventLabel)],
+    eventsInvalid: Seq[(TransactionHash, L2EventLabel)],
+    depositsAbsorbed: Seq[TransactionInput]
 ) derives CanEqual
 
 object BlockBody:
@@ -79,9 +81,9 @@ case class BlockBuilder[
     versionMajor: Int = 0,
     versionMinor: Int = 0,
     // FIXME: add type tags
-    eventsValid: Set[(TxId, L2EventLabel)] = Set.empty, // TODO: are sets ok?
-    eventsInvalid: Set[(TxId, L2EventLabel)] = Set.empty,
-    depositsAbsorbed: Seq[UtxoId[L1]] = Seq.empty,
+    eventsValid: Set[(TransactionHash, L2EventLabel)] = Set.empty, // TODO: are sets ok?
+    eventsInvalid: Set[(TransactionHash, L2EventLabel)] = Set.empty,
+    depositsAbsorbed: Seq[TransactionInput] = Seq.empty,
     utxosActive: UtxoSetCommitment = encodeHex(infG2)
 ) {
     def majorBlock(using
@@ -112,21 +114,21 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(versionMinor = versionMinor)
 
-    def withTransaction(txId: TxId): BlockBuilder[BlockType, BlockNum, VersionMajor] =
+    def withTransaction(txId: TransactionHash): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, L2EventTransactionLabel)))
 
-    def withWithdrawal(txId: TxId)(using
+    def withWithdrawal(txId: TransactionHash)(using
         ev: BlockType <:< TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsValid = eventsValid.+((txId, L2EventWithdrawalLabel)))
 
     def withInvalidEvent(
-        txId: TxId,
+        txId: TransactionHash,
         eventType: L2EventLabel
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
-    def withDeposit(d: UtxoId[L1])(using
+    def withDeposit(d: TransactionInput)(using
         ev: BlockType =:= TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(depositsAbsorbed = depositsAbsorbed ++ Seq(d))

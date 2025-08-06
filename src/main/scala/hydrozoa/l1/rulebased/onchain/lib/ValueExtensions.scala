@@ -12,7 +12,7 @@ object ValueExtensions:
 
         def containsCurrencySymbol(cs: CurrencySymbol): Boolean =
             // Split away ada which always comes first
-            self.toList match
+            self.toSortedMap.toList match
                 case List.Cons(_, tokens) => tokens.map(_._1).contains(cs)
                 case List.Nil             => false
 
@@ -34,7 +34,7 @@ object ValueExtensions:
             amount: BigInt
         ): Boolean =
             // Split away ada which always comes first
-            self.toList match
+            self.toSortedMap.toList match
                 case List.Cons(_, tokens) =>
                     tokens match
                         case List.Cons((cs_, names), otherSymbols) =>
@@ -54,7 +54,7 @@ object ValueExtensions:
           */
         def onlyNonAdaAsset: (CurrencySymbol, TokenName, BigInt) =
             // Split away ada which always comes first
-            self.toList match
+            self.toSortedMap.toList match
                 case List.Cons(_, tokens) =>
                     tokens match
                         case List.Cons((cs, names), otherSymbols) =>
