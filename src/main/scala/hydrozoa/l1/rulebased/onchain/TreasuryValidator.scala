@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
+import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
@@ -13,16 +14,7 @@ import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsExactlyOneAsset, unary_-}
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as ScalusScalar
-import hydrozoa.{
-    AddressBech,
-    AddressBechL1,
-    L1,
-    Network,
-    VerificationKeyBytes,
-    CurrencySymbol as HCurrencySymbol,
-    PosixTime as HPosixTime,
-    TokenName as HTokenName
-}
+import hydrozoa.{AddressL1, L1, VerificationKeyBytes, Address as HAddress, PosixTime as HPosixTime}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -35,6 +27,8 @@ import scalus.builtin.{
     FromData,
     ToData
 }
+import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
+import scalus.cardano.ledger.{AssetName, PolicyId}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.List.Nil
@@ -468,24 +462,26 @@ object TreasuryValidatorScript {
 
     val scriptHashString: String = encodeHex(IArray.unsafeFromArray(plutusScript.getScriptHash))
 
-    def address(n: Network): AddressBechL1 = {
+    def address(n: Network): AddressL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
-        address.getAddress |> AddressBech[L1].apply
+        address.getAddress |> (s =>
+            SLAddress.fromBech32(s).asInstanceOf[ShelleyAddress]
+        ) |> HAddress[L1].apply
     }
 }
 
 def mkTreasuryDatumUnresolved(
-    headMp: HCurrencySymbol,
-    disputeId: HTokenName,
+    headMp: PolicyId,
+    disputeId: AssetName,
     peers: List[VerificationKeyBytes],
     deadlineVoting: HPosixTime,
     versionMajor: BigInt,
     params: L2ConsensusParamsH32
 ): TreasuryDatum =
     UnresolvedDatum(
-      headMp = ByteString.fromArray(IArray.genericWrapArray(headMp.bytes).toArray),
-      disputeId = ByteString.fromHex(disputeId.tokenNameHex),
-      peers = peers.map(_.bytes |> ByteString.fromArray),
+      headMp = ByteString.fromArray(headMp.bytes),
+      disputeId = disputeId.bytes,
+      peers = peers.map(_.bytes),
       peersN = peers.length,
       deadlineVoting = deadlineVoting,
       versionMajor = versionMajor,

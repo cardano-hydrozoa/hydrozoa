@@ -1,15 +1,21 @@
 package hydrozoa.node.rest
 
+/* Question (Peter, 2025-08-10): My assumption is that this is the file is where we define our serialization
+boundary; i.e., where we go from an endpoint that contains a Bech32 string to a full-fledged ShelleyAddress.
+But this may be achievable earlier with tapirs schemas? I'm not sure.
+ */
+
 import com.github.plokhotnyuk.jsoniter_scala.core.{
     JsonKeyCodec,
     JsonReader,
     JsonValueCodec,
     JsonWriter
 }
+import scalus.cardano.ledger.*
+import scalus.cardano.address.Address as SAddress
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l2.consensus.network.{*, given}
-import hydrozoa.infra.deserializeDatumHex
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.{
     depositEndpoint,
@@ -28,11 +34,17 @@ import hydrozoa.node.server.{
 }
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
+import scalus.builtin.{ByteString, Data}
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.DatumOption.Inline
 import sttp.tapir.*
+import sttp.tapir.CodecFormat.TextPlain
 import sttp.tapir.generic.auto.schemaForCaseClass
 import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
+
+import scala.util.{Try, Success, Failure}
 
 /** Hydrozoa Node API, currently implemented in terms of Tapir HTTP server.
   */
@@ -64,7 +76,7 @@ class NodeRestApi(node: ActorRef[Node]):
             request.amount,
             request.seedUtxoTxId,
             request.seedUtxoTxIx
-          ).map(_.hash)
+          ).map(_.toHex)
         )
 
     private def runDeposit(
@@ -80,19 +92,24 @@ class NodeRestApi(node: ActorRef[Node]):
         node.ask(
           _.deposit(
             DepositRequest(
-              TxId(txId),
+              (TransactionHash.fromHex(txId)),
               TxIx(txIx.toChar),
               depositAmount,
               deadline,
-              AddressBech[L2](address),
+              Address.unsafeFromBech32(address),
               (datum match
-                  case None    => None
-                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+                  case None => None
+                  case Some(s) =>
+                      if s.isEmpty then None
+                      else {
+                          Some(Data.fromCbor(ByteString.fromHex(s)))
+                      }
               ),
-              AddressBech[L1](refundAddress),
+              Address.unsafeFromBech32(refundAddress),
               (refundDatum match
-                  case None    => None
-                  case Some(s) => if s.isEmpty then None else Some(deserializeDatumHex(s))
+                  case None => None
+                  case Some(s) =>
+                      if s.isEmpty then None else Some(Data.fromCbor(ByteString.fromHex(s)))
               )
             )
           )
@@ -169,11 +186,16 @@ given submitRequestL2Codec: JsonValueCodec[SubmitRequestL2] =
 given submitRequestL2Schema: Schema[SubmitRequestL2] =
     Schema.binary[SubmitRequestL2]
 
-given txIdSchema: Schema[TxId] =
-    Schema.derived[TxId]
+def decode(s: String): DecodeResult[TransactionHash] =
+    Try(TransactionHash.fromHex(s)) match {
+        case Success(s) => DecodeResult.Value(s)
+        case Failure(f) => DecodeResult.Error(s, f)
+    }
 
-given txIx: Schema[TxIx] =
-    Schema.derived[TxIx]
+def encode(txId: TransactionHash): String = txId.toHex
+
+given Codec[String, TransactionHash, TextPlain] =
+    Codec.string.mapDecode(decode)(encode)
 
 type StateL2Response = List[(UtxoId[L2], OutputNoTokens[L2])]
 
@@ -198,13 +220,10 @@ type StateL2Response = List[(UtxoId[L2], OutputNoTokens[L2])]
 //}
 
 given stateL2ResponseCodec: JsonValueCodec[StateL2Response] =
-    JsonCodecMaker.make
+    ??? // FIXME: JsonCodecMaker.make
 
-given policyIdSchema: Schema[PolicyId] =
-    Schema.derived[PolicyId]
-
-given tokenNameSchema: Schema[TokenName] =
-    Schema.derived[TokenName]
+given tokenNameSchema: Schema[AssetName] =
+    Schema.derived[AssetName]
 
 // FIXME (2025-07-04): A dependency update caused this to fail due to ambiguous
 //     given instances. It was strictly necessary at the time, so we commented it out.
@@ -214,7 +233,7 @@ given tokenNameSchema: Schema[TokenName] =
 case class InitRequest(
     otherPeers: List[WalletId],
     amount: Long,
-    seedUtxoTxId: TxId,
+    seedUtxoTxId: TransactionHash,
     seedUtxoTxIx: TxIx
 )
 

@@ -26,7 +26,7 @@ def mkHeadNativeScript(
     Script.Native(
       AllOf(
         vKeys
-            .map(key => AddrKeyHash(ByteString.fromHex(key.verKeyHash)))
+            .map(key => key.verKeyHash)
             .toIndexedSeq
             .sorted(using Ordering[AddrKeyHash])
             .map(Signature(_))

@@ -1,14 +1,10 @@
 package hydrozoa.l1.multisig.tx.finalization
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Tx
-import hydrozoa.infra.transitionary.{
-    bloxToScalusUtxoQuery,
-    emptyTxBody,
-    toScalus,
-    toScalusNativeScript
-}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import io.bullet.borer.Cbor
@@ -30,11 +26,11 @@ class ScalusFinalizationTxBuilder(
         val feeCoin: Coin = Coin(1000000)
 
         val headNativeScript: Native =
-            reader.multisigRegime(_.headNativeScript).toScalusNativeScript
+            reader.multisigRegime(_.headNativeScript)
 
         val beaconTokenPolicyId: PolicyId = headNativeScript.scriptHash
         val beaconTokenName: AssetName =
-            reader.multisigRegime(_.beaconTokenName).toScalus
+            reader.multisigRegime(_.beaconTokenName)
         val beaconTokenBurn = Mint(
           MultiAsset(
             SortedMap.from(
@@ -46,26 +42,19 @@ class ScalusFinalizationTxBuilder(
         val treasuryUtxoId = reader.multisigRegimeReader(_.treasuryUtxoId)
 
         val treasuryUtxo: TransactionOutput =
-            bloxToScalusUtxoQuery(backendService, treasuryUtxoId.toScalus) match {
+            bloxToScalusUtxoQuery(backendService, treasuryUtxoId) match {
                 case Left(err) => return Left("treasury utxo not found")
                 case Right(to) => to
             }
 
         // The L2 utxos will have beacon tokens in them. We want to only get the ada from them
         val outputsToWithdraw =
-            r.utxosWithdrawn.utxoMap
-                .map(w => w._2.toScalus)
-                .map({
-                    // Take only the added for the outputs
-                    case b: Babbage =>
-                        b.copy(value = b.value.copy(assets = MultiAsset.empty))
-                            .asInstanceOf[TransactionOutput]
-                    case _ => return Left("L2 utxo not a babbage UTxO")
-                })
+            r.utxosWithdrawn.values
+                .map(b => b.copy(value = b.value.copy(assets = MultiAsset.empty)))
         val valueWithdrawn: Value =
             outputsToWithdraw.foldLeft(Value.zero)((s, w) => s + w.value)
 
-        val changeAddress = reader.multisigRegime(_.seedAddress).toScalus
+        val changeAddress = reader.multisigRegime(_.seedAddress)
 
         // Change output value is:
         // The treasury value,
@@ -93,8 +82,8 @@ class ScalusFinalizationTxBuilder(
 
         val txBody =
             emptyTxBody.copy(
-              inputs = Set(treasuryUtxoId.toScalus),
-              outputs = outputsToWithdraw.toIndexedSeq.map(Sized(_)).appended(Sized(changeOutput)),
+              inputs = Set(treasuryUtxoId),
+              outputs = outputsToWithdraw.toIndexedSeq.map((b : Babbage) => Sized(b.asInstanceOf[TransactionOutput])).appended(Sized(changeOutput)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin,
               mint = Some(beaconTokenBurn)
@@ -107,7 +96,7 @@ class ScalusFinalizationTxBuilder(
           auxiliaryData = None
         )
 
-        Right(Tx(Cbor.encode(scalusTransaction).toByteArray))
+        Right(Tx(scalusTransaction))
     }
 
 }

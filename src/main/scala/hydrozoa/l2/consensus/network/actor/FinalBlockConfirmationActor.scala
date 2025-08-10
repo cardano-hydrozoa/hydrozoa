@@ -1,7 +1,6 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHUTxO}
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex, txHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.FinalizationTx
@@ -117,7 +116,7 @@ private class FinalBlockConfirmationActor(
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  contextAndStateFromV3UTxO(stateL2),
+                  stateL2.getContextAndState,
                   Seq.empty,
                   TaggedUtxoSet.apply(),
                   true
@@ -125,7 +124,7 @@ private class FinalBlockConfirmationActor(
                 resolution match
                     case ValidationResolution.Valid(_, _, utxosWithdrawn) =>
                         log.info(s"Final block ${req.block.blockHeader.blockNum} is valid.")
-                        toHUTxO(utxosWithdrawn)
+                        utxosWithdrawn
                     case resolution =>
                         throw RuntimeException(s"Final block validation failed: $resolution")
 

@@ -9,7 +9,7 @@ import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.node.state.*
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toHUTxO, toHydrozoa, toV3UTxO}
+import hydrozoa.infra.transitionary.{toV3UTxO, emptyContext}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.ledger.L2EventGenesis
@@ -17,6 +17,8 @@ import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.ledger.api.v3
 import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.rules.Context
+
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -35,8 +37,8 @@ private class MajorBlockConfirmationActor(
     override type AckType = AckMajor | AckMajor2
 
     // Who sets this utxosActive?
-    private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
-    private var mbGenesis: Option[(TxId, L2EventGenesis)] = _
+    private var utxosActive: UtxoSetL2 = _
+    private var mbGenesis: Option[(TransactionHash, L2EventGenesis)] = _
     private var utxosWithdrawn: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMajor] = mutable.Map.empty
     private val acks2: mutable.Map[WalletId, AckMajor2] = mutable.Map.empty
@@ -124,8 +126,8 @@ private class MajorBlockConfirmationActor(
 
         // Block validation (the leader can skip validation for its own block).
         val (
-          utxosActive: Map[v3.TxOutRef, v3.TxOut],
-          mbGenesis: Option[(TxId, L2EventGenesis)],
+          utxosActive: UtxoSetL2,
+          mbGenesis: Option[(TransactionHash, L2EventGenesis)],
           utxosWithdrawn: UtxoSetL2
         ) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
@@ -149,7 +151,7 @@ private class MajorBlockConfirmationActor(
                     val resolution = BlockValidator.validateBlock(
                       req.block,
                       prevHeader,
-                      contextAndStateFromV3UTxO(stateL2),
+                      stateL2.getContextAndState,
                       poolEventsL2,
                       depositUtxos,
                       false
@@ -158,11 +160,9 @@ private class MajorBlockConfirmationActor(
                         case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
                             log.info(s"Major block ${req.block.blockHeader.blockNum} is valid.")
                             Right(
-                              toV3UTxO(utxosActive),
-                              mbGenesis.map((txHash: TransactionHash, eventGenesis) =>
-                                  (TxId(txHash.toHex), eventGenesis)
-                              ),
-                              toHUTxO[L2](utxosWithdrawn)
+                              utxosActive,
+                              mbGenesis,
+                              utxosWithdrawn
                             )
                         case r @ ValidationResolution.NotYetKnownDeposits(depositsUnknown) =>
                             log.warn(
@@ -190,7 +190,7 @@ private class MajorBlockConfirmationActor(
         // Create settlement tx draft
         val txRecipe = SettlementRecipe(
           req.block.blockHeader.versionMajor,
-          req.block.blockBody.depositsAbsorbed.map(_.toHydrozoa),
+          req.block.blockBody.depositsAbsorbed,
           utxosWithdrawn
         )
         log.info(s"Settlement tx recipe: $txRecipe")
@@ -208,7 +208,7 @@ private class MajorBlockConfirmationActor(
                     val peersKeys = state.getVerificationKeys(openHead.headPeers).get
                     val (headAddress, headNativeScript, headMintingPolicy) =
                         (
-                          openHead.headBechAddress,
+                          openHead.headAddress,
                           openHead.headNativeScript,
                           openHead.headMintingPolicy
                         )
@@ -224,7 +224,7 @@ private class MajorBlockConfirmationActor(
           votingDuration = BigInt("1851604224000"),
           // Sorting
           peers = peersKeys.toList,
-          headAddressBech32 = headAddress,
+          headAddress = headAddress,
           headNativeScript = headNativeScript,
           headMintingPolicy = headMintingPolicy
         )

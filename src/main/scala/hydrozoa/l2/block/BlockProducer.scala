@@ -2,8 +2,10 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{Piper, encodeHex}
 import hydrozoa.l1.multisig.state.DepositUtxos
+import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
@@ -14,20 +16,14 @@ import hydrozoa.l2.ledger.L2EventLabel.{
 }
 import ox.channels.ActorRef
 import ox.sleep
-import scalus.cardano.ledger.{
-    HashPurpose,
-    TransactionHash,
-    TransactionInput,
-    UTxO,
-    TransactionOutput
-}
+import scalus.cardano.ledger.{TransactionHash}
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
 import scalus.ledger.api.v3
-import hydrozoa.infra.transitionary.toScalus
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-import scala.language.strictEquality
+import scala.language.{implicitConversions, strictEquality}
 
 class BlockProducer:
 
@@ -50,7 +46,7 @@ class BlockProducer:
         finalizing: Boolean
     ): Either[
       String,
-      (Block, UTxO, UTxO, UTxO, Option[(TransactionHash, L2EventGenesis)])
+      (Block, UtxoSetL2, UtxoSetL2, UtxoSetL2, Option[(TransactionHash, L2EventGenesis)])
     ] =
 
         // TODO: move to the block producer?
@@ -116,7 +112,7 @@ object BlockProducer:
         timeCreation: PosixTime,
         finalizing: Boolean
     ): Option[
-      (Block, UTxO, UTxO, UTxO, Option[(TransactionHash, L2EventGenesis)])
+      (Block, UtxoSet[L2], UtxoSet[L2], UtxoSet[L2], Option[(TransactionHash, L2EventGenesis)])
     ] =
 
         // 1. Initialize the variables and arguments.
@@ -125,7 +121,7 @@ object BlockProducer:
         // at the end using the block builder
         val txValid, wdValid: mutable.Set[TransactionHash] = mutable.Set.empty
         val eventsInvalid: mutable.Set[(TransactionHash, L2EventLabel)] = mutable.Set.empty
-        var depositsAbsorbed: Seq[TransactionInput] = Seq.empty
+        var depositsAbsorbed: Seq[UtxoIdL1] = Seq.empty
 
         // (c) Let previousMajorBlock be the latest major block in blocksConfirmedL2
         // val previousMajorBlock = state.asOpen(_.l2LastMajor)
@@ -133,7 +129,7 @@ object BlockProducer:
         // FIXME: seems we can remove `utxosAdded` if we have `Option[(TxId, SimpleGenesis)]`
         // (e) Let utxosAdded be a mutable variable initialized to an empty UtxoSetL2
         // (f) Let utxosWithdrawn be a mutable variable initialized to an empty UtxoSetL2
-        type UtxosDiffMutable = mutable.Set[(TransactionInput, TransactionOutput)]
+        type UtxosDiffMutable = mutable.Set[(UtxoIdL2, OutputL2)]
         val utxosAdded, utxosWithdrawn: UtxosDiffMutable = mutable.Set()
 
         // We use a mutable state
@@ -152,9 +148,14 @@ object BlockProducer:
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, wd) match
                     case Right(newState) =>
                         wdValid.add(wd.getEventId)
-                        val utxosDiff: Set[(TransactionInput, TransactionOutput)] =
+                        val utxosDiff: Set[(UtxoIdL2, OutputL2)] =
                             wd.transaction.body.value.inputs.foldLeft(Set.empty)((set, input) =>
-                                set + ((input, state.utxo(input)))
+                                set +
+                                    // N.B.: partial here, but we assume that all of our L2 UTxOs are Babbage.
+                                    ((
+                                      UtxoIdL2(input),
+                                      Output[L2](state.utxo(input).asInstanceOf[Babbage])
+                                    ))
                             )
                         utxosWithdrawn.addAll(utxosDiff)
                         state = newState
@@ -167,12 +168,11 @@ object BlockProducer:
         val mbGenesis: Option[(TransactionHash, L2EventGenesis)] = if !finalizing then
             // TODO: check deposits timing
             val depositsEligible: DepositUtxos =
-                TaggedUtxoSet.apply(depositsPending.unTag.utxoMap.filter(_ => true))
-            if depositsEligible.unTag.utxoMap.isEmpty then None
+                TaggedUtxoSet.apply(depositsPending)
+            if depositsEligible.untagged.isEmpty then None
             else
-                val depositsSorted = depositsEligible.unTag.utxoMap.toList
-                    .sortWith((a, b) => a._1._1.hash.compareTo(b._1._1.hash) < 0)
-                    .map((ti, to) => (ti.toScalus, to.toScalus))
+                val depositsSorted = depositsEligible.untagged.toList
+                    .sortWith((a, b) => a._1._1.toHex.compareTo(b._1._1.toHex) < 0)
                     .toSeq
                 val genesis: L2EventGenesis = L2EventGenesis.apply(depositsSorted)
                 val genesisHash = genesis.getEventId
@@ -193,7 +193,7 @@ object BlockProducer:
 
         // 5. If finalizing is True...
         if (finalizing)
-            utxosWithdrawn.addAll(state.utxo)
+            utxosWithdrawn.addAll(state.utxo.unsafeAsL2)
 
         // 6. Set block.blockType...
         val multisigRegimeKeepAlive = false // TODO: implement
@@ -239,8 +239,8 @@ object BlockProducer:
 
         Some(
           block,
-          state.utxo,
-          utxosAdded.toMap,
-          utxosWithdrawn.toMap,
+          UtxoSet[L2](state.utxo.unsafeAsL2),
+          UtxoSet[L2](utxosAdded.toMap),
+          UtxoSet[L2](utxosWithdrawn.toMap),
           mbGenesis
         )

@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.tx.resolution
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -37,7 +38,7 @@ class BloxBeanResolutionTxBuilder(
             case (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId)) =>
                 def getUtxoWithDatum[T](using FromData[T])(utxoId: UtxoIdL1): (Utxo, T) =
                     val Right(utxo) = backendService.getUtxoService
-                        .getTxOutput(utxoId.txId.hash, utxoId.outputIx.ix)
+                        .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
                         .toEither
 
                     val datum = fromData[T](
@@ -93,10 +94,10 @@ class BloxBeanResolutionTxBuilder(
                     .collectFrom(treasuryInput, treasuryRedeemer)
                     .payToContract(treasuryInput.getAddress, outputAmount.asJava, outputDatum)
                     .readFrom(
-                      treasuryScriptRefUtxoId.txId.hash,
-                      treasuryScriptRefUtxoId.outputIx.ix
+                      treasuryScriptRefUtxoId.transactionId.toHex,
+                      treasuryScriptRefUtxoId.index
                     )
-                    .readFrom(disputeScriptRefUtxoId.txId.hash, disputeScriptRefUtxoId.outputIx.ix)
+                    .readFrom(disputeScriptRefUtxoId.transactionId.toHex, disputeScriptRefUtxoId.index)
 
                 val nodeAddress = r.nodeAccount.enterpriseAddress()
                 val txSigner = SignerProviders.signerFrom(r.nodeAccount)

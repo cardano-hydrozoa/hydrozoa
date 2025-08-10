@@ -5,12 +5,12 @@ import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalu
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.InitTx
-import hydrozoa.{AddressBech, AddressBechL1, Tx}
+import hydrozoa.{Address, AddressL1, L1, Tx}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart, Address as SAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 
@@ -20,8 +20,8 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
 
     override def mkInitializationTxDraft(
         recipe: InitTxRecipe
-    ): Either[String, (InitTx, AddressBechL1)] =
-        bloxToScalusUtxoQuery(backendService, recipe.seedUtxo.toScalus) match {
+    ): Either[String, (InitTx, AddressL1)] =
+        bloxToScalusUtxoQuery(backendService, recipe.seedUtxo) match {
             case Left(err) => Left("Scalus InititializationTxBuilder failed: " ++ err)
             case Right(seedOutput) =>
                 Right({
@@ -32,9 +32,9 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     val headNativeScript = mkHeadNativeScript(recipe.peers)
 
                     // Put the head address of the native script
-                    val headAddress: Address = (
+                    val headAddress = (
                       ShelleyAddress(
-                        network = recipe.network.toScalus,
+                        network = recipe.network,
                         payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
                         delegation = Null
                       )
@@ -44,23 +44,9 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     // seed utxo
                     // TODO: factor out "mkSingleToken"
                     val beaconToken: MultiAsset = MultiAsset(
-                      SortedMap.from(
-                        Seq(
-                          (
-                            headNativeScript.scriptHash,
-                            SortedMap.from(
-                              Seq(
-                                (
-                                  AssetName(
-                                    ByteString.fromHex(
-                                      mkBeaconTokenName(recipe.seedUtxo).tokenNameHex.drop(2)
-                                    )
-                                  ),
-                                  1L
-                                )
-                              )
-                            )
-                          )
+                      SortedMap(
+                        headNativeScript.scriptHash -> SortedMap(
+                          mkBeaconTokenName(recipe.seedUtxo) -> 1L
                         )
                       )
                     )
@@ -96,7 +82,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
 
                     val ourBody =
                         emptyTxBody.copy(
-                          inputs = Set(recipe.seedUtxo.toScalus),
+                          inputs = Set(recipe.seedUtxo),
                           outputs = IndexedSeq(headOutput, changeOutput).map(Sized(_)),
                           // TODO: we set the fee to 1 ada, but this doesn't need to be
                           fee = feeCoin,
@@ -111,12 +97,8 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     )
 
                     (
-                      Tx(Cbor.encode(scalusTransaction).toByteArray),
-                      headAddress match {
-                          case sa: ShelleyAddress => AddressBech(sa.toBech32.get)
-                          // NOTE (Peter, 2025-08-07) I miss monads, how do I do those in scala?
-                          case _ => return Left("Hydra Head is not at a Shelly address")
-                      }
+                      Tx(scalusTransaction),
+                      Address[L1](headAddress)
                     )
 
                 })

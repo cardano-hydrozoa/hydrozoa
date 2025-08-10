@@ -2,6 +2,7 @@ package hydrozoa
 
 import com.bloxbean.cardano.client.function.helper.SignerProviders
 import hydrozoa.node.state.WalletId
+import scalus.cardano.ledger.VKeyWitness
 
 trait WalletModule:
 
@@ -14,7 +15,7 @@ trait WalletModule:
         tx: Tx[L],
         verificationKey: VerificationKey,
         signingKey: SigningKey
-    ): TxKeyWitness
+    ): VKeyWitness
 
     def createEd25519Signature(
         msg: IArray[Byte],
@@ -31,7 +32,7 @@ class Wallet(
         walletModule.exportVerificationKeyBytes(verificationKey)
     def getName: String = name
     def exportVerificationKeyBytes: VerificationKeyBytes = verificationKeysBytes
-    def createTxKeyWitness[L <: AnyLayer](tx: Tx[L]): TxKeyWitness =
+    def createTxKeyWitness[L <: AnyLayer](tx: Tx[L]): VKeyWitness =
         walletModule.createTxKeyWitness(tx, verificationKey, signingKey)
     def getWalletId: WalletId = WalletId(getName)
     def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =

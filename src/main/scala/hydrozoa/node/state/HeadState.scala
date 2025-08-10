@@ -1,5 +1,6 @@
 package hydrozoa.node.state
 
+import scala.language.implicitConversions
 import hydrozoa.infra.transitionary.toScalus
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.api.model
@@ -8,35 +9,16 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{
-    contextAndStateFromV3UTxO,
-    toHUTxO,
-    toHydrozoa,
-    toHydrozoaNativeScript,
-    toScalusLedger,
-    toV3UTxO
-}
-import hydrozoa.infra.{
-    Piper,
-    decodeHex,
-    encodeHex,
-    extractVoteTokenNameFromFallbackTx,
-    serializeTxHex,
-    txFees,
-    txHash,
-    verKeyHash
-}
+import hydrozoa.UtxoSet.getContextAndState
+import hydrozoa.infra.transitionary.{toScalusLedger, toV3UTxO}
+import hydrozoa.infra.{Piper, decodeHex, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, txHash, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Resolved
-import hydrozoa.l1.rulebased.onchain.{
-    DisputeResolutionScript,
-    TreasuryValidatorScript,
-    hashVerificationKey
-}
+import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript, hashVerificationKey}
 import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
@@ -45,19 +27,11 @@ import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.{
-    L2Event,
-    L2EventGenesis,
-    L2EventLabel,
-    L2EventTransaction,
-    L2EventWithdrawal,
-    l2EventLabel
-}
+import hydrozoa.l2.ledger.{L2Event, L2EventGenesis, L2EventLabel, L2EventTransaction, L2EventWithdrawal, l2EventLabel}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqDeinit}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.TestPeer
-import hydrozoa.UtxoMap
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
@@ -65,6 +39,8 @@ import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.{AssetName, Hash, PolicyId, TransactionHash}
 import scalus.cardano.ledger.Script.Native
 import scalus.ledger.api.v3
 import scalus.prelude.crypto.bls12_381.G2
@@ -119,7 +95,9 @@ trait HeadState:
       * @return
       *   Block record and optional genesis if effects for block are ready.
       */
-    def getBlockRecord(block: Block): Option[(BlockRecord, Option[(TxId, L2EventGenesis)])]
+    def getBlockRecord(
+        block: Block
+    ): Option[(BlockRecord, Option[(TransactionHash, L2EventGenesis)])]
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // Readers hierarchy
@@ -132,11 +110,11 @@ sealed trait InitializingPhaseReader extends HeadStateReaderApi:
 
 trait MultisigRegimeReader extends HeadStateReaderApi:
     def headPeers: Set[WalletId]
-    def headNativeScript: NativeScript
-    def headMintingPolicy: CurrencySymbol
-    def headBechAddress: AddressBechL1
-    def beaconTokenName: TokenName
-    def seedAddress: AddressBechL1
+    def headNativeScript: Native
+    def headMintingPolicy: PolicyId
+    def headAddress: AddressL1
+    def beaconTokenName: AssetName
+    def seedAddress: AddressL1
     def treasuryUtxoId: UtxoIdL1
     def stateL1: MultisigHeadStateL1
 
@@ -177,20 +155,23 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
       * @param txId
       * @return
       */
-    def isL2EventInPool(txId: TxId): Boolean
+    def isL2EventInPool(txId: TransactionHash): Boolean
 
     def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit
     def addDepositUtxos(depositUtxos: DepositUtxos): Unit
-    def stateL2: Map[v3.TxOutRef, v3.TxOut]
+    def stateL2: UtxoSetL2
     // QUESTION: is this supposed to update the stateL2?
-    def applyBlockRecord(block: BlockRecord, mbGenesis: Option[(TxId, L2EventGenesis)] = None): Unit
+    def applyBlockRecord(
+        block: BlockRecord,
+        mbGenesis: Option[(TransactionHash, L2EventGenesis)] = None
+    ): Unit
     def applyBlockEvents(
         blockNum: Int,
-        eventsValid: Seq[(TxId, L2EventLabel)],
-        eventsInvalid: Seq[(TxId, L2EventLabel)],
+        eventsValid: Seq[(TransactionHash, L2EventLabel)],
+        eventsInvalid: Seq[(TransactionHash, L2EventLabel)],
         depositsAbsorbed: Seq[UtxoIdL1]
-    ): Map[TxId, L2Event]
+    ): Map[TransactionHash, L2Event]
     def requestFinalization(): Unit
     def isNextBlockFinal: Boolean
     def switchToFinalizingPhase(): Unit
@@ -210,7 +191,7 @@ sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def runTestDispute(): Unit
 
 sealed trait FinalizingPhase extends HeadStateApi with FinalizingPhaseReader:
-    def stateL2: Map[v3.TxOutRef, v3.TxOut]
+    def stateL2: UtxoSetL2
     def tryProduceFinalBlock(force: Boolean): Either[String, Block]
     def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit
     def finalizeHead(block: BlockRecord): Unit
@@ -224,11 +205,11 @@ class HeadStateGlobal(
     val ownPeer: WalletId,
     val headPeerVKs: Map[WalletId, VerificationKeyBytes],
     val headParams: HeadParams,
-    val headNativeScript: NativeScript,
-    val headMintingPolicy: CurrencySymbol,
-    val headAddress: AddressBechL1,
-    val beaconTokenName: TokenName,
-    val seedAddress: AddressBechL1,
+    val headNativeScript: Native,
+    val headMintingPolicy: PolicyId,
+    val headAddress: AddressL1,
+    val beaconTokenName: AssetName,
+    val seedAddress: AddressL1,
     val initTx: InitTx, // Block #0 L1-effect
     val initializedOn: Long,
     val autonomousBlocks: Boolean
@@ -311,7 +292,8 @@ class HeadStateGlobal(
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
     // TODO: having two lists won't work when we are to replay events, we need order
-    private val genesisEventsConfirmedL2: mutable.Map[Int, (TxId, L2EventGenesis)] = mutable.Map()
+    private val genesisEventsConfirmedL2: mutable.Map[Int, (TransactionHash, L2EventGenesis)] =
+        mutable.Map()
     // TODO: these events won't contain genesis events
     private val nonGenesisEventsConfirmedL2: mutable.Buffer[(L2Event, Int)] = mutable.Buffer()
     private val depositHandled: mutable.Set[UtxoIdL1] = mutable.Set.empty
@@ -321,7 +303,7 @@ class HeadStateGlobal(
     private var stateL1: Option[MultisigHeadStateL1] = None
 
     // L2 state
-    private var stateL2: Option[Map[v3.TxOutRef, v3.TxOut]] = None
+    private var stateL2: Option[UtxoSetL2] = None
 
     // HeadStateReader
     override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
@@ -367,7 +349,7 @@ class HeadStateGlobal(
 
     override def getBlockRecord(
         block: Block
-    ): Option[(BlockRecord, Option[(TxId, L2EventGenesis)])] =
+    ): Option[(BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         // TODO: shall we use Map not Buffer?
         self.blocksConfirmedL2.find(_.block == block) match
             case None => None
@@ -379,12 +361,12 @@ class HeadStateGlobal(
 
     private class MultisigRegimeReaderImpl extends MultisigRegimeReader:
         def headPeers: Set[WalletId] = self.headPeerVKs.keySet
-        def headNativeScript: NativeScript = self.headNativeScript
-        def headMintingPolicy: CurrencySymbol = self.headMintingPolicy
-        def beaconTokenName: TokenName = self.beaconTokenName
-        def seedAddress: AddressBechL1 = self.seedAddress
-        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.unTag.ref
-        def headBechAddress: AddressBechL1 = self.headAddress
+        def headNativeScript: Native = self.headNativeScript
+        def headMintingPolicy: PolicyId = self.headMintingPolicy
+        def beaconTokenName: AssetName = self.beaconTokenName
+        def seedAddress: AddressL1 = self.seedAddress
+        def treasuryUtxoId: UtxoIdL1 = self.stateL1.get.treasuryUtxo.untagged.input
+        def headAddress: AddressL1 = self.headAddress
         def stateL1: MultisigHeadStateL1 = self.stateL1.get
 
     private class InitializingPhaseReaderImpl extends InitializingPhaseReader:
@@ -405,15 +387,17 @@ class HeadStateGlobal(
             .getOrElse(zeroBlock)
         def lastKnownTreasuryUtxoId: UtxoIdL1 = self.blocksConfirmedL2
             .findLast(_.block.blockHeader.blockType == Major)
-            .map(record => UtxoIdL1.apply(txHash(maybeMultisigL1Tx(record.l1Effect).get), TxIx(0)))
+            .map(record => UtxoId[L1](maybeMultisigL1Tx(record.l1Effect).get.id, TxIx(0)))
             .getOrElse(treasuryUtxoId)
-        def peekDeposits: DepositUtxos =
+        def peekDeposits: DepositUtxos = {
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
-            self.stateL1.get.depositUtxos.utxoMap.view
-                .filterKeys(k => !self.depositHandled.contains(k))
-                .toMap
-                |> TaggedUtxoSet.apply
+            TaggedUtxoSet[L1, DepositTag](UtxoSet[L1](
+              self.stateL1.get.depositUtxos.utxoMap.view
+                  .filterKeys(k => !self.depositHandled.contains(k))
+                  .toMap
+            ))
+        }
 
         def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
             val headParams = self.headParams
@@ -452,9 +436,9 @@ class HeadStateGlobal(
             self.mbIsNextBlockFinal = Some(false)
             self.headPhase = Open
             self.stateL1 = Some(MultisigHeadStateL1(treasuryUtxo))
-            self.stateL2 = Some(Map.empty)
+            self.stateL2 = Some(UtxoSet[L2]())
 
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.untagged.output.value.coin.value))
 
             log.info(
               s"Opening head, is block leader: ${self.isBlockLeader.get}, turn: ${self.blockLeadTurn.get}"
@@ -469,7 +453,7 @@ class HeadStateGlobal(
          */
         val headSize = headPeerVKs.size
         val headPeersVKH = headPeerVKs.map((k, v) => (k, v.verKeyHash))
-        val turns = headPeersVKH.values.toList.sorted
+        val turns = headPeersVKH.values.toList.sorted(using Hash.Ordering)
         val ownVKH = headPeersVKH(ownPeer)
         val ownIndex = turns.indexOf(ownVKH) + 1
         ownIndex % headSize
@@ -494,8 +478,8 @@ class HeadStateGlobal(
             log.info("Try to produce a block due to getting new L2 event...")
             tryProduceBlock(false)
 
-        def isL2EventInPool(txId: TxId): Boolean =
-            self.poolEventsL2.map(_.getEventId).contains(txId.toScalus)
+        def isL2EventInPool(txId: TransactionHash): Boolean =
+            self.poolEventsL2.map(_.getEventId).contains(txId)
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
@@ -513,7 +497,7 @@ class HeadStateGlobal(
 
                 blockProductionActor.ask(
                   _.produceBlock(
-                    contextAndStateFromV3UTxO(stateL2),
+                    stateL2.getContextAndState,
                     immutablePoolEventsL2,
                     peekDeposits,
                     tipHeader,
@@ -525,9 +509,9 @@ class HeadStateGlobal(
                         self.pendingOwnBlock = Some(
                           OwnBlock(
                             block,
-                            toV3UTxO(utxosActive),
-                            toHUTxO(utxosWithdrawn),
-                            mbGenesis.map((th, e) => (TxId(th.toHex), e))
+                            utxosActive,
+                            utxosWithdrawn,
+                            mbGenesis
                           )
                         )
                         self.isBlockPending = Some(true)
@@ -550,7 +534,7 @@ class HeadStateGlobal(
         override def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
             log.info(s"Setting a new treasury utxo: $treasuryUtxo")
             self.stateL1.get.treasuryUtxo = treasuryUtxo
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.untagged.output.value.coin.value))
 
         def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
             log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
@@ -559,20 +543,20 @@ class HeadStateGlobal(
 
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
-            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.unTag.utxoMap)
+            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.untagged)
             updateDepositLiquidity()
             log.info("Try to produce a new block due to observing a new deposit utxo...")
             tryProduceBlock(false)
 
         private def updateDepositLiquidity(): Unit =
-            val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.coins).sum
+            val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.value.coin.value).sum
             metrics.tell(_.setDepositsLiquidity(coins.toLong))
 
-        override def stateL2: Map[v3.TxOutRef, v3.TxOut] = self.stateL2.get
+        override def stateL2: UtxoSetL2 = self.stateL2.get
 
         override def applyBlockRecord(
             record: BlockRecord,
-            mbGenesis: Option[(TxId, L2EventGenesis)] = None
+            mbGenesis: Option[(TransactionHash, L2EventGenesis)] = None
         ): Unit =
             log.info(s"Applying block ${record.block.blockHeader.blockNum}")
 
@@ -594,16 +578,16 @@ class HeadStateGlobal(
 
             val confirmedEvents = applyBlockEvents(
               blockNum,
-              body.eventsValid.map((th, e) => (TxId(th.toHex), e)),
-              body.eventsInvalid.map((th, e) => (TxId(th.toHex), e)),
-              body.depositsAbsorbed.map(_.toHydrozoa)
+              body.eventsValid,
+              body.eventsInvalid,
+              body.depositsAbsorbed
             )
 
             // NB: this should be run before replacing utxo set
             val volumeWithdrawn = record.block.validWithdrawals.toList
-                .map(th => confirmedEvents(TxId(th.toHex)).asInstanceOf[L2EventWithdrawal])
+                .map(th => confirmedEvents(th).asInstanceOf[L2EventWithdrawal])
                 .flatMap(e => e.transaction.body.value.inputs)
-                .map(contextAndStateFromV3UTxO(stateL2)._2.utxo(_))
+                .map(stateL2.getContextAndState._2.utxo(_))
                 .map(_.value.coin.value)
                 .sum
 
@@ -638,7 +622,7 @@ class HeadStateGlobal(
                 mbGenesis.foreach(g => m.addInboundL1Volume(g._2.volume))
 
                 val volumeTransacted = record.block.validTransactions.toList
-                    .map(th => confirmedEvents(TxId(th.toHex)).asInstanceOf[L2EventTransaction])
+                    .map(th => confirmedEvents(th).asInstanceOf[L2EventTransaction])
                     .map(_.volume)
                     .sum
                 m.addTransactedL2Volume(volumeTransacted)
@@ -679,14 +663,14 @@ class HeadStateGlobal(
 
         override def applyBlockEvents(
             blockNum: Int,
-            eventsValid: Seq[(TxId, L2EventLabel)],
-            eventsInvalid: Seq[(TxId, L2EventLabel)],
+            eventsValid: Seq[(TransactionHash, L2EventLabel)],
+            eventsInvalid: Seq[(TransactionHash, L2EventLabel)],
             depositsAbsorbed: Seq[UtxoIdL1]
-        ): Map[TxId, L2Event] =
+        ): Map[TransactionHash, L2Event] =
 
-            def applyValidEvent(blockNum: Int, txId: TxId): (TxId, L2Event) =
+            def applyValidEvent(blockNum: Int, txId: TransactionHash): (TransactionHash, L2Event) =
                 log.info(s"Marking event $txId as validated by block $blockNum")
-                self.poolEventsL2.indexWhere(e => TxId(e.getEventId.toHex) == txId) match
+                self.poolEventsL2.indexWhere(e => e.getEventId == txId) match
                     case -1 => throw IllegalStateException(s"pool event $txId was not found")
                     case i =>
                         val event = self.poolEventsL2.remove(i)
@@ -711,8 +695,7 @@ class HeadStateGlobal(
             // 2.1 Add to handled
             self.depositHandled.addAll(depositsAbsorbed.toSet)
             // 2.2 Remove from pool
-            depositsAbsorbed.foreach(d =>
-                val depositId = UtxoIdL1(d.txId, d.outputIx)
+            depositsAbsorbed.foreach(depositId =>
                 val ix = self.poolDeposits.indexWhere(p => p.depositId == depositId)
                 ix match
                     case -1 =>
@@ -728,7 +711,7 @@ class HeadStateGlobal(
             log.info(s"Pool events before removing: ${self.poolEventsL2.size}")
 
             log.info(s"Removing invalid events: $eventsInvalid")
-            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId.toHydrozoa))
+            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
             log.info(s"Pool events after removing: ${self.poolEventsL2.size}")
@@ -790,19 +773,18 @@ class HeadStateGlobal(
                                 datum.peer.isDefined &&
                                 datum.peer.get == ownVk
                             ) match {
-                            case Some(utxo) =>
-                                UtxoIdL1.apply(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                            case Some(utxo) => utxo.input
                             case None => throw RuntimeException("Vote UTxO was not found")
                         }
 
-                    val ownAddress = AddressBech[L1](
-                      account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
+                    val ownAddress = Address[L1](
+                      Address.unsafeFromBech32(account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32)
                     )
 
                     // Temporarily
                     val ownAccount = account(TestPeer.valueOf(ownPeer.name))
 
-                    val unresolvedTreasuryUtxo = UtxoIdL1.apply(fallbackTxHash, TxIx(0))
+                    val unresolvedTreasuryUtxo = UtxoId[L1](fallbackTxHash, TxIx(0))
                     val recipe = VoteTxRecipe(
                       voteUtxoId,
                       // treasury is always the first output, though this is arguably not the best way to get it
@@ -831,31 +813,25 @@ class HeadStateGlobal(
 
                         log.info("Checking for resolved treasury utxo")
                         val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
-                        val beaconTokenUnit = encodeHex(
-                          this.headMintingPolicy.bytes ++ decodeHex(
-                            this.beaconTokenName.tokenNameHex
-                          )
-                        )
+                        val beaconTokenUnit = AssetName (
+                            this.headMintingPolicy ++
+                                this.beaconTokenName.bytes
+                            )
+
 
                         // TODO: use more effective endpoint that based on vote tokens' assets.
                         cardano
                             .ask(_.utxosAtAddress(treasuryAddress))
-                            .find(u =>
-                                fromData[TreasuryDatum](
-                                  Interop.toScalusData(
-                                    PlutusData
-                                        .deserialize(HexUtil.decodeHexString(u.getInlineDatum))
-                                  )
-                                ) match {
+                            .find(u => fromData[TreasuryDatum](u.output.datumOption.get.asInstanceOf[Inline].data)
+                                 match {
                                     case Resolved(_) =>
-                                        u.getAmount.asScala
-                                            .map(_.getUnit)
-                                            .contains(beaconTokenUnit)
+                                        u.output.value.assets.assets.contains(this.headMintingPolicy)
+                                         && u.output.value.assets.assets(this.headMintingPolicy)
+                                            .contains(this.beaconTokenName)
                                     case _ => false
                                 }
                             ) match {
-                            case Some(utxo) =>
-                                UtxoIdL1(TxId(utxo.getTxHash), TxIx(utxo.getOutputIndex))
+                            case Some(utxo) => utxo.input
                             case None =>
                                 log.info("Resolved treasury utxo was not found")
                                 // just wait
@@ -875,7 +851,7 @@ class HeadStateGlobal(
                             if (turn == 0) {
                                 val withdrawalTxHash = runWithdrawal(resolvedTreasury, ownAccount)
                                 // The rest of treasury should be always the first output
-                                val restTreasury = UtxoIdL1(withdrawalTxHash, TxIx(0))
+                                val restTreasury = UtxoId[L1](withdrawalTxHash, TxIx(0))
                                 runDeinit(restTreasury, ownAccount)
                             }
                     }
@@ -887,16 +863,12 @@ class HeadStateGlobal(
                     log.info("Skipping voting in favor of other votes");
             }
 
-            def getVoteDatum(a: model.Utxo) = {
-                fromData[VoteDatum](
-                  Interop.toScalusData(
-                    PlutusData
-                        .deserialize(HexUtil.decodeHexString(a.getInlineDatum))
-                  )
-                )
+            // FIXME: Partial. Throws if datum not inline
+            def getVoteDatum(a: Utxo[L1]) = {
+                fromData[VoteDatum](a.output.datumOption.get.asInstanceOf[Inline].data)
             }
 
-            def getVoteUtxos: List[BBUtxo] = {
+            def getVoteUtxos: List[Utxo[L1]] = {
                 val voteTokenName = extractVoteTokenNameFromFallbackTx(
                   l2LastMajorRecord.l1PostDatedEffect.get
                 )
@@ -908,12 +880,11 @@ class HeadStateGlobal(
                 val sortedVoteUtxoIds =
                     cardano
                         .ask(_.utxosAtAddress(disputeAddress))
-                        .filter(u =>
-                            val voteTokenUnit = encodeHex(
-                              this.headMintingPolicy.bytes
-                            ) + voteTokenName.tokenNameHex
-                            val units = u.getAmount.asScala.map(_.getUnit)
-                            units.contains(voteTokenUnit)
+                        .filter(u => {
+                            val uVal = u.output.value.assets.assets
+                            uVal.contains(this.headMintingPolicy) &&
+                                uVal(this.headMintingPolicy).contains(voteTokenName)
+                        }
                         )
                         .sortWith((a, b) =>
                             val datumA = getVoteDatum(a)
@@ -921,25 +892,22 @@ class HeadStateGlobal(
                             datumA.key < datumB.key
                         )
 
-                log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.getTxHash)}")
+                log.info(s"sortedVoteUtxoIds: ${sortedVoteUtxoIds.map(_.input.transactionId)}")
                 sortedVoteUtxoIds
             }
 
             // Move to Tx.scala-like module
-            def getUtxoId(utxo: BBUtxo): UtxoIdL1 = UtxoIdL1.apply(
-              utxo.getTxHash |> TxId.apply,
-              utxo.getOutputIndex |> TxIx.apply
-            )
+            def getUtxoId(utxo: Utxo[L1]): UtxoIdL1 = utxo.input
 
             def runTallying(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
 
                 type TallyTx = TxL1
 
-                def makeTallies(voteUtxos: List[BBUtxo]): List[TallyTx] = voteUtxos match
+                def makeTallies(voteUtxos: List[Utxo[L1]]): List[TallyTx] = voteUtxos match
                     case x :: y :: zs => List(makeTally(x, y)) ++ makeTallies(zs)
                     case _            => List.empty
 
-                def makeTally(voteA: BBUtxo, voteB: BBUtxo): TallyTx = {
+                def makeTally(voteA: Utxo[L1], voteB: Utxo[L1]): TallyTx = {
                     val recipe = TallyTxRecipe(
                       getUtxoId(voteA),
                       getUtxoId(voteB),
@@ -1010,7 +978,7 @@ class HeadStateGlobal(
                 }
             }
 
-            def runWithdrawal(resolvedTreasury: UtxoIdL1, ownAccount: Account): TxId = {
+            def runWithdrawal(resolvedTreasury: UtxoIdL1, ownAccount: Account): TransactionHash = {
 
                 log.info("Running withdraw...")
 
@@ -1022,7 +990,7 @@ class HeadStateGlobal(
                 val proof = G2.generator.toCompressedByteString.toHex
 
                 val recipe = WithdrawTxRecipe(
-                  toHUTxO(contextAndStateFromV3UTxO(utxos)._2.utxo),
+                  utxos,
                   resolvedTreasury,
                   proof,
                   ownAccount
@@ -1079,7 +1047,7 @@ class HeadStateGlobal(
         end runTestDispute
 
     private class FinalizingPhaseImpl extends FinalizingPhaseReaderImpl with FinalizingPhase:
-        def stateL2: Map[v3.TxOutRef, v3.TxOut] =
+        def stateL2: UtxoSetL2 =
             self.stateL2.get
 
         override def tryProduceFinalBlock(
@@ -1094,7 +1062,7 @@ class HeadStateGlobal(
 
                 blockProductionActor.ask(
                   _.produceBlock(
-                    contextAndStateFromV3UTxO(stateL2),
+                    stateL2.getContextAndState,
                     Seq.empty,
                     TaggedUtxoSet.apply(),
                     tipHeader,
@@ -1106,9 +1074,9 @@ class HeadStateGlobal(
                         self.pendingOwnBlock = Some(
                           OwnBlock(
                             block,
-                            toV3UTxO(utxosActive),
-                            toHUTxO[L2](utxosWithdrawn),
-                            mbGenesis.map((th, e) => (TxId(th.toHex), e))
+                            (utxosActive),
+                            (utxosWithdrawn),
+                            mbGenesis
                           )
                         )
                         self.isBlockPending = Some(true)
@@ -1130,7 +1098,7 @@ class HeadStateGlobal(
         override def newTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
             log.info("Net treasury utxo")
             self.stateL1.get.treasuryUtxo = treasuryUtxo
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.unTag.output.coins.toLong))
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.untagged.output.value.coin.value))
 
         override def finalizeHead(record: BlockRecord): Unit =
             require(
@@ -1252,7 +1220,7 @@ object HeadStateGlobal:
           ownPeer = params.ownPeer,
           headPeerVKs = params.headPeerVKs,
           headParams = params.headParams,
-          headNativeScript = params.headNativeScript.toHydrozoaNativeScript,
+          headNativeScript = params.headNativeScript,
           headMintingPolicy = params.headMintingPolicy,
           headAddress = params.headAddress,
           beaconTokenName = params.beaconTokenName,
@@ -1273,9 +1241,9 @@ case class BlockRecord(
 
 case class OwnBlock(
     block: Block,
-    utxosActive: Map[v3.TxOutRef, v3.TxOut],
+    utxosActive: UtxoSetL2,
     utxosWithdrawn: UtxoSetL2,
-    mbGenesis: Option[(TxId, L2EventGenesis)]
+    mbGenesis: Option[(TransactionHash, L2EventGenesis)]
 )
 
 case class PendingDeposit(
@@ -1310,7 +1278,7 @@ type L1PostDatedBlockEffect = Option[TxL1]
 // Always None for final block, always Some for minor block,
 // None or Some for major (None in case a major block is produced
 // to refresh a L1 treasury utxo.
-type L2BlockEffect = Option[Map[v3.TxOutRef, v3.TxOut]]
+type L2BlockEffect = Option[UtxoSetL2]
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
 
@@ -1319,10 +1287,10 @@ def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
     case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
 
 // NB: this won't work as an extension method on union type L1BlockEffect
-def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TxId] = l1BlockEffect match
+def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TransactionHash] = l1BlockEffect match
     case _: MinorBlockL1Effect => None
     case tx: MultisigTx[_]     => tx |> txHash |> Some.apply
 
 def mbSettlementFees(l1BlockEffect: L1BlockEffect): Option[Long] = l1BlockEffect match
-    case tx: SettlementTx => tx |> txFees |> Some.apply
+    case tx: SettlementTx => tx.untagged.body.value.fee.value |> Some.apply
     case _                => None

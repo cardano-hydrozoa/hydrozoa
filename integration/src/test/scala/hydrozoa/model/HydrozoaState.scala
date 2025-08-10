@@ -79,7 +79,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
     override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
         (new MultisigRegimeReader:
-            def headBechAddress: AddressBechL1 = s.headAddressBech32.get
+            def headAddress: AddressBechL1 = s.headAddressBech32.get
 
             override def headPeers: Set[WalletId] = ???
 
@@ -115,7 +115,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
             def pendingOwnBlock: OwnBlock = ???
             def isQuitConsensusImmediately: Boolean = ???
             def beaconTokenName: hydrozoa.TokenName = ???
-            def headBechAddress: hydrozoa.AddressBechL1 = ???
+            def headAddress: hydrozoa.AddressBechL1 = ???
             def headMintingPolicy: hydrozoa.CurrencySymbol = ???
             def headNativeScript: hydrozoa.NativeScript = ???
             def headPeers: Set[hydrozoa.node.state.WalletId] = ???

@@ -1,31 +1,42 @@
 package hydrozoa.l1.event
 
-import com.bloxbean.cardano.client.api.model.Amount.asset
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.transaction.spec.script.NativeScript as BBNativeScript
-import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.NodeState
-
-import java.math.BigInteger
 import ox.channels.ActorRef
 import ox.scheduling.{RepeatConfig, repeat}
 import ox.{fork, sleep, supervised}
+import scalus.bloxbean.Interop
+import scalus.builtin.ByteString
+import scalus.builtin.Data.fromData
+import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.{
+    AssetName,
+    Blake2b_256,
+    Coin,
+    Hash,
+    HashPurpose,
+    MultiAsset,
+    TransactionHash,
+    TransactionInput,
+    TransactionOutput,
+    Value
+}
 
+import java.math.BigInteger
+import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
 import scala.language.strictEquality
 import scala.util.Try
-import scalus.bloxbean.Interop
-import scalus.builtin.Data.fromData
-import scalus.cardano.ledger.Script.Native
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
   *
@@ -38,18 +49,18 @@ class MultisigL1EventSource(
     private val log = Logger(getClass)
 
     def awaitInitTx(
-        txId: TxId,
-        headAddress: AddressBechL1,
+        txId: TransactionHash,
+        headAddress: AddressL1,
         headNativeScript: Native,
-        beaconTokenName: TokenName
+        beaconTokenName: AssetName
     ): Unit =
         log.info("awaitInitTx")
         cardano.ask(_.awaitTx(txId)) match
             case Some(initTx) =>
                 log.info(s"Init tx $txId appeared on-chain.")
                 onlyOutputToAddress(initTx, headAddress) match
-                    case Right(ix, coins, tokens, _) =>
-                        val utxo = TaggedUtxo[L1, TreasuryTag](txId, ix, headAddress, coins, tokens)
+                    case Right(ix, value, _) =>
+                        val utxo = TaggedUtxo[L1, TreasuryTag](Utxo(txId, ix, headAddress, value))
                         log.info(s"Treasury utxo index is: $ix, utxo $utxo");
                         nodeState.tell(s =>
                             s.head.initializingPhase(
@@ -57,11 +68,13 @@ class MultisigL1EventSource(
                             )
                         )
 
-                        val treasuryTokenAmount = asset(
-                          headNativeScript.scriptHash.toHex,
-                          beaconTokenName.tokenNameHex,
-                          BigInteger.valueOf(1)
-                        )
+                        val treasuryTokenAmount =
+                            MultiAsset(
+                              SortedMap(
+                                headNativeScript.scriptHash ->
+                                    SortedMap(beaconTokenName -> 1L)
+                              )
+                            )
 
                         // repeat polling for head address while head exists
                         supervised {
@@ -94,60 +107,43 @@ class MultisigL1EventSource(
                 throw RuntimeException("initTx hasn't appeared")
 
     private enum MultisigUtxoType:
-        case Treasury(utxo: BBUtxo)
-        case Deposit(utxo: BBUtxo)
-        case Unknown(utxo: BBUtxo)
+        case Treasury(utxo: Utxo[L1])
+        case Deposit(utxo: Utxo[L1])
+        case Unknown(utxo: Utxo[L1])
 
-    private def utxoType(treasuryTokenAmount: Amount)(utxo: BBUtxo): MultisigUtxoType =
-        if utxo.getAmount.contains(treasuryTokenAmount)
+    private def utxoType(treasuryTokenAmount: MultiAsset)(utxo: Utxo[L1]): MultisigUtxoType = {
+        // TODO: Multiasset needs a (type safe) `contains` method
+        val treasuryTokenId = treasuryTokenAmount.assets.toList.head._1
+        val treasuryTokenName = treasuryTokenAmount.assets(treasuryTokenId).toList.head._1
+        val utxoAssets = utxo.output.value.assets.assets
+        if utxoAssets.contains(treasuryTokenId) && utxoAssets(treasuryTokenId).contains(
+              treasuryTokenName
+            ) && utxoAssets(treasuryTokenId)(treasuryTokenName) == 1
         then MultisigUtxoType.Treasury(utxo)
         else
             // FIXME: use depositDatum function
             val datum = Try(
-              fromData[DepositDatum](
-                Interop.toScalusData(
-                  PlutusData.deserialize(HexUtil.decodeHexString(utxo.getInlineDatum))
-                )
-              )
+              fromData[DepositDatum](utxo.output.datumOption.get.asInstanceOf[Inline].data)
             ).toOption
 
             datum match
                 case Some(_) => MultisigUtxoType.Deposit(utxo)
                 case None    => MultisigUtxoType.Unknown(utxo)
+    }
 
-    private def mkNewTreasuryUtxo(utxo: BBUtxo): TreasuryUtxo =
-        val utxoId = UtxoId[L1]
-            .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
-        val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        val tokens = valueTokens(utxo.toValue)
-        TaggedUtxo[L1, TreasuryTag](
-          utxoId.txId,
-          utxoId.outputIx,
-          utxo.getAddress |> AddressBech[L1],
-          coins,
-          tokens
-        )
+    private def mkNewTreasuryUtxo(utxo: Utxo[L1]): TreasuryUtxo = {
+        TaggedUtxo[L1, TreasuryTag](utxo)
+    }
 
     /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
       */
-    private def mkDepositUtxoUnsafe(utxo: BBUtxo): DepositUtxo =
-        val utxoId = UtxoId[L1]
-            .apply(utxo.getTxHash |> TxId.apply, utxo.getOutputIndex |> TxIx.apply)
-        val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
-        val tokens = valueTokens(utxo.toValue)
-
-        TaggedUtxo[L1, DepositTag](
-          utxoId.txId,
-          utxoId.outputIx,
-          utxo.getAddress |> AddressBech[L1],
-          coins,
-          tokens,
-          Some(utxo.getInlineDatum)
-        )
+    private def mkDepositUtxoUnsafe(utxo: Utxo[L1]): DepositUtxo = {
+        TaggedUtxo[L1, DepositTag](utxo)
+    }
 
     private def updateL1State(
-        headAddress: AddressBechL1,
-        treasuryTokenAmount: Amount
+        headAddress: AddressL1,
+        treasuryTokenAmount: MultiAsset
     ): Unit =
         nodeState.ask(_.mbInitializedOn) match
             case None =>
@@ -174,16 +170,14 @@ class MultisigL1EventSource(
                             val utxoType_ = utxoType(treasuryTokenAmount)
 
                             utxos.foreach(utxo =>
-                                val utxoId = UtxoId[L1]
-                                    .apply(
-                                      utxo.getTxHash |> TxId.apply,
-                                      utxo.getOutputIndex |> TxIx.apply
-                                    )
+                                val utxoId = utxo.input
                                 utxoType_(utxo) match
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
-                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
-                                            mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
+                                        // FIXME: TransactionHash and TransactionHash can't be compared with == (????)
+                                        if currentL1State.treasuryUtxo.untagged.input.index == utxoId.index &&
+                                            currentL1State.treasuryUtxo.untagged.input.transactionId.toHex == utxoId.transactionId.toHex
+                                        then mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
                                         existingDeposits.add(utxoId)
@@ -191,8 +185,8 @@ class MultisigL1EventSource(
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
                                             depositsNew.utxoMap
                                                 .put(
-                                                  depositUtxo.unTag.ref,
-                                                  depositUtxo.unTag.output
+                                                  depositUtxo.untagged.input,
+                                                  depositUtxo.untagged.output
                                                 )
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
@@ -222,15 +216,11 @@ class MultisigL1EventSource(
                             val utxoType_ = utxoType(treasuryTokenAmount)
 
                             utxos.foreach(utxo =>
-                                val utxoId = UtxoId[L1]
-                                    .apply(
-                                      utxo.getTxHash |> TxId.apply,
-                                      utxo.getOutputIndex |> TxIx.apply
-                                    )
+                                val utxoId = utxo.input
                                 utxoType_(utxo) match
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
-                                        if currentL1State.treasuryUtxo.unTag.ref != utxoId then
+                                        if currentL1State.treasuryUtxo.untagged.input != utxoId then
                                             mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")

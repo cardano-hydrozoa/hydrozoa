@@ -1,14 +1,15 @@
 package hydrozoa.node
 
+import com.bloxbean.cardano.client.common.model.Network
 import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.infra.transitionary.{toHydrozoa, toScalus}
-import hydrozoa.infra.{WalletModuleBloxbean, addWitness, toBloxbean}
+import hydrozoa.infra.transitionary.toScalus
+import hydrozoa.infra.{WalletModuleBloxbean, addWitness}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.state.WalletId
-import hydrozoa.{Wallet, networkL1static}
+import hydrozoa.{AnyLayer, Tx, TxL2, L2, Wallet, networkL1static}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network.{Mainnet, Testnet}
@@ -58,7 +59,7 @@ object TestPeer:
     private val accountCache: mutable.Map[TestPeer, Account] = mutable.Map.empty
         .withDefault(peer =>
             new Account(
-              networkL1static.toBloxbean,
+              Network(0, 42),
               mnemonic,
               createExternalAddressDerivationPathForAccount(peer.ordinal)
             )
@@ -102,9 +103,9 @@ extension [K, V](map: mutable.Map[K, V])
     }
 
 // TODO: refactor all of this to make it just use the scalus types.
-def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
-    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned.toHydrozoa)
-    addWitness(txUnsigned.toHydrozoa, keyWitness).toScalus
+def signTx[L <: AnyLayer](peer: TestPeer, txUnsigned: Tx[L]): Tx[L] =
+    val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
+    addWitness(txUnsigned, keyWitness)
 
 /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all inputs with
   * the given key
@@ -119,15 +120,14 @@ def l2EventWithdrawalFromInputsAndPeer(
       fee = Coin(0L)
     )
 
-    val txUnsigned: STransaction = {
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = true,
-          auxiliaryData = None
-        )
-
-    }
+    val txUnsigned: TxL2 = Tx[L2](
+      STransaction(
+        body = KeepRaw(txBody),
+        witnessSet = TransactionWitnessSet.empty,
+        isValid = true,
+        auxiliaryData = None
+      )
+    )
 
     // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
     // Its probably possible to extract the key and use the crypto primitives from scalus directly
@@ -157,14 +157,14 @@ def l2EventTransactionFromInputsAndPeer(
       fee = Coin(0L)
     )
 
-    val txUnsigned: STransaction = {
+    val txUnsigned: Tx[L2] = Tx[L2](
         STransaction(
           body = KeepRaw(txBody),
           witnessSet = TransactionWitnessSet.empty,
           isValid = false,
           auxiliaryData = None
         )
-    }
+    )
 
     L2EventTransaction(signTx(inPeer, txUnsigned))
 }

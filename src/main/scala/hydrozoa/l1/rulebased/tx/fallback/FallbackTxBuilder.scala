@@ -1,6 +1,8 @@
 package hydrozoa.l1.rulebased.tx.fallback
 
 import hydrozoa.*
+import scalus.cardano.ledger.PolicyId
+import scalus.cardano.ledger.Script.Native
 
 // Fallback AKA post-dated transition to the rule-based regime.
 
@@ -30,10 +32,10 @@ case class FallbackTxRecipe(
     multisigTx: TxL1,
 
     // Bech32 address of the rule-based regime's treasury script.
-    treasuryAddress: AddressBechL1,
+    treasuryAddress: AddressL1,
 
     // Bech32 address of the rule-based regime's resolution script.
-    disputeAddress: AddressBechL1,
+    disputeAddress: AddressL1,
 
     // Voting duration from head parameters.
     // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129
@@ -41,7 +43,7 @@ case class FallbackTxRecipe(
 
     // Head's peers.
     peers: List[VerificationKeyBytes],
-    headAddressBech32: AddressBechL1,
-    headNativeScript: NativeScript,
-    headMintingPolicy: CurrencySymbol
+    headAddress: AddressL1,
+    headNativeScript: Native,
+    headMintingPolicy: PolicyId
 )

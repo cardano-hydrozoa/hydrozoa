@@ -16,11 +16,11 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 sealed trait L2Event:
     def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash]
 
-final case class L2EventTransaction(transaction: Transaction) extends L2Event {
+final case class L2EventTransaction(transaction: TxL2) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
-final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
+final case class L2EventWithdrawal(transaction: TxL2) extends L2Event {
     override def getEventId: Hash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
 }
 
@@ -28,7 +28,7 @@ final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
   * outputs. The TxId of a Genesis Event comes from sorting the TxIds of the absorbed UTxOs,
   * encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
   */
-final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutput)])
+final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
     extends L2Event {
     require(utxosL1.nonEmpty, "L2EventGenesis must consume at least one L1 deposit")
 
@@ -37,8 +37,8 @@ final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutpu
       */
     // FIXME: check if this is really the desired behavior. Should we do something else if we have a malformed
     // deposit output?
-    val resolvedL2UTxOs: Seq[(TransactionInput, TransactionOutput)] = {
-        val mbL2Outs: Seq[Option[(TransactionInput, TransactionOutput)]] = {
+    val resolvedL2UTxOs: Seq[(UtxoIdL2, OutputL2)] = {
+        val mbL2Outs: Seq[Option[(UtxoIdL2, OutputL2)]] = {
             utxosL1.zipWithIndex.map((utxo, idx) => {
                 val l2TxIn = TransactionInput(transactionId = getEventId, index = idx)
                 if !utxo._2.isInstanceOf[Babbage] then None
@@ -52,14 +52,14 @@ final case class L2EventGenesis(utxosL1: Seq[(TransactionInput, TransactionOutpu
                             val dd: DepositDatum =
                                 fromData(Data.fromCbor(fromData[ByteString](datum).bytes))
                             Some(
-                              l2TxIn,
-                              Babbage(
+                              UtxoId[L2](l2TxIn),
+                              Output[L2](Babbage(
                                 address = dd.address.toScalusLedger,
                                 value = Value(babbageTxOut.value.coin),
                                 datumOption =
-                                    dd.datum.asScala.map(bs => Inline(Data.fromCbor(bs.bytes))),
+                                    dd.datum.asScala.map(Inline(_)),
                                 scriptRef = None
-                              )
+                              ))
                             )
 
                         case _ => None

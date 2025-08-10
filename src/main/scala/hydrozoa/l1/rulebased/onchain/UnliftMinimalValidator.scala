@@ -3,11 +3,14 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.infra.{encodeHex, toBB}
-import hydrozoa.{AddressBech, AddressBechL1, L1, Network}
+import hydrozoa.{Address, AddressL1, L1}
 import scalus.*
 import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.{Blake2b_224, Hash, HashPurpose}
 import scalus.ledger.api.v3.*
 import scalus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.prelude.*
@@ -47,9 +50,11 @@ object UnliftMinimialValidatorScript {
 
     val scriptHashString: String = encodeHex(IArray.unsafeFromArray(plutusScript.getScriptHash))
 
-    def address(n: Network): AddressBechL1 = {
+    def address(n: Network): AddressL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
-        address.getAddress |> AddressBech[L1].apply
+        Address[L1](ShelleyAddress(network = n,
+            payment = ShelleyPaymentPart.Script((Hash[Blake2b_224, HashPurpose.ScriptHash](
+                ByteString.fromHex(address.getAddress)))), delegation = Null))
     }
 }
 

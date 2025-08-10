@@ -1,146 +1,140 @@
 package hydrozoa.infra
 
-import co.nstant.in.cbor.model.{Array, ByteString, Map, UnsignedInteger}
+/** This package (partially) re-exposes the API of scalus's types on the L1/L2 tagged hydrozoa
+  * types. Note that there are currently both bloxbean and scalus types imported. Where conflicts
+  * occur, we import the scalus types with the `S` prefix; i.e. `SValue` comes from Scalus, `Value`
+  * comes from bloxbean.
+  */
+
+import co.nstant.in.cbor.model.{Map, UnsignedInteger, Array as CborArray, ByteString as CborByteString}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.spec.Era
-import com.bloxbean.cardano.client.transaction.spec.*
+import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScript as BBNativeScript}
+import com.bloxbean.cardano.client.transaction.spec.{TransactionOutput, Value}
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
-import com.bloxbean.cardano.client.transaction.spec.script.{
-    ScriptAll,
-    NativeScript as BBNativeScript
-}
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toHydrozoa
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
 import hydrozoa.node.TestPeer
+import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
-import scalus.builtin.Data
+import scalus.builtin.{ByteString, Data}
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{AssetName, Blake2b_224, Blake2b_256, Hash, HashPurpose, MultiAsset, OriginalCborByteArray, PolicyId, Sized, TransactionHash, TransactionInput, VKeyWitness, Transaction as STransaction, TransactionOutput as STransactionOutput, Value as SValue}
 import scalus.ledger.api.Timelock.AllOf
-import scalus.cardano.ledger.Transaction as STransaction
 
+import scala.collection.immutable.SortedMap
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
 
 // TODO: make an API
+// We should expose more of it, probably add more tagged types, and unifying the naming of the functions
 
-def txHash[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | Tx[L]): TxId = TxId(
-  getTxHash(getAnyTxBytes(tx))
-)
+// QUESTION: why isn't this just exposed as class methods?
+def txHash[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): TransactionHash =
+    tx.id
 
-def serializeTxHex[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | Tx[L]): String =
-    HexUtil.encodeHexString(getAnyTxBytes(tx))
+def serializeTxHex[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): String =
+    ByteString.fromArray(Cbor.encode(tx.asInstanceOf[STransaction]).toByteArray).toHex
 
-def getAnyTxBytes[L <: AnyLayer, T <: MultisigTxTag](tx: MultisigTx[T] | Tx[L]) = tx.bytes
+def deserializeTxHex[L <: AnyLayer](hex: String): Tx[L] = Tx[L]({
+    val bytes = HexUtil.decodeHexString(hex)
+    given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
-def deserializeTxHex[L <: AnyLayer](hex: String): Tx[L] = Tx[L](HexUtil.decodeHexString(hex))
+    Cbor.decode(bytes).to[STransaction].value
+})
 
 // Pure function to add a key witness to a transaction.
-def addWitness[L <: AnyLayer](tx: Tx[L], wit: TxKeyWitness): Tx[L] =
-    val txBytes = TransactionBytes(tx.bytes)
+def addWitness[L <: AnyLayer](tx: Tx[L], wit: VKeyWitness): Tx[L] =
+    val txBytes = TransactionBytes(Cbor.encode(tx.untagged).toByteArray)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
 
     val vkWitnessArrayDI = witnessSetMap.get(UnsignedInteger(0))
 
-    val vkWitnessArray: Array =
-        if (vkWitnessArrayDI != null) vkWitnessArrayDI.asInstanceOf[Array]
-        else new Array
+    val vkWitnessArray: CborArray =
+        if (vkWitnessArrayDI != null) vkWitnessArrayDI.asInstanceOf[CborArray]
+        else new CborArray
 
     if (vkWitnessArrayDI == null)
         witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray)
 
-    val vkeyWitness = new Array
-    vkeyWitness.add(ByteString(wit.vkey))
-    vkeyWitness.add(ByteString(wit.signature))
+    val vkeyWitness = new CborArray
+    vkeyWitness.add(CborByteString(wit.vkey.bytes))
+    vkeyWitness.add(CborByteString(wit.signature.bytes))
 
     vkWitnessArray.add(vkeyWitness)
 
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes |> Tx.apply
+    val txBytesSigned = txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes
+    given OriginalCborByteArray = OriginalCborByteArray(txBytesSigned)
+    Tx(Cbor.decode(txBytesSigned).to[STransaction].value)
 end addWitness
 
 // A variant for multisig functions.
-def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: TxKeyWitness): MultisigTx[T] =
+def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness): MultisigTx[T] =
     MultisigTx(addWitness(tx.toL1Tx, wit))
 
 /** @param tx
   * @param address
   * @return
-  *   Index and ada amount iff tx has exactly one output to address specified. TODO: should be value
+  *   Index, value, and datum iff tx has exactly one output to address specified.
   */
 def onlyOutputToAddress(
     tx: TxAny,
-    address: AddressBechL1
-): Either[(NoMatch | TooManyMatches), (TxIx, BigInt, Tokens, Data)] =
-    val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala.toList
-    outputs.filter(output => output.getAddress == address.bech32) match
-        case List(elem) =>
-            Right(
-              (
-                TxIx(outputs.indexOf(elem).toChar),
-                elem.getValue.getCoin.longValue(),
-                valueTokens(elem.getValue),
-                Interop.toScalusData(
-                  elem.getInlineDatum
-                ) // FIXME: how does it indicate it's optional? Use Option.apply
-              )
-            )
-        case Nil => Left(NoMatch())
-        case _   => Left(TooManyMatches())
+    address: AddressL1
+): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Int, SValue, Data)] =
+    val outputs = tx.body.value.outputs
+    outputs.filter(output => output.value.address == address) match
+        case IndexedSeq(elem: Sized[STransactionOutput]) =>
+            elem.value match
+                case b: Babbage if b.datumOption.isDefined =>
+                    b.datumOption.get match {
+                        case i: Inline => Right((outputs.indexOf(b), b.value, i.data))
+                        case _         => Left(NoInlineDatum())
+                    }
+                case _ => Left(NonBabbageMatch())
+        case i: IndexedSeq[Any] if i.isEmpty => Left(NoMatch())
+        case _                               => Left(TooManyMatches())
 
 final class NoMatch
 final class TooManyMatches
+final class NonBabbageMatch
+final class NoInlineDatum
 
-def txFees(tx: TxAny): Long = Transaction.deserialize(tx.bytes).getBody.getFee.longValue()
-
-//def outputDatum(tx: TxAny, index: TxIx): Data =
-//    val tx_ = Transaction.deserialize(tx.bytes)
-//    val output = tx_.getBody.getOutputs.get(index.ix.intValue)
-//    val datum = output.getInlineDatum
-//    Interop.toScalusData(datum)
-
+// WARNING/FIXME: Partial for compatibility reasons, will throw if address is not Shelley
 def toBloxBeanTransactionOutput[L <: AnyLayer](output: Output[L]): TransactionOutput =
     TransactionOutput.builder
-        .address(output.address.bech32)
-        .value(Value.builder.coin(BigInteger.valueOf(output.coins.longValue)).build)
+        .address(output.address.asInstanceOf[ShelleyAddress].toBech32.get)
+        .value(Value.builder.coin(BigInteger.valueOf(output.value.coin.value)).build)
         .build
 
 def txInputs[L <: AnyLayer](tx: Tx[L]): Seq[UtxoId[L]] =
-    val inputs = Transaction.deserialize(tx.bytes).getBody.getInputs.asScala
-    inputs.map(i => UtxoId(TxId(i.getTransactionId), TxIx(i.getIndex.toChar))).toSeq
+    val inputs = tx.body.value.inputs
+    inputs.map(i => UtxoId(i)).toSeq
 
-def valueTokens[L <: AnyLayer](tokens: Value): Tokens = {
-    tokens.toMap.asScala.toMap.map((k, v) =>
-        PolicyId(k) -> v.asScala.toMap.map((k, v) => TokenName(k) -> BigInt.apply(v))
-    )
-}
+/** WARN: I can't remember if the asset name from BB contains a "0x" prefix. If it does, you'll need
+  * to drop this manually during this conversion
+  */
+def valueTokens[L <: AnyLayer](tokens: Value): MultiAsset = MultiAsset({
+    SortedMap.from(tokens.toMap.asScala.toMap.map((k, v) =>
+        Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
+            -> SortedMap.from(v.asScala.toMap.map((k, v) => AssetName(ByteString.fromHex(k)) -> v.longValue()))
+    ))
+})
 def txOutputs[L <: AnyLayer](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
-    val outputs = Transaction.deserialize(tx.bytes).getBody.getOutputs.asScala
+    val outputs = tx.body.value.outputs
     val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
-            val utxoId = UtxoId[L](TxId(txId.hash), TxIx(ix.toChar))
-            val coins = o.getValue.getCoin.longValue()
-            val tokens = o.getValue
-            val tokens_ = valueTokens(tokens)
-            val datum = o.getInlineDatum match
-                case null => None
-                case some => Some(some.serializeToHex())
-            val utxo =
-                Output[L](AddressBech[L](o.getAddress), coins, tokens_, datum)
-            (utxoId, utxo)
+            val utxoId = UtxoId[L](TransactionInput(transactionId = tx.id, index = ix))
+            (utxoId, Output[L](o.value.asInstanceOf[Babbage]))
         )
-        .toSeq
-
-// TODO: remove in favor of toBB
-extension (n: Network) {
-    def toBloxbean: BBNetwork = BBNetwork(n.networkId, n.protocolMagic)
-}
 
 /** This is an ad-hoc implementation, it won't be correct fot other cases. Returns the number of
   * top-level scripts in ScriptAll native script as if they all were `ScriptPubkey` (i.e. require
@@ -161,13 +155,9 @@ def numberOfSignatories(nativeScript: Native): Int =
         case scriptAll: AllOf => scriptAll.scripts.size
         case _                => 0
 
-def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): TokenName =
-    val mint = Transaction.deserialize(fallbackTx.bytes).getBody.getMint.asScala.toList
+def extractVoteTokenNameFromFallbackTx(fallbackTx: TxL1): AssetName =
+    val mint = fallbackTx.body.value.mint.get.assets.toList
     assert(mint.size == 1)
-    val assets = mint.head.getAssets.asScala.toList
-    assert(assets.size == 1)
-    assets.head.getName
-        // skip leading `0x` BB adds to token names
-        .substring(2)
-        |> TokenName.apply
-
+    val tokens = mint.head._2.toList
+    assert(tokens.size == 1)
+    tokens.head._1

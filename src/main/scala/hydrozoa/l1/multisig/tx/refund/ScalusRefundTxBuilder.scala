@@ -1,10 +1,11 @@
 package hydrozoa.l1.multisig.tx.refund
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.NativeScript
-import hydrozoa.infra.transitionary.{emptyTxBody, toScalusNativeScript, v1AddressToLedger}
+
+import scala.language.implicitConversions
+import hydrozoa.infra.transitionary.{emptyTxBody, v1AddressToLedger}
 import hydrozoa.l1.multisig.state.DepositDatum
-import hydrozoa.{AddressBech, Tx}
+import hydrozoa.{Address, Tx}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import io.bullet.borer.Cbor
@@ -40,7 +41,7 @@ class ScalusRefundTxBuilder(
         // N.B.: Fee is currently paid from the deposit itself
         val feeCoin = Coin(1000000)
 
-        val depositOutput = r.depositTx.body.value.outputs(r.txIx.ix).value match {
+        val depositOutput = r.depositTx.body.value.outputs(r.txIx).value match {
             case to: TransactionOutput.Babbage => to
             case _                             => return Left("deposit output not a babbage output")
         }
@@ -57,7 +58,7 @@ class ScalusRefundTxBuilder(
             TransactionOutput(
               address = (v1AddressToLedger(depositDatum.refundAddress, r.network)),
               value = depositOutput.value,
-              datumOption = depositDatum.refundDatum.map(bs => Inline(toData(bs))).asScala
+              datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
             )
 
         // TODO: temporary workaround - add 60 slots to the tip
@@ -68,7 +69,7 @@ class ScalusRefundTxBuilder(
         // CBOR encoded hydrozoa native script
         // TODO: Turn this into a helper function or revise the types; its duplicated in the settlement tx builder
         val headNativeScript: Native =
-            reader.multisigRegime(_.headNativeScript).toScalusNativeScript
+            reader.multisigRegime(_.headNativeScript)
 
         // TODO: factor out. Duplicated in Settlement Transaction
         val requiredSigners = headNativeScript.script match {
@@ -86,7 +87,7 @@ class ScalusRefundTxBuilder(
 
         val txBody =
             emptyTxBody.copy(
-              inputs = Set(TransactionInput(transactionId = r.depositTx.id, index = r.txIx.ix)),
+              inputs = Set(TransactionInput(transactionId = r.depositTx.id, index = r.txIx)),
               outputs = IndexedSeq(refundOutput).map(Sized(_)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin,
@@ -105,7 +106,7 @@ class ScalusRefundTxBuilder(
           auxiliaryData = None
         )
 
-        Right(Tx(Cbor.encode(tx).toByteArray))
+        Right(Tx(tx))
     }
 
 }

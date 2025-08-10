@@ -3,7 +3,7 @@ package hydrozoa.l1.multisig.tx.deposit
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import hydrozoa.{Tx, TxIx, TxL1}
+import hydrozoa.{Tx, TxIx, TxL1, AddressL1}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
@@ -15,7 +15,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
 
     override def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)] = {
 
-        bloxToScalusUtxoQuery(backendService, recipe.deposit.toScalus) match {
+        bloxToScalusUtxoQuery(backendService, recipe.deposit) match {
             case Left(err) => Left(s"Scalus DepositTxBuilder failed: ${err}")
             case Right(utxoFunding) =>
                 Right({
@@ -23,8 +23,8 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
                         Value(coin = Coin(recipe.depositAmount.toLong))
-                    val headAddress: Address =
-                        Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
+                    val headAddress: AddressL1 =
+                        (reader.multisigRegime(_.headAddress))
 
                     val depositOutput: TransactionOutput = TransactionOutput(
                       address = headAddress,
@@ -58,7 +58,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                     }
 
                     val txBody = emptyTxBody.copy(
-                      inputs = Set(recipe.deposit.toScalus),
+                      inputs = Set(recipe.deposit),
                       outputs = IndexedSeq(depositOutput, changeOutput).map(Sized(_)),
                       fee = feeCoin,
                       requiredSigners = Set(utxoFunding.address.keyHash.get match {
@@ -85,7 +85,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
 
                     assert(ix >= 0, s"Deposit output was not found in the tx.")
 
-                    (Tx(Cbor.encode(tx).toByteArray), TxIx(ix))
+                    (Tx(tx), TxIx(ix))
                 })
 
         }
