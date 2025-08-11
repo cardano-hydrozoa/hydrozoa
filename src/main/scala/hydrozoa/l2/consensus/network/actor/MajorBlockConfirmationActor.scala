@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{Piper, addWitnessMultisig, serializeTxHex, txHash}
+import hydrozoa.infra.{Piper, addWitnessMultisig, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
@@ -234,7 +234,7 @@ private class MajorBlockConfirmationActor(
         val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
 
         log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
-        log.info("Fallback tx draft hash: " + txHash(fallbackTxDraft))
+        log.info("Fallback tx draft hash: " + fallbackTxDraft.id)
 
         this.fallbackTxDraft = fallbackTxDraft
 

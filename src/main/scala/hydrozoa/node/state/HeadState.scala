@@ -11,7 +11,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.UtxoSet.getContextAndState
 import hydrozoa.infra.transitionary.{toScalusLedger, toV3UTxO}
-import hydrozoa.infra.{Piper, decodeHex, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, txHash, verKeyHash}
+import hydrozoa.infra.{Piper, decodeHex, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
@@ -645,7 +645,7 @@ class HeadStateGlobal(
             // TODO: L1 effects submission should be carried on by a separate process
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(settlementTx) =>
-                    log.info(s"Submitting settlement tx: ${txHash(settlementTx)}")
+                    log.info(s"Submitting settlement tx: ${settlementTx.id}")
                     val ret = cardano.ask(_.submit(settlementTx))
                     log.info(s"settlementResult = $ret")
                 case _ =>
@@ -742,7 +742,7 @@ class HeadStateGlobal(
             // Submit fallback tx
             // TODO: wait till validity range is hit
             val fallbackTx = l2LastMajorRecord.l1PostDatedEffect.get
-            val fallbackTxHash = txHash(fallbackTx)
+            val fallbackTxHash = fallbackTx.id
             log.info(s"Submitting fallback tx: $fallbackTxHash")
             val fallbackResult = cardano.ask(_.submit(fallbackTx))
             log.info(s"fallbackResult = $fallbackResult")
@@ -796,7 +796,7 @@ class HeadStateGlobal(
                     )
                     log.info(s"Vote tx recipe: $recipe")
                     val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
-                    val voteTxHash = txHash(voteTx)
+                    val voteTxHash = voteTx.id
                     log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
 
                     log.info(s"Submitting vote tx: $voteTxHash")
@@ -1040,7 +1040,7 @@ class HeadStateGlobal(
                 network.tell(_.reqDeinit(ReqDeinit(deinitTxDraft, headPeers)))
                 log.info("Waiting for the deinit tx...")
                 cardano.ask(
-                  _.awaitTx(txHash(deinitTxDraft), RetryConfig.delay(10, 1.second))
+                  _.awaitTx(deinitTxDraft.id, RetryConfig.delay(10, 1.second))
                 )
             }
         }
@@ -1164,7 +1164,7 @@ class HeadStateGlobal(
             record.l1Effect |> maybeMultisigL1Tx match {
                 case Some(finalizationTx) =>
                     // Submit finalization tx
-                    log.info(s"Submitting finalization tx: ${txHash(finalizationTx)}")
+                    log.info(s"Submitting finalization tx: ${finalizationTx.id}")
                     val res = cardano.ask(_.submit(finalizationTx))
                     log.info(s"Finalization tx submission result is: ${res}")
                 case _ => assert(false, "Impossible: finalization tx should always present")
@@ -1289,7 +1289,7 @@ def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
 // NB: this won't work as an extension method on union type L1BlockEffect
 def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TransactionHash] = l1BlockEffect match
     case _: MinorBlockL1Effect => None
-    case tx: MultisigTx[_]     => tx |> txHash |> Some.apply
+    case tx: MultisigTx[_]     => tx.id |> Some.apply
 
 def mbSettlementFees(l1BlockEffect: L1BlockEffect): Option[Long] = l1BlockEffect match
     case tx: SettlementTx => tx.untagged.body.value.fee.value |> Some.apply

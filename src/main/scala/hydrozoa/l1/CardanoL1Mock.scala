@@ -5,7 +5,7 @@ import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
 import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{serializeTxHex, txHash, txInputs, txOutputs}
+import hydrozoa.infra.{serializeTxHex, txInputs, txOutputs}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.monitoring.Metrics
@@ -33,11 +33,11 @@ class CardanoL1Mock() extends CardanoL1:
 
     private val utxosActive: mutable.Map[UtxoIdL1, Output[L1]] = mutable.Map()
 
-    def getUtxosActive: Map[UtxoIdL1, Output[L1]] = Map.from(utxosActive)
+    def getUtxosActive: UtxoSet[L1] = UtxoSet[L1](Map.from(utxosActive))
 
     override def submit(tx: TxL1): Either[SubmissionError, TransactionHash] =
         synchronized {
-            val txId = txHash(tx)
+            val txId = tx.id
             log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
             if knownTxs.contains(txId) then Right(txId)
             else
@@ -91,7 +91,7 @@ object CardanoL1Mock:
         l1Mock.utxosActive.addAll(genesisUtxos)
         l1Mock
 
-    def apply(knownTxs: Map[TransactionHash, TxL1], utxosActive: Map[UtxoIdL1, Output[L1]]): CardanoL1Mock =
+    def apply(knownTxs: Map[TransactionHash, TxL1], utxosActive: UtxoSet[L1]): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock
         l1Mock.knownTxs.addAll(knownTxs)
         l1Mock.utxosActive.clear()

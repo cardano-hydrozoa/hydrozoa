@@ -37,16 +37,19 @@ prefer to do this is by:
     L2; etc.
  * */
 
+import hydrozoa.infra.transitionary.toScalusLedger
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import hydrozoa.TaggedUtxoSet.TaggedUtxoSet
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 import io.bullet.borer.Cbor
-import scalus.builtin.ByteString
+import scalus.builtin.Data.{fromData, toData}
+import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.language.implicitConversions
@@ -92,10 +95,12 @@ object TxL2:
 // Address
 
 object Address:
-    opaque type Address[+L <: AnyLayer] = ShelleyAddress
+    opaque type Address[+L <: AnyLayer] = ShelleyAddress 
     def apply[L <: AnyLayer](addr: ShelleyAddress): Address[L] = addr
     given [L <: AnyLayer]: Conversion[Address[L], ShelleyAddress] = identity
-
+    given [L <: AnyLayer]: FromData[Address[L]] = (d : Data) => Address[L](fromData[v3.Address](d).toScalusLedger)
+    given fromDataAddress[L <: AnyLayer]: ToData[Address[L]] = (addr : Address[L]) => toData(LedgerToPlutusTranslation.getAddress(addr.untagged))
+    
     /** Assumes a Shelley address and that the developer is asserting the correct layer */
     def unsafeFromBech32[L <: AnyLayer](addr: String): Address[L] =
         Address[L](SAddress.fromBech32(addr).asInstanceOf[ShelleyAddress])
@@ -132,7 +137,7 @@ type Ed25519SignatureHex = Ed25519SignatureHex.Ed25519SignatureHex
 object UtxoId:
     opaque type UtxoId[L <: AnyLayer] = TransactionInput
     def apply[L <: AnyLayer](utxoId: TransactionInput): UtxoId[L] = utxoId
-    def apply[L <: AnyLayer](transactionId: TransactionHash, index: Integer): UtxoId[L] =
+    def apply[L <: AnyLayer](transactionId: TransactionHash, index: Int): UtxoId[L] =
         UtxoId[L](TransactionInput(transactionId, index))
     given [L <: AnyLayer]: CanEqual[UtxoId[L], UtxoId[L]] = CanEqual.derived
     given [L <: AnyLayer]: Conversion[UtxoId[L], TransactionInput] = identity
@@ -151,11 +156,10 @@ object UtxoIdL2:
     case class TxIx(ix: Int) derives CanEqual
 
 object TxIx:
-    opaque type TxIx = Integer
+    opaque type TxIx = Int
     def apply(i: Int): TxIx = i
-    given Conversion[TxIx, Integer] = identity
     given Conversion[TxIx, Int] = _.toInt
-    extension (txIx: TxIx) def untagged: Integer = identity(txIx)
+    extension (txIx: TxIx) def untagged: Int = identity(txIx)
 
 type TxIx = TxIx.TxIx
 

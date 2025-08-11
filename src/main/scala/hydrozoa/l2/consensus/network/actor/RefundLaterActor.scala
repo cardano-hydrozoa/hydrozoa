@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l2.consensus.network.*
@@ -43,7 +43,7 @@ private class RefundLaterActor(
                 network = networkL1static
               )
             )
-        log.info("Post-dated refund tx hash: " + txHash(txDraft))
+        log.info("Post-dated refund tx hash: " + txDraft.id)
 
         // TxDump.dumpMultisigTx(refundTxDraft)
 

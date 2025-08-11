@@ -1,7 +1,7 @@
 package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{Piper, sequence, txHash}
+import hydrozoa.infra.{Piper, sequence}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
@@ -124,7 +124,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState.get.setWithdrawTxBuilder(withdrawTxBuilder)
             this.headState.get.setDeinitTxBuilder(deinitTxBuilder)
             log.info(s"Setting up L1 event sourcing...")
-            val initTxId = params.initTx |> txHash
+            val initTxId = params.initTx.id
             multisigL1EventSource.tell(
               _.awaitInitTx(
                 initTxId,

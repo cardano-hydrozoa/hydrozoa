@@ -3,7 +3,7 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.{toScalusLedger}
+import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
@@ -19,12 +19,12 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.builtin.Data
-import scalus.cardano.ledger.TransactionHash
+import scalus.cardano.ledger.{LedgerToPlutusTranslation, TransactionHash}
 import scalus.ledger.api.v3.{TxOut, TxOutRef}
 import scalus.prelude.asScalus
-import scalus.cardano.ledger.LedgerToPlutusTranslation
 
 import scala.concurrent.duration.DurationInt
+import scala.language.implicitConversions
 import scala.util.Try
 
 class Node:
@@ -124,10 +124,10 @@ class Node:
         // Make the datum and the recipe
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
-          LedgerToPlutusTranslation.getAddress(r.address.untagged),
+            LedgerToPlutusTranslation.getAddress(r.address),
           r.datum.asScalus,
           BigInt.apply(0), // deadline,
-          LedgerToPlutusTranslation.getAddress(r.refundAddress.untagged),
+            LedgerToPlutusTranslation.getAddress(r.refundAddress),
           r.datum.asScalus
         )
 
@@ -137,7 +137,7 @@ class Node:
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) =
             depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe))
-        val depositTxHash = txHash(depositTxDraft)
+        val depositTxHash = depositTxDraft.id
 
         val serializedTx = serializeTxHex(depositTxDraft)
         log.info(s"Deposit tx: $serializedTx")

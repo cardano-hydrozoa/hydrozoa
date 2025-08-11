@@ -1,5 +1,6 @@
 package hydrozoa.l1.event
 
+import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*

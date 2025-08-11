@@ -5,6 +5,7 @@ import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal
 import hydrozoa.node.TestPeer
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
 import hydrozoa.node.state.{BlockRecord, WalletId}
+import scalus.cardano.ledger.TransactionHash
 
 /** Hydrozoa peers' network SUT facade.
   */
@@ -13,18 +14,18 @@ trait HydrozoaFacade:
         initiator: TestPeer,
         otherHeadPeers: Set[WalletId],
         ada: Long,
-        txId: TxId,
+        txId: TransactionHash,
         txIx: TxIx
-    ): Either[InitializationError, TxId]
+    ): Either[InitializationError, TransactionHash]
 
     def deposit(
         depositor: TestPeer,
         r: DepositRequest
     ): Either[DepositError, DepositResponse]
 
-    def awaitTxL1(txId: TxId): Option[TxL1]
+    def awaitTxL1(txId: TransactionHash): Option[TxL1]
 
-    def submitL2(tx: L2EventTransaction | L2EventWithdrawal): Either[String, TxId]
+    def submitL2(tx: L2EventTransaction | L2EventWithdrawal): Either[String, TransactionHash]
 
     def stateL2(): List[(UtxoId[L2], Output[L2])]
 
@@ -35,7 +36,7 @@ trait HydrozoaFacade:
       */
     def produceBlock(
         nextBlockFinal: Boolean,
-    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])]
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])]
 
     /** Runs test dispute scenario. Used only for testing.
       */

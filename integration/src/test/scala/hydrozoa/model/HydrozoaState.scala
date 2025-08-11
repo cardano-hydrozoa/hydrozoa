@@ -10,34 +10,36 @@ import hydrozoa.l2.ledger.L2Event
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
+import scalus.cardano.ledger.{AssetName, PolicyId, TransactionHash}
+import scalus.cardano.ledger.Script.Native
 
 /** This should be immutable. So the original idea of using NodeState/HeadStateGlobal won't work. We
   * need another thing here.
   */
 case class HydrozoaState(
-    peersNetworkPhase: PeersNetworkPhase,
-    knownPeers: Set[TestPeer],
-    pp: ProtocolParams,
+                            peersNetworkPhase: PeersNetworkPhase,
+                            knownPeers: Set[TestPeer],
+                            pp: ProtocolParams,
 
-    // Head
-    headPhase: Option[HeadPhase] = None,
-    initiator: Option[TestPeer] = None,
-    headPeers: Set[TestPeer] = Set.empty,
-    headAddressBech32: Option[AddressBechL1] = None,
-    headMultisigScript: Option[NativeScript] = None,
-    depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
-    treasuryUtxoId: Option[UtxoIdL1] = None,
+                            // Head
+                            headPhase: Option[HeadPhase] = None,
+                            initiator: Option[TestPeer] = None,
+                            headPeers: Set[TestPeer] = Set.empty,
+                            headAddress: Option[AddressL1] = None,
+                            headMultisigScript: Option[Native] = None,
+                            depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
+                            treasuryUtxoId: Option[UtxoIdL1] = None,
 
-    // Node
-    poolEvents: Seq[L2Event] = Seq.empty,
+                            // Node
+                            poolEvents: Seq[L2Event] = Seq.empty,
 
-    // L1
-    knownTxs: Map[TxId, TxL1] = Map.empty,
-    utxosActive: Map[UtxoIdL1, OutputL1],
+                            // L1
+                            knownTxs: Map[TransactionHash, TxL1] = Map.empty,
+                            utxosActive: UtxoSetL1,
 
-    // L2
-    utxosActiveL2: Map[UtxoIdL2, OutputL2] = Map.empty,
-    l2Tip: Block = zeroBlock
+                            // L2
+                            utxosActiveL2: UtxoSetL2 = UtxoSet[L2](Map.empty),
+                            l2Tip: Block = zeroBlock
 ):
     override def toString: String =
         "Hydrozoa state:" +
@@ -47,7 +49,7 @@ case class HydrozoaState(
             s"\tHead phase: ${headPhase.toString}\n" +
             s"\tInitiator: ${initiator.toString}\n" +
             s"\tHead peers: ${headPeers.toString()}\n" +
-            s"\tHead address ${headAddressBech32.toString}\n" +
+            s"\tHead address ${headAddress.toString}\n" +
             s"\tHead multisig script: [SKIPPED]\n" +
             s"\tDeposits utxo: ${depositUtxos.toString}\n" +
             s"\tTreasury UTxO id: ${treasuryUtxoId.toString}\n" +
@@ -64,7 +66,7 @@ object HydrozoaState:
           peersNetworkPhase = NewlyCreated,
           knownPeers = knownPeers,
           pp = pp,
-          utxosActive = Map.from(genesisUtxos)
+          utxosActive = UtxoSet[L1](Map.from(genesisUtxos))
         )
 
 enum PeersNetworkPhase derives CanEqual:
@@ -79,17 +81,17 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
     override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
         (new MultisigRegimeReader:
-            def headAddress: AddressBechL1 = s.headAddressBech32.get
+            def headAddress: AddressL1 = s.headAddress.get
 
             override def headPeers: Set[WalletId] = ???
 
-            override def headNativeScript: NativeScript = s.headMultisigScript.get
+            override def headNativeScript: Native = s.headMultisigScript.get
 
-            override def headMintingPolicy: CurrencySymbol = ???
+            override def headMintingPolicy: PolicyId = ???
 
-            override def beaconTokenName: TokenName = ???
+            override def beaconTokenName: AssetName = ???
 
-            override def seedAddress: AddressBechL1 = ???
+            override def seedAddress: AddressL1 = ???
 
             override def treasuryUtxoId: UtxoIdL1 = s.treasuryUtxoId.get
 
@@ -114,12 +116,12 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
             def isBlockPending: Boolean = ???
             def pendingOwnBlock: OwnBlock = ???
             def isQuitConsensusImmediately: Boolean = ???
-            def beaconTokenName: hydrozoa.TokenName = ???
-            def headAddress: hydrozoa.AddressBechL1 = ???
-            def headMintingPolicy: hydrozoa.CurrencySymbol = ???
-            def headNativeScript: hydrozoa.NativeScript = ???
+            def beaconTokenName: AssetName = ???
+            def headAddress: hydrozoa.AddressL1 = ???
+            def headMintingPolicy: PolicyId = ???
+            def headNativeScript: Native = ???
             def headPeers: Set[hydrozoa.node.state.WalletId] = ???
-            def seedAddress: hydrozoa.AddressBechL1 = ???
+            def seedAddress: hydrozoa.AddressL1 = ???
             def stateL1: hydrozoa.l1.multisig.state.MultisigHeadStateL1 = ???
             def treasuryUtxoId: hydrozoa.UtxoIdL1 = ???
         ) |> foo

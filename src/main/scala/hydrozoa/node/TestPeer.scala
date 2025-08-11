@@ -9,7 +9,7 @@ import hydrozoa.infra.{WalletModuleBloxbean, addWitness}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.state.WalletId
-import hydrozoa.{AnyLayer, Tx, TxL2, L2, Wallet, networkL1static}
+import hydrozoa.{AnyLayer, L2, Output, Tx, TxL2, UtxoId, Wallet, networkL1static}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network.{Mainnet, Testnet}
@@ -17,18 +17,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    Coin,
-    Hash,
-    KeepRaw,
-    Sized,
-    TransactionBody,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    Value,
-    Transaction as STransaction
-}
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Transaction as STransaction, given}
 import scalus.ledger.api.v3
 
 import scala.collection.mutable
@@ -136,8 +125,8 @@ def l2EventWithdrawalFromInputsAndPeer(
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
-    inputs: Set[TransactionInput],
-    utxoSet: Map[TransactionInput, TransactionOutput],
+    inputs: Set[UtxoId[L2]],
+    utxoSet: Map[UtxoId[L2], Output[L2]],
     inPeer: TestPeer,
     outPeer: TestPeer
 ): L2EventTransaction = {
@@ -145,7 +134,7 @@ def l2EventTransactionFromInputsAndPeer(
     val totalVal: Value = inputs.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
 
     val txBody: TransactionBody = TransactionBody(
-      inputs = inputs,
+      inputs = inputs.map(_.untagged),
       outputs = IndexedSeq(
         Babbage(
           address = TestPeer.address(outPeer),
@@ -153,7 +142,7 @@ def l2EventTransactionFromInputsAndPeer(
           datumOption = None,
           scriptRef = None
         )
-      ).map(Sized(_)),
+      ).map(b => Sized(b.asInstanceOf[TransactionOutput])),
       fee = Coin(0L)
     )
 

@@ -15,7 +15,7 @@ import sttp.tapir.Schema
 type InitializationError = String
 
 // Simple depositing
-type DepositId = UtxoIdL1
+type DepositId = UtxoId[L1]
 
 case class DepositRequest(
     txId: TransactionHash,

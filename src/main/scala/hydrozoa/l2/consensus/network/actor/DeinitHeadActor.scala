@@ -3,7 +3,7 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.{toIArray, toScalus}
-import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -49,7 +49,7 @@ private class DeinitHeadActor(
         val txDraft = req.deinitTx
 
         log.info("Deinit tx draft: " + serializeTxHex(txDraft))
-        log.info("Deinit tx draft hash: " + txHash(txDraft))
+        log.info("Deinit tx draft hash: " + txDraft.id)
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckDeinit(me, ownWit)

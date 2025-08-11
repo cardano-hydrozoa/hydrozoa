@@ -93,7 +93,7 @@ class NodeRestApi(node: ActorRef[Node]):
           _.deposit(
             DepositRequest(
               (TransactionHash.fromHex(txId)),
-              TxIx(txIx.toChar),
+              TxIx(txIx.toInt),
               depositAmount,
               deadline,
               Address.unsafeFromBech32(address),

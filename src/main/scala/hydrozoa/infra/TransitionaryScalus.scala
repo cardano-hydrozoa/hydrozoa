@@ -4,6 +4,7 @@
 
 package hydrozoa.infra.transitionary
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
@@ -93,9 +94,10 @@ extension (to: v3.TxOut) {
 
 // FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
 extension (addr: v3.Address) {
-    def toScalusLedger: Address =
-        (
+    def toScalusLedger[L <: AnyLayer]: Address[L] =
+        Address[L](
           ShelleyAddress(
+              // FIXME: We use the static network here
               network = networkL1static,
             payment = addr.credential match {
                 case PubKeyCredential(pkc) =>
@@ -228,7 +230,7 @@ extension (utxo: BBUtxo) {
                 Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(utxo.getTxHash)),
                 utxo.getOutputIndex
             )
-        val addr: ShelleyAddress = Address.fromBech32(utxo.getAddress).asInstanceOf[ShelleyAddress]
+        val addr: ShelleyAddress = Address.unsafeFromBech32(utxo.getAddress).asInstanceOf[ShelleyAddress]
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
         val tokens = valueTokens(utxo.toValue)
         val inlineDatum = Data.fromCbor(HexUtil.decodeHexString(utxo.getInlineDatum))
@@ -268,7 +270,7 @@ def bloxToScalusUtxoQuery(
         case Left(err) => Left("[bloxToScalusUtxoQuery]: Querying failed: " ++ err)
         case Right(utxo) =>
             Right({
-                val outAddress = Address.fromBech32(utxo.getAddress)
+                val outAddress = Address.unsafeFromBech32(utxo.getAddress)
                 val outVal: Value = utxo.toValue.toLedgerValue
                 val outDat = scala
                     .Option(utxo.getInlineDatum)

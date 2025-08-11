@@ -1,5 +1,6 @@
 package hydrozoa.sut
 
+import scala.language.implicitConversions
 import hydrozoa.*
 import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer
@@ -8,6 +9,7 @@ import hydrozoa.node.rest.{InitRequest, NodeRestApi, SubmitRequestL2}
 import hydrozoa.node.server.*
 import hydrozoa.node.state.{BlockRecord, WalletId}
 import ox.par
+import scalus.cardano.ledger.TransactionHash
 import sttp.client4.DefaultSyncBackend
 import sttp.model.Uri
 import sttp.tapir.DecodeResult
@@ -22,9 +24,9 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
         initiator: TestPeer,
         otherHeadPeers: Set[WalletId],
         ada: Long,
-        txId: TxId,
+        txId: TransactionHash,
         txIx: TxIx
-    ): Either[InitializationError, TxId] =
+    ): Either[InitializationError, TransactionHash] =
         val request = InitRequest(otherHeadPeers.toList, ada, txId, txIx)
 
         val response = SttpClientInterpreter()
@@ -33,7 +35,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             .send(backend)
 
         response.body match
-            case DecodeResult.Value(v) => v.map(TxId.apply)
+            case DecodeResult.Value(v) => v.map(TransactionHash.fromHex)
             case _                     => Left("decoding failed")
 
     override def deposit(
@@ -44,13 +46,15 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
         val response = SttpClientInterpreter()
             .toRequest(NodeRestApi.depositEndpoint, baseUri = peers.get(depositor))
             .apply(
-              r.txId.hash,
-              r.txIx.ix.longValue,
+              r.txId.toHex,
+              r.txIx.toLong,
               r.depositAmount,
               r.deadline,
-              r.address.bech32,
+              // FIXME: Partial
+              r.address.toBech32.get,
               None, // r.datum, // FIXME:
-              r.refundAddress.bech32,
+              // FIXME: Partial
+              r.refundAddress.toBech32.get,
               None // r.refundDatum // FIXME:
             )
             .send(backend)
@@ -59,11 +63,11 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case DecodeResult.Value(v) => v
             case _                     => Left("decoding failed")
 
-    override def awaitTxL1(txId: TxId): Option[TxL1] = ???
+    override def awaitTxL1(txId: TransactionHash): Option[TxL1] = ???
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
-    ): Either[InitializationError, TxId] =
+    ): Either[InitializationError, TransactionHash] =
 
         val lazyResponses = peers
             .map(p =>
@@ -83,7 +87,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
         val results = par(randomNode)
 
         results.head.body match
-            case DecodeResult.Value(v) => v.map(TxId.apply)
+            case DecodeResult.Value(v) => v.map(TransactionHash.fromHex)
             case _                     => Left("decoding failed")
 
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
@@ -105,7 +109,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
 
     override def produceBlock(
         nextBlockFinal: Boolean,
-    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] = throw RuntimeException(
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] = throw RuntimeException(
       "Real Hydrozoa facade doesn't support lockstep block producing"
     )
 

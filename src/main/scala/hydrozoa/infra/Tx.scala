@@ -6,11 +6,19 @@ package hydrozoa.infra
   * comes from bloxbean.
   */
 
-import co.nstant.in.cbor.model.{Map, UnsignedInteger, Array as CborArray, ByteString as CborByteString}
+import co.nstant.in.cbor.model.{
+    Map,
+    UnsignedInteger,
+    Array as CborArray,
+    ByteString as CborByteString
+}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.spec.Era
-import com.bloxbean.cardano.client.transaction.spec.script.{ScriptAll, NativeScript as BBNativeScript}
+import com.bloxbean.cardano.client.transaction.spec.script.{
+    ScriptAll,
+    NativeScript as BBNativeScript
+}
 import com.bloxbean.cardano.client.transaction.spec.{TransactionOutput, Value}
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
@@ -25,12 +33,29 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, Blake2b_224, Blake2b_256, Hash, HashPurpose, MultiAsset, OriginalCborByteArray, PolicyId, Sized, TransactionHash, TransactionInput, VKeyWitness, Transaction as STransaction, TransactionOutput as STransactionOutput, Value as SValue}
+import scalus.cardano.ledger.{
+    AssetName,
+    Blake2b_224,
+    Blake2b_256,
+    Hash,
+    HashPurpose,
+    MultiAsset,
+    OriginalCborByteArray,
+    PolicyId,
+    Sized,
+    TransactionHash,
+    TransactionInput,
+    VKeyWitness,
+    Transaction as STransaction,
+    TransactionOutput as STransactionOutput,
+    Value as SValue
+}
 import scalus.ledger.api.Timelock.AllOf
 
-import scala.collection.immutable.SortedMap
 import java.math.BigInteger
+import scala.collection.immutable.SortedMap
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 // TODO: make an API
 // We should expose more of it, probably add more tagged types, and unifying the naming of the functions
@@ -88,14 +113,14 @@ def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness):
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressL1
-): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Int, SValue, Data)] =
+                       ): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Integer, SValue, Data)] =
     val outputs = tx.body.value.outputs
     outputs.filter(output => output.value.address == address) match
         case IndexedSeq(elem: Sized[STransactionOutput]) =>
             elem.value match
                 case b: Babbage if b.datumOption.isDefined =>
                     b.datumOption.get match {
-                        case i: Inline => Right((outputs.indexOf(b), b.value, i.data))
+                        case i: Inline => Right((outputs.indexOf(Sized(b.asInstanceOf[STransactionOutput])), b.value, i.data))
                         case _         => Left(NoInlineDatum())
                     }
                 case _ => Left(NonBabbageMatch())
@@ -118,18 +143,15 @@ def txInputs[L <: AnyLayer](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = tx.body.value.inputs
     inputs.map(i => UtxoId(i)).toSeq
 
-/** WARN: I can't remember if the asset name from BB contains a "0x" prefix. If it does, you'll need
-  * to drop this manually during this conversion
-  */
+
 def valueTokens[L <: AnyLayer](tokens: Value): MultiAsset = MultiAsset({
     SortedMap.from(tokens.toMap.asScala.toMap.map((k, v) =>
         Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
-            -> SortedMap.from(v.asScala.toMap.map((k, v) => AssetName(ByteString.fromHex(k)) -> v.longValue()))
+            -> SortedMap.from(v.asScala.toMap.map((k, v) => AssetName(ByteString.fromHex(k.drop(2))) -> v.longValue()))
     ))
 })
 def txOutputs[L <: AnyLayer](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = tx.body.value.outputs
-    val txId = txHash(tx)
     outputs.zipWithIndex
         .map((o, ix) =>
             val utxoId = UtxoId[L](TransactionInput(transactionId = tx.id, index = ix))

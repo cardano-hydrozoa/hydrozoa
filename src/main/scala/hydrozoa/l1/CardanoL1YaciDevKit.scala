@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.api.model.{Utxo as BBUtxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.{Utxo as HUtxo, *}
-import hydrozoa.infra.{toEither, txHash}
+import hydrozoa.infra.{toEither}
 import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
@@ -37,7 +37,7 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
       * @return
       */
     override def submit(tx: TxL1): Either[SubmissionError, TransactionHash] = {
-        val hash = txHash(tx)
+        val hash = tx.id
 
         log.info(s"Submitting tx $hash")
 

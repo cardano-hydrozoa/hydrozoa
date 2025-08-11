@@ -1,5 +1,6 @@
 package hydrozoa.l1.multisig.state
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.OutputL1
@@ -40,7 +41,8 @@ def mkMultisigTreasuryDatum(major: Int, _params: L2ConsensusParamsH32): Multisig
     )
 
 // DepositDatum
-
+// FIXME: I'd _like_ to use hydrozoa.Address[L], but then the ToData deriving doesn't work, despite defining an
+// instance in the Address[L] object.
 case class DepositDatum(
     address: Address,
     /** Represents an optional inline datum */

@@ -3,7 +3,7 @@ package hydrozoa.l1.multisig.tx.refund
 import com.bloxbean.cardano.client.backend.api.BackendService
 
 import scala.language.implicitConversions
-import hydrozoa.infra.transitionary.{emptyTxBody, v1AddressToLedger}
+import hydrozoa.infra.transitionary.{emptyTxBody, toScalusLedger, v1AddressToLedger}
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.{Address, Tx}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
@@ -15,18 +15,7 @@ import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    AssetName,
-    Coin,
-    KeepRaw,
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    VKeyWitness,
-    Value
-}
+import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, Sized, Transaction, TransactionInput, TransactionOutput, TransactionWitnessSet, VKeyWitness, Value}
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -56,7 +45,7 @@ class ScalusRefundTxBuilder(
 
         val refundOutput: TransactionOutput =
             TransactionOutput(
-              address = (v1AddressToLedger(depositDatum.refundAddress, r.network)),
+              address = depositDatum.refundAddress.toScalusLedger,
               value = depositOutput.value,
               datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
             )
