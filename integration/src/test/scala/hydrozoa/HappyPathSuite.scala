@@ -74,18 +74,19 @@ class HappyPathSuite extends FunSuite {
 
             // Deposit change from initialization transaction
             deposit1 <- sut.deposit(
-              Alice,
-              DepositRequest(
-                initTxId,
-                TxIx(1),
-                100_000_000,
-                None,
-                Address[L2](TestPeer.address(Alice)),
-                None,
-                Address[L1](TestPeer.address(Alice)),
-                None
-              )
+                    Alice,
+                    DepositRequest(
+                            initTxId,
+                            TxIx(1),
+            100_000_000,
+                            None,
+                            Address[L2](TestPeer.address(Alice)),
+                            None,
+                            Address[L1](TestPeer.address(Alice)),
+                            None
+                    )
             )
+          
 
             deposit1Tx = sut.awaitTxL1(deposit1.depositId.transactionId).toRight("Deposit tx is missing")
 

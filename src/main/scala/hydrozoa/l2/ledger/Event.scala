@@ -49,8 +49,7 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
                             // FIXME, seriously: this is chaotic. We previously were using `ByteString` to represent datums,
                             // and because of that, they got serialized as Bytestrings. Thus, the datum on the deposit
                             // utxo is serialized _as a bytestring that contains the cbor for the actual datum_.
-                            val dd: DepositDatum =
-                                fromData(Data.fromCbor(fromData[ByteString](datum).bytes))
+                            val dd: DepositDatum = fromData(datum)
                             Some(
                               UtxoId[L2](l2TxIn),
                               Output[L2](Babbage(

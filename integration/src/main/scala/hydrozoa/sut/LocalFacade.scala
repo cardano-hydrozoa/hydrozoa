@@ -1,6 +1,5 @@
 package hydrozoa.sut
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
@@ -18,6 +17,7 @@ import scalus.cardano.ledger.TransactionHash
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
+import scala.language.implicitConversions
 
 /**
  * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
@@ -71,7 +71,7 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash))
+                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash.transactionId))
                       )
                     )
                     // println(veracity)

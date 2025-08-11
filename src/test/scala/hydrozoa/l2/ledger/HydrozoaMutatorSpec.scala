@@ -38,9 +38,6 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
         )
     Some(
       Inline(
-        toData(
-          ByteString.fromArray(
-            Cbor.encode(
               toData(
                 DepositDatum(
                   address = v3Addr,
@@ -50,12 +47,8 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
                   refundDatum = SOption.None
                 )
               )
-            ).toByteArray
-          )
-        )
-      )
+            )
     )
-
 }
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
@@ -328,11 +321,11 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 postGenesisState <- HydrozoaL2Mutator(emptyContext, emptyState, event)
 
                 // Then generate the transaction event, where Alice tries to send all UTxOs to bob
-                allTxInputs = postGenesisState.utxo.keySet
+                allTxInputs = postGenesisState.utxo.keySet.map(UtxoId[L2](_))
 
                 transactionEvent = l2EventTransactionFromInputsAndPeer(
                   inputs = allTxInputs,
-                  utxoSet = postGenesisState.utxo,
+                  utxoSet = (postGenesisState.utxo.unsafeAsL2),
                   inPeer = Alice,
                   outPeer = Bob
                 )
@@ -367,8 +360,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 val allTxInputs = postGenesisState.utxo.keySet
 
                 val transactionEvent = l2EventTransactionFromInputsAndPeer(
-                  inputs = allTxInputs,
-                  utxoSet = postGenesisState.utxo,
+                  inputs = allTxInputs.map(UtxoId[L2](_)),
+                  utxoSet = postGenesisState.utxo.unsafeAsL2,
                   inPeer = Alice,
                   outPeer = Bob
                 )
