@@ -11,7 +11,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
 val scalusVersion = "0.11.0+63-89eb3e72-SNAPSHOT"
-val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
+val bloxbeanVersion = "0.7.0-beta4-SNAPSHOT"
 
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
