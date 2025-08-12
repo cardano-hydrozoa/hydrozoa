@@ -9,9 +9,13 @@ import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.txbuilder.{BuilderContext, TxBuilder}
 
-class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateReader)
-    extends DepositTxBuilder {
+class ScalusDepositTxBuilder(
+    backendService: BackendService,
+    reader: HeadStateReader,
+    builderContext: BuilderContext
+) extends DepositTxBuilder {
 
     override def buildDepositTxDraft(recipe: DepositTxRecipe): Either[String, (TxL1, TxIx)] = {
 
@@ -19,64 +23,16 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
             case Left(err) => Left(s"Scalus DepositTxBuilder failed: ${err}")
             case Right(utxoFunding) =>
                 Right({
-                    // TODO: we set the fee to 1 ada, but this doesn't need to be
-                    val feeCoin = Coin(1_000_000)
                     val depositValue: Value =
                         Value(coin = Coin(recipe.depositAmount.toLong))
                     val headAddress: Address =
                         Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
 
-                    val depositOutput: TransactionOutput = TransactionOutput(
-                      address = headAddress,
-                      value = depositValue,
-                      datumOption = Some(Inline(toData(recipe.datum)))
-                    )
-
-                    val changeOutput: TransactionOutput = TransactionOutput(
-                      address = utxoFunding.address,
-                      value =
-                          try {
-                              utxoFunding.value - Value(
-                                coin = feeCoin
-                              ) - depositValue
-                          } catch {
-                              case _: IllegalArgumentException =>
-                                  return Left(
-                                    s"Malformed value equal to `utxoFunding.value - Value(feeCoin) - depositValue` encountered: utxoFunding.value = ${utxoFunding.value}, depositValue = ${depositValue}, feeCoin = ${feeCoin}"
-                                  )
-                          },
-                      datumOption = None
-                    )
-
-                    val requiredSigner: AddrKeyHash = {
-                        utxoFunding.address match
-                            case shelleyAddress: ShelleyAddress =>
-                                shelleyAddress.payment match
-                                    case ShelleyPaymentPart.Key(hash) => hash
-                                    case _ => return Left("deposit not at a pubkey address")
-                            case _ => return Left("Could not get key hash for required signer")
-                    }
-
-                    val txBody = emptyTxBody.copy(
-                      inputs = Set(recipe.deposit.toScalus),
-                      outputs = IndexedSeq(depositOutput, changeOutput).map(Sized(_)),
-                      fee = feeCoin,
-                      requiredSigners = Set(utxoFunding.address.keyHash.get match {
-                          case a: AddrKeyHash => a
-                          case s: StakeKeyHash =>
-                              return Left(
-                                "buildDepositTxDraft: expecting an address key hash, got a stake key"
-                              )
-
-                      })
-                    )
-
-                    val tx: Transaction = Transaction(
-                      body = KeepRaw(txBody),
-                      witnessSet = TransactionWitnessSet.empty,
-                      isValid = true,
-                      auxiliaryData = None
-                    )
+                    val tx = builderContext
+                        .withUtxo(Map(recipe.deposit.toScalus -> utxoFunding))
+                        .buildNewTx
+                        .payToAddress(headAddress, depositValue, toData(recipe.datum))
+                        .doFinalize
 
                     // Find the deposit outout index
                     val ix = tx.body.value.outputs.indexWhere(output =>

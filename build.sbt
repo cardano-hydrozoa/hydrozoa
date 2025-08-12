@@ -10,7 +10,7 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.11.0+63-89eb3e72-SNAPSHOT"
+val scalusVersion = "0.11.0+64-c44a837a-SNAPSHOT"
 val bloxbeanVersion = "0.7.0-beta4-SNAPSHOT"
 
 // Latest Scala 3 LTS version
