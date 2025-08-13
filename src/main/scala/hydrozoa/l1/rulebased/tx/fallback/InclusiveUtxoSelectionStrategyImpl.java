@@ -25,7 +25,7 @@ import java.util.stream.Collectors;
 public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy {
 
     private final UtxoSupplier utxoSupplier;
-    
+
     private final boolean ignoreUtxosWithDatumHash;
 
     public InclusiveUtxoSelectionStrategyImpl(UtxoSupplier utxoSupplier) {
@@ -42,8 +42,8 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
 
         // No excluded utxo
         utxosToExclude.clear();
-                
-        if(outputAmounts == null || outputAmounts.isEmpty()){
+
+        if (outputAmounts == null || outputAmounts.isEmpty()) {
             return Collections.emptySet();
         }
 
@@ -52,7 +52,7 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
 
         //TODO -- Should we throw error if both datumHash and inlineDatum are set ??
 
-        try{
+        try {
             // loop over utxo's, find matching requested amount
             Set<Utxo> selectedUtxos = new HashSet<>();
 
@@ -69,7 +69,7 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
             final int nrOfItems = 100;
 
             String firstAddr = null;
-            while(addrIter.hasNext()) {
+            while (addrIter.hasNext()) {
                 int page = 0;
                 Address senderAddr = addrIter.next();
                 String sender = senderAddr.toBech32();
@@ -125,7 +125,7 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
 
                         if (utxoSelected) {
                             var walletUtxo = WalletUtxo.from(utxo);
-                            walletUtxo.setDerivationPath(senderAddr.getDerivationPath().isPresent()? senderAddr.getDerivationPath().get(): null);
+                            walletUtxo.setDerivationPath(senderAddr.getDerivationPath().isPresent() ? senderAddr.getDerivationPath().get() : null);
 
                             selectedUtxos.add(walletUtxo);
                             if (!remaining.isEmpty() && selectedUtxos.size() > maxUtxoSelectionLimit) {
@@ -138,25 +138,26 @@ public class InclusiveUtxoSelectionStrategyImpl implements UtxoSelectionStrategy
                     }
                 }
             }
-            if(!remaining.isEmpty()){
+            if (!remaining.isEmpty()) {
                 throw new InsufficientBalanceException("Not enough funds for [" + remaining + "], address: " + firstAddr);
             }
             return selectedUtxos;
-        }catch(InputsLimitExceededException e){
+        } catch (InputsLimitExceededException e) {
             var fallback = fallback();
-            if(fallback != null){
+            if (fallback != null) {
                 return fallback.select(addrIter, outputAmounts, datumHash, inlineDatum, utxosToExclude, maxUtxoSelectionLimit);
             }
             throw new ApiRuntimeException("Input limit exceeded and no fallback provided", e);
         }
     }
 
-    private static Comparator<Utxo> sortByMostMatchingAssets(List<Amount> outputAmounts){
+    private static Comparator<Utxo> sortByMostMatchingAssets(List<Amount> outputAmounts) {
         // first process utxos which contain most matching assets
         return (o1, o2) -> Integer.compare(countMatchingAssets(o2.getAmount(), outputAmounts), countMatchingAssets(o1.getAmount(), outputAmounts));
     }
-    private static int countMatchingAssets(List<Amount> l1, List<Amount> outputAmounts){
-        if(l1 == null || l1.isEmpty() || outputAmounts == null || outputAmounts.isEmpty()){
+
+    private static int countMatchingAssets(List<Amount> l1, List<Amount> outputAmounts) {
+        if (l1 == null || l1.isEmpty() || outputAmounts == null || outputAmounts.isEmpty()) {
             return 0;
         }
         return (int) l1.stream()
