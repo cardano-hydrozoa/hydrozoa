@@ -14,12 +14,14 @@ import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsCurrencySymbol, containsExactlyOneAsset, onlyNonAdaAsset}
 import hydrozoa.l2.block.BlockTypeL2
-import hydrozoa.{PosixTime, *}
+import hydrozoa.{PosixTime, Address as HAddress, *}
 import scalus.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
+import scalus.cardano.ledger.TransactionOutput.Shelley
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
@@ -524,9 +526,9 @@ object DisputeResolutionScript {
       IArray.unsafeFromArray(plutusScript.getScriptHash)
     )
 
-    def address(n: Network): AddressBechL1 = {
+    def address(n: Network): AddressL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
-        address.getAddress |> AddressBech[L1].apply
+        address.getAddress |> (s => SLAddress.fromBech32(s).asInstanceOf[ShelleyAddress]) |> HAddress[L1].apply
     }
 }
 
@@ -540,7 +542,7 @@ def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
     )
 
 def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
-    PubKeyHash(blake2b_224(ByteString.fromArray(peer.bytes)))
+    PubKeyHash(blake2b_224(peer.bytes))
 
 def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
     VoteDatum(

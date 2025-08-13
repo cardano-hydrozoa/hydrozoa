@@ -1,16 +1,21 @@
 package hydrozoa.l1
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
+import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
 import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.{serializeTxHex, txHash, txInputs, txOutputs}
+import hydrozoa.infra.{serializeTxHex, txInputs, txOutputs}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.monitoring.Metrics
 import ox.channels.ActorRef
 import ox.resilience.RetryConfig
+import scalus.builtin.ByteString
+import scalus.cardano.address.Network
+import scalus.cardano.address.Network.Testnet
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Blake2b_256, Coin, Hash, HashPurpose, TransactionHash, TransactionInput, TransactionOutput, Value}
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
@@ -22,17 +27,17 @@ class CardanoL1Mock() extends CardanoL1:
 
     override def setMetrics(metrics: ActorRef[Metrics]): Unit = ()
 
-    private val knownTxs: mutable.Map[TxId, TxL1] = mutable.Map()
+    private val knownTxs: mutable.Map[TransactionHash, TxL1] = mutable.Map()
 
-    def getKnownTxs: Map[TxId, TxL1] = Map.from(knownTxs)
+    def getKnownTxs: Map[TransactionHash, TxL1] = Map.from(knownTxs)
 
     private val utxosActive: mutable.Map[UtxoIdL1, Output[L1]] = mutable.Map()
 
-    def getUtxosActive: Map[UtxoIdL1, Output[L1]] = Map.from(utxosActive)
+    def getUtxosActive: UtxoSet[L1] = UtxoSet[L1](Map.from(utxosActive))
 
-    override def submit(tx: TxL1): Either[SubmissionError, TxId] =
+    override def submit(tx: TxL1): Either[SubmissionError, TransactionHash] =
         synchronized {
-            val txId = txHash(tx)
+            val txId = tx.id
             log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
             if knownTxs.contains(txId) then Right(txId)
             else
@@ -55,50 +60,29 @@ class CardanoL1Mock() extends CardanoL1:
         }
 
     override def awaitTx(
-        txId: TxId,
+        txId: TransactionHash,
         retryConfig: RetryConfig[Throwable, Option[TxL1]]
     ): Option[TxL1] = knownTxs.get(txId)
 
-    override def network: Network = Network(0, 42)
+    override def network: Network = Testnet
 
     override def lastBlockTime: PosixTime = 0
 
-    def utxoIdsByAddress(address: AddressBechL1): Set[UtxoIdL1] =
+    def utxoIdsByAddress(address: AddressL1): Set[UtxoIdL1] =
         utxosActive.filter((_, utxo) => utxo.address == address).keySet.toSet
 
     def utxoById(utxoId: UtxoIdL1): Option[OutputL1] = utxosActive.get(utxoId)
 
-    override def utxosAtAddress(address: AddressBechL1): List[Utxo] =
+    override def utxosAtAddress(address: AddressL1): List[(Utxo[L1])] =
         utxosActive
-            .filter((_, utxo) => utxo.address == address)
-            .map((utxoId, output) =>
+            .filter((_, utxo) => utxo.address == address).toList.map((in, out) => Utxo[L1](in, out))
+      
 
-                val amounts: mutable.Set[Amount] = mutable.Set.empty
-
-                output.tokens.foreach((policyId, tokens) =>
-                    tokens.foreach((tokenName, quantity) =>
-                        val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenNameHex)
-                        amounts.add(Amount.asset(unit, quantity.longValue))
-                    )
-                )
-
-                Utxo(
-                  utxoId.txId.hash,
-                  utxoId.outputIx.ix,
-                  address.bech32,
-                  (List(lovelace(output.coins.bigInteger)) ++ amounts.toList).asJava,
-                  null, // no datum hashes
-                  output.mbInlineDatum.getOrElse(""),
-                  null // no scripts
-                )
-            )
-            .toList
-
-    override def utxoIdsAdaAtAddress(address: AddressBechL1): Map[UtxoIdL1, BigInt] =
+    override def utxoIdsAdaAtAddress(address: AddressL1): Map[UtxoIdL1, Coin] =
         utxosActive
             .filter((_, utxo) => utxo.address == address)
             .view
-            .mapValues(_.coins)
+            .mapValues(_.value.coin)
             .toMap
 
 object CardanoL1Mock:
@@ -107,7 +91,7 @@ object CardanoL1Mock:
         l1Mock.utxosActive.addAll(genesisUtxos)
         l1Mock
 
-    def apply(knownTxs: Map[TxId, TxL1], utxosActive: Map[UtxoIdL1, Output[L1]]): CardanoL1Mock =
+    def apply(knownTxs: Map[TransactionHash, TxL1], utxosActive: UtxoSet[L1]): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock
         l1Mock.knownTxs.addAll(knownTxs)
         l1Mock.utxosActive.clear()
@@ -175,11 +159,7 @@ val genesisUtxos: Set[(UtxoIdL1, Output[L1])] =
       ("a6ce90a9a5ef8ef73858effdae375ba50f302d3c6c8b587a15eaa8fa98ddf741", TestPeer.address(Julia))
     ).map((txHash, address) =>
         (
-          UtxoIdL1(TxId(txHash), TxIx(0)),
-          Output[L1](
-            AddressBech[L1](address.toBech32.get),
-            BigInt("10000000000"),
-            emptyTokens
-          )
+          UtxoIdL1(TransactionInput(Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(txHash)), 0)),
+          Output[L1](Babbage(address = address, value = Value(Coin(10_000_000_000L))))
         )
     ).toSet

@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus
 
-import hydrozoa.{Network, UDiffTimeMilli, VerificationKeyBytes}
+import hydrozoa.{UDiffTimeMilli, VerificationKeyBytes}
 
 /** TODO: spec out what makes the difference between HeadParams / L2ConsensusParams
   * @param l2NetworkId

@@ -3,7 +3,7 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.{toIArray, toScalus}
-import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -18,6 +18,7 @@ import ox.channels.{ActorRef, Channel, Source}
 import scalus.builtin.{ByteString, given}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.{PolicyId, AssetName, VKeyWitness, TransactionHash}
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Shelley
 
@@ -40,11 +41,11 @@ private class InitHeadActor(
 
     private var txDraft: InitTx = _
     private var headNativeScript: Native = _
-    private var headMintingPolicy: CurrencySymbol = _
-    private var headAddress: AddressBechL1 = _
-    private var beaconTokenName: TokenName = _
-    private var seedAddress: AddressBechL1 = _
-    private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
+    private var headMintingPolicy: PolicyId = _
+    private var headAddress: AddressL1 = _
+    private var beaconTokenName: AssetName = _
+    private var seedAddress: AddressL1 = _
+    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
@@ -52,14 +53,14 @@ private class InitHeadActor(
         val headPeers = req.otherHeadPeers + req.initiator
         val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
         val headNativeScript = mkHeadNativeScript(headVKeys)
-        val headMintingPolicy: CurrencySymbol = CurrencySymbol(headNativeScript.scriptHash.toIArray)
+        val headMintingPolicy: PolicyId = (headNativeScript.scriptHash)
 
-        val headAddress: AddressBechL1 = AddressBech(
+        val headAddress: AddressL1 = Address[L1](
           ShelleyAddress(
-            network = cardanoActor.ask(_.network.toScalus),
+            network = cardanoActor.ask(_.network),
             payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
             delegation = Null
-          ).toBech32.get
+          )
         )
 
         log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
@@ -77,7 +78,7 @@ private class InitHeadActor(
         val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
 
         log.info("Init tx draft: " + serializeTxHex(txDraft))
-        log.info("Init tx draft hash: " + txHash(txDraft))
+        log.info("Init tx draft hash: " + txDraft.id)
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckInit(me, ownWit)
@@ -86,7 +87,7 @@ private class InitHeadActor(
         this.ownAck = ownAck
         this.txDraft = txDraft
         this.headNativeScript = headNativeScript
-        this.headMintingPolicy = CurrencySymbol(headNativeScript.scriptHash.toIArray)
+        this.headMintingPolicy = headNativeScript.scriptHash
         this.headAddress = headAddress
         this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress
@@ -145,7 +146,7 @@ private class InitHeadActor(
                         // FIXME: what should go next here?
                         throw RuntimeException(msg)
 
-    private val resultChannel: Channel[TxId] = Channel.buffered(1)
+    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

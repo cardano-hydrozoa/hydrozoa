@@ -1,5 +1,6 @@
 package hydrozoa.l1.multisig.state
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.OutputL1
@@ -7,6 +8,8 @@ import scalus.*
 import scalus.bloxbean.Interop
 import scalus.builtin.Data.{FromData, ToData, fromData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.cardano.ledger.DatumOption
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.ledger.api.v1.{Address, PosixTime}
 import scalus.prelude.Option
 
@@ -38,13 +41,16 @@ def mkMultisigTreasuryDatum(major: Int, _params: L2ConsensusParamsH32): Multisig
     )
 
 // DepositDatum
-
+// FIXME: I'd _like_ to use hydrozoa.Address[L], but then the ToData deriving doesn't work, despite defining an
+// instance in the Address[L] object.
 case class DepositDatum(
     address: Address,
-    datum: Option[ByteString],
+    /** Represents an optional inline datum */
+    datum: Option[Data],
     deadline: PosixTime,
     refundAddress: Address,
-    refundDatum: Option[ByteString]
+    /** Represents an optional inline datum */
+    refundDatum: Option[Data]
 ) derives FromData,
       ToData
 
@@ -52,12 +58,8 @@ import scala.Option as OptionS
 
 def depositDatum(output: OutputL1): OptionS[DepositDatum] =
     for
-        datumHex <- output.mbInlineDatum
+        datumOption <- output.datumOption
         datum <- Try(
-          fromData[DepositDatum](
-            Interop.toScalusData(
-              PlutusData.deserialize(HexUtil.decodeHexString(datumHex))
-            )
-          )
+          fromData[DepositDatum](datumOption.asInstanceOf[Inline].data)
         ).toOption
     yield datum

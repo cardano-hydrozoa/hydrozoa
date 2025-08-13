@@ -5,7 +5,8 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
-import scalus.cardano.ledger.Value
+import scalus.builtin.Data
+import scalus.cardano.ledger.{DatumOption, TransactionHash, Value}
 import sttp.tapir.Schema
 
 // Types for NODE API
@@ -14,17 +15,19 @@ import sttp.tapir.Schema
 type InitializationError = String
 
 // Simple depositing
-type DepositId = UtxoIdL1
+type DepositId = UtxoId[L1]
 
 case class DepositRequest(
-    txId: TxId,
+    txId: TransactionHash,
     txIx: TxIx,
     depositAmount: BigInt,
     deadline: Option[BigInt],
-    address: AddressBechL2,
-    datum: Option[Datum],
-    refundAddress: AddressBechL1,
-    refundDatum: Option[Datum]
+    address: AddressL2,
+    /** Represents an optional inline datum */
+    datum: Option[Data],
+    refundAddress: AddressL1,
+    /** Represents an optional inline datum */
+    refundDatum: Option[Data]
 )
 
 case class DepositResponse(postDatedRefundTx: PostDatedRefundTx, depositId: DepositId) {
@@ -33,21 +36,18 @@ case class DepositResponse(postDatedRefundTx: PostDatedRefundTx, depositId: Depo
 }
 
 given depositResponseCodec: JsonValueCodec[DepositResponse] =
-    JsonCodecMaker.make
+    ??? // FIXME: JsonCodecMaker.make
 
 given depositResponseSchema: Schema[DepositResponse] =
     Schema.derived[DepositResponse]
 
 given utxoIdL1Schema: Schema[UtxoIdL1] =
-    Schema.derived[UtxoIdL1]
+    Schema.binary[UtxoIdL1]
 
-given txIdSchema: Schema[TxId] =
-    Schema.derived[TxId]
+given txIdSchema: Schema[TransactionHash] =
+    Schema.binary[TransactionHash]
 
 given txL1Schema: Schema[TxL1] =
-    Schema.derived[TxL1]
-
-given txIxSchema: Schema[TxIx] =
-    Schema.derived[TxIx]
+    Schema.binary[TxL1]
 
 type DepositError = String

@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.tx.tally
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -33,7 +34,7 @@ class BloxBeanTallyTxBuilder(
 
         def getVoteUtxoWithDatum(utxoId: UtxoIdL1): (Utxo, VoteDatum) =
             val Right(utxo) = backendService.getUtxoService
-                .getTxOutput(utxoId.txId.hash, utxoId.outputIx.ix)
+                .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
                 .toEither
 
             val datum = fromData[VoteDatum](
@@ -79,7 +80,7 @@ class BloxBeanTallyTxBuilder(
         val txPartial = ScriptTx()
             .collectFrom(continuingInput, continuingRedeemer)
             .collectFrom(removedInput, removedRedeemer)
-            .readFrom(r.treasuryUtxoId.txId.hash, r.treasuryUtxoId.outputIx.ix)
+            .readFrom(r.treasuryUtxoId.transactionId.toHex, r.treasuryUtxoId.index)
             .payToContract(continuingInput.getAddress, outputAmount.asJava, outputDatum)
             .attachSpendingValidator(DisputeResolutionScript.plutusScript)
 

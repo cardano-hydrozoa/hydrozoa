@@ -43,7 +43,7 @@ enum BlockTypeL2 derives CanEqual:
 case class BlockBody(
     eventsValid: Seq[(TransactionHash, L2EventLabel)],
     eventsInvalid: Seq[(TransactionHash, L2EventLabel)],
-    depositsAbsorbed: Seq[TransactionInput]
+    depositsAbsorbed: Seq[UtxoIdL1]
 ) derives CanEqual
 
 object BlockBody:
@@ -83,7 +83,7 @@ case class BlockBuilder[
     // FIXME: add type tags
     eventsValid: Set[(TransactionHash, L2EventLabel)] = Set.empty, // TODO: are sets ok?
     eventsInvalid: Set[(TransactionHash, L2EventLabel)] = Set.empty,
-    depositsAbsorbed: Seq[TransactionInput] = Seq.empty,
+    depositsAbsorbed: Seq[UtxoIdL1] = Seq.empty,
     utxosActive: UtxoSetCommitment = encodeHex(infG2)
 ) {
     def majorBlock(using
@@ -128,7 +128,7 @@ case class BlockBuilder[
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(eventsInvalid = eventsInvalid.+((txId, eventType)))
 
-    def withDeposit(d: TransactionInput)(using
+    def withDeposit(d: UtxoIdL1)(using
         ev: BlockType =:= TBlockMajor
     ): BlockBuilder[BlockType, BlockNum, VersionMajor] =
         copy(depositsAbsorbed = depositsAbsorbed ++ Seq(d))

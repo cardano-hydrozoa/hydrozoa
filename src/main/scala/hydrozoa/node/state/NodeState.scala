@@ -1,7 +1,7 @@
 package hydrozoa.node.state
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.{Piper, sequence, txHash}
+import hydrozoa.infra.{Piper, sequence}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.InitTx
@@ -17,9 +17,10 @@ import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdraw
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
 import hydrozoa.node.state.HeadPhase.Finalized
-import hydrozoa.{AddressBechL1, CurrencySymbol, NativeScript, TokenName, VerificationKeyBytes}
+import hydrozoa.{AddressL1, VerificationKeyBytes}
 import ox.channels.ActorRef
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.{AssetName, PolicyId}
 
 import scala.collection.mutable
 
@@ -123,7 +124,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState.get.setWithdrawTxBuilder(withdrawTxBuilder)
             this.headState.get.setDeinitTxBuilder(deinitTxBuilder)
             log.info(s"Setting up L1 event sourcing...")
-            val initTxId = params.initTx |> txHash
+            val initTxId = params.initTx.id
             multisigL1EventSource.tell(
               _.awaitInitTx(
                 initTxId,
@@ -199,10 +200,10 @@ case class InitializingHeadParams(
     headPeerVKs: Map[WalletId, VerificationKeyBytes],
     headParams: HeadParams,
     headNativeScript: Native,
-    headMintingPolicy: CurrencySymbol,
-    headAddress: AddressBechL1,
-    beaconTokenName: TokenName,
-    seedAddress: AddressBechL1,
+    headMintingPolicy: PolicyId,
+    headAddress: AddressL1,
+    beaconTokenName: AssetName,
+    seedAddress: AddressL1,
     initTx: InitTx,
     initializedOn: Long, // system time, milliseconds
     autonomousBlocks: Boolean

@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.tx.withdraw
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -9,12 +10,8 @@ import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{mkBuilder, toBloxBeanTransactionOutput, toEither, toTxOutRefV3}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
-    TreasuryDatum,
-    TreasuryRedeemer,
-    WithdrawRedeemer
-}
-import hydrozoa.{TxL1, UtxoId, UtxoIdL1}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, TreasuryRedeemer, WithdrawRedeemer}
+import hydrozoa.{L2, Output, TxL1, UtxoId, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, FromData}
@@ -37,7 +34,7 @@ class BloxBeanWithdrawTxBuilder(
             case Some(treasuryScriptRefUtxoId) =>
                 def getUtxoWithDatum[T](using FromData[T])(utxoId: UtxoIdL1): (BBUtxo, T) =
                     val Right(utxo) = backendService.getUtxoService
-                        .getTxOutput(utxoId.txId.hash, utxoId.outputIx.ix)
+                        .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
                         .toEither
 
                     val datum = fromData[T](
@@ -59,7 +56,7 @@ class BloxBeanWithdrawTxBuilder(
                 )
 
                 val withdrawals =
-                    r.withdrawals.utxoMap.map((_, utxo) => toBloxBeanTransactionOutput(utxo)).toSeq
+                    r.withdrawals.map((_, utxo) => toBloxBeanTransactionOutput(Output[L2](utxo))).toSeq
 
                 val withdrawnCoins =
                     withdrawals.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))
@@ -74,7 +71,7 @@ class BloxBeanWithdrawTxBuilder(
                 )
 
                 val withdrawRedeemer = WithdrawRedeemer(
-                  r.withdrawals.utxoMap.keys.map(_.toTxOutRefV3).toList.asScalus,
+                  r.withdrawals.keys.map(_.toTxOutRefV3).toList.asScalus,
                   proofBS
                 )
 
@@ -86,8 +83,8 @@ class BloxBeanWithdrawTxBuilder(
                     .collectFrom(treasuryInput, treasuryRedeemer)
                     .payToContract(treasuryInput.getAddress, treasuryValue.asJava, outputDatum)
                     .readFrom(
-                      treasuryScriptRefUtxoId.txId.hash,
-                      treasuryScriptRefUtxoId.outputIx.ix
+                      treasuryScriptRefUtxoId.transactionId.toHex,
+                      treasuryScriptRefUtxoId.index
                     )
 
                 val nodeAddress = r.nodeAccount.enterpriseAddress()

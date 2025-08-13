@@ -3,7 +3,7 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.{toHydrozoa, toScalusLedger}
+import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
@@ -19,10 +19,12 @@ import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.builtin.Data
+import scalus.cardano.ledger.{LedgerToPlutusTranslation, TransactionHash}
 import scalus.ledger.api.v3.{TxOut, TxOutRef}
 import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt
+import scala.language.implicitConversions
 import scala.util.Try
 
 class Node:
@@ -41,11 +43,11 @@ class Node:
     def initializeHead(
         otherHeadPeers: Set[WalletId],
         treasuryAda: Long,
-        txId: TxId,
+        txId: TransactionHash,
         txIx: TxIx
-    ): Either[InitializationError, TxId] =
+    ): Either[InitializationError, TransactionHash] =
 
-        log.info(s"Init the head with seed ${txId.hash}#${txIx.ix}, amount $treasuryAda ADA")
+        log.info(s"Init the head with seed ${txId.toHex}#${txIx.untagged}, amount $treasuryAda ADA")
 
         // TODO: explicit type for errors
         Try({
@@ -67,7 +69,7 @@ class Node:
             log.info(s"knownVKeys: $knownVKeys")
 
             // ReqInit
-            val seedOutput = UtxoIdL1(txId, txIx)
+            val seedOutput = UtxoId[L1](txId, txIx)
             // TODO: unify - somewhere we ask for Ada, somewhere for Lovelace
             val treasuryCoins = treasuryAda * 1_000_000
             val reqInit =
@@ -122,20 +124,20 @@ class Node:
         // Make the datum and the recipe
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
-          decodeBech32AddressL2(r.address),
-          r.datum.map(datumByteString).asScalus,
+            LedgerToPlutusTranslation.getAddress(r.address),
+          r.datum.asScalus,
           BigInt.apply(0), // deadline,
-          decodeBech32AddressL1(r.refundAddress),
-          r.datum.map(datumByteString).asScalus
+            LedgerToPlutusTranslation.getAddress(r.refundAddress),
+          r.datum.asScalus
         )
 
         val depositTxRecipe =
-            DepositTxRecipe(UtxoIdL1(r.txId, r.txIx), r.depositAmount, depositDatum)
+            DepositTxRecipe(UtxoId[L1](r.txId, r.txIx), r.depositAmount, depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) =
             depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe))
-        val depositTxHash = txHash(depositTxDraft)
+        val depositTxHash = depositTxDraft.id
 
         val serializedTx = serializeTxHex(depositTxDraft)
         log.info(s"Deposit tx: $serializedTx")
@@ -144,7 +146,7 @@ class Node:
         // FIXME: in fact it's not a multisig tx, we have to revise tx dumping
         // TxDump.dumpMultisigTx(depositTxDraft)
 
-        val req = ReqRefundLater(depositTxDraft, index)
+        val req = ReqRefundLater(depositTxDraft, TxIx(index))
         val refundTx = network.ask(_.reqRefundLater(req))
         val serializedRefundTx = serializeTxHex(refundTx)
         log.info(s"Refund tx: $serializedRefundTx")
@@ -159,23 +161,23 @@ class Node:
             )
 
         log.info(s"Deposit tx submitted: $depositTxId")
-        Right(DepositResponse(refundTx, UtxoIdL1(depositTxHash, index)))
+        Right(DepositResponse(refundTx, UtxoId[L1](depositTxHash, index)))
     end deposit
 
-    def submitL1(hex: String): Either[String, TxId] =
+    def submitL1(hex: String): Either[String, TransactionHash] =
         cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
-    def awaitTxL1(txId: TxId): Option[TxL1] = cardano.ask(_.awaitTx(txId))
+    def awaitTxL1(txId: TransactionHash): Option[TxL1] = cardano.ask(_.awaitTx(txId))
 
-    def submitL2(req: SubmitRequestL2): Either[String, TxId] =
+    def submitL2(req: SubmitRequestL2): Either[String, TransactionHash] =
         req match
             case Transaction(tx) =>
                 network.tell(_.reqEventL2(ReqEventL2(tx)))
-                Right(TxId(tx.getEventId.toHex))
+                Right((tx.getEventId))
 
             case Withdrawal(wd) =>
                 network.tell(_.reqEventL2(ReqEventL2(wd)))
-                Right(TxId(wd.getEventId.toHex))
+                Right((wd.getEventId))
 
     end submitL2
 
@@ -193,7 +195,7 @@ class Node:
       */
     def produceNextBlockLockstep(
         nextBlockFinal: Boolean,
-    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
           "Autonomous block production should be turned off to use this function"
@@ -250,11 +252,7 @@ class Node:
                             .toList
                         stateL2
                             .map((utxoId, output) =>
-                                val convertedUtxoId = utxoId.toHydrozoa[L2]
-                                val scalusOutput = output.toScalusLedger
-                                val hydrozoaOutput = scalusOutput.toHydrozoa[L2]
-                                val outputNoTokens = OutputNoTokens.apply(hydrozoaOutput)
-                                convertedUtxoId -> outputNoTokens
+                                utxoId -> OutputNoTokens(output)
                             )
 
                     }

@@ -1,5 +1,6 @@
 package hydrozoa.l1.multisig.tx.settlement
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.Tx
@@ -12,10 +13,11 @@ import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop.toPlutusData
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Address
+import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
@@ -50,7 +52,7 @@ class ScalusSettlementTxBuilder(
         val resolvedUtxoInputs: Seq[TransactionOutput] =
             utxoIds
                 .map(id =>
-                    bloxToScalusUtxoQuery(backendService, id.toScalus) match {
+                    bloxToScalusUtxoQuery(backendService, id) match {
                         case x @ Left(err) => {
                             val isDeposit = r.deposits.contains(id)
 
@@ -71,7 +73,7 @@ class ScalusSettlementTxBuilder(
         // Withdrawals (outputs go to peers)
 
         val withdrawals: IndexedSeq[Sized[TransactionOutput]] =
-            r.utxosWithdrawn.utxoMap.map(w => w._2.toScalus).toIndexedSeq.map(Sized(_))
+            r.utxosWithdrawn.values.toIndexedSeq.map(Sized(_))
 
         /////////////////////////////////////////////////
         // Treasury Output (with funds increased from deposits, decreased from withdrawals)
@@ -83,12 +85,10 @@ class ScalusSettlementTxBuilder(
         // Address
         // CBOR encoded hydrozoa native script
         // TODO: Turn this into a helper function or revise the types; its duplicated in the refund tx builder
-        val headNativeScript: Native =
-            Cbor.decode(reader.multisigRegime(_.headNativeScript).bytes).to[Native].value
+        val headNativeScript: Native = reader.multisigRegime(_.headNativeScript)
 
         // TODO: factor this out or change types. It is shared with the deposit Tx builder
-        val headAddress: Address =
-            Address.fromBech32(reader.multisigRegime(_.headBechAddress).bech32)
+        val headAddress: ShelleyAddress = reader.multisigRegime(_.headAddress)
 
         //////////////
         // Datum
@@ -133,7 +133,7 @@ class ScalusSettlementTxBuilder(
         // Finally construct the body
         val txBody =
             emptyTxBody.copy(
-              inputs = utxoIds.toSet.map(_.toScalus),
+              inputs = utxoIds.toSet.map(_.untagged),
               outputs = withdrawals.appended(treasuryOutput),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin
@@ -151,7 +151,7 @@ class ScalusSettlementTxBuilder(
           auxiliaryData = None
         )
 
-        Right(Tx(Cbor.encode(tx).toByteArray))
+        Right(Tx(tx))
 
     }
 }

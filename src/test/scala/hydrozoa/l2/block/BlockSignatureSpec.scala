@@ -17,13 +17,13 @@ class BlockSignatureSpec extends munit.ScalaCheckSuite {
         println(encodeHex(sBh))
         val wallet = TestPeer.mkWallet(Alice)
         val signature = wallet.createEd25519Signature(sBh)
-        println(encodeHex(signature.signature))
+        println(encodeHex(signature.untagged))
 
         val vk = wallet.exportVerificationKeyBytes
         val result = verifyEd25519Signature(
-          ByteString.fromArray(vk.bytes),
+          vk.bytes, 
           ByteString.fromArray(sBh.toArray),
-          ByteString.fromArray(signature.signature.toArray)
+          ByteString.fromArray(signature.untagged.toArray)
         )
         println(result)
         assert(result, "Validation fails")

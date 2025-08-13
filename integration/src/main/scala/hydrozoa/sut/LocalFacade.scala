@@ -13,9 +13,11 @@ import hydrozoa.node.state.{BlockRecord, WalletId}
 import ox.*
 import ox.logback.InheritableMDC
 import ox.resilience.{RetryConfig, retry}
+import scalus.cardano.ledger.TransactionHash
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
+import scala.language.implicitConversions
 
 /**
  * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
@@ -38,9 +40,9 @@ class LocalFacade(
         initiator: TestPeer,
         otherHeadPeers: Set[WalletId],
         ada: Long,
-        txId: TxId,
+        txId: TransactionHash,
         txIx: TxIx
-    ): Either[InitializationError, TxId] =
+                               ): Either[InitializationError, TransactionHash] =
         log.info("SUT: initializing head...")
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
@@ -69,7 +71,7 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                        _.head.openPhase(_.stateL1.depositUtxos.utxoMap.contains(depositTxHash))
+                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash.transactionId))
                       )
                     )
                     // println(veracity)
@@ -77,11 +79,11 @@ class LocalFacade(
                 })
                 ret
 
-    override def awaitTxL1(txId: TxId): Option[TxL1] = randomNode.awaitTxL1(txId)
+    override def awaitTxL1(txId: TransactionHash): Option[TxL1] = randomNode.awaitTxL1(txId)
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
-    ): Either[String, TxId] =
+                         ): Either[String, TransactionHash] =
         log.info("SUT: submitting L2 transaction/withdrawal...")
 
         val request = tx match
@@ -106,7 +108,7 @@ class LocalFacade(
 
     override def produceBlock(
         nextBlockFinal: Boolean,
-    ): Either[String, (BlockRecord, Option[(TxId, L2EventGenesis)])] =
+                             ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
               s" nextBlockFinal = $nextBlockFinal"

@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.tx.vote
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -35,7 +36,7 @@ class BloxBeanVoteTxBuilder(
     override def buildVoteTxDraft(r: VoteTxRecipe): Either[String, TxL1] =
 
         val Right(voteUtxo) = backendService.getUtxoService
-            .getTxOutput(r.voteUtxoId.txId.hash, r.voteUtxoId.outputIx.ix)
+            .getTxOutput(r.voteUtxoId.transactionId.toHex, r.voteUtxoId.index)
             .toEither
 
         val inVoteDatum = fromData[VoteDatum](
@@ -53,7 +54,7 @@ class BloxBeanVoteTxBuilder(
               .toData
         )
 
-        val multisig = r.proof.map(s => ByteString.fromArray(s.signature.toArray)).toList.asScalus
+        val multisig = r.proof.map(s => ByteString.fromArray(s)).toList.asScalus
         val redeemer = Interop.toPlutusData(
           DisputeRedeemer.Vote(MinorBlockL1Effect(r.blockHeader, multisig)).toData
         )
@@ -69,11 +70,11 @@ class BloxBeanVoteTxBuilder(
 
         val txPartial = ScriptTx()
             .collectFrom(voteUtxo, redeemer)
-            .readFrom(r.treasuryUtxoId.txId.hash, r.treasuryUtxoId.outputIx.ix)
+            .readFrom(r.treasuryUtxoId.transactionId.toHex, r.treasuryUtxoId.index)
             .payToContract(voteUtxo.getAddress, outputAmount.asJava, outVoteDatum)
             .attachSpendingValidator(DisputeResolutionScript.plutusScript);
 
-        val nodeAddress = r.nodeAddress.bech32
+        val nodeAddress = r.nodeAddress.toBech32.get
 
         val txSigner = SignerProviders.signerFrom(r.nodeAccount)
 

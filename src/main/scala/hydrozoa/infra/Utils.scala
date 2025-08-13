@@ -2,14 +2,16 @@ package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
+import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
-import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import hydrozoa.{AnyLayer, L1, L2, Network, UtxoId, VerificationKeyBytes}
+import hydrozoa.*
+import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.ledger.api.v3.TxId
-import scalus.ledger.api.v3.TxOutRef
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.{AddrKeyHash, Hash}
+import scalus.ledger.api.v3.{TxId, TxOutRef}
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
@@ -64,7 +66,7 @@ def encodeHex(bytes: IArray[Byte]): String =
 
 def decodeHex(hex: String): IArray[Byte] = IArray.from(HexUtil.decodeHexString(hex))
 
-extension (vkb: VerificationKeyBytes) def verKeyHash: String = getKeyHash(vkb.bytes)
+extension (vkb: VerificationKeyBytes) def verKeyHash: AddrKeyHash = Hash(blake2b_224(vkb.bytes))
 
 // Piper!
 implicit class Piper[A](val x: A) extends AnyVal {
@@ -91,9 +93,9 @@ def sequence[A](l: List[Option[A]]): Option[List[A]] = l match {
 
 extension [L <: AnyLayer](self: UtxoId[L])
     def toTxOutRefV3: TxOutRef = {
-        val txId = TxId.apply(ByteString.fromHex(self.txId.hash))
-        val txIx = BigInt(self.outputIx.ix)
-        TxOutRef.apply(txId, txIx)
+        val txId = self.transactionId
+        TxOutRef.apply(TxId(txId), self.index)
     }
 
-extension (self: Network) def toBB: BBNetwork = BBNetwork(self.networkId, self.protocolMagic)
+// FIXME: This is a static value of 42. Scalus network doesn't expose the protocl magic.
+extension (self: Network) def toBB: BBNetwork = BBNetwork(self.value.toInt, 42)

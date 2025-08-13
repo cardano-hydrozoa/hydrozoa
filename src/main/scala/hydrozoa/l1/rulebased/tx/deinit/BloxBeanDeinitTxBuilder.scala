@@ -31,7 +31,7 @@ class BloxBeanDeinitTxBuilder(
             case Some(treasuryScriptRefUtxoId) =>
                 def getUtxoWithDatum[T](using FromData[T])(utxoId: UtxoIdL1): (BBUtxo, T) =
                     val Right(utxo) = backendService.getUtxoService
-                        .getTxOutput(utxoId.txId.hash, utxoId.outputIx.ix)
+                        .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
                         .toEither
 
                     val datum = fromData[T](
@@ -49,14 +49,14 @@ class BloxBeanDeinitTxBuilder(
                 val treasuryCoins = treasuryValue.getCoin
 
                 val headTokensToBurn = treasuryValue.getMultiAssets.asScala
-                    .find(_.getPolicyId == encodeHex(r.headMintingPolicy.bytes))
+                    .find(_.getPolicyId == encodeHex(IArray.from(r.headMintingPolicy.bytes)))
                     .get
                     .negate
 
                 val treasuryRedeemer = Interop.toPlutusData(TreasuryRedeemer.Deinit.toData)
 
                 val scriptArray =
-                    CborSerializationUtil.deserialize(r.headNativeScript.bytes).asInstanceOf[Array]
+                    CborSerializationUtil.deserialize(r.headNativeScript.script.toCbor).asInstanceOf[Array]
                 val headNativeScript = NativeScript.deserialize(scriptArray)
 
                 // native multisig + one required signer to spend seed utxo
@@ -65,13 +65,13 @@ class BloxBeanDeinitTxBuilder(
                 //
                 val txPartial = ScriptTx()
                     .collectFrom(treasuryInput, treasuryRedeemer)
-                    .payToAddress(r.initializerAddress.bech32, Amount.lovelace(treasuryCoins))
+                    .payToAddress(r.initializerAddress.toBech32.get, Amount.lovelace(treasuryCoins))
                     // Due to BB's peculiarities, we can't use .mintAsset from ScriptTx
                     // please see .preBalanceTx and .postBalanceTx down below.
                     // .mintAssets(headNativeScript, ???)
                     .readFrom(
-                      treasuryScriptRefUtxoId.txId.hash,
-                      treasuryScriptRefUtxoId.outputIx.ix
+                      treasuryScriptRefUtxoId.transactionId.toHex,
+                      treasuryScriptRefUtxoId.index
                     )
 
                 val nodeAddress = r.nodeAccount.enterpriseAddress()

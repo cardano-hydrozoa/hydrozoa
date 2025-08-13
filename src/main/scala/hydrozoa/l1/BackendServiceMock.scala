@@ -5,9 +5,13 @@ import com.bloxbean.cardano.client.api.model.{Amount, ProtocolParams, Result, Ut
 import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.backend.model.*
+import com.bloxbean.cardano.client.util.HexUtil
 import com.fasterxml.jackson.databind.JsonNode
 import hydrozoa.*
 import hydrozoa.infra.{ResultUtils, toResult}
+import scalus.builtin.ByteString
+import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
+import scalus.cardano.ledger.{TransactionInput, Hash}
 
 import java.math.BigInteger
 import java.util
@@ -66,6 +70,7 @@ class TransactionServiceMock extends TransactionService:
 class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
     override def getUtxos(address: String, count: Int, page: Int): Result[util.List[Utxo]] = ???
 
+    // QUESTION: Should this really be taking a string for an address? Is there a better type to use here?
     override def getUtxos(
         address: String,
         count: Int,
@@ -73,8 +78,8 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         _order: OrderEnum
     ): Result[util.List[Utxo]] =
         val addressUtxos = cardanoL1Mock.getUtxosActive
-            .filter((_, output) => output.address == AddressBech[L1](address))
-            .map((id, output) => mkUtxo(id.txId.hash, id.outputIx.ix)(output))
+            .filter((_, output) => output.address == (SAddress.fromBech32(address).asInstanceOf[ShelleyAddress]))
+            .map((id, output) => mkUtxo(id.transactionId.toHex, id.index)(output))
 
         addressUtxos.drop(count * (page - 1)).take(count) match
             case Nil       => ResultUtils.mkResultError
@@ -96,7 +101,7 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
     ): Result[util.List[Utxo]] = ???
 
     override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
-        val utxoId = UtxoIdL1(TxId(txHash), TxIx(outputIndex.toChar))
+        val utxoId = UtxoIdL1(TransactionInput(Hash(ByteString.fromArray(HexUtil.decodeHexString(txHash))), outputIndex))
         val opt = cardanoL1Mock.getUtxosActive
             .get(utxoId)
             .map(mkUtxo(txHash, outputIndex))
@@ -106,9 +111,9 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
 
         val amounts: mutable.Set[Amount] = mutable.Set.empty
 
-        output.tokens.foreach((policyId, tokens) =>
-            tokens.foreach((tokenName, quantity) =>
-                val unit = AssetUtil.getUnit(policyId.policyId, tokenName.tokenNameHex)
+        output.value.assets.assets.toList.foreach((policyId, tokens) =>
+            tokens.toList.foreach((tokenName, quantity) =>
+                val unit = AssetUtil.getUnit(policyId.toHex, tokenName.bytes.toHex)
                 amounts.add(Amount.asset(unit, quantity.longValue))
             )
         )
@@ -117,10 +122,10 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
             .builder()
             .txHash(txHash)
             .outputIndex(outputIndex)
-            .address(output.address.bech32)
+            .address(output.address.asInstanceOf[ShelleyAddress].toBech32.get)
             .amount(
               (amounts.toSet + Amount.lovelace(
-                BigInteger.valueOf(output.coins.longValue)
+                BigInteger.valueOf(output.value.coin.value)
               )).toList.asJava
             )
             .build()

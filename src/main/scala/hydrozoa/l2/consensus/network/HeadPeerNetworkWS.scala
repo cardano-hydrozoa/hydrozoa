@@ -6,8 +6,9 @@ import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransport
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
-import hydrozoa.{TxId, VerificationKeyBytes}
+import hydrozoa.VerificationKeyBytes
 import ox.channels.ActorRef
+import scalus.cardano.ledger.TransactionHash
 
 // TODO: naming - this has nothing to do with WS
 class HeadPeerNetworkWS(
@@ -35,7 +36,7 @@ class HeadPeerNetworkWS(
         val req = ReqVerKey()
         dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
 
-    override def reqInit(req: ReqInit): TxId =
+    override def reqInit(req: ReqInit): TransactionHash =
         log.info(s"reqInit: $req")
         requireHeadPeersAreKnown(req.otherHeadPeers)
         val seq = transport.nextSeq

@@ -1,7 +1,8 @@
 package hydrozoa.l2.consensus.network.actor
 
+import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.{contextAndStateFromV3UTxO, toV3UTxO}
+import hydrozoa.infra.transitionary.toV3UTxO
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
@@ -9,6 +10,7 @@ import hydrozoa.node.state.*
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import scalus.ledger.api.v3
+import hydrozoa.{UtxoSetL2}
 
 import scala.collection.mutable
 
@@ -23,7 +25,7 @@ private class MinorBlockConfirmationActor(
     override type ReqType = ReqMinor
     override type AckType = AckMinor
 
-    private var utxosActive: Map[v3.TxOutRef, v3.TxOut] = _
+    private var utxosActive: UtxoSetL2 = _
     private val acks: mutable.Map[WalletId, AckMinor] = mutable.Map.empty
     private var finalizeHead: Boolean = false
 
@@ -33,7 +35,7 @@ private class MinorBlockConfirmationActor(
         if (req != null && acks.keySet == headPeers)
             // Minor block effects
             val l1Effect: L1BlockEffect =
-                acks.map(a => Ed25519Signature(decodeHex(a._2.signature.signature))).toSeq
+                acks.map(a => Ed25519Signature(decodeHex(a._2.signature))).toSeq
             val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, None, l2Effect)
@@ -61,7 +63,7 @@ private class MinorBlockConfirmationActor(
         log.trace(s"init req: $req")
 
         // Block validation (the leader can skip validation since its own block).
-        val (utxosActive: Map[v3.TxOutRef, v3.TxOut], _, _, isNextBlockFinal) =
+        val (utxosActive: UtxoSetL2, _, _, isNextBlockFinal) =
             if stateActor.ask(_.head.openPhase(_.isBlockLeader))
             then
                 val (ownBlock: OwnBlock, isFinalizationRequested) = stateActor.ask(
@@ -96,14 +98,14 @@ private class MinorBlockConfirmationActor(
                 val resolution = BlockValidator.validateBlock(
                   req.block,
                   prevHeader,
-                  contextAndStateFromV3UTxO(stateL2),
+                  stateL2.getContextAndState,
                   poolEventsL2,
                   depositUtxos, // FIXME: do we need it for a minor block?
                   false // minor is not a final
                 )
                 resolution match
                     case ValidationResolution.Valid(utxosActive, mbGenesis, utxosWithdrawn) =>
-                        (toV3UTxO(utxosActive), mbGenesis, utxosWithdrawn, isFinalizationRequested)
+                        (utxosActive, mbGenesis, utxosWithdrawn, isFinalizationRequested)
                     case resolution =>
                         throw RuntimeException(s"Minor block validation failed: $resolution")
 
@@ -117,7 +119,7 @@ private class MinorBlockConfirmationActor(
         // Sign block header
         val (me, signature) =
             walletActor.ask(w => (w.getWalletId, w.createEd25519Signature(msg)))
-        val signatureHex = Ed25519SignatureHex(encodeHex(signature.signature))
+        val signatureHex = Ed25519SignatureHex(encodeHex(signature))
 
         val ownAck: AckType = AckMinor(me, signatureHex, isNextBlockFinal)
         deliver(ownAck)

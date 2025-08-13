@@ -3,7 +3,7 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.{toIArray, toScalus}
-import hydrozoa.infra.{addWitness, serializeTxHex, txHash}
+import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
@@ -21,6 +21,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Shelley
+import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 
 import scala.collection.mutable
 
@@ -40,7 +41,7 @@ private class DeinitHeadActor(
     private var ownAck: AckDeinit = _
 
     private var txDraft: DeinitTx = _
-    private val acks: mutable.Map[WalletId, TxKeyWitness] = mutable.Map.empty
+    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqType): Seq[AckType] =
         log.info(s"Initializing deinit actor: $req")
@@ -48,7 +49,7 @@ private class DeinitHeadActor(
         val txDraft = req.deinitTx
 
         log.info("Deinit tx draft: " + serializeTxHex(txDraft))
-        log.info("Deinit tx draft hash: " + txHash(txDraft))
+        log.info("Deinit tx draft hash: " + txDraft.id)
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckDeinit(me, ownWit)
@@ -96,7 +97,7 @@ private class DeinitHeadActor(
                         // FIXME: what should go next here?
                         throw RuntimeException(msg)
 
-    private val resultChannel: Channel[TxId] = Channel.buffered(1)
+    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

@@ -1,5 +1,6 @@
 package hydrozoa.l1.rulebased.tx.fallback
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.{BackendService, DefaultUtxoSupplier}
@@ -8,26 +9,16 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{
-    HydrozoaBuilderBackendService,
-    Piper,
-    decodeHex,
-    encodeHex,
-    mkBuilder,
-    numberOfSignatories
-}
+import hydrozoa.infra.{HydrozoaBuilderBackendService, Piper, decodeHex, encodeHex, mkBuilder, numberOfSignatories}
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
-import hydrozoa.l1.rulebased.onchain.{
-    mkDefVoteDatum,
-    mkTreasuryDatumUnresolved,
-    mkVoteDatum,
-    mkVoteTokenName
-}
-import hydrozoa.{TxId, TxIx, TxL1, UtxoIdL1}
+import hydrozoa.l1.rulebased.onchain.{mkDefVoteDatum, mkTreasuryDatumUnresolved, mkVoteDatum, mkVoteTokenName}
+import hydrozoa.{TxIx, TxL1, UtxoId, UtxoIdL1}
 import scalus.prelude.asScalus
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
 import co.nstant.in.cbor.model.Array as CborArray
+import scalus.builtin.ByteString
+import scalus.cardano.ledger.{Blake2b_256, Hash, TransactionHash, TransactionInput}
 
 import java.math.BigInteger
 import scala.jdk.CollectionConverters.*
@@ -48,7 +39,7 @@ class BloxBeanFallbackTxBuilder(
         val builder = mkBuilder[Tx](fallbackBuilderBackendService)
 
         val multisigTreasuryUtxo: Utxo = fallbackBuilderBackendService.getUtxoService
-            .getUtxos(r.headAddressBech32.bech32, 100, 1, OrderEnum.asc)
+            .getUtxos(r.headAddress.toBech32.get, 100, 1, OrderEnum.asc)
             .getValue
             .get(0)
 
@@ -60,14 +51,15 @@ class BloxBeanFallbackTxBuilder(
 
         // WARNING [Peter and Ilia]: This is a mess. There's some trickiness with going from
         // scalus's `Native` to BB's `NativeScript`.
-        val hnsCborAsByteArray: Array[Byte] = r.headNativeScript.bytes
+        val hnsCborAsByteArray: Array[Byte] = r.headNativeScript.script.toCbor
         val hnsCborArray =
             CborSerializationUtil.deserialize(hnsCborAsByteArray).asInstanceOf[CborArray]
         val headNativeScript =
             NativeScript.deserialize(hnsCborArray)
 
         // Calculate dispute id
-        val voteTokenName = mkVoteTokenName(UtxoIdL1(TxId(multisigTreasuryUtxo.getTxHash), TxIx(0)))
+        val voteTokenName = mkVoteTokenName(UtxoId(TransactionInput(
+            TransactionHash.fromHex(multisigTreasuryUtxo.getTxHash), TxIx(0))))
 
         // Treasury datum
         val treasuryDatum = Interop.toPlutusData(
@@ -82,7 +74,7 @@ class BloxBeanFallbackTxBuilder(
           ).toData
         )
 
-        val bbTokenName = "0x" + voteTokenName.tokenNameHex
+        val bbTokenName = "0x" + voteTokenName.bytes.toHex
 
         // Vote tokens and vote utxos
         val voteTokens = Asset.builder
@@ -97,7 +89,7 @@ class BloxBeanFallbackTxBuilder(
 
         def mkVoteOutput(datum: PlutusData) = {
             TransactionOutput.builder
-                .address(r.disputeAddress.bech32)
+                .address(r.disputeAddress.toBech32.get)
                 .value(
                   Value.builder
                       // TODO: MinAda
@@ -106,7 +98,7 @@ class BloxBeanFallbackTxBuilder(
                         List(
                           MultiAsset
                               .builder()
-                              .policyId(encodeHex(r.headMintingPolicy.bytes))
+                              .policyId(encodeHex(IArray.from(r.headMintingPolicy.bytes)))
                               .assets(
                                 List(
                                   Asset.builder
@@ -137,11 +129,11 @@ class BloxBeanFallbackTxBuilder(
         val txPartial = Tx()
             .collectFrom(List(multisigTreasuryUtxo).asJava)
             .payToContract(
-              r.treasuryAddress.bech32,
+              r.treasuryAddress.toBech32.get,
               multisigTreasuryUtxo.getAmount,
               treasuryDatum
             )
-            .from(r.headAddressBech32.bech32)
+            .from(r.headAddress.toBech32.get)
             .mintAssets(headNativeScript, voteTokens)
 
         val fallbackTx = builder
@@ -170,7 +162,7 @@ class BloxBeanFallbackTxBuilder(
             .additionalSignersCount(numberOfSignatories(headNativeScript))
             // FIXME: Fails with "Not enough funds" (at least for fallback against init tx)
             // TODO: When building against a settlement tx, it pulls in the old treasury utxo :-(
-            .feePayer(r.headAddressBech32.bech32)
+            .feePayer(r.headAddress.toBech32.get)
             .withUtxoSelectionStrategy(
               InclusiveUtxoSelectionStrategyImpl(
                 DefaultUtxoSupplier(fallbackBuilderBackendService.getUtxoService)

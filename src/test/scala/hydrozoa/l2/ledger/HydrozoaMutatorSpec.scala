@@ -1,5 +1,6 @@
 package hydrozoa.l2.ledger
 
+import hydrozoa.*
 import hydrozoa.infra.transitionary.*
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.node.TestPeer.*
@@ -37,9 +38,6 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
         )
     Some(
       Inline(
-        toData(
-          ByteString.fromArray(
-            Cbor.encode(
               toData(
                 DepositDatum(
                   address = v3Addr,
@@ -49,18 +47,14 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
                   refundDatum = SOption.None
                 )
               )
-            ).toByteArray
-          )
-        )
-      )
+            )
     )
-
 }
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
   * event
   */
-def genDepositFromPeer(peer: TestPeer): Gen[(TransactionInput, TransactionOutput)] =
+def genDepositFromPeer(peer: TestPeer): Gen[(UtxoId[L1], Output[L1])] =
     for
         txId: TransactionHash <- genByteStringOfN(32).map(
           Hash.apply[Blake2b_256, HashPurpose.TransactionHash](_)
@@ -78,7 +72,7 @@ def genDepositFromPeer(peer: TestPeer): Gen[(TransactionInput, TransactionOutput
           datumOption = depositDatumFromPeer(peer),
           scriptRef = None
         )
-    yield (txIn, txOut)
+    yield (UtxoId[L1](txIn), Output[L1](txOut))
 
 /** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the
   * given peer
@@ -90,7 +84,7 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
             L2EventGenesis(Seq(genDepositFromPeer(peer).sample.get))
         else {
             var counter = 0
-            var genesisSeq: Seq[(TransactionInput, TransactionOutput)] = Seq.empty
+            var genesisSeq: Seq[(UtxoId[L1], Output[L1])] = Seq.empty
             while {
                 val deposit = genDepositFromPeer(peer).sample.get
                 if !(genesisSeq.contains(deposit))
@@ -137,10 +131,11 @@ def genL2EventTransactionAttack: Gen[
 
             val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
 
-            val newTx: L2EventTransaction =
-                transaction
+            val newTx: L2EventTransaction = {
+                val underlyingOriginal = transaction.transaction.untagged
+                val underlyingModified = underlyingOriginal
                     // First focus on the inputs of the transaction
-                    .focus(_.transaction.body.value.inputs)
+                    .focus(_.body.value.inputs)
                     // then modify those inputs: the goal is to replace the txId of one input with
                     // our bogusInputId
                     .modify(
@@ -153,6 +148,9 @@ def genL2EventTransactionAttack: Gen[
                           .replace(bogusTxIn)
                           .toSet
                     )
+
+                L2EventTransaction(Tx[L2](underlyingModified))
+            }
 
             val expectedException = new TransactionException.BadAllInputsUTxOException(
               transactionId = newTx.getEventId,
@@ -178,7 +176,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     test("init empty STS constituents") {
         val context = emptyContext
         val state = emptyState
-        val event = L2EventTransaction(emptyTransaction)
+        val event = L2EventTransaction(Tx[L2](emptyTransaction))
     }
 
     property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(Alice)) {
@@ -323,11 +321,11 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 postGenesisState <- HydrozoaL2Mutator(emptyContext, emptyState, event)
 
                 // Then generate the transaction event, where Alice tries to send all UTxOs to bob
-                allTxInputs = postGenesisState.utxo.keySet
+                allTxInputs = postGenesisState.utxo.keySet.map(UtxoId[L2](_))
 
                 transactionEvent = l2EventTransactionFromInputsAndPeer(
                   inputs = allTxInputs,
-                  utxoSet = postGenesisState.utxo,
+                  utxoSet = (postGenesisState.utxo.unsafeAsL2),
                   inPeer = Alice,
                   outPeer = Bob
                 )
@@ -362,8 +360,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                 val allTxInputs = postGenesisState.utxo.keySet
 
                 val transactionEvent = l2EventTransactionFromInputsAndPeer(
-                  inputs = allTxInputs,
-                  utxoSet = postGenesisState.utxo,
+                  inputs = allTxInputs.map(UtxoId[L2](_)),
+                  utxoSet = postGenesisState.utxo.unsafeAsL2,
                   inPeer = Alice,
                   outPeer = Bob
                 )

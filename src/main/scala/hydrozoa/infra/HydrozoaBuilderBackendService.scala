@@ -1,16 +1,14 @@
 package hydrozoa.infra
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.common.OrderEnum
-import com.bloxbean.cardano.client.api.helper.{
-    FeeCalculationService,
-    TransactionHelperService,
-    UtxoTransactionBuilder
-}
+import com.bloxbean.cardano.client.api.helper.{FeeCalculationService, TransactionHelperService, UtxoTransactionBuilder}
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil
-import hydrozoa.{AddressBech, L1, TxL1}
+import hydrozoa.{Address, L1, TxL1}
+import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
 
 import java.util
 import scala.jdk.CollectionConverters.*
@@ -42,7 +40,7 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
     final private class VirtualTreasuryUtxoService extends UtxoService {
         override def getUtxos(address: String, count: Int, page: Int): Result[util.List[Utxo]] = ???
 
-        val txBytes = multisigTx.bytes
+        val txBytes = multisigTx.toCbor
         val txHash = TransactionUtil.getTxHash(txBytes)
 
         override def getUtxos(
@@ -53,15 +51,15 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
         ): Result[util.List[Utxo]] =
             if page > 1 then ResultUtils.mkResultError
             else
-                onlyOutputToAddress(multisigTx, AddressBech[L1](address)) match {
+                onlyOutputToAddress(multisigTx, Address[L1](SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])) match {
                     case Left(_) => ResultUtils.mkResultError
-                    case Right(treasuryOutputIx, _, _, multisigTreasuryDatum) =>
+                    case Right(treasuryOutputIx, _, multisigTreasuryDatum) =>
                         val tb = Transaction.deserialize(txBytes)
-                        val treasuryOutput = tb.getBody.getOutputs.get(treasuryOutputIx.ix)
+                        val treasuryOutput = tb.getBody.getOutputs.get(treasuryOutputIx)
 
                         // This is required only due to BB's peculiarities
                         val multisigTreasuryUtxo: Utxo =
-                            txOutputToUtxo(txHash, treasuryOutputIx.ix, treasuryOutput)
+                            txOutputToUtxo(txHash, treasuryOutputIx, treasuryOutput)
 
                         val result = Result.success("").asInstanceOf[Result[util.List[Utxo]]]
                         result.withValue(List(multisigTreasuryUtxo).asJava)

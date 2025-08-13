@@ -45,7 +45,7 @@ trait HeadPeerNetwork {
       */
     def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes]
 
-    def reqInit(req: ReqInit): TxId
+    def reqInit(req: ReqInit): TransactionHash
 
     def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx
 
@@ -123,7 +123,7 @@ case class ReqInit(
     treasuryCoins: Long
 ) extends Req:
     type ackType = AckInit
-    type resultType = TxId
+    type resultType = TransactionHash
 
 given reqInitCodec: JsonValueCodec[ReqInit] =
     JsonCodecMaker.make
@@ -133,23 +133,17 @@ given reqInitSchema: Schema[ReqInit] =
 
 // ReqInit aux schemas
 given utxoIdL1Schema: Schema[UtxoIdL1] =
-    Schema.derived[UtxoIdL1]
+    Schema.binary[UtxoIdL1]
 
-given txIdSchema: Schema[TxId] =
-    Schema.derived[TxId]
-
-given txIxSchema: Schema[TxIx] =
-    Schema.derived[TxIx]
-
-given txKeyWitnessSchema: Schema[TxKeyWitness] =
-    Schema.derived[TxKeyWitness]
+given txIdSchema: Schema[TransactionHash] =
+    Schema.binary[TransactionHash]
 
 /** ------------------------------------------------------------------------------------------
   * AckInit
   * ------------------------------------------------------------------------------------------
   */
 
-case class AckInit(peer: WalletId, signature: TxKeyWitness) extends Ack
+case class AckInit(peer: WalletId, signature: VKeyWitness) extends Ack
 
 given ackInitCodec: JsonValueCodec[AckInit] =
     JsonCodecMaker.make
@@ -172,15 +166,18 @@ given reqRefundLaterCodec: JsonValueCodec[ReqRefundLater] =
 given reqRefundLaterSchema: Schema[ReqRefundLater] =
     Schema.derived[ReqRefundLater]
 
+given txIxSchema: Schema[TxIx] =
+    ???
+
 given txL1Schema: Schema[TxL1] =
-    Schema.derived[TxL1]
+    Schema.binary[TxL1]
 
 /** ------------------------------------------------------------------------------------------
   * AckRefundLater
   * ------------------------------------------------------------------------------------------
   */
 
-case class AckRefundLater(peer: WalletId, signature: TxKeyWitness) extends Ack
+case class AckRefundLater(peer: WalletId, signature: VKeyWitness) extends Ack
 
 given ackRefundLaterCodec: JsonValueCodec[AckRefundLater] =
     JsonCodecMaker.make
@@ -204,13 +201,13 @@ given reqEventL2Schema: Schema[ReqEventL2] =
 
 /* ReqEventK2 aux schemas */
 given utxoIdL2Schema: Schema[UtxoIdL2] =
-    Schema.derived[UtxoIdL2]
+    Schema.binary[UtxoIdL2]
 
 given simpleOutputSchema: Schema[OutputNoTokens[L2]] =
-    Schema.derived[OutputNoTokens[L2]]
+    Schema.binary[OutputNoTokens[L2]]
 
-given addressBechL2Schema: Schema[AddressBechL2] =
-    Schema.derived[AddressBechL2]
+given addressBechL2Schema: Schema[AddressL2] =
+    Schema.binary[AddressL2]
 
 /** ------------------------------------------------------------------------------------------
   * AckUnit
@@ -258,8 +255,8 @@ given blockBodySchema: Schema[BlockBody] =
 given hashSchema[A, B]: Schema[Hash[A, B]] =
     Schema.binary[Hash[A, B]]
 
-given txIdNonGenesisL2EventLabelPairSchema: Schema[(TxId, L2EventLabel)] =
-    Schema.derived[(TxId, L2EventLabel)]
+given txIdNonGenesisL2EventLabelPairSchema: Schema[(TransactionHash, L2EventLabel)] =
+    Schema.derived[(TransactionHash, L2EventLabel)]
 
 given nonGenesisL2EventLabelSchema: Schema[L2EventLabel] =
     Schema.derived[L2EventLabel]
@@ -276,13 +273,13 @@ case class AckMinor(
 ) extends Ack
 
 given ackMinorCodec: JsonValueCodec[AckMinor] =
-    JsonCodecMaker.make
+    ??? //FIXME: JsonCodecMaker.make
 
 given ackMinorSchema: Schema[AckMinor] =
     Schema.derived[AckMinor]
 
 given ed25519SignatureHexSchema: Schema[Ed25519SignatureHex] =
-    Schema.derived[Ed25519SignatureHex]
+    Schema.binary[Ed25519SignatureHex]
 
 /** ------------------------------------------------------------------------------------------
   * ReqMajor
@@ -306,8 +303,8 @@ given reqMajorSchema: Schema[ReqMajor] =
 
 case class AckMajor(
     peer: WalletId,
-    rollouts: Seq[TxKeyWitness],
-    postDatedTransition: TxKeyWitness
+    rollouts: Seq[VKeyWitness],
+    postDatedTransition: VKeyWitness
 ) extends Ack
 
 given ackMajorCodec: JsonValueCodec[AckMajor] =
@@ -318,7 +315,7 @@ given ackMajorSchema: Schema[AckMajor] =
 
 case class AckMajor2(
     peer: WalletId,
-    settlement: TxKeyWitness,
+    settlement: VKeyWitness,
     nextBlockFinal: Boolean
 ) extends Ack
 
@@ -350,7 +347,7 @@ given reqFinalSchema: Schema[ReqFinal] =
 
 case class AckFinal(
     peer: WalletId,
-    rollouts: Seq[TxKeyWitness]
+    rollouts: Seq[VKeyWitness]
 ) extends Ack
 
 given ackFinalCodec: JsonValueCodec[AckFinal] =
@@ -361,7 +358,7 @@ given ackFinalSchema: Schema[AckFinal] =
 
 case class AckFinal2(
     peer: WalletId,
-    finalization: TxKeyWitness
+    finalization: VKeyWitness
 ) extends Ack
 
 given ackFinal2Codec: JsonValueCodec[AckFinal2] =
@@ -401,7 +398,7 @@ given reqDeinitSchema: Schema[ReqDeinit] =
   * ------------------------------------------------------------------------------------------
   */
 
-case class AckDeinit(peer: WalletId, signature: TxKeyWitness) extends Ack
+case class AckDeinit(peer: WalletId, signature: VKeyWitness) extends Ack
 
 given ackDeinitCodec: JsonValueCodec[AckDeinit] =
     JsonCodecMaker.make
@@ -493,23 +490,23 @@ given hashKeyCodec[A, B]: JsonKeyCodec[Hash[A, B]] = new JsonKeyCodec[Hash[A, B]
 // Json codec just uses the cbor codec and encodes as bytes
 // WARN: unlike the `hashCodec` above, this wasn't written in such a way that made length-checking an explicit issue.
 // But do our CBOR codecs do it?
-given scalusTransactionCodec: JsonValueCodec[Transaction] = new JsonValueCodec[Transaction] {
-    override def decodeValue(in: JsonReader, default: Transaction): Transaction = {
+given transactionCodec[L <: AnyLayer]: JsonValueCodec[Tx[L]] = new JsonValueCodec[Tx[L]] {
+    override def decodeValue(in: JsonReader, default: Tx[L]): Tx[L] = {
         val bytes = in.readBase64AsBytes(null)
         given OriginalCborByteArray = OriginalCborByteArray(bytes)
-        Cbor.decode(bytes).to[Transaction].value
+        Tx[L](Cbor.decode(bytes).to[Transaction].value)
     }
 
-    override def encodeValue(tx: Transaction, out: JsonWriter): Unit = {
-        out.writeBase64Val(Cbor.encode[Transaction](tx).toByteArray, false)
+    override def encodeValue(tx: Tx[L], out: JsonWriter): Unit = {
+        out.writeBase64Val(Cbor.encode[Transaction](tx.untagged).toByteArray, false)
     }
 
-    override val nullValue: Transaction = Transaction(
+    override val nullValue: Tx[L] = Tx[L](Transaction(
       body = KeepRaw(emptyTxBody),
       witnessSet = TransactionWitnessSet(),
       isValid = false,
       auxiliaryData = None
-    )
+    ))
 }
 
 given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
@@ -523,4 +520,30 @@ given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
             ???
 
         override def nullValue: L2EventWithdrawal | L2EventTransaction = ???
+    }
+
+given [L <: AnyLayer]: JsonValueCodec[UtxoId[L]] =
+    new JsonValueCodec[UtxoId[L]] {
+        override def decodeValue(
+                                    in: JsonReader,
+                                    default: UtxoId[L] 
+                                ): UtxoId[L] = ???
+
+        override def encodeValue(x: UtxoId[L], out: JsonWriter): Unit =
+            ???
+
+        override def nullValue: UtxoId[L] = ???
+    }
+
+given JsonValueCodec[TxIx] =
+    new JsonValueCodec[TxIx] {
+        override def decodeValue(
+                                    in: JsonReader,
+                                    default: TxIx
+                                ): TxIx = ???
+
+        override def encodeValue(x: TxIx, out: JsonWriter): Unit =
+            ???
+
+        override def nullValue: TxIx = ???
     }

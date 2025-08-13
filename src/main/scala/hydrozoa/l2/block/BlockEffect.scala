@@ -1,7 +1,6 @@
 package hydrozoa.l2.block
 
 import hydrozoa.UtxoSetL2
-import hydrozoa.infra.transitionary.toHydrozoa
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, SettlementTx}
@@ -23,7 +22,7 @@ object BlockEffect:
                 // Create settlement tx draft
                 val txRecipe = SettlementRecipe(
                   block.blockHeader.versionMajor,
-                  block.blockBody.depositsAbsorbed.map(_.toHydrozoa),
+                  block.blockBody.depositsAbsorbed,
                   utxosWithdrawn
                 )
                 val Right(settlementTxDraft: SettlementTx) =
