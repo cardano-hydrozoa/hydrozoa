@@ -14,6 +14,8 @@ import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.txbuilder.BuilderContext
+import hydrozoa.infra.Piper
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.*
 import scalus.ledger.api
@@ -24,13 +26,13 @@ import scala.collection
 
 class ScalusSettlementTxBuilder(
     backendService: BackendService,
-    reader: HeadStateReader
+    reader: HeadStateReader,
+    builderContext: BuilderContext
 ) extends SettlementTxBuilder {
 
     override def mkSettlementTxDraft(
         r: SettlementRecipe
     ): Either[String, SettlementTx] = {
-        val feeCoin = Coin(10000000)
 
         //////////////////////////////////////////////////////////////////////////
         // Inputs (Absorbed deposits + old treasury Utxo)
@@ -47,22 +49,20 @@ class ScalusSettlementTxBuilder(
             r.deposits.toBuffer.append(reader.openPhaseReader(_.lastKnownTreasuryUtxoId))
 
         // This is a resolved list of all the inputs. It is impure; may fail if the lookup fails
-        val resolvedUtxoInputs: Seq[TransactionOutput] =
-            utxoIds
-                .map(id =>
-                    bloxToScalusUtxoQuery(backendService, id.toScalus) match {
-                        case x @ Left(err) => {
-                            val isDeposit = r.deposits.contains(id)
-
-                            return Left(
-                              s"${if isDeposit then "Deposit" else "Treasury"} UTxO not found on L1 ledger during settlement transaction. Bloxbean error: " ++ x.toString
-                            )
-                        }
-
-                        case Right(output) => output
+        val resolvedUtxos: Map[TransactionInput, TransactionOutput] = {
+            val resolved = utxoIds.map(id =>
+                bloxToScalusUtxoQuery(backendService, id.toScalus) match {
+                    case x @ Left(err) => {
+                        val isDeposit = r.deposits.contains(id)
+                        return Left(
+                          s"${if isDeposit then "Deposit" else "Treasury"} UTxO not found on L1 ledger during settlement transaction. Bloxbean error: " ++ x.toString
+                        )
                     }
-                )
-                .toSeq
+                    case Right(output) => id.toScalus -> output
+                }
+            )
+            resolved.toMap
+        }
 
         //////////////////////////////////////////////////////////////////////////
         // Outputs
@@ -70,8 +70,7 @@ class ScalusSettlementTxBuilder(
         /////////////////////////////////////////////////
         // Withdrawals (outputs go to peers)
 
-        val withdrawals: IndexedSeq[Sized[TransactionOutput]] =
-            r.utxosWithdrawn.utxoMap.map(w => w._2.toScalus).toIndexedSeq.map(Sized(_))
+        val withdrawalOutputs = r.utxosWithdrawn.utxoMap.values.map(_.toScalus)
 
         /////////////////////////////////////////////////
         // Treasury Output (with funds increased from deposits, decreased from withdrawals)
@@ -99,59 +98,42 @@ class ScalusSettlementTxBuilder(
 
         //////////////
         // Value
-        val withdrawnValue: Value = withdrawals.foldLeft(Value.zero)((s, w) => s + (w.value.value))
+        val withdrawnValue: Value = withdrawalOutputs.foldLeft(Value.zero)((s, w) => s + w.value)
 
         // The new treasury value should be the sum of all inputs minus withdrawals minus fee
         // -- the inputs will be the deposits and the old treasury utxo
         // FIXME: factor out this calculation
         // TODO: this might not work as expected, since it will produce
         //  lists like that: ada,token,...,ada,...
-        val inputsValue: Value =
-            resolvedUtxoInputs.foldLeft(Value.zero)((b, to) => b + to.value)
+        val inputsValue: Value = resolvedUtxos.values.foldLeft(Value.zero)((b, to) => b + to.value)
 
         val treasuryValue: Value =
-            try { inputsValue - withdrawnValue - Value(coin = feeCoin) }
+            try { inputsValue - withdrawnValue }
             catch {
                 case e: IllegalArgumentException =>
                     return Left(
-                      s"Malformed value equal to `inputsValue - withdrawnValue - Value(coin = feeCoin)` encountered: inputsValue = ${inputsValue}, withdrawnValue = ${withdrawnValue}, feeCoin = ${feeCoin}"
+                      s"Malformed value equal to `inputsValue - withdrawnValue` encountered: inputsValue = ${inputsValue}, withdrawnValue = ${withdrawnValue}"
                     )
             }
 
-        ////////////////////////////
-        // Then construct the output
+        try {
+            // Build transaction using TxBuilder
+            val tx = builderContext
+                .withUtxo(resolvedUtxos)
+                .buildNewTx
+                .withInputs(utxoIds.toSet.map(_.toScalus))
+                .withScript(headNativeScript, 0)
+                .|>(builder =>
+                    withdrawalOutputs.foldLeft(builder)((b, utxo) =>
+                        b.payToAddress(utxo.address, utxo.value)
+                    )
+                )
+                .payToAddress(headAddress, treasuryValue, treasuryDatum)
+                .doFinalize
 
-        val treasuryOutput: Sized[TransactionOutput] = Sized(
-          TransactionOutput(
-            address = headAddress,
-            value = treasuryValue,
-            datumOption = Some(Inline(treasuryDatum))
-          )
-        )
-
-        ///////////////////////////
-        // Finally construct the body
-        val txBody =
-            emptyTxBody.copy(
-              inputs = utxoIds.toSet.map(_.toScalus),
-              outputs = withdrawals.appended(treasuryOutput),
-              // TODO: we set the fee to 1 ada, but this doesn't need to be
-              fee = feeCoin
-            )
-
-        val txWitSet: TransactionWitnessSet =
-            TransactionWitnessSet(
-              nativeScripts = Set(headNativeScript)
-            )
-
-        val tx: Transaction = Transaction(
-          body = KeepRaw(txBody),
-          witnessSet = txWitSet,
-          isValid = true,
-          auxiliaryData = None
-        )
-
-        Right(Tx(Cbor.encode(tx).toByteArray))
-
+            Right(Tx(Cbor.encode(tx).toByteArray))
+        } catch {
+            case e: Exception => Left(s"Failed to build settlement transaction: ${e.getMessage}")
+        }
     }
 }

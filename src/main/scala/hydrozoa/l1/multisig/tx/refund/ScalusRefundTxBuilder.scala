@@ -13,33 +13,21 @@ import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.txbuilder.BuilderContext
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    AssetName,
-    Coin,
-    KeepRaw,
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    VKeyWitness,
-    Value
-}
+import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, Sized, Slot, Transaction, TransactionInput, TransactionOutput, TransactionWitnessSet, VKeyWitness, Value}
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
 
 class ScalusRefundTxBuilder(
     backendService: BackendService,
-    reader: HeadStateReader
+    reader: HeadStateReader,
+    builderContext: BuilderContext,
 ) extends RefundTxBuilder {
     override def mkPostDatedRefundTxDraft(
         r: PostDatedRefundRecipe
     ): Either[String, PostDatedRefundTx] = {
-        // N.B.: Fee is currently paid from the deposit itself
-        val feeCoin = Coin(1000000)
-
         val depositOutput = r.depositTx.body.value.outputs(r.txIx.ix).value match {
             case to: TransactionOutput.Babbage => to
             case _                             => return Left("deposit output not a babbage output")
@@ -53,23 +41,21 @@ class ScalusRefundTxBuilder(
                     case _         => return Left("deposit datum not inline")
         }
 
-        val refundOutput: TransactionOutput =
-            TransactionOutput(
-              address = (v1AddressToLedger(depositDatum.refundAddress, r.network)),
-              value = depositOutput.value,
-              datumOption = depositDatum.refundDatum.map(bs => Inline(toData(bs))).asScala
-            )
+        val address = v1AddressToLedger(depositDatum.refundAddress, r.network)
+        val builder = depositDatum.refundDatum.map(bs => toData(bs)).asScala.fold(
+          builderContext.buildNewTx.payToAddress(address, depositOutput.value)
+        )(datum => builderContext.buildNewTx.payToAddress(address, depositOutput.value, datum)
 
-        // TODO: temporary workaround - add 60 slots to the tip
-        val validitySlot: Option[Long] = Some(
-          (backendService.getBlockService.getLatestBlock.getValue.getSlot + 60)
-        )
+
+        val latestSlot = backendService.getBlockService.getLatestBlock.getValue.getSlot
+        
 
         // CBOR encoded hydrozoa native script
         // TODO: Turn this into a helper function or revise the types; its duplicated in the settlement tx builder
         val headNativeScript: Native =
             reader.multisigRegime(_.headNativeScript).toScalusNativeScript
 
+        
         // TODO: factor out. Duplicated in Settlement Transaction
         val requiredSigners = headNativeScript.script match {
             case api.Timelock.AllOf(scripts) =>
@@ -83,6 +69,10 @@ class ScalusRefundTxBuilder(
                 }.toSet
             case _ => return Left("Malformed native script: top level is not AllOf")
         }
+
+        builder.validFrom(Slot(latestSlot + 60))
+            .withScript(headNativeScript, 0)
+            .withRequiredSigners(requiredSigners)
 
         val txBody =
             emptyTxBody.copy(
