@@ -1,10 +1,11 @@
 package hydrozoa.demo
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
-import hydrozoa.infra.transitionary.{toHydrozoa, toScalus}
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.CardanoL1YaciDevKit
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
@@ -21,6 +22,7 @@ import ox.channels.{Actor, ActorRef, Channel}
 import ox.flow.Flow
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import sttp.client4.UriContext
@@ -131,10 +133,9 @@ object Workload extends OxApp:
     def genInitializeCommand(s: HydrozoaState): Gen[InitializeCommand] =
         for
             initiator <- Gen.oneOf(s.knownPeers)
-            account = TestPeer.account(initiator)
             headPeers = s.knownPeers.filterNot(p => p == initiator)
             utxoIds: Set[UtxoIdL1] = cardanoL1YaciDevKit
-                .utxoIdsAdaAtAddress(AddressBech[L1](account.toString))
+                .utxoIdsAdaAtAddress(Address[L1](TestPeer.address(initiator)))
                 .keySet
 
             seedUtxoId <- Gen.oneOf(utxoIds)
@@ -143,18 +144,17 @@ object Workload extends OxApp:
     def genDepositCommand(s: HydrozoaState): Gen[DepositCommand] =
         for
             depositor <- Gen.oneOf(s.headPeers + s.initiator.get)
-            depositorAccount = TestPeer.account(depositor)
-            depositorAddressL1 = AddressBech[L1](depositorAccount.toString)
+            depositorAddressL1 = Address[L1](TestPeer.address(depositor))
             utxos = cardanoL1YaciDevKit.utxoIdsAdaAtAddress(depositorAddressL1)
             (seedUtxoId, coins) <- Gen.oneOf(utxos)
 
             // more addresses the better
             recipient <- Gen.oneOf(TestPeer.values)
             recipientAccount = TestPeer.account(recipient)
-            recipientAddressL2 = AddressBech[L2](depositorAccount.toString)
+            recipientAddressL2 = Address[L2](TestPeer.address(depositor))
             depositAmount: BigInt <- Gen.choose(
-              BigInt.apply(5_000_000).min(coins),
-              BigInt.apply(100_000_000).min(coins)
+              BigInt.apply(5_000_000).min(coins.value),
+              BigInt.apply(100_000_000).min(coins.value)
             )
         yield DepositCommand(
           depositor,
@@ -170,7 +170,7 @@ object Workload extends OxApp:
         for
             numberOfInputs <- Gen.choose(1, 5.min(l2state.size))
             inputs <- Gen.pick(numberOfInputs, l2state.keySet)
-            totalCoins = inputs.map(l2state(_).coins).sum
+            totalCoins = inputs.map(l2state(_).value.coin.value).sum
 
             outputCoins <- Gen.tailRecM[List[BigInt], List[BigInt]](List.empty) { tails =>
                 val residual = totalCoins - tails.sum
@@ -205,7 +205,7 @@ object Workload extends OxApp:
                     .map(Sized(_))
 
             txBody: TransactionBody = TransactionBody(
-              inputs = inputs.map(_.toScalus).toSet,
+              inputs = inputs.toSet.map(_.untagged),
               outputs = outputs,
               fee = Coin(0L)
             )
@@ -213,23 +213,23 @@ object Workload extends OxApp:
             neededSigners: Set[TestPeer] = {
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
-                val addrMap: Map[AddressBechL2, TestPeer] = {
+                val addrMap: Map[AddressL2, TestPeer] = {
                     s.knownPeers.foldLeft(Map.empty)((m, peer) =>
-                        m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer)
+                        m.updated(Address[L2](TestPeer.address(peer)), peer)
                     )
                 }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
                 // a single element for the required signer. This is the desired behavior
-                txBody.inputs.map(ti => addrMap(l2state(ti.toHydrozoa).address))
+                txBody.inputs.map(ti => addrMap(Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])))
             }
 
-            txUnsigned: Transaction = Transaction(
+            txUnsigned: Tx[L2] = Tx[L2](Transaction(
               body = KeepRaw(txBody),
               witnessSet = TransactionWitnessSet.empty,
               isValid = true,
               auxiliaryData = None
-            )
+            ))
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
         yield TransactionL2Command(L2EventTransaction(tx))
@@ -241,7 +241,7 @@ object Workload extends OxApp:
             numberOfInputs <- Gen.choose(1, 3.min(l2state.size))
             inputs <- Gen.pick(numberOfInputs, l2state.keySet)
             txBody: TransactionBody = TransactionBody(
-              inputs = inputs.map(_.toScalus).toSet,
+              inputs = inputs.toSet.map(_.untagged),
               outputs = IndexedSeq.empty,
               fee = Coin(0L)
             )
@@ -249,23 +249,23 @@ object Workload extends OxApp:
             neededSigners: Set[TestPeer] = {
                 // Generate a lookup table mapping addresses to peers.
                 // (We can probably move this outside of the generator for a speedup)
-                val addrMap: Map[AddressBechL2, TestPeer] = {
+                val addrMap: Map[AddressL2, TestPeer] = {
                     s.knownPeers.foldLeft(Map.empty)((m, peer) =>
-                        m.updated(AddressBech[L2](TestPeer.address(peer).toBech32.get), peer)
+                        m.updated(Address[L2](TestPeer.address(peer)), peer)
                     )
                 }
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
                 // a single element for the required signer. This is the desired behavior
-                txBody.inputs.map(ti => addrMap(l2state(ti.toHydrozoa).address))
+                txBody.inputs.map(ti => addrMap(Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])))
             }
 
-            txUnsigned: Transaction = Transaction(
+            txUnsigned: Tx[L2] = Tx[L2](Transaction(
               body = KeepRaw(txBody),
               witnessSet = TransactionWitnessSet.empty,
               isValid = true,
               auxiliaryData = None
-            )
+            ))
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
         yield WithdrawalL2Command(L2EventWithdrawal(tx))
@@ -297,7 +297,7 @@ class InitializeCommand(
 
     private val log = Logger(getClass)
 
-    override type Result = Either[InitializationError, TxId]
+    override type Result = Either[InitializationError, TransactionHash]
 
     override def toString: String =
         s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
@@ -324,8 +324,8 @@ class InitializeCommand(
             initiator,
             otherHeadPeers.map(TestPeer.mkWalletId),
             1000,
-            seedUtxo.txId,
-            seedUtxo.outputIx
+            seedUtxo.transactionId,
+            TxIx(seedUtxo.index)
           )
         )
 
@@ -333,8 +333,8 @@ class DepositCommand(
     depositor: TestPeer,
     fundUtxo: UtxoIdL1,
     depositAmount: BigInt,
-    address: AddressBechL2,
-    refundAddress: AddressBechL1
+    address: AddressL2,
+    refundAddress: AddressL1
 ) extends WorkloadCommand:
 
     private val log = Logger(getClass)
@@ -352,8 +352,8 @@ class DepositCommand(
 
     override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
         val request = DepositRequest(
-          fundUtxo.txId,
-          fundUtxo.outputIx,
+          fundUtxo.transactionId,
+          TxIx(fundUtxo.index),
           depositAmount,
           None, // FIXME
           address,

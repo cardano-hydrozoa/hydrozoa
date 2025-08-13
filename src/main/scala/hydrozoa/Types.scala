@@ -37,10 +37,9 @@ prefer to do this is by:
     L2; etc.
  * */
 
-import hydrozoa.infra.transitionary.toScalusLedger
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import hydrozoa.TaggedUtxoSet.TaggedUtxoSet
-import hydrozoa.infra.transitionary.toScalus
+import hydrozoa.infra.transitionary.{toScalus, toScalusLedger}
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.{fromData, toData}
@@ -95,12 +94,18 @@ object TxL2:
 // Address
 
 object Address:
-    opaque type Address[+L <: AnyLayer] = ShelleyAddress 
-    def apply[L <: AnyLayer](addr: ShelleyAddress): Address[L] = addr
+    opaque type Address[+L <: AnyLayer] = ShelleyAddress
+
     given [L <: AnyLayer]: Conversion[Address[L], ShelleyAddress] = identity
-    given [L <: AnyLayer]: FromData[Address[L]] = (d : Data) => Address[L](fromData[v3.Address](d).toScalusLedger)
-    given fromDataAddress[L <: AnyLayer]: ToData[Address[L]] = (addr : Address[L]) => toData(LedgerToPlutusTranslation.getAddress(addr.untagged))
-    
+
+    given [L <: AnyLayer]: FromData[Address[L]] = (d: Data) =>
+        Address[L](fromData[v3.Address](d).toScalusLedger)
+
+    def apply[L <: AnyLayer](addr: ShelleyAddress): Address[L] = addr
+
+    given fromDataAddress[L <: AnyLayer]: ToData[Address[L]] = (addr: Address[L]) =>
+        toData(LedgerToPlutusTranslation.getAddress(addr.untagged))
+
     /** Assumes a Shelley address and that the developer is asserting the correct layer */
     def unsafeFromBech32[L <: AnyLayer](addr: String): Address[L] =
         Address[L](SAddress.fromBech32(addr).asInstanceOf[ShelleyAddress])
@@ -136,9 +141,12 @@ type Ed25519SignatureHex = Ed25519SignatureHex.Ed25519SignatureHex
 
 object UtxoId:
     opaque type UtxoId[L <: AnyLayer] = TransactionInput
-    def apply[L <: AnyLayer](utxoId: TransactionInput): UtxoId[L] = utxoId
+
     def apply[L <: AnyLayer](transactionId: TransactionHash, index: Int): UtxoId[L] =
         UtxoId[L](TransactionInput(transactionId, index))
+
+    def apply[L <: AnyLayer](utxoId: TransactionInput): UtxoId[L] = utxoId
+
     given [L <: AnyLayer]: CanEqual[UtxoId[L], UtxoId[L]] = CanEqual.derived
     given [L <: AnyLayer]: Conversion[UtxoId[L], TransactionInput] = identity
     extension [L <: AnyLayer](utxoId: UtxoId[L]) def untagged: TransactionInput = identity(utxoId)
@@ -195,17 +203,22 @@ type OutputNoTokens[L <: AnyLayer] = OutputNoTokens.OutputNoTokens[L]
  * If we use the tuple form, then we can ue an opaque type alias as above. Should we?
  * ---------------------------------------------------------------------------------------------
  */
-case class Utxo[L <: AnyLayer](input: UtxoId[L], output: Output[L])
 
+/** A UTxO should reflect a _matching_ input and output. This condition is not presently enforced at
+  * the type level.
+  */
 object Utxo:
+    opaque type Utxo[L <: AnyLayer] = (UtxoId[L], Output[L])
+    def apply[L <: AnyLayer](io: (UtxoId[L], Output[L])) : Utxo[L] = io
+    def apply[L <: AnyLayer](input: UtxoId[L], output: Output[L]): Utxo[L] = (input, output)
     def apply[L <: AnyLayer](
         txId: TransactionHash,
         txIx: Int,
         address: Address[L],
         value: Value,
         mbInlineDatum: Option[DatumOption.Inline] = None
-    ) =
-        new Utxo[L](
+    ): Utxo[L] =
+        (
           UtxoId[L](TransactionInput(txId, txIx)),
           Output[L](
             Babbage(
@@ -216,11 +229,13 @@ object Utxo:
             )
           )
         )
+    given [L <: AnyLayer]: Conversion[Utxo[L], (UtxoId[L], Output[L])] = identity
     // Still need this conversion because scalus doesn't have a full query thing yet
-    def fromBB[L <: AnyLayer](utxo: BBUtxo): Utxo[L] = {
-        val s = utxo.toScalus
-        Utxo[L](UtxoId[L](s._1), Output[L](s._2))
-    }
+    extension [L <: AnyLayer](utxo: Utxo[L]) def untagged: (UtxoId[L], Output[L]) = identity(utxo)
+    extension [L <: AnyLayer](utxo: Utxo[L]) def output: Output[L] = utxo._2
+    extension [L <: AnyLayer](utxo: Utxo[L]) def input: UtxoId[L] = utxo._1
+
+type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 
 case class TaggedUtxo[L <: AnyLayer, F <: MultisigUtxoTag](untagged: Utxo[L])
 

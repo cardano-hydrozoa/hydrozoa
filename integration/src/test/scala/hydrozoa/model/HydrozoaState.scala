@@ -10,36 +10,36 @@ import hydrozoa.l2.ledger.L2Event
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
-import scalus.cardano.ledger.{AssetName, PolicyId, TransactionHash}
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.{AssetName, PolicyId, TransactionHash}
 
 /** This should be immutable. So the original idea of using NodeState/HeadStateGlobal won't work. We
   * need another thing here.
   */
 case class HydrozoaState(
-                            peersNetworkPhase: PeersNetworkPhase,
-                            knownPeers: Set[TestPeer],
-                            pp: ProtocolParams,
+    peersNetworkPhase: PeersNetworkPhase,
+    knownPeers: Set[TestPeer],
+    pp: ProtocolParams,
 
-                            // Head
-                            headPhase: Option[HeadPhase] = None,
-                            initiator: Option[TestPeer] = None,
-                            headPeers: Set[TestPeer] = Set.empty,
-                            headAddress: Option[AddressL1] = None,
-                            headMultisigScript: Option[Native] = None,
-                            depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
-                            treasuryUtxoId: Option[UtxoIdL1] = None,
+    // Head
+    headPhase: Option[HeadPhase] = None,
+    initiator: Option[TestPeer] = None,
+    headPeers: Set[TestPeer] = Set.empty,
+    headAddress: Option[AddressL1] = None,
+    headMultisigScript: Option[Native] = None,
+    depositUtxos: DepositUtxos = TaggedUtxoSet.apply(),
+    treasuryUtxoId: Option[UtxoIdL1] = None,
 
-                            // Node
-                            poolEvents: Seq[L2Event] = Seq.empty,
+    // Node
+    poolEvents: Seq[L2Event] = Seq.empty,
 
-                            // L1
-                            knownTxs: Map[TransactionHash, TxL1] = Map.empty,
-                            utxosActive: UtxoSetL1,
+    // L1
+    knownTxs: Map[TransactionHash, TxL1] = Map.empty,
+    utxosActive: UtxoSetL1,
 
-                            // L2
-                            utxosActiveL2: UtxoSetL2 = UtxoSet[L2](Map.empty),
-                            l2Tip: Block = zeroBlock
+    // L2
+    utxosActiveL2: UtxoSetL2 = UtxoSet[L2](Map.empty),
+    l2Tip: Block = zeroBlock
 ):
     override def toString: String =
         "Hydrozoa state:" +
