@@ -1,11 +1,12 @@
 package hydrozoa.l1
 
-import com.bloxbean.cardano.client.api.model.{Utxo as BBUtxo}
+import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
-import hydrozoa.{Utxo as HUtxo, *}
-import hydrozoa.infra.{toEither}
+import hydrozoa.infra.toEither
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.node.monitoring.Metrics
+import hydrozoa.{Utxo as HUtxo, *}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import ox.scheduling.Jitter
@@ -93,7 +94,11 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
             .toEither match
             case Left(err) =>
                 throw RuntimeException(err)
-            case Right(utxos) => utxos.asScala.toList.map(bbutxo => HUtxo.fromBB(bbutxo))
+            case Right(utxos) =>
+                utxos.asScala.toList.map(bbutxo =>
+                    val s = bbutxo.toScalus
+                    HUtxo[L1](UtxoId[L1](s._1), Output[L1](s._2))
+                )
 
     override def utxoIdsAdaAtAddress(headAddress: AddressL1): Map[UtxoIdL1, Coin] =
         // NB: can't be more than 100
@@ -114,12 +119,16 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
                               u.getOutputIndex
                             )
                           ),
-                          Coin(BigInt.apply(
-                            u.getAmount.asScala
-                                .find(a => a.getUnit.equals("lovelace"))
-                                .get
-                                .getQuantity
-                          ).toLong)
+                          Coin(
+                            BigInt
+                                .apply(
+                                  u.getAmount.asScala
+                                      .find(a => a.getUnit.equals("lovelace"))
+                                      .get
+                                      .getQuantity
+                                )
+                                .toLong
+                          )
                         )
                     )
                     .toMap
