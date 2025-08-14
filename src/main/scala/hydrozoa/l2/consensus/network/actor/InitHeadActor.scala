@@ -18,7 +18,7 @@ import ox.channels.{ActorRef, Channel, Source}
 import scalus.builtin.{ByteString, given}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{PolicyId, AssetName, VKeyWitness, TransactionHash}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Shelley
 
@@ -32,20 +32,18 @@ private class InitHeadActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqInit
     override type AckType = AckInit
-
+    private val log = Logger(getClass)
+    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
+    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
     private var ownAck: AckInit = _
-
     private var txDraft: InitTx = _
     private var headNativeScript: Native = _
     private var headMintingPolicy: PolicyId = _
     private var headAddress: AddressL1 = _
     private var beaconTokenName: AssetName = _
     private var seedAddress: AddressL1 = _
-    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
@@ -68,7 +66,7 @@ private class InitHeadActor(
         val initTxRecipe = InitTxRecipe(
           network = cardanoActor.ask(_.network),
           seedUtxo = req.seedUtxoId,
-          coins = req.treasuryCoins,
+          coins = Coin(req.treasuryCoins),
           peers = headVKeys
         )
 
@@ -141,12 +139,10 @@ private class InitHeadActor(
                         dropMyself()
 
                     case Left(err) =>
-                        val msg = s"Can't submit init tx: $err"
+                         val msg = s"Can't submit init tx: $err"
                         log.error(msg)
                         // FIXME: what should go next here?
                         throw RuntimeException(msg)
-
-    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]
