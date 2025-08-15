@@ -142,7 +142,7 @@ object LocalNode:
                 val networkActor = Actor.create(network)
 
                 nodeState.setNetwork(networkActor)
-                
+
                 // Static actors for node state
                 val multisigL1EventSource =
                     new MultisigL1EventSource(nodeStateActor, cardanoActor)

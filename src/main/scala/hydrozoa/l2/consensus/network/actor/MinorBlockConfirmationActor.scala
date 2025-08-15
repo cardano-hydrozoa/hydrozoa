@@ -1,18 +1,17 @@
 package hydrozoa.l2.consensus.network.actor
 
-import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.transitionary.toV3UTxO
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.*
-import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, Wallet}
+import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import scalus.ledger.api.v3
-import hydrozoa.{UtxoSetL2}
 
 import scala.collection.mutable
+import scala.language.implicitConversions
 
 private class MinorBlockConfirmationActor(
     stateActor: ActorRef[NodeState],
@@ -20,44 +19,13 @@ private class MinorBlockConfirmationActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqMinor
     override type AckType = AckMinor
-
-    private var utxosActive: UtxoSetL2 = _
+    private val log = Logger(getClass)
     private val acks: mutable.Map[WalletId, AckMinor] = mutable.Map.empty
+    private val resultChannel: Channel[Unit] = Channel.buffered(1)
+    private var utxosActive: UtxoSetL2 = _
     private var finalizeHead: Boolean = false
-
-    private def tryMakeResult(): Unit =
-        log.trace("tryMakeResult")
-        val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
-        if (req != null && acks.keySet == headPeers)
-            // Minor block effects
-            val l1Effect: L1BlockEffect =
-                acks.map(a => Ed25519Signature(decodeHex(a._2.signature))).toSeq
-            val l2Effect: L2BlockEffect = Some(utxosActive)
-            // Block record and state update by block application
-            val record = BlockRecord(req.block, l1Effect, None, l2Effect)
-            stateActor.tell(nodeState =>
-                nodeState.head.openPhase(s =>
-                    s.applyBlockRecord(record)
-                    // Dump state
-                    nodeState.head.dumpState()
-                )
-            )
-            // Move head into finalization phase if finalizeHead flag was received
-            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
-            // TODO: the absence of this line is a good test!
-            resultChannel.send(())
-            dropMyself()
-
-    override def deliver(ack: AckType): Option[AckType] =
-        log.trace(s"deliver ack: $ack")
-        acks.put(ack.peer, ack)
-        if ack.nextBlockFinal then this.finalizeHead = true
-        tryMakeResult()
-        None
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
@@ -125,7 +93,35 @@ private class MinorBlockConfirmationActor(
         deliver(ownAck)
         Seq(ownAck)
 
-    private val resultChannel: Channel[Unit] = Channel.buffered(1)
+    override def deliver(ack: AckType): Option[AckType] =
+        log.trace(s"deliver ack: $ack")
+        acks.put(ack.peer, ack)
+        if ack.nextBlockFinal then this.finalizeHead = true
+        tryMakeResult()
+        None
+
+    private def tryMakeResult(): Unit =
+        log.trace("tryMakeResult")
+        val headPeers = stateActor.ask(_.head.openPhase(_.headPeers))
+        if (req != null && acks.keySet == headPeers)
+            // Minor block effects
+            val l1Effect: L1BlockEffect =
+                acks.map(a => Ed25519Signature(decodeHex(a._2.signature))).toSeq
+            val l2Effect: L2BlockEffect = Some(utxosActive)
+            // Block record and state update by block application
+            val record = BlockRecord(req.block, l1Effect, None, l2Effect)
+            stateActor.tell(nodeState =>
+                nodeState.head.openPhase(s =>
+                    s.applyBlockRecord(record)
+                    // Dump state
+                    nodeState.head.dumpState()
+                )
+            )
+            // Move head into finalization phase if finalizeHead flag was received
+            if (finalizeHead) stateActor.tell(_.head.openPhase(_.switchToFinalizingPhase()))
+            // TODO: the absence of this line is a good test!
+            resultChannel.send(())
+            dropMyself()
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

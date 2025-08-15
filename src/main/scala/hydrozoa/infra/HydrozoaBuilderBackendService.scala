@@ -1,7 +1,11 @@
 package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.common.OrderEnum
-import com.bloxbean.cardano.client.api.helper.{FeeCalculationService, TransactionHelperService, UtxoTransactionBuilder}
+import com.bloxbean.cardano.client.api.helper.{
+    FeeCalculationService,
+    TransactionHelperService,
+    UtxoTransactionBuilder
+}
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.transaction.spec.Transaction
@@ -37,10 +41,17 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
         backendService.getUtxoTransactionBuilder
 
     final private class VirtualTreasuryUtxoService extends UtxoService {
-        override def getUtxos(address: String, count: Int, page: Int): Result[util.List[Utxo]] = ???
-
         val txBytes = multisigTx.toCbor
         val txHash = TransactionUtil.getTxHash(txBytes)
+
+        override def getUtxos(address: String, count: Int, page: Int): Result[util.List[Utxo]] = ???
+
+        override def getUtxos(
+            address: String,
+            unit: String,
+            count: Int,
+            page: Int
+        ): Result[util.List[Utxo]] = getUtxos(address, count, page, OrderEnum.asc)
 
         override def getUtxos(
             address: String,
@@ -50,7 +61,10 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
         ): Result[util.List[Utxo]] =
             if page > 1 then ResultUtils.mkResultError
             else
-                onlyOutputToAddress(multisigTx, Address[L1](SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])) match {
+                onlyOutputToAddress(
+                  multisigTx,
+                  Address[L1](SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])
+                ) match {
                     case Left(_) => ResultUtils.mkResultError
                     case Right(treasuryOutputIx, _, multisigTreasuryDatum) =>
                         val tb = Transaction.deserialize(txBytes)
@@ -64,13 +78,6 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
                         result.withValue(List(multisigTreasuryUtxo).asJava)
                         result
                 }
-
-        override def getUtxos(
-            address: String,
-            unit: String,
-            count: Int,
-            page: Int
-        ): Result[util.List[Utxo]] = getUtxos(address, count, page, OrderEnum.asc)
 
         override def getUtxos(
             address: String,

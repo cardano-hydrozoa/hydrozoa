@@ -33,15 +33,13 @@ private class DeinitHeadActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqDeinit
     override type AckType = AckDeinit
-
-    private var ownAck: AckDeinit = _
-
-    private var txDraft: DeinitTx = _
+    private val log = Logger(getClass)
     private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
+    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
+    private var ownAck: AckDeinit = _
+    private var txDraft: DeinitTx = _
 
     override def init(req: ReqType): Seq[AckType] =
         log.info(s"Initializing deinit actor: $req")
@@ -96,8 +94,6 @@ private class DeinitHeadActor(
                         log.error(msg)
                         // FIXME: what should go next here?
                         throw RuntimeException(msg)
-
-    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

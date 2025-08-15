@@ -57,9 +57,9 @@ sealed trait STSL2 {
     // An L2 Event is a Transaction (re-using the L1 transaction type) that can
     // also absorb deposits or release withdrawals.
     final type Event = L2Event
-    type Value
     final type Error = String | TransactionException
     final type Result = Either[Error, Value]
+    type Value
 
     def apply(context: Context, state: State, event: Event): Result
 
@@ -69,22 +69,21 @@ sealed trait STSL2 {
 object STSL2 {
     trait Validator extends STSL2 {
         override final type Value = Unit
-
-        def validate(context: Context, state: State, event: Event): Result
+        protected final val success: Result = Right(())
 
         override final def apply(context: Context, state: State, event: Event): Result =
             validate(context, state, event)
 
-        protected final val success: Result = Right(())
+        def validate(context: Context, state: State, event: Event): Result
     }
 
     trait Mutator extends STSL2 {
         override final type Value = State
 
-        def transit(context: Context, state: State, event: Event): Result
-
         override final def apply(context: Context, state: State, event: Event): Result =
             transit(context, state, event)
+
+        def transit(context: Context, state: State, event: Event): Result
 
         protected final def success(state: State): Result = Right(state)
     }

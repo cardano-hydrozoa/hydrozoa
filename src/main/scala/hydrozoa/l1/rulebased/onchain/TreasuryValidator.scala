@@ -40,6 +40,10 @@ import scalus.prelude.{*, given}
 @Compile
 object TreasuryValidator extends Validator:
 
+    // EdDSA / ed25519 Cardano verification key
+    private type VerificationKey = ByteString
+    // The result of `bls12_381_G2_compress` function
+    private type MembershipProof = ByteString
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
     // upon switching into rule-based mode so it will be
@@ -58,66 +62,9 @@ object TreasuryValidator extends Validator:
             )
           )
         ).map(G1.uncompress)
-
-    // EdDSA / ed25519 Cardano verification key
-    private type VerificationKey = ByteString
-
-    // The result of `bls12_381_G2_compress` function
-    private type MembershipProof = ByteString
-
-    // Datum
-    enum TreasuryDatum:
-        case Unresolved(unresolvedDatum: UnresolvedDatum)
-        case Resolved(resolvedDatum: ResolvedDatum)
-
-    given FromData[TreasuryDatum] = FromData.derived
-    given ToData[TreasuryDatum] = ToData.derived
-
-    case class UnresolvedDatum(
-        headMp: CurrencySymbol,
-        disputeId: TokenName,
-        peers: List[VerificationKey],
-        peersN: BigInt,
-        deadlineVoting: PosixTime,
-        versionMajor: BigInt,
-        params: L2ConsensusParamsH32
-    )
-
-    given FromData[UnresolvedDatum] = FromData.derived
-    given ToData[UnresolvedDatum] = ToData.derived
-
-    case class ResolvedDatum(
-        headMp: CurrencySymbol,
-        utxosActive: MembershipProof,
-        version: (BigInt, BigInt),
-        params: L2ConsensusParamsH32
-    )
-
-    given FromData[ResolvedDatum] = FromData.derived
-    given ToData[ResolvedDatum] = ToData.derived
-
-    // Script redeemer
-    enum TreasuryRedeemer:
-        case Resolve
-        case Withdraw(withdrawRedeemer: WithdrawRedeemer)
-        case Deinit
-
-    given FromData[TreasuryRedeemer] = FromData.derived
-    given ToData[TreasuryRedeemer] = ToData.derived
-
-    case class WithdrawRedeemer(
-        utxoIds: List[TxOutRef],
-        // membership proof for utxoIds and the updated accumulator at the same time
-        proof: MembershipProof
-    )
-
-    given FromData[WithdrawRedeemer] = FromData.derived
-    given ToData[WithdrawRedeemer] = ToData.derived
-
     // Common errors
     private inline val DatumIsMissing =
         "Treasury datum should be present"
-
     // Resolve redeemer
     private inline val ResolveNeedsUnresolvedDatumInInput =
         "Resolve redeemer requires unresolved datum in treasury input"
@@ -139,7 +86,6 @@ object TreasuryValidator extends Validator:
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedNoVote =
         "Unexpected NoVot when trying to resolve"
-
     // Withdraw redeemer
     private inline val WithdrawNeedsResolvedDatum =
         "Withdraw redeemer requires resolved datum"
@@ -155,14 +101,31 @@ object TreasuryValidator extends Validator:
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
     private inline val WithdrawOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
-
     // Deinit redeemer
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
     private inline val DeinitTokensNotBurned =
         "All head tokens should be burned"
 
-    def cip67BeaconTokenPrefix = hex"01349900"
+    given FromData[TreasuryDatum] = FromData.derived
+
+    given ToData[TreasuryDatum] = ToData.derived
+
+    given FromData[UnresolvedDatum] = FromData.derived
+
+    given ToData[UnresolvedDatum] = ToData.derived
+
+    given FromData[ResolvedDatum] = FromData.derived
+
+    given ToData[ResolvedDatum] = ToData.derived
+
+    given FromData[TreasuryRedeemer] = FromData.derived
+
+    given ToData[TreasuryRedeemer] = ToData.derived
+
+    given FromData[WithdrawRedeemer] = FromData.derived
+
+    given ToData[WithdrawRedeemer] = ToData.derived
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
@@ -394,30 +357,7 @@ object TreasuryValidator extends Validator:
 
                 require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
 
-    // Utility functions
-    /*
-     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
-     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
-     * */
-    def getFinalPolyScalus(binomial_poly: List[ScalusScalar]): List[ScalusScalar] = {
-        binomial_poly
-            .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
-                val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
-                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
-    }
-
-    def getG1Commitment(
-        setup: List[BLS12_381_G1_Element],
-        subset: List[ScalusScalar]
-    ): BLS12_381_G1_Element = {
-        val subsetInG1 =
-            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
-                st.scale(sb.toInt)
-
-        subsetInG1.foldLeft(G1.zero): (a, b) =>
-            bls12_381_G1_add(a, b)
-    }
+    def cip67BeaconTokenPrefix = hex"01349900"
 
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
       * `acc`.
@@ -442,6 +382,65 @@ object TreasuryValidator extends Validator:
         val rhs = bls12_381_millerLoop(getG1Commitment(setup, subset), proof)
         bls12_381_finalVerify(lhs, rhs)
     }
+
+    def getG1Commitment(
+        setup: List[BLS12_381_G1_Element],
+        subset: List[ScalusScalar]
+    ): BLS12_381_G1_Element = {
+        val subsetInG1 =
+            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
+                st.scale(sb.toInt)
+
+        subsetInG1.foldLeft(G1.zero): (a, b) =>
+            bls12_381_G1_add(a, b)
+    }
+
+    // Utility functions
+    /*
+     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
+     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
+     * */
+    def getFinalPolyScalus(binomial_poly: List[ScalusScalar]): List[ScalusScalar] = {
+        binomial_poly
+            .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
+                val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
+                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
+                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
+    }
+
+    // Datum
+    enum TreasuryDatum:
+        case Unresolved(unresolvedDatum: UnresolvedDatum)
+        case Resolved(resolvedDatum: ResolvedDatum)
+
+    case class UnresolvedDatum(
+        headMp: CurrencySymbol,
+        disputeId: TokenName,
+        peers: List[VerificationKey],
+        peersN: BigInt,
+        deadlineVoting: PosixTime,
+        versionMajor: BigInt,
+        params: L2ConsensusParamsH32
+    )
+
+    case class ResolvedDatum(
+        headMp: CurrencySymbol,
+        utxosActive: MembershipProof,
+        version: (BigInt, BigInt),
+        params: L2ConsensusParamsH32
+    )
+
+    // Script redeemer
+    enum TreasuryRedeemer:
+        case Resolve
+        case Withdraw(withdrawRedeemer: WithdrawRedeemer)
+        case Deinit
+
+    case class WithdrawRedeemer(
+        utxoIds: List[TxOutRef],
+        // membership proof for utxoIds and the updated accumulator at the same time
+        proof: MembershipProof
+    )
 
 end TreasuryValidator
 

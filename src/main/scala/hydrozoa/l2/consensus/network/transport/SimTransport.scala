@@ -63,17 +63,17 @@ class SimTransport(simNetwork: SimNetwork, ownPeer: TestPeer) extends HeadPeerNe
         never
     }
 
-    override def nextSeq: Long =
-        val ret = counter + 1
-        counter = ret
-        ret
-
     override def broadcastReq(seq: Option[Long] = None)(req: Req): Long =
         val next: Long = seq.getOrElse(nextSeq)
         val aux = ReqAux(ownPeer, next)
         val anyMsg = AnyMsg(req, aux)
         simNetwork.send(anyMsg, ownPeer)
         next
+
+    override def nextSeq: Long =
+        val ret = counter + 1
+        counter = ret
+        ret
 
     override def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
         val next = nextSeq

@@ -1,6 +1,5 @@
 package hydrozoa.l1.rulebased.tx.resolution
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -24,6 +23,7 @@ import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.FromData
 
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 class BloxBeanResolutionTxBuilder(
     backendService: BackendService,
@@ -97,7 +97,10 @@ class BloxBeanResolutionTxBuilder(
                       treasuryScriptRefUtxoId.transactionId.toHex,
                       treasuryScriptRefUtxoId.index
                     )
-                    .readFrom(disputeScriptRefUtxoId.transactionId.toHex, disputeScriptRefUtxoId.index)
+                    .readFrom(
+                      disputeScriptRefUtxoId.transactionId.toHex,
+                      disputeScriptRefUtxoId.index
+                    )
 
                 val nodeAddress = r.nodeAccount.enterpriseAddress()
                 val txSigner = SignerProviders.signerFrom(r.nodeAccount)

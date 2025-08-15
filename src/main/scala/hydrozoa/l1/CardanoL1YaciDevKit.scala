@@ -1,11 +1,11 @@
 package hydrozoa.l1
 
-import com.bloxbean.cardano.client.api.model.{Utxo as BBUtxo}
+import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
-import hydrozoa.{Utxo as HUtxo, *}
-import hydrozoa.infra.{toEither}
+import hydrozoa.infra.toEither
 import hydrozoa.node.monitoring.Metrics
+import hydrozoa.{Utxo as HUtxo, *}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import ox.scheduling.Jitter
@@ -22,14 +22,12 @@ import scala.util.Try
 class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     private val log = Logger(getClass)
-
+    // TODO: temporarily: Yaci cannot return serialized tx so far
+    private val knownTxs: mutable.Map[TransactionHash, TxL1] = mutable.Map()
     private var metrics: ActorRef[Metrics] = _
 
     override def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
-
-    // TODO: temporarily: Yaci cannot return serialized tx so far
-    private val knownTxs: mutable.Map[TransactionHash, TxL1] = mutable.Map()
 
     /** Submit for Yaci (and real networks for that matter) should take into account that Ogmios
       * seems to fail if a tx has been already submitted before.
@@ -114,12 +112,16 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
                               u.getOutputIndex
                             )
                           ),
-                          Coin(BigInt.apply(
-                            u.getAmount.asScala
-                                .find(a => a.getUnit.equals("lovelace"))
-                                .get
-                                .getQuantity
-                          ).toLong)
+                          Coin(
+                            BigInt
+                                .apply(
+                                  u.getAmount.asScala
+                                      .find(a => a.getUnit.equals("lovelace"))
+                                      .get
+                                      .getQuantity
+                                )
+                                .toLong
+                          )
                         )
                     )
                     .toMap

@@ -1,8 +1,8 @@
 package hydrozoa.l2.block
 
 import hydrozoa.infra.transitionary.{emptyTransaction, emptyTxBody}
-import scalus.cardano.ledger.{KeepRaw, Transaction, TransactionInput, TransactionWitnessSet}
 import hydrozoa.{L1, TxIx, UtxoId, UtxoIdL1}
+import scalus.cardano.ledger.{KeepRaw, Transaction, TransactionInput, TransactionWitnessSet}
 
 class BlockBuilderSpec extends munit.ScalaCheckSuite {
 

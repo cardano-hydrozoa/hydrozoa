@@ -1,6 +1,5 @@
 package hydrozoa.l1.rulebased.tx.tally
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -23,6 +22,7 @@ import scalus.builtin.Data.{fromData, toData}
 import scalus.prelude.Option.None as SNone
 
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 class BloxBeanTallyTxBuilder(
     backendService: BackendService

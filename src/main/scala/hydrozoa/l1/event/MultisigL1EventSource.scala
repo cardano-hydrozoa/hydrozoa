@@ -1,6 +1,5 @@
 package hydrozoa.l1.event
 
-import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
@@ -18,25 +17,14 @@ import scalus.builtin.Data.fromData
 import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{
-    AssetName,
-    Blake2b_256,
-    Coin,
-    Hash,
-    HashPurpose,
-    MultiAsset,
-    TransactionHash,
-    TransactionInput,
-    TransactionOutput,
-    Value
-}
+import scalus.cardano.ledger.*
 
 import java.math.BigInteger
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-import scala.language.strictEquality
+import scala.language.{implicitConversions, strictEquality}
 import scala.util.Try
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
@@ -106,41 +94,6 @@ class MultisigL1EventSource(
                                 )
             case None =>
                 throw RuntimeException("initTx hasn't appeared")
-
-    private enum MultisigUtxoType:
-        case Treasury(utxo: Utxo[L1])
-        case Deposit(utxo: Utxo[L1])
-        case Unknown(utxo: Utxo[L1])
-
-    private def utxoType(treasuryTokenAmount: MultiAsset)(utxo: Utxo[L1]): MultisigUtxoType = {
-        // TODO: Multiasset needs a (type safe) `contains` method
-        val treasuryTokenId = treasuryTokenAmount.assets.toList.head._1
-        val treasuryTokenName = treasuryTokenAmount.assets(treasuryTokenId).toList.head._1
-        val utxoAssets = utxo.output.value.assets.assets
-        if utxoAssets.contains(treasuryTokenId) && utxoAssets(treasuryTokenId).contains(
-              treasuryTokenName
-            ) && utxoAssets(treasuryTokenId)(treasuryTokenName) == 1
-        then MultisigUtxoType.Treasury(utxo)
-        else
-            // FIXME: use depositDatum function
-            val datum = Try(
-              fromData[DepositDatum](utxo.output.datumOption.get.asInstanceOf[Inline].data)
-            ).toOption
-
-            datum match
-                case Some(_) => MultisigUtxoType.Deposit(utxo)
-                case None    => MultisigUtxoType.Unknown(utxo)
-    }
-
-    private def mkNewTreasuryUtxo(utxo: Utxo[L1]): TreasuryUtxo = {
-        TaggedUtxo[L1, TreasuryTag](utxo)
-    }
-
-    /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
-      */
-    private def mkDepositUtxoUnsafe(utxo: Utxo[L1]): DepositUtxo = {
-        TaggedUtxo[L1, DepositTag](utxo)
-    }
 
     private def updateL1State(
         headAddress: AddressL1,
@@ -239,3 +192,38 @@ class MultisigL1EventSource(
                           )
                         )
                     case other => log.warn(s"Unsupported phase: $other")
+
+    private def utxoType(treasuryTokenAmount: MultiAsset)(utxo: Utxo[L1]): MultisigUtxoType = {
+        // TODO: Multiasset needs a (type safe) `contains` method
+        val treasuryTokenId = treasuryTokenAmount.assets.toList.head._1
+        val treasuryTokenName = treasuryTokenAmount.assets(treasuryTokenId).toList.head._1
+        val utxoAssets = utxo.output.value.assets.assets
+        if utxoAssets.contains(treasuryTokenId) && utxoAssets(treasuryTokenId).contains(
+              treasuryTokenName
+            ) && utxoAssets(treasuryTokenId)(treasuryTokenName) == 1
+        then MultisigUtxoType.Treasury(utxo)
+        else
+            // FIXME: use depositDatum function
+            val datum = Try(
+              fromData[DepositDatum](utxo.output.datumOption.get.asInstanceOf[Inline].data)
+            ).toOption
+
+            datum match
+                case Some(_) => MultisigUtxoType.Deposit(utxo)
+                case None    => MultisigUtxoType.Unknown(utxo)
+    }
+
+    private def mkNewTreasuryUtxo(utxo: Utxo[L1]): TreasuryUtxo = {
+        TaggedUtxo[L1, TreasuryTag](utxo)
+    }
+
+    /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
+      */
+    private def mkDepositUtxoUnsafe(utxo: Utxo[L1]): DepositUtxo = {
+        TaggedUtxo[L1, DepositTag](utxo)
+    }
+
+    private enum MultisigUtxoType:
+        case Treasury(utxo: Utxo[L1])
+        case Deposit(utxo: Utxo[L1])
+        case Unknown(utxo: Utxo[L1])

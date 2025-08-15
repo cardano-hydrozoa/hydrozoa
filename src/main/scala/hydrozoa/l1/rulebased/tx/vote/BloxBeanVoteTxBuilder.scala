@@ -1,6 +1,5 @@
 package hydrozoa.l1.rulebased.tx.vote
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
@@ -26,6 +25,7 @@ import scalus.prelude.List.asScala
 import scalus.prelude.asScalus
 
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 class BloxBeanVoteTxBuilder(
     backendService: BackendService

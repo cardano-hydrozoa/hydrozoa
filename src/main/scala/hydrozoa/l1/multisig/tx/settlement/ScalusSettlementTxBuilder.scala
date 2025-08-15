@@ -1,6 +1,5 @@
 package hydrozoa.l1.multisig.tx.settlement
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.Tx
@@ -14,15 +13,16 @@ import scalus.bloxbean.Interop.toPlutusData
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api
 import scalus.ledger.api.Timelock
 import scalus.ledger.api.Timelock.Signature
 
 import scala.collection
+import scala.language.implicitConversions
 
 class ScalusSettlementTxBuilder(
     backendService: BackendService,

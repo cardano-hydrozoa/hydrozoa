@@ -35,7 +35,7 @@ trait HydrozoaFacade:
       * @return
       */
     def produceBlock(
-        nextBlockFinal: Boolean,
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])]
 
     /** Runs test dispute scenario. Used only for testing.

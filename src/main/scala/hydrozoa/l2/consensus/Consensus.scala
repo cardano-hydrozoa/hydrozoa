@@ -31,24 +31,23 @@ end ConsensusDispatcher
 
 class DefaultConsensusDispatcher extends ConsensusDispatcher:
 
+    private val log = Logger(getClass)
+    private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] = mutable.Map.empty
+    // TODO: rename
+    private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
+    private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
     private var transport: ActorRef[HeadPeerNetworkTransport] = _
+    private var ownActor: ActorRef[ConsensusDispatcher] = _
+    private var consensusActorFactory: ConsensusActorFactory = _
 
     override def setTransport(transport: ActorRef[HeadPeerNetworkTransport]): Unit =
         this.transport = transport
 
-    private var ownActor: ActorRef[ConsensusDispatcher] = _
-
     override def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit =
         this.ownActor = ownActor
 
-    private var consensusActorFactory: ConsensusActorFactory = _
-
     override def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit =
         this.consensusActorFactory = consensusActorFactory
-
-    private val log = Logger(getClass)
-
-    private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] = mutable.Map.empty
 
     def dispatchMessage(msg: AnyMsg): Unit =
         log.info(s"Dispatching incoming message: $msg")
@@ -126,10 +125,6 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.info(s"Dropping actor for origin $origin")
         val ret = actors.remove(origin)
         assert(ret.isDefined)
-
-    // TODO: rename
-    private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
-    private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
 
     def run()(using Ox): Unit =
         log.info("running actor spawner...")

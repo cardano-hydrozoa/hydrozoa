@@ -1,6 +1,5 @@
 package hydrozoa.l2.block
 
-import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.Piper
@@ -12,12 +11,12 @@ import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventGenesisLabel, L2EventWithdrawalLabel}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, UTxO}
 import scalus.cardano.ledger.rules.{Context, State}
+import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, UTxO}
 import scalus.ledger.api.v3
 
 import scala.collection.mutable
-import scala.language.strictEquality
+import scala.language.{implicitConversions, strictEquality}
 import scala.util.boundary
 import scala.util.boundary.break
 

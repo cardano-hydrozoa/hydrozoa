@@ -1,7 +1,7 @@
 package hydrozoa.l1.multisig.tx.settlement
 
-import hydrozoa.{UtxoIdL1, UtxoSetL2}
 import hydrozoa.l1.multisig.tx.SettlementTx
+import hydrozoa.{UtxoIdL1, UtxoSetL2}
 
 trait SettlementTxBuilder {
     def mkSettlementTxDraft(

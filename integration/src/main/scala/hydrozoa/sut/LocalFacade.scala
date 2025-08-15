@@ -19,12 +19,11 @@ import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.language.implicitConversions
 
-/**
- * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
- * it selects a random peer.
- * @param peers
- * @param shutdown
- */
+/** This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting
+  * Txs to L2, it selects a random peer.
+  * @param peers
+  * @param shutdown
+  */
 class LocalFacade(
     peers: Map[TestPeer, Node],
     shutdown: Long => Unit
@@ -32,17 +31,13 @@ class LocalFacade(
 
     private val log = Logger(getClass)
 
-    private def randomNode =
-        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
-        peers.values.toList(millis % peers.size)
-
     override def initializeHead(
         initiator: TestPeer,
         otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TransactionHash,
         txIx: TxIx
-                               ): Either[InitializationError, TransactionHash] =
+    ): Either[InitializationError, TransactionHash] =
         log.info("SUT: initializing head...")
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
@@ -71,7 +66,12 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash.transactionId))
+                        _.head.openPhase(
+                          _.stateL1.depositUtxos.utxoMap.keys
+                              .map(_.transactionId)
+                              .toSeq
+                              .contains(depositTxHash.transactionId)
+                        )
                       )
                     )
                     // println(veracity)
@@ -81,9 +81,13 @@ class LocalFacade(
 
     override def awaitTxL1(txId: TransactionHash): Option[TxL1] = randomNode.awaitTxL1(txId)
 
+    private def randomNode =
+        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
+        peers.values.toList(millis % peers.size)
+
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
-                         ): Either[String, TransactionHash] =
+    ): Either[String, TransactionHash] =
         log.info("SUT: submitting L2 transaction/withdrawal...")
 
         val request = tx match
@@ -107,8 +111,8 @@ class LocalFacade(
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-                             ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
               s" nextBlockFinal = $nextBlockFinal"

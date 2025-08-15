@@ -12,6 +12,7 @@ import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.{*, given}
 import hydrozoa.node.TestPeer
+import hydrozoa.node.server.Node
 import ox.*
 import ox.channels.*
 import ox.flow.Flow
@@ -31,41 +32,6 @@ import sttp.ws.WebSocketFrame
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-import hydrozoa.l2.consensus.network.{
-    ackFinal2Codec,
-    ackFinal2Schema,
-    ackFinalCodec,
-    ackFinalSchema,
-    ackInitCodec,
-    ackInitSchema,
-    ackDeinitCodec,
-    ackDeinitSchema,
-    ackMajor2Codec,
-    ackMajor2Schema,
-    ackMajorCodec,
-    ackMajorSchema,
-    ackMinorCodec,
-    ackMinorSchema,
-    ackRefundLaterCodec,
-    ackRefundLaterSchema,
-    ackVerKeySchema,
-    reqEventL2Schema,
-    reqFinalCodec,
-    reqFinalSchema,
-    reqInitCodec,
-    reqInitSchema,
-    reqDeinitCodec,
-    reqDeinitSchema,
-    reqMajorCodec,
-    reqMajorSchema,
-    reqMinorCodec,
-    reqMinorSchema,
-    reqRefundLaterCodec,
-    reqRefundLaterSchema,
-    reqVerKeySchema,
-    testPeerSchema
-}
-import hydrozoa.node.server.Node
 
 trait HeadPeerNetworkTransport:
 
@@ -125,39 +91,6 @@ enum AnyMsg:
     case ReqDeinitMsg(content: ReqDeinit, aux: ReqAux)
     case AckDeinitMsg(content: AckDeinit, aux: AckAux)
 
-    def getFromSeq: (TestPeer, Long) = this match
-        case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
-        case AckVerKeyMsg(_, aux)      => aux.from -> aux.seq
-        case ReqInitMsg(_, aux)        => aux.from -> aux.seq
-        case AckInitMsg(_, aux)        => aux.from -> aux.seq
-        case ReqRefundLaterMsg(_, aux) => aux.from -> aux.seq
-        case AckRefundLaterMsg(_, aux) => aux.from -> aux.seq
-        case ReqEventL2Msg(_, aux)     => aux.from -> aux.seq
-        case AckUnitMsg(aux)           => aux.from -> aux.seq
-        case ReqMinorMsg(_, aux)       => aux.from -> aux.seq
-        case AckMinorMsg(_, aux)       => aux.from -> aux.seq
-        case ReqMajorMsg(_, aux)       => aux.from -> aux.seq
-        case AckMajorMsg(_, aux)       => aux.from -> aux.seq
-        case AckMajor2Msg(_, aux)      => aux.from -> aux.seq
-        case ReqFinalMsg(_, aux)       => aux.from -> aux.seq
-        case AckFinalMsg(_, aux)       => aux.from -> aux.seq
-        case AckFinal2Msg(_, aux)      => aux.from -> aux.seq
-        case ReqDeinitMsg(_, aux)      => aux.from -> aux.seq
-        case AckDeinitMsg(_, aux)      => aux.from -> aux.seq
-
-    def asAck: Option[(TestPeer, Long, Ack)] = this match
-        case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckInitMsg(content, aux)        => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckRefundLaterMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckUnitMsg(aux)                 => Some(aux.replyTo, aux.replyToSeq, AckUnit())
-        case AckMinorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckMajorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckMajor2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckFinalMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckFinal2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
-        case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
-        case _                               => None
-
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
         this match
             case ReqVerKeyMsg(content, aux) =>
@@ -200,6 +133,39 @@ enum AnyMsg:
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
         case None               => this.getFromSeq
+
+    def getFromSeq: (TestPeer, Long) = this match
+        case ReqVerKeyMsg(_, aux)      => aux.from -> aux.seq
+        case AckVerKeyMsg(_, aux)      => aux.from -> aux.seq
+        case ReqInitMsg(_, aux)        => aux.from -> aux.seq
+        case AckInitMsg(_, aux)        => aux.from -> aux.seq
+        case ReqRefundLaterMsg(_, aux) => aux.from -> aux.seq
+        case AckRefundLaterMsg(_, aux) => aux.from -> aux.seq
+        case ReqEventL2Msg(_, aux)     => aux.from -> aux.seq
+        case AckUnitMsg(aux)           => aux.from -> aux.seq
+        case ReqMinorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMinorMsg(_, aux)       => aux.from -> aux.seq
+        case ReqMajorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMajorMsg(_, aux)       => aux.from -> aux.seq
+        case AckMajor2Msg(_, aux)      => aux.from -> aux.seq
+        case ReqFinalMsg(_, aux)       => aux.from -> aux.seq
+        case AckFinalMsg(_, aux)       => aux.from -> aux.seq
+        case AckFinal2Msg(_, aux)      => aux.from -> aux.seq
+        case ReqDeinitMsg(_, aux)      => aux.from -> aux.seq
+        case AckDeinitMsg(_, aux)      => aux.from -> aux.seq
+
+    def asAck: Option[(TestPeer, Long, Ack)] = this match
+        case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckInitMsg(content, aux)        => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckRefundLaterMsg(content, aux) => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckUnitMsg(aux)                 => Some(aux.replyTo, aux.replyToSeq, AckUnit())
+        case AckMinorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckMajorMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckMajor2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckFinalMsg(content, aux)       => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckFinal2Msg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
+        case _                               => None
 
     def asMsg: Msg = this match
         case ReqVerKeyMsg(content, _)      => content
@@ -256,47 +222,6 @@ class HeadPeerNetworkTransportWS(
     peers: Map[TestPeer, Uri]
 ) extends HeadPeerNetworkTransport:
 
-    private val log = Logger(getClass)
-
-    private var dispatcher: ActorRef[ConsensusDispatcher] = _
-    override def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
-        this.dispatcher = dispatcher
-
-    // Global channel for incoming messages
-    private val incoming: Channel[AnyMsg] = Channel.unlimited
-
-    // Global channel for outgoing messages
-    private val outgoing: Channel[AnyMsg] = Channel.unlimited
-
-    // A list of private channels for every peer we are talking to
-    private val outgoingChannels: mutable.Buffer[Channel[AnyMsg]] = mutable.Buffer.empty
-
-    private var counter: Long = 0
-
-    override def nextSeq: Long =
-        val ret = counter + 1
-        counter = ret
-        ret
-
-    // Creates a new channel and returns a flow from it
-    private def mkOutgoingFlowCopy(): Flow[AnyMsg] =
-        val newChannel: Channel[AnyMsg] = Channel.unlimited
-        outgoingChannels.append(newChannel)
-        Flow.fromSource(newChannel)
-
-    private val serverPeers = peers.filter((k, _) => ownPeer.compareTo(k) > 0)
-    log.info(s"peers to connect: $serverPeers")
-
-    // "Server" component
-
-    // Requests and responses can be treated separately despite the Pipe representation which is Flow[A] => Flow[B]
-    // This is called for every new incoming connection
-    def mkPipe(outgoingFlow: Flow[AnyMsg]): Pipe[AnyMsg, AnyMsg] =
-        in =>
-            in.tap(incoming.send)
-                .drain()
-                .merge(outgoingFlow)
-
     type FullWs = Full[
       Unit,
       Unit,
@@ -306,41 +231,19 @@ class HeadPeerNetworkTransportWS(
       OxStreams & WebSockets,
       Identity
     ]
+    private val log = Logger(getClass)
+    // Global channel for incoming messages
+    private val incoming: Channel[AnyMsg] = Channel.unlimited
+    // Global channel for outgoing messages
+    private val outgoing: Channel[AnyMsg] = Channel.unlimited
+    // A list of private channels for every peer we are talking to
+    private val outgoingChannels: mutable.Buffer[Channel[AnyMsg]] = mutable.Buffer.empty
+    private val serverPeers = peers.filter((k, _) => ownPeer.compareTo(k) > 0)
+    private var dispatcher: ActorRef[ConsensusDispatcher] = _
+    private var counter: Long = 0
 
-    // The WebSocket endpoint
-    def wsConsensusEndpoint(): FullWs =
-        endpoint.get
-            .in("ws")
-            .out(
-              webSocketBody[AnyMsg, CodecFormat.Json, AnyMsg, CodecFormat.Json](OxStreams)
-                  .concatenateFragmentedFrames(false)
-                  .ignorePong(true)
-                  .autoPongOnPing(true)
-                  .decodeCloseRequests(false)
-                  .decodeCloseResponses(false)
-                  .autoPing(Some((10.seconds, WebSocketFrame.Ping("ping-content".getBytes))))
-            )
-            .handleSuccess(_ => mkPipe(mkOutgoingFlowCopy()))
-
-    // "Client" component
-
-    def wsConsensusClient()(ws: SyncWebSocket): Unit =
-        supervised:
-            val (wsSource, wsSink) = asSourceAndSink(ws)
-
-            forkDiscard:
-                mkOutgoingFlowCopy()
-                    .runToChannel()
-                    .map(anyMsg1WSFCodec.encode)
-                    .pipeTo(wsSink, propagateDone = false)
-
-            wsSource.foreach { wsf =>
-                anyMsg1WSFCodec.decode(wsf) match
-                    case DecodeResult.Value(v) => incoming.send(v)
-                    case DecodeResult.Error(err, throwable) =>
-                        log.error(err)
-                        throw throwable
-            }
+    override def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
+        this.dispatcher = dispatcher
 
     override def run(): Unit =
         supervised {
@@ -393,6 +296,58 @@ class HeadPeerNetworkTransportWS(
 
             never
         }
+    log.info(s"peers to connect: $serverPeers")
+
+    // "Server" component
+
+    // The WebSocket endpoint
+    def wsConsensusEndpoint(): FullWs =
+        endpoint.get
+            .in("ws")
+            .out(
+              webSocketBody[AnyMsg, CodecFormat.Json, AnyMsg, CodecFormat.Json](OxStreams)
+                  .concatenateFragmentedFrames(false)
+                  .ignorePong(true)
+                  .autoPongOnPing(true)
+                  .decodeCloseRequests(false)
+                  .decodeCloseResponses(false)
+                  .autoPing(Some((10.seconds, WebSocketFrame.Ping("ping-content".getBytes))))
+            )
+            .handleSuccess(_ => mkPipe(mkOutgoingFlowCopy()))
+
+    // Creates a new channel and returns a flow from it
+    private def mkOutgoingFlowCopy(): Flow[AnyMsg] =
+        val newChannel: Channel[AnyMsg] = Channel.unlimited
+        outgoingChannels.append(newChannel)
+        Flow.fromSource(newChannel)
+
+    // Requests and responses can be treated separately despite the Pipe representation which is Flow[A] => Flow[B]
+    // This is called for every new incoming connection
+    def mkPipe(outgoingFlow: Flow[AnyMsg]): Pipe[AnyMsg, AnyMsg] =
+        in =>
+            in.tap(incoming.send)
+                .drain()
+                .merge(outgoingFlow)
+
+    // "Client" component
+
+    def wsConsensusClient()(ws: SyncWebSocket): Unit =
+        supervised:
+            val (wsSource, wsSink) = asSourceAndSink(ws)
+
+            forkDiscard:
+                mkOutgoingFlowCopy()
+                    .runToChannel()
+                    .map(anyMsg1WSFCodec.encode)
+                    .pipeTo(wsSink, propagateDone = false)
+
+            wsSource.foreach { wsf =>
+                anyMsg1WSFCodec.decode(wsf) match
+                    case DecodeResult.Value(v) => incoming.send(v)
+                    case DecodeResult.Error(err, throwable) =>
+                        log.error(err)
+                        throw throwable
+            }
 
     override def broadcastReq(seq: Option[Long])(req: Req): Long =
         log.info(s"broadcastReq")
@@ -413,6 +368,11 @@ class HeadPeerNetworkTransportWS(
         outgoing.send(anyMsg)
         log.info(s"Done!")
         next
+
+    override def nextSeq: Long =
+        val ret = counter + 1
+        counter = ret
+        ret
 
 end HeadPeerNetworkTransportWS
 

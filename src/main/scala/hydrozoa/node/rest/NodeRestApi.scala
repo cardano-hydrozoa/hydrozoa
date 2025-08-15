@@ -11,31 +11,17 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
     JsonValueCodec,
     JsonWriter
 }
-import scalus.cardano.ledger.*
-import scalus.cardano.address.Address as SAddress
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l2.consensus.network.{*, given}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
-import hydrozoa.node.rest.NodeRestApi.{
-    depositEndpoint,
-    finalizeEndpoint,
-    initEndpoint,
-    stateL2Endpoint,
-    submitL1Endpoint,
-    submitL2Endpoint
-}
-import hydrozoa.node.server.{
-    DepositRequest,
-    DepositResponse,
-    Node,
-    depositResponseCodec,
-    depositResponseSchema
-}
+import hydrozoa.node.rest.NodeRestApi.*
+import hydrozoa.node.server.{*, given}
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import sttp.tapir.*
 import sttp.tapir.CodecFormat.TextPlain
@@ -44,7 +30,7 @@ import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-import scala.util.{Try, Success, Failure}
+import scala.util.{Failure, Success, Try}
 
 /** Hydrozoa Node API, currently implemented in terms of Tapir HTTP server.
   */

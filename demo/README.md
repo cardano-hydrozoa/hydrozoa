@@ -1,10 +1,10 @@
 # Hydrozoa Demo Setup
 
 This folder contains a demo-suite for Hydrozoa.
-It allows to spin up a test Hydrozoa peer network  of three nodes: 
+It allows to spin up a test Hydrozoa peer network of three nodes:
 Alice, Bob, and Carol along with a Cardano L1 private testnet
-powered by [Yaci DevKit](https://github.com/bloxbean/yaci-devkit/tree/main) 
-and auxiliary containers for tracing, collection and showing metrics - 
+powered by [Yaci DevKit](https://github.com/bloxbean/yaci-devkit/tree/main)
+and auxiliary containers for tracing, collection and showing metrics -
 Prometheus, Grafana, and others.
 
 You can play with the Hydrozoa network manually by using client APIs
@@ -18,9 +18,9 @@ a barrage of user commands to see how it works under some load.
 
 ## How to run
 
-1. Build the Docker image of Hydrozoa node. 
-The image is not yet publicly available, but you can easily build it locally
-using `sbt` tool from project's root folder:
+1. Build the Docker image of Hydrozoa node.
+   The image is not yet publicly available, but you can easily build it locally
+   using `sbt` tool from project's root folder:
 
 ```bash
 [in Nix shell, project root]
@@ -28,6 +28,7 @@ $ sbt docker:publishLocal
 ```
 
 Check the image is in the local registry:
+
 ```bash
 $ docker images | grep hydrozoa
 cardano-hydrozoa/hydrozoa   0.1.0-SNAPSHOT   3ee4e908c85c   45 years ago    574MB
@@ -41,6 +42,7 @@ $ docker compose up
 ```
 
 Once up, the following should work:
+
 * Yaci Viewer - http://localhost:5173/
 * Grafana - http://localhost:3003/
 
@@ -48,7 +50,7 @@ Navigate to provisioned Hydrozoa dashboard to observe the head.
 
 ## Cleaning up
 
-In some cases you might want to remove containers and volumes 
+In some cases you might want to remove containers and volumes
 (be careful, this command can DESTROY your data):
 
 ```bash
@@ -62,6 +64,7 @@ To run a sample demo workload run the following command from project's root fold
 ```bash
 sbt demo/run
 ```
+
 ## ...or play with a Hydrozoa head manually
 
 Follow Alice's logs in a separate window:

@@ -1,6 +1,5 @@
 package hydrozoa.sut
 
-import scala.language.implicitConversions
 import hydrozoa.*
 import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer
@@ -14,6 +13,8 @@ import sttp.client4.DefaultSyncBackend
 import sttp.model.Uri
 import sttp.tapir.DecodeResult
 import sttp.tapir.client.sttp4.SttpClientInterpreter
+
+import scala.language.implicitConversions
 
 /** The real facade to Hydrozoa uses HTTP API to interact with nodes. Nodes should be up and ready.
   */
@@ -108,10 +109,11 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case _ => throw RuntimeException("decoding error")
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] = throw RuntimeException(
-      "Real Hydrozoa facade doesn't support lockstep block producing"
-    )
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
+        throw RuntimeException(
+          "Real Hydrozoa facade doesn't support lockstep block producing"
+        )
 
     override def runDispute(): Unit = throw RuntimeException(
       "Real Hydrozoa facade doesn't implement explicit run dispute method"

@@ -1,12 +1,12 @@
 package hydrozoa.l2.consensus.network
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.VerificationKeyBytes
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.transport.HeadPeerNetworkTransport
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
-import hydrozoa.VerificationKeyBytes
 import ox.channels.ActorRef
 import scalus.cardano.ledger.TransactionHash
 
@@ -17,18 +17,11 @@ class HeadPeerNetworkWS(
     transport: HeadPeerNetworkTransport
 ) extends HeadPeerNetwork:
 
+    private val log = Logger(getClass)
     private var dispatcher: ActorRef[ConsensusDispatcher] = _
 
     def setDispatcher(dispatcher: ActorRef[ConsensusDispatcher]): Unit =
         this.dispatcher = dispatcher
-
-    private val log = Logger(getClass)
-
-    private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
-        val headPeersNames = headPeers.map(_.name)
-        val knownPeersNames = knownPeers.map(_.name)
-        require(headPeersNames.subsetOf(knownPeersNames), "All peers should be known")
-    }
 
     override def reqVerificationKeys(): Map[WalletId, VerificationKeyBytes] =
         log.info(s"reqVerificationKeys")
@@ -41,6 +34,12 @@ class HeadPeerNetworkWS(
         requireHeadPeersAreKnown(req.otherHeadPeers)
         val seq = transport.nextSeq
         dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
+
+    private def requireHeadPeersAreKnown(headPeers: Set[WalletId]): Unit = {
+        val headPeersNames = headPeers.map(_.name)
+        val knownPeersNames = knownPeers.map(_.name)
+        require(headPeersNames.subsetOf(knownPeersNames), "All peers should be known")
+    }
 
     override def reqRefundLater(req: ReqRefundLater): PostDatedRefundTx =
         log.info(s"reqRefundLater: $req")

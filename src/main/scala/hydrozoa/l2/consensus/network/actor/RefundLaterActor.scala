@@ -2,13 +2,13 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
+import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.{NodeState, WalletId}
 import ox.channels.{ActorRef, Channel, Source}
-import hydrozoa.infra.transitionary.toScalus
 import scalus.cardano.ledger.{TransactionInput, VKeyWitness}
 
 import scala.collection.mutable
@@ -20,13 +20,12 @@ private class RefundLaterActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqRefundLater
     override type AckType = AckRefundLater
-
-    private var txDraft: PostDatedRefundTx = _
+    private val log = Logger(getClass)
     private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
+    private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
+    private var txDraft: PostDatedRefundTx = _
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
@@ -75,8 +74,6 @@ private class RefundLaterActor(
             stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, refundTx)))
             resultChannel.send(refundTx)
             dropMyself()
-
-    private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

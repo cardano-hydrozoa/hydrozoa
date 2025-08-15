@@ -12,8 +12,8 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Blake2b_224, Hash, HashPurpose}
 import scalus.ledger.api.v3.*
-import scalus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.prelude.*
+import scalus.prelude.crypto.bls12_381.{G1, G2}
 
 @Compile
 object UnliftMinimalValidator extends Validator:
@@ -52,9 +52,15 @@ object UnliftMinimialValidatorScript {
 
     def address(n: Network): AddressL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
-        Address[L1](ShelleyAddress(network = n,
-            payment = ShelleyPaymentPart.Script((Hash[Blake2b_224, HashPurpose.ScriptHash](
-                ByteString.fromHex(address.getAddress)))), delegation = Null))
+        Address[L1](
+          ShelleyAddress(
+            network = n,
+            payment = ShelleyPaymentPart.Script(
+              (Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(address.getAddress)))
+            ),
+            delegation = Null
+          )
+        )
     }
 }
 

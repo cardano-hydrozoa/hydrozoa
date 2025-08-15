@@ -124,10 +124,10 @@ class Node:
         // Make the datum and the recipe
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
-            LedgerToPlutusTranslation.getAddress(r.address),
+          LedgerToPlutusTranslation.getAddress(r.address),
           r.datum.asScalus,
           BigInt.apply(0), // deadline,
-            LedgerToPlutusTranslation.getAddress(r.refundAddress),
+          LedgerToPlutusTranslation.getAddress(r.refundAddress),
           r.datum.asScalus
         )
 
@@ -194,7 +194,7 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean,
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
@@ -251,9 +251,7 @@ class Node:
                             .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
                         stateL2
-                            .map((utxoId, output) =>
-                                utxoId -> OutputNoTokens(output)
-                            )
+                            .map((utxoId, output) => utxoId -> OutputNoTokens(output))
 
                     }
                     case _ => List.empty

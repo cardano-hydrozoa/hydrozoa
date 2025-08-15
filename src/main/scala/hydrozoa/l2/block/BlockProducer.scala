@@ -16,7 +16,7 @@ import hydrozoa.l2.ledger.L2EventLabel.{
 }
 import ox.channels.ActorRef
 import ox.sleep
-import scalus.cardano.ledger.{TransactionHash}
+import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
 import scalus.ledger.api.v3

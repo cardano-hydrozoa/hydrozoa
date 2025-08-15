@@ -10,15 +10,15 @@ Then, finally, we define a mutator that both validates and processes any L2Event
  */
 
 private object HydrozoaGenesisMutator extends STSL2.Mutator {
-    // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
-    // index
-    private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
-        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs.map((x,y) => x.untagged -> y.untagged))
-    }
-
     override def transit(context: Context, state: State, event: Event): Result = event match {
         case g: L2EventGenesis => Right(addGenesisUtxosToState(g, state))
         case _                 => Right(state)
+    }
+
+    // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
+    // index
+    private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
+        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs.map((x, y) => x.untagged -> y.untagged))
     }
 }
 
