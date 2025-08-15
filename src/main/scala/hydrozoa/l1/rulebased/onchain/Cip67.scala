@@ -21,4 +21,3 @@ def mkVoteTokenName(treasuryUtxoId: UtxoIdL1): AssetName =
       ).toByteArray.toList).toArray
     )
     AssetName(ByteString.fromHex(encodeHex(IArray.from(disputeTokenPrefix ++ name.bytes))))
-

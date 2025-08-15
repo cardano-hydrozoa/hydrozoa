@@ -61,6 +61,7 @@ class ScalusDepositTxBuilder(backendService: BackendService, reader: HeadStateRe
                       inputs = Set(recipe.deposit),
                       outputs = IndexedSeq(depositOutput, changeOutput).map(Sized(_)),
                       fee = feeCoin,
+                      ttl = Some(recipe.ttl.slot),
                       requiredSigners = Set(utxoFunding.address.keyHash.get match {
                           case a: AddrKeyHash => a
                           case s: StakeKeyHash =>

@@ -17,7 +17,19 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Transaction as STransaction, given}
+import scalus.cardano.ledger.{
+    Coin,
+    Hash,
+    KeepRaw,
+    Sized,
+    TransactionBody,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    Value,
+    Transaction as STransaction,
+    given
+}
 import scalus.ledger.api.v3
 
 import scala.collection.mutable
@@ -147,12 +159,12 @@ def l2EventTransactionFromInputsAndPeer(
     )
 
     val txUnsigned: Tx[L2] = Tx[L2](
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = false,
-          auxiliaryData = None
-        )
+      STransaction(
+        body = KeepRaw(txBody),
+        witnessSet = TransactionWitnessSet.empty,
+        isValid = false,
+        auxiliaryData = None
+      )
     )
 
     L2EventTransaction(signTx(inPeer, txUnsigned))

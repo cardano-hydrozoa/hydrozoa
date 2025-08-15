@@ -448,7 +448,7 @@ object MBTSuite extends Commands:
                 ScalusOption.None
             )
 
-            val depositTxRecipe = DepositTxRecipe(fundUtxo, amount, depositDatum)
+            val depositTxRecipe = DepositTxRecipe(fundUtxo, amount, depositDatum, Slot(10_000))
 
             val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
             val backendService = BackendServiceMock(l1Mock, state.pp)
@@ -513,7 +513,7 @@ object MBTSuite extends Commands:
                 fundUtxo.transactionId,
                 TxIx(fundUtxo.index),
                 amount,
-                None,
+                0,
                 address,
                 None,
                 refundAddress,

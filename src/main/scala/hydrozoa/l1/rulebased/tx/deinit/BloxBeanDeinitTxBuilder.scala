@@ -56,7 +56,9 @@ class BloxBeanDeinitTxBuilder(
                 val treasuryRedeemer = Interop.toPlutusData(TreasuryRedeemer.Deinit.toData)
 
                 val scriptArray =
-                    CborSerializationUtil.deserialize(r.headNativeScript.script.toCbor).asInstanceOf[Array]
+                    CborSerializationUtil
+                        .deserialize(r.headNativeScript.script.toCbor)
+                        .asInstanceOf[Array]
                 val headNativeScript = NativeScript.deserialize(scriptArray)
 
                 // native multisig + one required signer to spend seed utxo

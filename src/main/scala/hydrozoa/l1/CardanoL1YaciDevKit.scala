@@ -3,6 +3,7 @@ package hydrozoa.l1
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.Piper
 import hydrozoa.infra.toEither
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.node.monitoring.Metrics
@@ -86,6 +87,9 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
 
     override def lastBlockTime: PosixTime =
         backendService.getBlockService.getLatestBlock.getValue.getTime
+
+    override def lastBlockSlot: Slot =
+        backendService.getBlockService.getLatestBlock.getValue.getSlot |> Slot.apply
 
     override def utxosAtAddress(headAddress: AddressL1): List[HUtxo[L1]] =
         // FIXME: can't be more than 100

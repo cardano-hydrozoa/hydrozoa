@@ -1,6 +1,5 @@
 package hydrozoa
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
@@ -10,9 +9,9 @@ import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l2.ledger.L2EventTransaction
-import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
+import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 import scalus.cardano.address.ShelleyAddress
@@ -22,6 +21,7 @@ import sttp.client4.quick.*
 import sttp.model.MediaType.ApplicationJson
 
 import scala.concurrent.duration.Duration
+import scala.language.implicitConversions
 
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
@@ -141,7 +141,9 @@ class DisputeSuite extends FunSuite {
               Alice,
               testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
-              TransactionHash.fromHex("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
+              TransactionHash.fromHex(
+                "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
+              ),
               TxIx(0)
             )
             _ = sut.awaitTxL1(initTxId)
@@ -152,7 +154,7 @@ class DisputeSuite extends FunSuite {
                 initTxId,
                 TxIx(1),
                 100_000_000,
-                None,
+                0,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](TestPeer.address(Alice)),
@@ -168,7 +170,7 @@ class DisputeSuite extends FunSuite {
                 deposit1.depositId.transactionId,
                 TxIx(1),
                 100_000_000,
-                None,
+                0,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](

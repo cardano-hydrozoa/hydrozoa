@@ -1,12 +1,11 @@
 package hydrozoa.node.server
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
-import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import scalus.builtin.Data
-import scalus.cardano.ledger.{DatumOption, TransactionHash, Value}
+import scalus.cardano.ledger.TransactionHash
 import sttp.tapir.Schema
 
 // Types for NODE API
@@ -21,7 +20,11 @@ case class DepositRequest(
     txId: TransactionHash,
     txIx: TxIx,
     depositAmount: BigInt,
-    deadline: Option[BigInt],
+    /** A non-negative Posix time that indicates the time by which the user wants to have their
+      * deposit absorbed on the L2 or have it refunded back on L1. See the comment for the `deposit`
+      * function in `Node.scala`.
+      */
+    deadline: BigInt,
     address: AddressL2,
     /** Represents an optional inline datum */
     datum: Option[Data],

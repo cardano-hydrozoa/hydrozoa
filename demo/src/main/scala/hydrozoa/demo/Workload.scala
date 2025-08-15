@@ -355,7 +355,7 @@ class DepositCommand(
           fundUtxo.transactionId,
           TxIx(fundUtxo.index),
           depositAmount,
-          None, // FIXME
+          0, // FIXME
           address,
           None, // FIXME
           refundAddress,

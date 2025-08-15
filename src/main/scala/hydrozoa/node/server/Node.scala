@@ -3,11 +3,10 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
-import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe}
+import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ttlMargin}
 import hydrozoa.l2.block.Block
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.l2.ledger.L2EventGenesis
@@ -18,9 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
-import scalus.builtin.Data
-import scalus.cardano.ledger.{LedgerToPlutusTranslation, TransactionHash}
-import scalus.ledger.api.v3.{TxOut, TxOutRef}
+import scalus.cardano.ledger.{LedgerToPlutusTranslation, Slot, TransactionHash}
 import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt
@@ -80,37 +77,110 @@ class Node:
 
     end initializeHead
 
+    /** Handle a combined deposit request, i.e. build a deposit tx for the user and the post-dated
+      * refund. Arguably should be split up into two separate things.
+      *
+      * @param r
+      *   the user's deposit request
+      * @return
+      *   An error or a pair (post-dates refund tx, deposit utxo id)
+      */
     def deposit(r: DepositRequest): Either[DepositError, DepositResponse] =
-
-        log.info(s"Deposit request: $r")
 
         /*
 
-        How deadline relates to other consensus parameters:
+        How deposit timing works
+        ------------------------
 
-         * `depositMarginMaturity` (s) - mature time
-         * `minimalDepositWindow` (s) - minimal window
-         * `depositMarginExpiry` (s) - potential race prevention
+        Deposit eligibility
+        -------------------
 
-                `depositMarginMaturity`         `minimalDepositWindow`        `depositMarginExpiry`
-        ----*|============================|*******************************|==========================|-------
+        Hydrozoa has to be able to determine whether a deposit is eligible for absorption or not.
 
-             ^ we are here                ^ now settlement tx can pick up                            ^ closest
-               `latestBlockTime`            the deposit                                                deadline
+        The main source of data for deposit timings for a particular deposit is the deposit tx itself:
 
-              - no enough confirmations     - mature enough                 - to close to deadline
-                can be rolled back with     - far enough from deadline        may lead to races with
-                higher probability                                            post-dated refund tx
+        1. The _validity upper bound_ is mandatory and should be a bounded slot value.
+           This value is converted to POSIX time using genesis/slot configuration.
+           If not set, a deposit is not going to be absorbed.
+           The use of the tx's validity interval and not the block's time protects from possible
+           volatility of that information in the case of forks.
 
-         So basic check for requested deadline is:
+        2. The deposit output should have a datum of DepositDatum type.
+           Its `deadline` field should contain POSIX time that represents the time by which
+           a user wants to have the deposit absorbed into L2 ot refunded back to L1.
 
-          deadline > latestBlockTime + depositMarginMaturity + minimalDepositWindow + depositMarginExpiry
+        These two things form a window we call `depositIntervalOuter`:
+
+        depositIntervalOuter :=
+              [ depositTx.upperBound |> toTime
+              , deposit.datum.deadline
+              )
+
+        Then two parameters from Hydrozoa consensus parameters known as _deposit margins_ are used to
+        narrow this window by cutting off its boundaries:
+
+         * `depositMarginMaturity` (seconds, used for the lower bound)
+                A newly created deposit should be aged during this period before being absorbed.
+                This is done to lower the likelihood of a deposit being rolled back.
+
+         * `depositMarginExpiry` (seconds, used for the upper bound)
+                Controls a safe distance between two potential txs that can spend a deposit utxo to prevent contention:
+                    - settlement tx that absorbs a deposit
+                    - post-dated refund that returns a deposit
+
+        Or more formally:
+
+        depositMargins :=
+          [ + depositMarginMaturity
+          , - depositMarginExpiry
+          )
+
+        This way we calculate `depositIntervalInner` that defines the _actual window_:
+
+        depositIntervalInner  := depositIntervalOuter + depositMargins
+
+        Or visually:
+
+             |----------------------------------- depositIntervalOuter -----------------------------------|
+             ^ depositTx.upperBound                                                                       ^ deposit.datum.deadline
+
+        -----|==============================|*******************************|=============================|-------
+
+             |---`depositMarginMaturity` ---|---- `depositIntervalInner` ---|--- `depositMarginExpiry` ---|
+
+        Deposit is eligible for absorption if the time of a major block which tries to absorb a deposit is in the
+        `depositIntervalInner` interval.
+
+
+        Post-dated refund tx
+        --------------------
+
+        Post-dated refund txs should get `deadline` as their lower validity interval.
+
+        Building deposit txs
+        --------------------
+
+        If a depositor uses Hydrozoa to build a deposit transaction, we ask her to specify `deadline` that goes to the
+        datum of deposit utxo. Hydrozoa node determines the upper bound of the validity interval for deposit tx automatically
+        based on the current time and `hydrozoa.l1.multisig.tx.deposit.ttlMargin` constant/parameter.
+
+        If the user sets the `deadline` duration too low and the head fails to absorb the deposit within the window,
+        ...this is not implemented -> the deposit will be refunded immediately (if L2 consensus still holds when this is determined)
+        ... this is implemented -> or via the post-dated refund tx.
+
+        The user only loses time and tx fees. Of course, the frontend UI could also have additional guardrails of its own
+        to protect the user's time and tx fees, but the hydrozoa node doesn't need to know or care about these guardrails.
 
          */
 
+        log.info(s"Deposit request: $r")
+
+        // We don't check deadline correctness.
+
+        // FIXME: now we don't need that
         // TODO: Check deadline
-//        val (maturity, window, expiry) = nodeState.head.openPhase(_.depositTimingParams)
-//        val latestBlockTime = cardano.lastBlockTime
+//        val (maturity, expiry) = nodeState.ask(_.head.openPhase(_.depositTimingParams))
+//        val latestBlockTime = cardano.ask(_.lastBlockTime)
 //        val minimalDeadline = latestBlockTime + maturity + window + expiry
 //
 //        val deadline = r.deadline.getOrElse(minimalDeadline)
@@ -122,17 +192,19 @@ class Node:
 //            )
 
         // Make the datum and the recipe
-        // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
-            LedgerToPlutusTranslation.getAddress(r.address),
+          LedgerToPlutusTranslation.getAddress(r.address),
           r.datum.asScalus,
-          BigInt.apply(0), // deadline,
-            LedgerToPlutusTranslation.getAddress(r.refundAddress),
+          r.deadline,
+          LedgerToPlutusTranslation.getAddress(r.refundAddress),
           r.datum.asScalus
         )
 
+        // the upper bound AKA ttl for deposit tx
+        val ttl = Slot(cardano.ask(_.lastBlockSlot).slot + ttlMargin)
+
         val depositTxRecipe =
-            DepositTxRecipe(UtxoId[L1](r.txId, r.txIx), r.depositAmount, depositDatum)
+            DepositTxRecipe(UtxoId[L1](r.txId, r.txIx), r.depositAmount, depositDatum, ttl)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
         val Right(depositTxDraft, index) =
@@ -194,7 +266,7 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean,
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
@@ -223,12 +295,12 @@ class Node:
         errorOrBlock match
             case Left(err) => Left(err)
             case Right(block) =>
-                val effects = retryEither(RetryConfig.delay(20, 100.millis)) {
+                val effects = retryEither(RetryConfig.delay(30, 100.millis)) {
                     log.info("Trying to obtain block results...")
                     nodeState
                         .ask(_.head.getBlockRecord(block))
                         .toRight(
-                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 20 secs of waiting"
+                          s"Effects for block ${block.blockHeader.blockNum} have not been found after 30 secs of waiting"
                         )
                 }
 
@@ -251,9 +323,7 @@ class Node:
                             .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
                         stateL2
-                            .map((utxoId, output) =>
-                                utxoId -> OutputNoTokens(output)
-                            )
+                            .map((utxoId, output) => utxoId -> OutputNoTokens(output))
 
                     }
                     case _ => List.empty

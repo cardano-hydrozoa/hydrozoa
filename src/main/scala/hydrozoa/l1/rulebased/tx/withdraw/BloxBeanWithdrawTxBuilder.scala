@@ -10,7 +10,11 @@ import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.infra.{mkBuilder, toBloxBeanTransactionOutput, toEither, toTxOutRefV3}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, TreasuryRedeemer, WithdrawRedeemer}
+import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
+    TreasuryDatum,
+    TreasuryRedeemer,
+    WithdrawRedeemer
+}
 import hydrozoa.{L2, Output, TxL1, UtxoId, UtxoIdL1}
 import scalus.bloxbean.*
 import scalus.builtin.Data.{fromData, toData}
@@ -56,7 +60,9 @@ class BloxBeanWithdrawTxBuilder(
                 )
 
                 val withdrawals =
-                    r.withdrawals.map((_, utxo) => toBloxBeanTransactionOutput(Output[L2](utxo))).toSeq
+                    r.withdrawals
+                        .map((_, utxo) => toBloxBeanTransactionOutput(Output[L2](utxo)))
+                        .toSeq
 
                 val withdrawnCoins =
                     withdrawals.foldLeft(BigInteger.ZERO)((s, w) => s.add(w.getValue.getCoin))

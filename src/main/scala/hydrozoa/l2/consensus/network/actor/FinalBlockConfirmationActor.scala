@@ -97,7 +97,7 @@ private class FinalBlockConfirmationActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")
 
-        val utxosWithdrawn : UtxoSetL2 =
+        val utxosWithdrawn: UtxoSetL2 =
             if stateActor.ask(_.head.finalizingPhase(_.isBlockLeader))
             then
                 val ownBlock = stateActor.ask(_.head.finalizingPhase(_.pendingOwnBlock))

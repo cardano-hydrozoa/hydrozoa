@@ -11,14 +11,25 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.UtxoSet.getContextAndState
 import hydrozoa.infra.transitionary.{toScalusLedger, toV3UTxO}
-import hydrozoa.infra.{Piper, decodeHex, encodeHex, extractVoteTokenNameFromFallbackTx, serializeTxHex, verKeyHash}
+import hydrozoa.infra.{
+    Piper,
+    decodeHex,
+    encodeHex,
+    extractVoteTokenNameFromFallbackTx,
+    serializeTxHex,
+    verKeyHash
+}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Resolved
-import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript, hashVerificationKey}
+import hydrozoa.l1.rulebased.onchain.{
+    DisputeResolutionScript,
+    TreasuryValidatorScript,
+    hashVerificationKey
+}
 import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
 import hydrozoa.l1.rulebased.tx.resolution.{ResolutionTxBuilder, ResolutionTxRecipe}
 import hydrozoa.l1.rulebased.tx.tally.{TallyTxBuilder, TallyTxRecipe}
@@ -27,7 +38,14 @@ import hydrozoa.l1.rulebased.tx.withdraw.{WithdrawTxBuilder, WithdrawTxRecipe}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
-import hydrozoa.l2.ledger.{L2Event, L2EventGenesis, L2EventLabel, L2EventTransaction, L2EventWithdrawal, l2EventLabel}
+import hydrozoa.l2.ledger.{
+    L2Event,
+    L2EventGenesis,
+    L2EventLabel,
+    L2EventTransaction,
+    L2EventWithdrawal,
+    l2EventLabel
+}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqDeinit}
 import hydrozoa.l2.ledger.*
 import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
@@ -127,7 +145,7 @@ trait OpenPhaseReader extends MultisigRegimeReader:
     def l2LastMajor: Block
     def lastKnownTreasuryUtxoId: UtxoIdL1
     def peekDeposits: DepositUtxos
-    def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
+    def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli) // TODO: explicit type
     def blockLeadTurn: Int
     def isBlockLeader: Boolean
     def isBlockPending: Boolean
@@ -392,19 +410,20 @@ class HeadStateGlobal(
         def peekDeposits: DepositUtxos = {
             // Subtracts deposits that are known to have been handled yet, though their utxo may be still
             // on stateL1.depositUtxos.
-            TaggedUtxoSet[L1, DepositTag](UtxoSet[L1](
-              self.stateL1.get.depositUtxos.utxoMap.view
-                  .filterKeys(k => !self.depositHandled.contains(k))
-                  .toMap
-            ))
+            TaggedUtxoSet[L1, DepositTag](
+              UtxoSet[L1](
+                self.stateL1.get.depositUtxos.utxoMap.view
+                    .filterKeys(k => !self.depositHandled.contains(k))
+                    .toMap
+              )
+            )
         }
 
-        def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) =
+        def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli) =
             val headParams = self.headParams
             val consensusParams = headParams.l2ConsensusParams
             (
               consensusParams.depositMarginMaturity,
-              headParams.minimalDepositWindow,
               consensusParams.depositMarginExpiry
             )
 
@@ -774,11 +793,13 @@ class HeadStateGlobal(
                                 datum.peer.get == ownVk
                             ) match {
                             case Some(utxo) => utxo.input
-                            case None => throw RuntimeException("Vote UTxO was not found")
+                            case None       => throw RuntimeException("Vote UTxO was not found")
                         }
 
                     val ownAddress = Address[L1](
-                      Address.unsafeFromBech32(account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32)
+                      Address.unsafeFromBech32(
+                        account(TestPeer.valueOf(ownPeer.name)).getEnterpriseAddress.toBech32
+                      )
                     )
 
                     // Temporarily
@@ -813,20 +834,23 @@ class HeadStateGlobal(
 
                         log.info("Checking for resolved treasury utxo")
                         val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
-                        val beaconTokenUnit = AssetName (
-                            this.headMintingPolicy ++
-                                this.beaconTokenName.bytes
-                            )
-
+                        val beaconTokenUnit = AssetName(
+                          this.headMintingPolicy ++
+                              this.beaconTokenName.bytes
+                        )
 
                         // TODO: use more effective endpoint that based on vote tokens' assets.
                         cardano
                             .ask(_.utxosAtAddress(treasuryAddress))
-                            .find(u => fromData[TreasuryDatum](u.output.datumOption.get.asInstanceOf[Inline].data)
-                                 match {
+                            .find(u =>
+                                fromData[TreasuryDatum](
+                                  u.output.datumOption.get.asInstanceOf[Inline].data
+                                ) match {
                                     case Resolved(_) =>
-                                        u.output.value.assets.assets.contains(this.headMintingPolicy)
-                                         && u.output.value.assets.assets(this.headMintingPolicy)
+                                        u.output.value.assets.assets
+                                            .contains(this.headMintingPolicy)
+                                        && u.output.value.assets
+                                            .assets(this.headMintingPolicy)
                                             .contains(this.beaconTokenName)
                                     case _ => false
                                 }
@@ -883,9 +907,8 @@ class HeadStateGlobal(
                         .filter(u => {
                             val uVal = u.output.value.assets.assets
                             uVal.contains(this.headMintingPolicy) &&
-                                uVal(this.headMintingPolicy).contains(voteTokenName)
-                        }
-                        )
+                            uVal(this.headMintingPolicy).contains(voteTokenName)
+                        })
                         .sortWith((a, b) =>
                             val datumA = getVoteDatum(a)
                             val datumB = getVoteDatum(b)

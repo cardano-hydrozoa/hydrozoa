@@ -110,7 +110,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
             def l2LastMajor: Block = ???
             def lastKnownTreasuryUtxoId: UtxoIdL1 = s.treasuryUtxoId.get
             def peekDeposits: DepositUtxos = ???
-            def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli, UDiffTimeMilli) = ???
+            def depositTimingParams: (UDiffTimeMilli, UDiffTimeMilli) = ???
             def blockLeadTurn: Int = ???
             def isBlockLeader: Boolean = ???
             def isBlockPending: Boolean = ???

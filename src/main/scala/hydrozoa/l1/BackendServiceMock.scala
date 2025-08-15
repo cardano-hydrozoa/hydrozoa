@@ -78,7 +78,9 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         _order: OrderEnum
     ): Result[util.List[Utxo]] =
         val addressUtxos = cardanoL1Mock.getUtxosActive
-            .filter((_, output) => output.address == (SAddress.fromBech32(address).asInstanceOf[ShelleyAddress]))
+            .filter((_, output) =>
+                output.address == (SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])
+            )
             .map((id, output) => mkUtxo(id.transactionId.toHex, id.index)(output))
 
         addressUtxos.drop(count * (page - 1)).take(count) match
@@ -101,7 +103,9 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
     ): Result[util.List[Utxo]] = ???
 
     override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
-        val utxoId = UtxoIdL1(TransactionInput(Hash(ByteString.fromArray(HexUtil.decodeHexString(txHash))), outputIndex))
+        val utxoId = UtxoIdL1(
+          TransactionInput(Hash(ByteString.fromArray(HexUtil.decodeHexString(txHash))), outputIndex)
+        )
         val opt = cardanoL1Mock.getUtxosActive
             .get(utxoId)
             .map(mkUtxo(txHash, outputIndex))

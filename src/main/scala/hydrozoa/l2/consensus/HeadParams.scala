@@ -12,12 +12,11 @@ import hydrozoa.{UDiffTimeMilli, VerificationKeyBytes}
 case class HeadParams(
 //    l2NetworkId: Network,
 //    participants: Set[ParticipantVerificationKey],
-    l2ConsensusParams: L2ConsensusParams,
-    minimalDepositWindow: UDiffTimeMilli
+    l2ConsensusParams: L2ConsensusParams
 )
 
 object HeadParams:
-    def default = HeadParams(L2ConsensusParams.default, UDiffTimeMilli(10_000))
+    def default = HeadParams(L2ConsensusParams.default)
 
 /** L2 consensus parameters - their hash is used to guarantee all nodes are running with the same
   * parameters set.
