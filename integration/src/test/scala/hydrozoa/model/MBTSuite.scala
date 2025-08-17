@@ -5,7 +5,7 @@ import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.*
-import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, onlyOutputToAddress, serializeTxHex}
+import hydrozoa.infra.{NoInlineDatum, NoMatch, NonBabbageMatch, PSStyleAssoc, Piper, TooManyMatches, onlyOutputToAddress, serializeTxHex}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
@@ -13,7 +13,6 @@ import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, ScalusInitializationTxBuilder}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder, ScalusRefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
-import hydrozoa.l1.multisig.tx.toL1Tx
 import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
@@ -59,8 +58,8 @@ object MBTSuite extends Commands:
 
     override def canCreateNewSut(
         newState: State,
-        initSuts: Traversable[State],
-        runningSuts: Traversable[Sut]
+        initSuts: Iterable[State],
+        runningSuts: Iterable[Sut]
     ): Boolean = initSuts.isEmpty && runningSuts.isEmpty
 
     override def newSut(state: State): Sut =
@@ -256,7 +255,7 @@ object MBTSuite extends Commands:
             (r.map(_.toString), s => preCondition(s) ==> postCondition(s, r))
         }
 
-    case class NoOp0(override val id: Int) extends Command0(id) {
+    case class NoOp0(val noopId: Int) extends Command0(noopId) {
         type Result = Null
 
         def run(sut: Sut) = null
@@ -310,11 +309,11 @@ object MBTSuite extends Commands:
      */
 
     class InitializeCommand(
-        override val id: Int,
+        initializeCommandId: Int,
         initiator: TestPeer,
         otherHeadPeers: Set[TestPeer],
         seedUtxo: UtxoIdL1
-    ) extends StateLikeCommand with Command0(id):
+    ) extends StateLikeCommand with Command0(initializeCommandId):
 
         private val log = Logger(getClass)
 
@@ -354,7 +353,7 @@ object MBTSuite extends Commands:
                 val l1Mock = CardanoL1Mock(state.knownTxs, state.utxosActive)
                 val backendService = BackendServiceMock(l1Mock, state.pp)
                 val initTxBuilder: InitTxBuilder = ScalusInitializationTxBuilder(backendService)
-                val Right(initTx, headAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+                val Right(initTx, headAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) : @unchecked
 
                 // FIXME: the native script is now constructed inside the initTxBuilder;
                 // thus, this value is redundant and is only being created for compatibility during refactoring
@@ -364,16 +363,18 @@ object MBTSuite extends Commands:
                 val headMultisigScript = mkHeadNativeScript(pubKeys)
 
                 log.info(s"Init initTx: ${serializeTxHex(initTx)}")
-                val txId = initTx.id
+                val txId = initTx.untagged.id
                 log.info(s"Init initTx hash: $txId")
 
-                l1Mock.submit(initTx.toL1Tx)
+                l1Mock.submit(initTx)
 
-                val treasuryUtxoId = onlyOutputToAddress(initTx |> toL1Tx, headAddress) match
+                val treasuryUtxoId = onlyOutputToAddress(initTx, headAddress) match
                     case Right((ix : Integer), _, _) => UtxoId[L1](txId, ix)
                     case Left(err) => err match
                             case _: NoMatch => throw RuntimeException("Can't find treasury in the initialization tx!")
                             case _: TooManyMatches => throw RuntimeException("Initialization tx contains more than one multisig outputs!")
+                            case _: NonBabbageMatch => throw RuntimeException("Initialization tx has a non-babbage utxo")
+                            case _: NoInlineDatum => throw RuntimeException("Initialization tx is missing an inline datum")
 
                 val newState = state.copy(
                   peersNetworkPhase = RunningHead,
@@ -419,13 +420,13 @@ object MBTSuite extends Commands:
      */
 
     class DepositCommand(
-        override val id: Int,
+        depositId: Int,
         depositor: TestPeer,
         fundUtxo: UtxoIdL1,
         amount: BigInt,
         address: Address[L2],
         refundAddress: Address[L1]
-    ) extends StateLikeCommand with Command0(id):
+    ) extends StateLikeCommand with Command0(depositId):
 
         private val log = Logger(getClass)
 
@@ -456,21 +457,21 @@ object MBTSuite extends Commands:
             val depositTxBuilder: DepositTxBuilder = ScalusDepositTxBuilder(backendService, nodeStateReader)
 
             // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-            val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe)
+            val Right(depositTxDraft, index) = depositTxBuilder.buildDepositTxDraft(depositTxRecipe) : @unchecked
             val depositTxHash = depositTxDraft.id
 
             val serializedTx = serializeTxHex(depositTxDraft)
             log.info(s"Expected deposit tx: $serializedTx")
             log.info(s"Expected deposit tx hash: $depositTxHash, deposit output index: $index")
 
-            val Right(_) = l1Mock.submit(depositTxDraft |> toL1Tx)
+            val Right(_) = l1Mock.submit(depositTxDraft) : @unchecked
 
             val refundTxBuilder: RefundTxBuilder = ScalusRefundTxBuilder(backendService, nodeStateReader)
 
             val Right(refundTxDraft) =
                 refundTxBuilder.mkPostDatedRefundTxDraft(
                     PostDatedRefundRecipe(depositTxDraft, index, l1Mock.network)
-                )
+                ) : @unchecked
 
             val depositUtxoId = UtxoId[L1](depositTxHash, index)
             val depositUtxo: OutputL1 = l1Mock.utxoById(depositUtxoId).get
@@ -490,15 +491,15 @@ object MBTSuite extends Commands:
             stateAfter: HydrozoaState,
             result: Either[DepositError, DepositResponse]
         ): Prop =
-            val expectedResponse = expectedResult.right.get
-            val response = result.right.get
+            val Right(expectedResponse) = expectedResult : @unchecked
+            val Right(response) = result : @unchecked
 
             ("Deposit txs hashed should be identical" |:
                 expectedResponse.depositId.transactionId.toHex == response.depositId.transactionId.toHex)
                 &&  ("Deposit txs outputs should be identical" |:
                         expectedResponse.depositId.index == response.depositId.index)
                 && ("Post-dated refund txs should have the same hash" |:
-                    expectedResponse.postDatedRefundTx.id.toHex == response.postDatedRefundTx.id.toHex)
+                    expectedResponse.postDatedRefundTx.untagged.id.toHex == response.postDatedRefundTx.untagged.id.toHex)
 
 
         override def postConditionFailure(
@@ -535,7 +536,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class TransactionL2Command(override val id: Int, simpleTransaction: L2EventTransaction) extends Command0(id):
+    class TransactionL2Command(transactionL2Id: Int, simpleTransaction: L2EventTransaction) extends Command0(transactionL2Id):
 
         private val log = Logger(getClass)
 
@@ -564,7 +565,7 @@ object MBTSuite extends Commands:
      * ------------------------------------------------------------------------------------------
      */
 
-    class WithdrawalL2Command(override val id: Int, simpleWithdrawal: L2EventWithdrawal) extends Command0(id):
+    class WithdrawalL2Command(withdrawalL2Id: Int, simpleWithdrawal: L2EventWithdrawal) extends Command0(withdrawalL2Id):
 
         private val log = Logger(getClass)
 
@@ -592,7 +593,7 @@ object MBTSuite extends Commands:
      * Produce Block Command
      * ------------------------------------------------------------------------------------------
      */
-    class ProduceBlockCommand(override val id: Int, finalization: Boolean) extends StateLikeCommand with Command0(id):
+    class ProduceBlockCommand(produceBlockId: Int, finalization: Boolean) extends StateLikeCommand with Command0(produceBlockId):
 
         private val log = Logger(getClass)
 
@@ -659,7 +660,7 @@ object MBTSuite extends Commands:
                     val treasuryUtxoId =
                         (l1Effect |> maybeMultisigL1Tx).map(tx =>
                             val txId = tx.id
-                            val Right((ix : Integer), _, _) = onlyOutputToAddress(tx, state.headAddress.get)
+                            val Right((ix : Integer), _, _) = onlyOutputToAddress(tx, state.headAddress.get) : @unchecked
                             Some(UtxoId[L1](txId, ix))
                          ).getOrElse(state.treasuryUtxoId)
 
@@ -767,7 +768,7 @@ object MBTSuite extends Commands:
             postCondition(state, result.isSuccess)
     }
 
-    class ShutdownCommand(override val id: Int) extends UnitCommand0 with Command0(id):
+    class ShutdownCommand(shutdownId: Int) extends UnitCommand0 with Command0(shutdownId):
 
         private val log = Logger(getClass)
 

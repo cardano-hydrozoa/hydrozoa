@@ -135,8 +135,14 @@ class Node:
             DepositTxRecipe(UtxoId[L1](r.txId, r.txIx), r.depositAmount, depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-        val Right(depositTxDraft, index) =
-            depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe))
+        val (depositTxDraft, index) =
+            depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe)) match {
+                case Right(res) => res
+                case Left(e) =>
+                    throw RuntimeException(
+                      s"node could note builder deposit tx draft. Error from builder: ${e}"
+                    )
+            }
         val depositTxHash = depositTxDraft.id
 
         val serializedTx = serializeTxHex(depositTxDraft)
@@ -153,12 +159,16 @@ class Node:
 
         // TODO: temporarily we submit the deposit tx here on the node that handles the request
         // TODO: shall we add a combined function for signing?
-        val Right(depositTxId) =
+        val (depositTxId) =
             cardano.ask(
               _.submit(
                 addWitness(depositTxDraft, wallet.ask(_.createTxKeyWitness(depositTxDraft)))
               )
-            )
+            ) match {
+                case Right(res) => res
+                case Left(err) =>
+                    throw RuntimeException(s"Error when submitting or signing deposit tx: ${err}")
+            }
 
         log.info(s"Deposit tx submitted: $depositTxId")
         Right(DepositResponse(refundTx, UtxoId[L1](depositTxHash, index)))

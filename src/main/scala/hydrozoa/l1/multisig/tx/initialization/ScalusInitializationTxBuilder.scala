@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
-import hydrozoa.l1.multisig.tx.InitTx
+import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.{Address, AddressL1, L1, Tx}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
@@ -97,7 +97,7 @@ class ScalusInitializationTxBuilder(backendService: BackendService) extends Init
                     )
 
                     (
-                      Tx(scalusTransaction),
+                      (MultisigTx(scalusTransaction)),
                       Address[L1](headAddress)
                     )
 

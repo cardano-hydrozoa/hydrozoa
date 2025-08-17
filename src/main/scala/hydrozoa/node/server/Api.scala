@@ -39,7 +39,7 @@ given depositResponseCodec: JsonValueCodec[DepositResponse] =
     ??? // FIXME: JsonCodecMaker.make
 
 given depositResponseSchema: Schema[DepositResponse] =
-    Schema.derived[DepositResponse]
+    ??? // Schema.derived[DepositResponse]
 
 given utxoIdL1Schema: Schema[UtxoIdL1] =
     Schema.binary[UtxoIdL1]

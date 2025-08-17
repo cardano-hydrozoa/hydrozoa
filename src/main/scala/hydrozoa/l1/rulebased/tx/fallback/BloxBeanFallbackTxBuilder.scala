@@ -56,7 +56,9 @@ class BloxBeanFallbackTxBuilder(
 
         val multisigDatum = fromData[MultisigTreasuryDatum](
           Interop.toScalusData(
-            PlutusData.deserialize(decodeHex(multisigTreasuryUtxo.getInlineDatum).toArray)
+            PlutusData.deserialize(
+              IArray.genericWrapArray(decodeHex(multisigTreasuryUtxo.getInlineDatum)).toArray
+            )
           )
         )
 

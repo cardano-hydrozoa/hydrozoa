@@ -33,9 +33,9 @@ import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option
 import scalus.{ledger, prelude}
 
-import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.collection.immutable.SortedMap
 import scala.given
+import scala.jdk.CollectionConverters.ListHasAsScala
 import scala.language.implicitConversions
 
 //////////////////////////////////

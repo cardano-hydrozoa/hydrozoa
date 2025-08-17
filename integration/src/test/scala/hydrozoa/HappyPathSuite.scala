@@ -5,6 +5,7 @@ import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.rest.SubmitRequestL2.Transaction
 import hydrozoa.node.server.DepositRequest
+import hydrozoa.node.state.L1BlockEffect.{FinalizationTxEffect, SettlementTxEffect}
 import hydrozoa.node.{TestPeer, l2EventWithdrawalFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
@@ -110,7 +111,7 @@ class HappyPathSuite extends FunSuite {
 
             // Note: The `asInstanceOf` will fail if a minor block is produced instead of a major block
             settlement1Tx = sut
-                .awaitTxL1(major1._1.l1Effect.asInstanceOf[TxL1].id)
+                .awaitTxL1(major1._1.l1Effect.asInstanceOf[SettlementTxEffect].effect.untagged.id)
                 .toRight("Settlement tx is missing")
 
             // This gets the state from the local facade, which gets the state from a random node, which
@@ -123,12 +124,12 @@ class HappyPathSuite extends FunSuite {
             major2 <- sut.produceBlock(nextBlockFinal = true)
             // Note: The `asInstanceOf` will fail if a minor block is produced instead of a major block
             settlement2Tx = sut
-                .awaitTxL1(major2._1.l1Effect.asInstanceOf[TxL1].id)
+                .awaitTxL1(major2._1.l1Effect.asInstanceOf[SettlementTxEffect].effect.untagged.id)
                 .toRight("Settlement tx is missing")
 
             finalBlock <- sut.produceBlock(false)
             finalTx = sut
-                .awaitTxL1((finalBlock._1.l1Effect.asInstanceOf[TxL1].id))
+                .awaitTxL1((finalBlock._1.l1Effect.asInstanceOf[FinalizationTxEffect].effect.untagged.id))
                 .toRight("Final tx is missing")
         yield (
           deposit1Tx,

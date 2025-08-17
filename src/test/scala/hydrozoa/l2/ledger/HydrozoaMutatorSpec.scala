@@ -230,7 +230,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         forAll(genL2EventGenesisFromPeer(Bob)) { event =>
             // First apply the randomly generated genesis event with Bob's UTxOs
             // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
-            val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
+            val Right(postGenesisState) =
+                HydrozoaL2Mutator(emptyContext, emptyState, event): @unchecked
             // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
             val withdrawlEvent = l2EventWithdrawalFromInputsAndPeer(
               postGenesisState.utxo.keySet,
@@ -278,7 +279,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
       forAll(genL2EventGenesisFromPeer(Alice)) { event =>
           // First apply the randomly generated genesis event with Alice's UTxOs
           // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
-          val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
+          val Right(postGenesisState) =
+              HydrozoaL2Mutator(emptyContext, emptyState, event): @unchecked
 
           // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
           val allTxInputs = postGenesisState.utxo.keySet

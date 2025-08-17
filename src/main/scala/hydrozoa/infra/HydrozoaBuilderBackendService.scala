@@ -15,6 +15,7 @@ import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
 
 import java.util
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: TxL1)
     extends BackendService {
@@ -24,17 +25,17 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
     override def getAssetService: AssetService = backendService.getAssetService
     override def getBlockService: BlockService = backendService.getBlockService
     override def getEpochService: EpochService = backendService.getEpochService
-    override def getFeeCalculationService(
-        transactionHelperService: TransactionHelperService
-    ): FeeCalculationService = backendService.getFeeCalculationService(transactionHelperService)
+//    override def getFeeCalculationService(
+//        transactionHelperService: TransactionHelperService
+//    ): FeeCalculationService = backendService.getFeeCalculationService(transactionHelperService)
     override def getFeeCalculationService: FeeCalculationService =
         backendService.getFeeCalculationService
     override def getMetadataService: MetadataService = backendService.getMetadataService
     override def getNetworkInfoService: NetworkInfoService = backendService.getNetworkInfoService
     override def getPoolService: PoolService = backendService.getPoolService
     override def getScriptService: ScriptService = backendService.getScriptService
-    override def getTransactionHelperService: TransactionHelperService =
-        backendService.getTransactionHelperService
+//    override def getTransactionHelperService: TransactionHelperService =
+//        backendService.getTransactionHelperService
     override def getTransactionService: TransactionService = backendService.getTransactionService
     override def getUtxoService: UtxoService = VirtualTreasuryUtxoService()
     override def getUtxoTransactionBuilder: UtxoTransactionBuilder =
@@ -52,6 +53,14 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
             count: Int,
             page: Int
         ): Result[util.List[Utxo]] = getUtxos(address, count, page, OrderEnum.asc)
+
+        override def getUtxos(
+            address: String,
+            unit: String,
+            count: Int,
+            page: Int,
+            order: OrderEnum
+        ): Result[util.List[Utxo]] = getUtxos(address, count, page, order)
 
         override def getUtxos(
             address: String,
@@ -78,14 +87,6 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
                         result.withValue(List(multisigTreasuryUtxo).asJava)
                         result
                 }
-
-        override def getUtxos(
-            address: String,
-            unit: String,
-            count: Int,
-            page: Int,
-            order: OrderEnum
-        ): Result[util.List[Utxo]] = getUtxos(address, count, page, order)
 
         override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
             // if txHash == this.txHash && outputIndex == = then

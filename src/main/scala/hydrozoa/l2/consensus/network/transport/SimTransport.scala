@@ -70,17 +70,17 @@ class SimTransport(simNetwork: SimNetwork, ownPeer: TestPeer) extends HeadPeerNe
         simNetwork.send(anyMsg, ownPeer)
         next
 
-    override def nextSeq: Long =
-        val ret = counter + 1
-        counter = ret
-        ret
-
     override def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
         val next = nextSeq
         val aux = AckAux(ownPeer, next, replyTo, replyToSeq)
         val anyMsg = AnyMsg(ack, aux)
         simNetwork.send(anyMsg, ownPeer)
         next
+
+    override def nextSeq: Long =
+        val ret = counter + 1
+        counter = ret
+        ret
 
 object SimTransport:
     def apply(simNetwork: SimNetwork, ownPeer: TestPeer): HeadPeerNetworkTransport =

@@ -15,9 +15,9 @@ import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
 import scalus.builtin.Data.fromData
 import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.*
 
 import java.math.BigInteger
 import scala.collection.immutable.SortedMap
@@ -92,6 +92,10 @@ class MultisigL1EventSource(
                                 throw RuntimeException(
                                   "Init tx contains more than one multisig outputs!"
                                 )
+                            case _: NonBabbageMatch =>
+                                throw RuntimeException("Init tx contains a non-Babbage output")
+                            case _: NoInlineDatum =>
+                                throw RuntimeException("Init tx does not contain an inline datum")
             case None =>
                 throw RuntimeException("initTx hasn't appeared")
 

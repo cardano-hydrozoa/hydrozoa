@@ -13,6 +13,7 @@ import hydrozoa.l2.ledger.L2EventTransaction
 import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
+import hydrozoa.node.state.L1BlockEffect.SettlementTxEffect
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
 import scalus.cardano.address.ShelleyAddress
@@ -182,7 +183,7 @@ class DisputeSuite extends FunSuite {
             // Make a major block
             major1 <- sut.produceBlock(false)
             major1SettlementTx = sut
-                .awaitTxL1((major1._1.l1Effect.asInstanceOf[TxL1]).id)
+                .awaitTxL1(major1._1.l1Effect.asInstanceOf[SettlementTxEffect].effect.untagged.id)
                 .toRight("No settlement tx for th major 1")
 
             // L2 tx + minor block 1.1

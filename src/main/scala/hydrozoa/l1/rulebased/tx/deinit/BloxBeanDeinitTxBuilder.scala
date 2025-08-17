@@ -10,7 +10,7 @@ import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{encodeHex, mkBuilder, numberOfSignatories, toEither}
+import hydrozoa.infra.{encodeHex, getUtxoWithDatum, mkBuilder, numberOfSignatories, toEither}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, TreasuryRedeemer}
 import hydrozoa.{TxL1, UtxoId, UtxoIdL1}
 import scalus.bloxbean.*
@@ -18,6 +18,7 @@ import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.FromData
 
 import scala.jdk.CollectionConverters.*
+import scala.util.{Failure, Success, Try}
 
 class BloxBeanDeinitTxBuilder(
     backendService: BackendService,
@@ -29,76 +30,71 @@ class BloxBeanDeinitTxBuilder(
     override def buildDeinitTxDraft(r: DeinitTxRecipe): Either[String, TxL1] =
         mbTreasuryScriptRefUtxoId match
             case Some(treasuryScriptRefUtxoId) =>
-                def getUtxoWithDatum[T](using FromData[T])(utxoId: UtxoIdL1): (BBUtxo, T) =
-                    val Right(utxo) = backendService.getUtxoService
-                        .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
-                        .toEither
+                for
+                    inputAndDatum <-
+                        getUtxoWithDatum[TreasuryDatum](r.resolvedTreasuryUtxoId, backendService)
 
-                    val datum = fromData[T](
-                      Interop.toScalusData(
-                        PlutusData
-                            .deserialize(HexUtil.decodeHexString(utxo.getInlineDatum))
-                      )
-                    )
-                    (utxo, datum)
+                    treasuryInput = inputAndDatum._1
+                    treasuryInputDatum <- inputAndDatum._2 match {
+                        case TreasuryDatum.Resolved(tid) => Right(tid)
+                        case _ => Left("buildDeInitTxDraft: Treasury datum must be resolved")
+                    }
 
-                val (treasuryInput: BBUtxo, TreasuryDatum.Resolved(treasuryInputDatum)) =
-                    getUtxoWithDatum[TreasuryDatum](r.resolvedTreasuryUtxoId)
+                    treasuryValue = treasuryInput.toValue
+                    treasuryCoins = treasuryValue.getCoin
 
-                val treasuryValue = treasuryInput.toValue
-                val treasuryCoins = treasuryValue.getCoin
+                    headTokensToBurn = treasuryValue.getMultiAssets.asScala
+                        .find(_.getPolicyId == encodeHex(IArray.from(r.headMintingPolicy.bytes)))
+                        .get
+                        .negate
 
-                val headTokensToBurn = treasuryValue.getMultiAssets.asScala
-                    .find(_.getPolicyId == encodeHex(IArray.from(r.headMintingPolicy.bytes)))
-                    .get
-                    .negate
+                    treasuryRedeemer = Interop.toPlutusData(TreasuryRedeemer.Deinit.toData)
 
-                val treasuryRedeemer = Interop.toPlutusData(TreasuryRedeemer.Deinit.toData)
+                    scriptArray =
+                        CborSerializationUtil
+                            .deserialize(r.headNativeScript.script.toCbor)
+                            .asInstanceOf[Array]
+                    headNativeScript = NativeScript.deserialize(scriptArray)
 
-                val scriptArray =
-                    CborSerializationUtil
-                        .deserialize(r.headNativeScript.script.toCbor)
-                        .asInstanceOf[Array]
-                val headNativeScript = NativeScript.deserialize(scriptArray)
+                    // native multisig + one required signer to spend seed utxo
+                    signatories = numberOfSignatories(headNativeScript) + 1
 
-                // native multisig + one required signer to spend seed utxo
-                val signatories = numberOfSignatories(headNativeScript) + 1
+                    txPartial = ScriptTx()
+                        .collectFrom(treasuryInput, treasuryRedeemer)
+                        .payToAddress(
+                          r.initializerAddress.toBech32.get,
+                          Amount.lovelace(treasuryCoins)
+                        )
+                        // Due to BB's peculiarities, we can't use .mintAsset from ScriptTx
+                        // please see .preBalanceTx and .postBalanceTx down below.
+                        // .mintAssets(headNativeScript, ???)
+                        .readFrom(
+                          treasuryScriptRefUtxoId.transactionId.toHex,
+                          treasuryScriptRefUtxoId.index
+                        )
 
-                //
-                val txPartial = ScriptTx()
-                    .collectFrom(treasuryInput, treasuryRedeemer)
-                    .payToAddress(r.initializerAddress.toBech32.get, Amount.lovelace(treasuryCoins))
-                    // Due to BB's peculiarities, we can't use .mintAsset from ScriptTx
-                    // please see .preBalanceTx and .postBalanceTx down below.
-                    // .mintAssets(headNativeScript, ???)
-                    .readFrom(
-                      treasuryScriptRefUtxoId.transactionId.toHex,
-                      treasuryScriptRefUtxoId.index
-                    )
+                    nodeAddress = r.nodeAccount.enterpriseAddress()
+                    txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-                val nodeAddress = r.nodeAccount.enterpriseAddress()
-                val txSigner = SignerProviders.signerFrom(r.nodeAccount)
-
-                val tx: Transaction = builder
-                    .apply(txPartial)
-                    // .withRequiredSigners(Address(nodeAddress))
-                    .collateralPayer(nodeAddress)
-                    .feePayer(nodeAddress)
-                    .withSigner(txSigner)
-                    .additionalSignersCount(signatories)
-                    // .preBalanceTx should be called only once
-                    .preBalanceTx((_, t) =>
-                        t.getWitnessSet.getNativeScripts.add(headNativeScript)
-                        t.getBody.getMint.add(headTokensToBurn)
-                    )
-                    .postBalanceTx((_, t) =>
-                        val outputs = t.getBody.getOutputs
-                        // These are burned effectively
-                        outputs.getLast.getValue.setMultiAssets(List.empty.asJava)
-                    )
-                    .buildAndSign()
-
-                Right(TxL1(tx.serialize))
+                    tx: Transaction = builder
+                        .apply(txPartial)
+                        // .withRequiredSigners(Address(nodeAddress))
+                        .collateralPayer(nodeAddress)
+                        .feePayer(nodeAddress)
+                        .withSigner(txSigner)
+                        .additionalSignersCount(signatories)
+                        // .preBalanceTx should be called only once
+                        .preBalanceTx((_, t) =>
+                            t.getWitnessSet.getNativeScripts.add(headNativeScript)
+                            t.getBody.getMint.add(headTokensToBurn)
+                        )
+                        .postBalanceTx((_, t) =>
+                            val outputs = t.getBody.getOutputs
+                            // These are burned effectively
+                            outputs.getLast.getValue.setMultiAssets(List.empty.asJava)
+                        )
+                        .buildAndSign()
+                yield (TxL1(tx.serialize))
 
             case _ => Left("Ref scripts are not set")
 }

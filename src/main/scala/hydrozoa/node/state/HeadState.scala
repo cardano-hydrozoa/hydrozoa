@@ -37,12 +37,12 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqDeinit}
-import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.l2.ledger.*
 import hydrozoa.node.TestPeer
 import hydrozoa.node.TestPeer.account
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
+import hydrozoa.node.state.L1BlockEffect.MinorBlockL1Effect
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
 import scalus.bloxbean.Interop
@@ -128,7 +128,7 @@ trait MultisigRegimeReader extends HeadStateReaderApi:
     def stateL1: MultisigHeadStateL1
 
 trait OpenPhaseReader extends MultisigRegimeReader:
-    def immutablePoolEventsL2: Seq[L2Event]
+    def immutablePoolEventsL2: Seq[L2EventWithdrawal | L2EventTransaction]
     def immutableBlocksConfirmedL2: Seq[BlockRecord]
     def immutableEventsConfirmedL2: Seq[(L2Event, Int)]
     def l2Tip: Block
@@ -158,7 +158,7 @@ sealed trait InitializingPhase extends HeadStateApi with InitializingPhaseReader
 
 sealed trait OpenPhase extends HeadStateApi with OpenPhaseReader:
     def enqueueDeposit(depositId: UtxoIdL1, postDatedRefund: PostDatedRefundTx): Unit
-    def poolEventL2(event: L2Event): Unit
+    def poolEventL2(event: L2EventWithdrawal | L2EventTransaction): Unit
 
     /** Used only for testing. Checks whether an non-genesis event is in the pool.
       * @param txId
@@ -228,7 +228,8 @@ class HeadStateGlobal(
 
     private val log = Logger(getClass)
     // Pool: L2 events + pending deposits
-    private val poolEventsL2: mutable.Buffer[L2Event] = mutable.Buffer()
+    private val poolEventsL2: mutable.Buffer[L2EventWithdrawal | L2EventTransaction] =
+        mutable.Buffer()
     private val poolDeposits: mutable.Buffer[PendingDeposit] = mutable.Buffer()
     // Hydrozoa L2 blocks, confirmed events, and deposits handled
     private val blocksConfirmedL2: mutable.Buffer[BlockRecord] = mutable.Buffer()
@@ -419,7 +420,8 @@ class HeadStateGlobal(
         def headPeers: Set[WalletId] = self.headPeerVKs.keySet
 
     private class OpenPhaseReaderImpl extends MultisigRegimeReaderImpl with OpenPhaseReader:
-        def immutablePoolEventsL2: Seq[L2Event] = self.poolEventsL2.toSeq
+        def immutablePoolEventsL2: Seq[L2EventTransaction | L2EventWithdrawal] =
+            self.poolEventsL2.toSeq
         def immutableBlocksConfirmedL2: Seq[BlockRecord] = self.blocksConfirmedL2.toSeq
         def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = self.nonGenesisEventsConfirmedL2.toSeq
         def l2Tip: Block = l2Tip_
@@ -497,7 +499,7 @@ class HeadStateGlobal(
             self.poolDeposits.append(PendingDeposit(depositId, postDatedRefund))
             metrics.tell(_.setDepositQueueSize(poolDeposits.size))
 
-        def poolEventL2(event: L2Event): Unit =
+        def poolEventL2(event: L2EventWithdrawal | L2EventTransaction): Unit =
             log.info(s"Pooling event: $event")
             self.poolEventsL2.append(event)
             // Metrics
@@ -509,6 +511,56 @@ class HeadStateGlobal(
             // Try produce block
             log.info("Try to produce a block due to getting new L2 event...")
             tryProduceBlock(false)
+
+        override def tryProduceBlock(
+            nextBlockFinal: Boolean,
+            force: Boolean = false
+        ): Either[String, Block] = {
+            // 2. The leader produces the block and starts consensus on it.
+            if (self.autonomousBlocks || force)
+                && this.isBlockLeader && !this.isBlockPending
+            then
+                log.info(s"Trying to produce next minor/major block...")
+
+                val finalizing = self.headPhase == Finalizing
+
+                val tipHeader = l2Tip.blockHeader
+
+                blockProductionActor.ask(
+                  _.produceBlock(
+                    stateL2.getContextAndState,
+                    immutablePoolEventsL2,
+                    peekDeposits,
+                    tipHeader,
+                    timeCurrent,
+                    finalizing
+                  )
+                ) match
+                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
+                        self.pendingOwnBlock = Some(
+                          OwnBlock(
+                            block,
+                            utxosActive,
+                            utxosWithdrawn,
+                            mbGenesis
+                          )
+                        )
+                        self.isBlockPending = Some(true)
+                        self.mbIsNextBlockFinal = Some(nextBlockFinal)
+                        Right(block)
+                    case Left(err) =>
+                        // TODO: this arguably should never happen
+                        setLeaderFlag(tipHeader.blockNum + 1)
+                        Left(err)
+            else
+                val msg = s"Block is not going to be produced: " +
+                    s"autonomousBlocks=${self.autonomousBlocks} " +
+                    s"force=$force " +
+                    s"isBlockLeader=${this.isBlockLeader} " +
+                    s"isBlockPending=${this.isBlockPending} "
+                log.info(msg)
+                Left(msg)
+        }
 
         def isL2EventInPool(txId: TransactionHash): Boolean =
             self.poolEventsL2.map(_.getEventId).contains(txId)
@@ -700,6 +752,13 @@ class HeadStateGlobal(
 
             validEvents.toMap
 
+        override def stateL2: UtxoSetL2 = self.stateL2.get
+
+        private def setLeaderFlag(nextBlockNum: Int): Unit = {
+            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
+            log.info(s"isBlockLeader: ${self.isBlockLeader} for block ${nextBlockNum}")
+        }
+
         override def requestFinalization(): Unit =
             log.info("Head finalization has been requested, next block will be final.")
             self.mbIsNextBlockFinal = Some(true)
@@ -711,63 +770,6 @@ class HeadStateGlobal(
             self.headPhase = Finalizing
             log.info("Try to produce the final block...")
             tryProduceBlock(true)
-
-        override def tryProduceBlock(
-            nextBlockFinal: Boolean,
-            force: Boolean = false
-        ): Either[String, Block] = {
-            // 2. The leader produces the block and starts consensus on it.
-            if (self.autonomousBlocks || force)
-                && this.isBlockLeader && !this.isBlockPending
-            then
-                log.info(s"Trying to produce next minor/major block...")
-
-                val finalizing = self.headPhase == Finalizing
-
-                val tipHeader = l2Tip.blockHeader
-
-                blockProductionActor.ask(
-                  _.produceBlock(
-                    stateL2.getContextAndState,
-                    immutablePoolEventsL2,
-                    peekDeposits,
-                    tipHeader,
-                    timeCurrent,
-                    finalizing
-                  )
-                ) match
-                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
-                        self.pendingOwnBlock = Some(
-                          OwnBlock(
-                            block,
-                            utxosActive,
-                            utxosWithdrawn,
-                            mbGenesis
-                          )
-                        )
-                        self.isBlockPending = Some(true)
-                        self.mbIsNextBlockFinal = Some(nextBlockFinal)
-                        Right(block)
-                    case Left(err) =>
-                        // TODO: this arguably should never happen
-                        setLeaderFlag(tipHeader.blockNum + 1)
-                        Left(err)
-            else
-                val msg = s"Block is not going to be produced: " +
-                    s"autonomousBlocks=${self.autonomousBlocks} " +
-                    s"force=$force " +
-                    s"isBlockLeader=${this.isBlockLeader} " +
-                    s"isBlockPending=${this.isBlockPending} "
-                log.info(msg)
-                Left(msg)
-        }
-
-        override def stateL2: UtxoSetL2 = self.stateL2.get
-
-        private def setLeaderFlag(nextBlockNum: Int): Unit = {
-            self.isBlockLeader = Some(nextBlockNum % headPeerVKs.size == this.blockLeadTurn)
-            log.info(s"isBlockLeader: ${self.isBlockLeader} for block ${nextBlockNum}")
-        }
 
         override def runTestDispute(): Unit = {
 
@@ -829,7 +831,10 @@ class HeadStateGlobal(
                       ownAccount
                     )
                     log.info(s"Vote tx recipe: $recipe")
-                    val Right(voteTx) = voteTxBuilder.buildVoteTxDraft(recipe)
+                    val voteTx = voteTxBuilder.buildVoteTxDraft(recipe) match
+                        case Right(res) => res
+                        case Left(e)    => throw RuntimeException(s"error building vote tx: ${e}")
+
                     val voteTxHash = voteTx.id
                     log.info(s"Vote tx: ${serializeTxHex(voteTx)}")
 
@@ -1068,12 +1073,16 @@ class HeadStateGlobal(
                   ownAccount
                 )
 
-                val Right(deinitTxDraft) = deinitTxBuilder.buildDeinitTxDraft(recipe)
+                val deinitTxDraft = deinitTxBuilder.buildDeinitTxDraft(recipe) match {
+                    case Right(res) => res
+                    case Left(err) =>
+                        throw RuntimeException(s"failed to build deinit transaction: ${err}")
+                }
 
                 val headPeers = this.headPeers
 
                 // Fire and forget for now, arguably should be .ask
-                network.tell(_.reqDeinit(ReqDeinit(deinitTxDraft, headPeers)))
+                network.tell(_.reqDeinit(ReqDeinit(MultisigTx(deinitTxDraft), headPeers)))
                 log.info("Waiting for the deinit tx...")
                 cardano.ask(
                   _.awaitTx(deinitTxDraft.id, RetryConfig.delay(10, 1.second))
@@ -1264,11 +1273,30 @@ case class RefundedDeposit(
     immediateRefundTx: Option[TxL1]
 )
 
-type L1BlockEffect = InitTx | SettlementTx | FinalizationTx | MinorBlockL1Effect
+enum L1BlockEffect:
+    case InitTxEffect(effect: InitTx)
+    case SettlementTxEffect(effect: SettlementTx)
+    case FinalizationTxEffect(effect: FinalizationTx)
+    // It's not an "effect", but rather its parts - all nodes signatures that
+    // can be turned into a voting transaction.
+    case MinorBlockL1Effect(effect: Seq[Ed25519Signature])
 
-// It's not an "effect", but rather its parts - all nodes signatures that
-// can be turned into a voting transaction.
-type MinorBlockL1Effect = Seq[Ed25519Signature]
+extension (l1be: L1BlockEffect)
+    def maybeMultisigL1Tx: Option[TxL1] = l1be match
+        case _: MinorBlockL1Effect                      => None
+        case L1BlockEffect.InitTxEffect(someTx)         => someTx |> Some.apply
+        case L1BlockEffect.SettlementTxEffect(someTx)   => someTx |> Some.apply
+        case L1BlockEffect.FinalizationTxEffect(someTx) => someTx |> Some.apply
+
+    def mbTxHash: Option[TransactionHash] = l1be match
+        case _: MinorBlockL1Effect                      => None
+        case L1BlockEffect.InitTxEffect(someTx)         => someTx.untagged.id |> Some.apply
+        case L1BlockEffect.SettlementTxEffect(someTx)   => someTx.untagged.id |> Some.apply
+        case L1BlockEffect.FinalizationTxEffect(someTx) => someTx.untagged.id |> Some.apply
+
+    def mbSettlementFees: Option[Long] = l1be match
+        case L1BlockEffect.SettlementTxEffect(tx) => tx.untagged.body.value.fee.value |> Some.apply
+        case _                                    => None
 
 // This is not defined for minor and final blocks, so we have to use Option here.
 // Probably we can do it better.
@@ -1280,16 +1308,3 @@ type L1PostDatedBlockEffect = Option[TxL1]
 type L2BlockEffect = Option[UtxoSetL2]
 
 given CanEqual[L2BlockEffect, L2BlockEffect] = CanEqual.derived
-
-def maybeMultisigL1Tx(l1Effect: L1BlockEffect): Option[TxL1] = l1Effect match
-    case _: MinorBlockL1Effect             => None
-    case someTx: MultisigTx[MultisigTxTag] => someTx |> toL1Tx |> Some.apply
-
-// NB: this won't work as an extension method on union type L1BlockEffect
-def mbTxHash(l1BlockEffect: L1BlockEffect): Option[TransactionHash] = l1BlockEffect match
-    case _: MinorBlockL1Effect => None
-    case tx: MultisigTx[_]     => tx.id |> Some.apply
-
-def mbSettlementFees(l1BlockEffect: L1BlockEffect): Option[Long] = l1BlockEffect match
-    case tx: SettlementTx => tx.untagged.body.value.fee.value |> Some.apply
-    case _                => None

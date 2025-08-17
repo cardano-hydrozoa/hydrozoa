@@ -123,7 +123,7 @@ object Ed25519Signature:
     opaque type Ed25519Signature = IArray[Byte]
     def apply(signature: IArray[Byte]): Ed25519Signature = signature
     given Conversion[Ed25519Signature, IArray[Byte]] = identity
-    given Conversion[Ed25519Signature, Array[Byte]] = (sig => sig.toArray)
+    given Conversion[Ed25519Signature, Array[Byte]] = (sig => IArray.genericWrapArray(sig).toArray)
     extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
 
 type Ed25519Signature = Ed25519Signature.Ed25519Signature

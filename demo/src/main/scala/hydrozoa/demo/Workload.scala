@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.CardanoL1YaciDevKit
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
@@ -26,6 +25,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import sttp.client4.UriContext
 
+import scala.collection.compat.immutable.ArraySeq
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
@@ -146,7 +146,7 @@ object Workload extends OxApp:
             (seedUtxoId, coins) <- Gen.oneOf(utxos)
 
             // more addresses the better
-            recipient <- Gen.oneOf(TestPeer.values)
+            recipient <- Gen.oneOf(ArraySeq.unsafeWrapArray(TestPeer.values))
             recipientAccount = TestPeer.account(recipient)
             recipientAddressL2 = Address[L2](TestPeer.address(depositor))
             depositAmount <- Gen.choose(
@@ -180,7 +180,7 @@ object Workload extends OxApp:
 
             recipients <- Gen.containerOfN[List, TestPeer](
               outputCoins.length,
-              Gen.oneOf(TestPeer.values)
+              Gen.oneOf(ArraySeq.unsafeWrapArray(TestPeer.values))
             )
             recipients <- Gen.containerOfN[List, TestPeer](
               outputCoins.length,
@@ -260,7 +260,11 @@ object Workload extends OxApp:
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
                 // a single element for the required signer. This is the desired behavior
-                inputs.map(ti => addrMap(Address[L2](l2state(ti).address.asInstanceOf[ShelleyAddress]))).toSet
+                inputs
+                    .map(ti =>
+                        addrMap(Address[L2](l2state(ti).address.asInstanceOf[ShelleyAddress]))
+                    )
+                    .toSet
             }
 
             txUnsigned: Tx[L2] = Tx[L2](

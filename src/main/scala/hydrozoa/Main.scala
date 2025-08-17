@@ -39,9 +39,9 @@ import scalus.bloxbean.Interop
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Shelley
-import scalus.cardano.ledger.*
 import scalus.prelude.AssocMap
 import sttp.client4.UriContext
 import sttp.model.Uri

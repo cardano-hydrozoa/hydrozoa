@@ -8,6 +8,7 @@ import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxB
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckFinal, AckFinal2, Req, ReqFinal}
 import hydrozoa.node.state.*
+import hydrozoa.node.state.L1BlockEffect.FinalizationTxEffect
 import hydrozoa.{TaggedUtxoSet, UtxoSet, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 
@@ -99,8 +100,11 @@ private class FinalBlockConfirmationActor(
             // Create finalization tx draft
             val recipe =
                 FinalizationRecipe(req.block.blockHeader.versionMajor, utxosWithdrawn)
-            val Right(finalizationTxDraft: FinalizationTx) =
-                finalizationTxBuilder.buildFinalizationTxDraft(recipe)
+            val finalizationTxDraft: FinalizationTx =
+                finalizationTxBuilder.buildFinalizationTxDraft(recipe) match {
+                    case Right(ftx) => ftx
+                    case Left(e)    => throw RuntimeException(e)
+                }
             val serializedTx = serializeTxHex(finalizationTxDraft)
             log.info(
               s"Finalization tx for final block ${req.block.blockHeader.blockNum} is $serializedTx"
@@ -125,9 +129,9 @@ private class FinalBlockConfirmationActor(
             // Create effects
             // L1 effect
             val wits = acks2.map(_._2.finalization)
-            val finalizationTx = wits.foldLeft(finalizationTxDraft)(addWitnessMultisig)
+            val finalizationTx = (wits.foldLeft(finalizationTxDraft)(addWitnessMultisig))
             // val serializedTx = serializeTxHex(finalizationTx)
-            val l1Effect: L1BlockEffect = finalizationTx
+            val l1Effect: L1BlockEffect = FinalizationTxEffect(finalizationTx)
             val l2Effect: L2BlockEffect = None
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, None, l2Effect)

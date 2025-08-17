@@ -9,11 +9,6 @@ import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.L2EventLabel.{
-    L2EventGenesisLabel,
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
 import ox.channels.ActorRef
 import ox.sleep
 import scalus.cardano.ledger.TransactionHash
@@ -39,7 +34,7 @@ class BlockProducer:
           * production
           */
         l2Ledger: (Context, State),
-        poolEvents: Seq[L2Event],
+        poolEvents: Seq[L2EventWithdrawal | L2EventTransaction],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
@@ -106,7 +101,7 @@ object BlockProducer:
       */
     def createBlock(
         l2Ledger: (Context, State),
-        poolEvents: Seq[L2Event],
+        poolEvents: Seq[L2EventWithdrawal | L2EventTransaction],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,

@@ -81,10 +81,6 @@ class LocalFacade(
 
     override def awaitTxL1(txId: TransactionHash): Option[TxL1] = randomNode.awaitTxL1(txId)
 
-    private def randomNode =
-        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
-        peers.values.toList(millis % peers.size)
-
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
     ): Either[String, TransactionHash] =
@@ -106,6 +102,10 @@ class LocalFacade(
                     if (!veracity.forall(e => e)) throw IllegalStateException()
                 })
                 ret
+
+    private def randomNode =
+        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
+        peers.values.toList(millis % peers.size)
 
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
@@ -138,11 +138,10 @@ class LocalFacade(
             case None =>
                 answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
                 Left("Block can't be produced at the moment")
-            case Some(answer) =>
-                log.info(
-                  s"Block details are here #${answer.right.get._1.block.blockHeader.blockNum}"
-                )
-                Right(answer.right.get)
+            case Some(Left(answer)) => throw RuntimeException("Impossible pattern match")
+            case Some(Right(answer)) =>
+                log.info(s"Block details are here #${answer._1.block.blockHeader.blockNum}")
+                Right(answer)
 
     override def runDispute(): Unit =
         log.info("running test dispute...")

@@ -6,6 +6,7 @@ import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.*
+import hydrozoa.node.state.L1BlockEffect.MinorBlockL1Effect
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
 import scalus.ledger.api.v3
@@ -106,7 +107,7 @@ private class MinorBlockConfirmationActor(
         if (req != null && acks.keySet == headPeers)
             // Minor block effects
             val l1Effect: L1BlockEffect =
-                acks.map(a => Ed25519Signature(decodeHex(a._2.signature))).toSeq
+                MinorBlockL1Effect(acks.map(a => Ed25519Signature(decodeHex(a._2.signature))).toSeq)
             val l2Effect: L2BlockEffect = Some(utxosActive)
             // Block record and state update by block application
             val record = BlockRecord(req.block, l1Effect, None, l2Effect)

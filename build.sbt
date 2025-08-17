@@ -80,7 +80,13 @@ lazy val integration = (project in file("integration"))
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.6"
 
-ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
+ThisBuild / scalacOptions ++= Seq(
+  "-feature",
+  "-deprecation",
+  "-unchecked",
+  "-Werror",
+  "-language:implicitConversions"
+)
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)

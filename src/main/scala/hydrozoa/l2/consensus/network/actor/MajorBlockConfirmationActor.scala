@@ -5,14 +5,15 @@ import hydrozoa.*
 import hydrozoa.infra.transitionary.{emptyContext, toV3UTxO}
 import hydrozoa.infra.{Piper, addWitnessMultisig, serializeTxHex}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.tx.SettlementTx
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
+import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
 import hydrozoa.l2.consensus.network.{AckMajor, AckMajor2, Req, ReqMajor}
 import hydrozoa.l2.ledger.L2EventGenesis
 import hydrozoa.node.state.*
+import hydrozoa.node.state.L1BlockEffect.SettlementTxEffect
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.cardano.ledger.TransactionHash
@@ -120,8 +121,14 @@ private class MajorBlockConfirmationActor(
           utxosWithdrawn
         )
         log.info(s"Settlement tx recipe: $txRecipe")
-        val Right(settlementTxDraft: SettlementTx) =
-            settlementTxBuilder.mkSettlementTxDraft(txRecipe)
+        val (settlementTxDraft: SettlementTx) =
+            settlementTxBuilder.mkSettlementTxDraft(txRecipe) match {
+                case Right(res) => res
+                case Left(e) =>
+                    throw RuntimeException(
+                      s"Major block confirmtaion actor could not build settlement tx draft. Error from builder: ${e}"
+                    )
+            }
         val serializedTx = serializeTxHex(settlementTxDraft)
         log.info(s"Settlement tx for block ${req.block.blockHeader.blockNum} is $serializedTx")
         this.settlementTxDraft = settlementTxDraft
@@ -157,7 +164,13 @@ private class MajorBlockConfirmationActor(
 
         log.info(s"FallbackTxRecipe= $fallbackTxRecipe")
 
-        val Right(fallbackTxDraft) = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe)
+        val fallbackTxDraft = fallbackTxBuilder.buildFallbackTxDraft(fallbackTxRecipe) match {
+            case Right(res) => res
+            case Left(e) =>
+                throw new RuntimeException(
+                  s"MajorBlockConfirmationActor could not produce fallback tx draft. Error from builder: ${e}"
+                )
+        }
 
         log.info("Fallback tx draft: " + serializeTxHex(fallbackTxDraft))
         log.info("Fallback tx draft hash: " + fallbackTxDraft.id)
@@ -221,11 +234,12 @@ private class MajorBlockConfirmationActor(
             val wits = acks2.map(_._2.settlement)
             val settlementTx = wits.foldLeft(this.settlementTxDraft)(addWitnessMultisig)
             log.info("Settlement signed tx: " + serializeTxHex(settlementTx))
-            val l1Effect: L1BlockEffect = settlementTx
+            val l1Effect: L1BlockEffect = SettlementTxEffect(settlementTx)
 
             // L1 post-dated fallback effect
             val witsFallback = acks.map(_._2.postDatedTransition)
-            val fallbackTx = witsFallback.foldLeft(this.fallbackTxDraft)(addWitnessMultisig)
+            val fallbackTx =
+                witsFallback.foldLeft(MultisigTx(this.fallbackTxDraft))(addWitnessMultisig)
             log.info("Fallback signed tx: " + serializeTxHex(fallbackTx))
 
             // L2 effect

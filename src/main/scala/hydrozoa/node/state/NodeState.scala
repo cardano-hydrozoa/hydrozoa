@@ -13,7 +13,7 @@ import hydrozoa.l1.rulebased.tx.withdraw.WithdrawTxBuilder
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.HeadPeerNetwork
-import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.{L2EventLabel, L2EventTransactionLabel, L2EventWithdrawalLabel}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
 import hydrozoa.node.state.HeadPhase.Finalized
@@ -122,7 +122,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState.get.setWithdrawTxBuilder(withdrawTxBuilder)
             this.headState.get.setDeinitTxBuilder(deinitTxBuilder)
             log.info(s"Setting up L1 event sourcing...")
-            val initTxId = params.initTx.id
+            val initTxId = params.initTx.untagged.id
             multisigL1EventSource.tell(
               _.awaitInitTx(
                 initTxId,

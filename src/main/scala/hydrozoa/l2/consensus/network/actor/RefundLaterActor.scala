@@ -4,8 +4,8 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{addWitness, serializeTxHex}
-import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.{NodeState, WalletId}
 import ox.channels.{ActorRef, Channel, Source}
@@ -30,7 +30,7 @@ private class RefundLaterActor(
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
 
-        val Right(txDraft) =
+        val txDraft =
             refundTxBuilder.mkPostDatedRefundTxDraft(
               PostDatedRefundRecipe(
                 depositTx = req.depositTx,
@@ -41,8 +41,14 @@ private class RefundLaterActor(
                 ,
                 network = networkL1static
               )
-            )
-        log.info("Post-dated refund tx hash: " + txDraft.id)
+            ) match {
+                case Right(res) => res
+                case Left(e) =>
+                    throw new RuntimeException(
+                      s"RefundLaterActor could not build refund tx. Error from builder: ${e}"
+                    )
+            }
+        log.info("Post-dated refund tx hash: " + txDraft.untagged.id)
 
         // TxDump.dumpMultisigTx(refundTxDraft)
 
@@ -66,13 +72,13 @@ private class RefundLaterActor(
         if (req != null && acks.keySet == headPeers)
             // All wits are here, we can sign and save post-dated
             // refund transaction for future's use.
-            val refundTx = acks.values.foldLeft(txDraft)(addWitness)
+            val refundTx = acks.values.foldLeft(txDraft.untagged)(addWitness)
             val serializedTx = serializeTxHex(refundTx)
             log.info("Post-dated refund refundTx: " + serializedTx)
 
             val depositUtxoId = UtxoIdL1.apply(TransactionInput(req.depositTx.id, req.index))
-            stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, refundTx)))
-            resultChannel.send(refundTx)
+            stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, MultisigTx(refundTx))))
+            resultChannel.send(MultisigTx(refundTx))
             dropMyself()
 
     override def result(using req: Req): Source[req.resultType] =

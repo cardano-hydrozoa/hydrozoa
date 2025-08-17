@@ -2,19 +2,25 @@ package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
+import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
+import scalus.bloxbean.Interop
 import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.ByteString
+import scalus.builtin.Data.fromData
+import scalus.builtin.{ByteString, FromData}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{AddrKeyHash, Hash}
 import scalus.ledger.api.v3.{TxId, TxOutRef}
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
+import scala.util.{Failure, Success, Try}
 
 extension [A](result: Result[A])
     def toEither: Either[String, A] =
@@ -99,3 +105,27 @@ extension [L <: AnyLayer](self: UtxoId[L])
 
 // FIXME: This is a static value of 42. Scalus network doesn't expose the protocl magic.
 extension (self: Network) def toBB: BBNetwork = BBNetwork(self.value.toInt, 42)
+
+def getUtxoWithDatum[T](using
+    FromData[T]
+)(utxoId: UtxoIdL1, backendService: BackendService): Either[String, (Utxo, T)] =
+    for
+        utxo <- backendService.getUtxoService
+            .getTxOutput(utxoId.transactionId.toHex, utxoId.index)
+            .toEither
+
+        datum <- Try(
+          fromData[T](
+            Interop.toScalusData(
+              PlutusData
+                  .deserialize(HexUtil.decodeHexString(utxo.getInlineDatum))
+            )
+          )
+        ) match {
+            case Success(s) => Right(s)
+            case Failure(e) =>
+                Left(
+                  e.toString
+                )
+        }
+    yield (utxo, datum)

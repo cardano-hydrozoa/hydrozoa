@@ -29,6 +29,7 @@ import scalus.builtin.{
 }
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
 import scalus.cardano.ledger.{AssetName, PolicyId}
+import scalus.cardano.onchain.RequirementError
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.List.Nil
@@ -89,6 +90,8 @@ object TreasuryValidator extends Validator:
     // Withdraw redeemer
     private inline val WithdrawNeedsResolvedDatum =
         "Withdraw redeemer requires resolved datum"
+    private inline val WithdrawOutputNeedsResolvedDatum =
+        "Treasury output from withdrawal redeemer require resolved datum"
     private inline val WithdrawWrongNumberOfWithdrawals =
         "Number of outputs should match the number of utxo ids"
     private inline val WithdrawBeaconTokenFailure =
@@ -301,7 +304,10 @@ object TreasuryValidator extends Validator:
                 )
 
                 // Accumulator updated commitment
-                val Resolved(outputResolvedDatum) = treasuryOutput.inlineDatumOfType[TreasuryDatum]
+                val outputResolvedDatum = treasuryOutput.inlineDatumOfType[TreasuryDatum] match {
+                    case Resolved(od) => od
+                    case _            => fail(WithdrawOutputNeedsResolvedDatum)
+                }
 
                 require(
                   outputResolvedDatum.utxosActive == proof,

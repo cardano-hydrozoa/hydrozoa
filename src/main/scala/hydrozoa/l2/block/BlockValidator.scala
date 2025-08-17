@@ -9,7 +9,6 @@ import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.L2EventLabel.{L2EventGenesisLabel, L2EventWithdrawalLabel}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
 import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, UTxO}
@@ -80,7 +79,7 @@ object BlockValidator:
         prevHeader: BlockHeader,
         l2Ledger: (Context, State),
         // FIXME: missing in the spec, empty for final block
-        poolEventsL2: Seq[L2Event],
+        poolEventsL2: Seq[L2EventTransaction | L2EventWithdrawal],
         // FIXME: missing in the spec, is not needed for minor and final blocks
         depositUtxos: DepositUtxos,
         // FIXME: missing in the spec, can be removed I guess

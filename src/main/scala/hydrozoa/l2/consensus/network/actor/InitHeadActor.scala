@@ -7,7 +7,7 @@ import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
+import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
@@ -49,7 +49,13 @@ private class InitHeadActor(
         log.trace(s"Init req: $req")
 
         val headPeers = req.otherHeadPeers + req.initiator
-        val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
+        val headVKeys = stateActor.ask(_.getVerificationKeys(headPeers)) match {
+            case Some(keys) => keys
+            case _ =>
+                throw RuntimeException(
+                  "State actor could not provide verification keys for head peers"
+                )
+        }
         val headNativeScript = mkHeadNativeScript(headVKeys)
         val headMintingPolicy: PolicyId = (headNativeScript.scriptHash)
 
@@ -73,10 +79,16 @@ private class InitHeadActor(
         log.info(s"initTxRecipe: $initTxRecipe")
 
         // Builds and balance initialization tx
-        val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match {
+            case Right(res) => res
+            case Left(e) =>
+                throw new RuntimeException(
+                  s"Init head actor could not produce initialization tx draft. Error from builder: ${e}"
+                )
+        }
 
         log.info("Init tx draft: " + serializeTxHex(txDraft))
-        log.info("Init tx draft hash: " + txDraft.id)
+        log.info("Init tx draft hash: " + txDraft.untagged.id)
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckInit(me, ownWit)
@@ -108,12 +120,12 @@ private class InitHeadActor(
             if acks.keySet == headPeers
             then
                 // All wits are here, we can sign and submit
-                val initTx = acks.values.foldLeft(txDraft)(addWitness)
+                val initTx = acks.values.foldLeft(txDraft.untagged)(addWitness)
                 val serializedTx = serializeTxHex(initTx)
                 log.info("Initialization tx: " + serializedTx)
 
                 // TODO: submission should be carried on by a separate thread
-                cardanoActor.ask(_.submit(toL1Tx(initTx))) match
+                cardanoActor.ask(_.submit(initTx)) match
                     case Right(txHash) =>
                         // Put the head into Initializing phase
                         val (headPeersVKs, autonomousBlocks) =
@@ -129,12 +141,12 @@ private class InitHeadActor(
                           headAddress,
                           beaconTokenName,
                           seedAddress,
-                          initTx,
+                          MultisigTx(initTx),
                           System.currentTimeMillis(),
                           autonomousBlocks
                         )
                         stateActor.tell(_.tryInitializeHead(params))
-                        TxDump.dumpInitTx(initTx)
+                        TxDump.dumpInitTx(MultisigTx(initTx))
                         resultChannel.send(txHash)
                         dropMyself()
 

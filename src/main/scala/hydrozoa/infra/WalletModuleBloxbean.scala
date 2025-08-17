@@ -5,9 +5,11 @@ import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.VKeyWitness
+
+import scala.language.implicitConversions
 
 object WalletModuleBloxbean extends WalletModule:
 
@@ -39,5 +41,8 @@ object WalletModuleBloxbean extends WalletModule:
         signingKey: SigningKey
     ): Ed25519Signature =
         val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
-        val signature = signingProvider.signExtended(msg.toArray, signingKey.getKeyData)
+        val signature = signingProvider.signExtended(
+          IArray.genericWrapArray(msg).toArray,
+          signingKey.getKeyData
+        )
         Ed25519Signature(IArray.from(signature))

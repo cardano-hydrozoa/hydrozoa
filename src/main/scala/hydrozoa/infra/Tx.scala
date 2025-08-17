@@ -24,7 +24,7 @@ import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import hydrozoa.node.TestPeer
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
@@ -59,10 +59,6 @@ import scala.language.implicitConversions
 
 // TODO: make an API
 // We should expose more of it, probably add more tagged types, and unifying the naming of the functions
-
-// QUESTION: why isn't this just exposed as class methods?
-def txHash[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): TransactionHash =
-    tx.id
 
 def serializeTxHex[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): String =
     ByteString.fromArray(Cbor.encode(tx.asInstanceOf[STransaction]).toByteArray).toHex
@@ -103,7 +99,7 @@ end addWitness
 
 // A variant for multisig functions.
 def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness): MultisigTx[T] =
-    MultisigTx(addWitness(tx.toL1Tx, wit))
+    MultisigTx(addWitness(tx.untagged, wit))
 
 /** @param tx
   * @param address

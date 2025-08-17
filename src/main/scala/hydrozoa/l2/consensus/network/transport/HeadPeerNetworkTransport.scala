@@ -12,7 +12,6 @@ import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.consensus.network.{*, given}
 import hydrozoa.node.TestPeer
-import hydrozoa.node.server.Node
 import ox.*
 import ox.channels.*
 import ox.flow.Flow
@@ -24,7 +23,7 @@ import sttp.client4.ws.sync.*
 import sttp.model.Uri
 import sttp.shared.Identity
 import sttp.tapir.*
-import sttp.tapir.DecodeResult.Value
+import sttp.tapir.DecodeResult.{Missing, Value}
 import sttp.tapir.server.ServerEndpoint.Full
 import sttp.tapir.server.netty.sync.OxStreams.Pipe
 import sttp.tapir.server.netty.sync.{NettySyncServer, OxStreams}
@@ -347,6 +346,21 @@ class HeadPeerNetworkTransportWS(
                     case DecodeResult.Error(err, throwable) =>
                         log.error(err)
                         throw throwable
+                    case DecodeResult.Multiple(m) => {
+                        log.error("multiple messages decoded")
+                        throw RuntimeException("wsConsensusClient: multiple messages decoded")
+                    }
+                    case DecodeResult.Mismatch(expected, actual) => {
+                        log.error {
+                            s"Mismatch in wsConsensusClient decoding. Expected: ${expected}; actual: ${actual}"
+                        }
+                        throw RuntimeException("wsConsensusClient: mismatch in decoding")
+                    }
+                    case DecodeResult.InvalidValue(errors) => {
+                        log.error(errors.toString())
+                        throw RuntimeException("wsConsensusClient: invalid value in decoding")
+                    }
+                    case Missing =>
             }
 
     override def broadcastReq(seq: Option[Long])(req: Req): Long =

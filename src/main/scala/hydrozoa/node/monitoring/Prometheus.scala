@@ -1,14 +1,18 @@
 package hydrozoa.node.monitoring
 
-import hydrozoa.l2.ledger.L2EventLabel
-import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.l2.ledger.{L2EventLabel, L2EventTransactionLabel, L2EventWithdrawalLabel}
 import io.prometheus.metrics.core.metrics.{Counter, Gauge, Histogram}
 
+/** Throws an exception on genesis events */
 def nonGenesisEventLabel(eventType: L2EventLabel | String): String = {
     val eventTypeLabel = eventType match
         case L2EventTransactionLabel => "transaction"
         case L2EventWithdrawalLabel  => "withdrawal"
         case str: String             => str
+        case _ =>
+            throw RuntimeException(
+              "nonGenesisEventLabel: Genesis event passed where non-genesis event expected"
+            )
     eventTypeLabel
 }
 

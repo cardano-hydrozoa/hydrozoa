@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.Tx
 import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
-import hydrozoa.l1.multisig.tx.FinalizationTx
+import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import io.bullet.borer.Cbor
 import scalus.cardano.ledger.*
@@ -98,7 +98,7 @@ class ScalusFinalizationTxBuilder(
           auxiliaryData = None
         )
 
-        Right(Tx(scalusTransaction))
+        Right(MultisigTx(scalusTransaction))
     }
 
 }

@@ -87,14 +87,15 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)]) extends L2Ev
 
 }
 
-// Tags used in blocks
-enum L2EventLabel derives CanEqual:
-    case L2EventGenesisLabel
-    case L2EventTransactionLabel
-    case L2EventWithdrawalLabel
+/** Tags used in blocks */
+sealed trait L2EventLabel derives CanEqual
+
+case object L2EventGenesisLabel extends L2EventLabel derives CanEqual
+case object L2EventTransactionLabel extends L2EventLabel derives CanEqual
+case object L2EventWithdrawalLabel extends L2EventLabel derives CanEqual
 
 def l2EventLabel(e: L2Event): L2EventLabel =
     e match
-        case _: L2EventGenesis     => L2EventLabel.L2EventGenesisLabel
-        case _: L2EventTransaction => L2EventLabel.L2EventTransactionLabel
-        case _: L2EventWithdrawal  => L2EventLabel.L2EventWithdrawalLabel
+        case _: L2EventGenesis     => L2EventGenesisLabel
+        case _: L2EventTransaction => L2EventTransactionLabel
+        case _: L2EventWithdrawal  => L2EventWithdrawalLabel

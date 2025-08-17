@@ -4,15 +4,10 @@ import com.github.plokhotnyuk.jsoniter_scala.core.*
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.transitionary.emptyTxBody
-import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import hydrozoa.l1.multisig.tx.{DeinitTx, PostDatedRefundTx}
 import hydrozoa.l2.block.{Block, BlockBody, BlockHeader, BlockTypeL2}
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.L2EventLabel.{
-    L2EventGenesisLabel,
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import io.bullet.borer.Cbor
@@ -377,7 +372,7 @@ given testPeerSchema: Schema[TestPeer] =
   */
 
 case class ReqDeinit(
-    deinitTx: TxL1,
+    deinitTx: DeinitTx,
     // TODO: this should not be here. I added it to avoid calling HeadState from the actor
     //   since I saw a deadlock once I tried. We have to figure it out, since the actor
     //   needs the state to effectively deinit the head.
@@ -387,10 +382,10 @@ case class ReqDeinit(
     type resultType = Unit
 
 given reqDeinitCodec: JsonValueCodec[ReqDeinit] =
-    JsonCodecMaker.make
+    ??? // JsonCodecMaker.make
 
 given reqDeinitSchema: Schema[ReqDeinit] =
-    Schema.derived[ReqDeinit]
+    ??? // Schema.derived[ReqDeinit]
 
 /** ------------------------------------------------------------------------------------------
   * AckDeinit
