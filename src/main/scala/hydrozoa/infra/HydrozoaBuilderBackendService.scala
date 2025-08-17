@@ -1,11 +1,7 @@
 package hydrozoa.infra
 
 import com.bloxbean.cardano.client.api.common.OrderEnum
-import com.bloxbean.cardano.client.api.helper.{
-    FeeCalculationService,
-    TransactionHelperService,
-    UtxoTransactionBuilder
-}
+import com.bloxbean.cardano.client.api.helper.{FeeCalculationService, UtxoTransactionBuilder}
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.transaction.spec.Transaction
@@ -56,14 +52,6 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
 
         override def getUtxos(
             address: String,
-            unit: String,
-            count: Int,
-            page: Int,
-            order: OrderEnum
-        ): Result[util.List[Utxo]] = getUtxos(address, count, page, order)
-
-        override def getUtxos(
-            address: String,
             count: Int,
             page: Int,
             order: OrderEnum
@@ -87,6 +75,14 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
                         result.withValue(List(multisigTreasuryUtxo).asJava)
                         result
                 }
+
+        override def getUtxos(
+            address: String,
+            unit: String,
+            count: Int,
+            page: Int,
+            order: OrderEnum
+        ): Result[util.List[Utxo]] = getUtxos(address, count, page, order)
 
         override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
             // if txHash == this.txHash && outputIndex == = then

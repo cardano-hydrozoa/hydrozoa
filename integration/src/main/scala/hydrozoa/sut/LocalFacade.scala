@@ -103,12 +103,12 @@ class LocalFacade(
                 })
                 ret
 
+    override def stateL2(): List[(UtxoId[L2], Output[L2])] =
+        randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
+
     private def randomNode =
         val millis = System.currentTimeMillis().toString.takeRight(3).toInt
         peers.values.toList(millis % peers.size)
-
-    override def stateL2(): List[(UtxoId[L2], Output[L2])] =
-        randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
         nextBlockFinal: Boolean
@@ -162,8 +162,6 @@ val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
 
-    private val log = Logger("LocalFacade")
-
     def apply(
         peers: Set[TestPeer],
         autonomousBlocks: Boolean = false,
@@ -194,7 +192,7 @@ object LocalFacade:
                               mbTreasuryScriptRefUtxoId = mbTreasuryScriptRefUtxoId,
                               mbDisputeScriptRefUtxoId = mbDisputeScriptRefUtxoId,
                               nodeCallback = (p, n) => {
-                                  synchronized(nodes.put(p, n))
+                                  synchronized(nodes.put(p, n)) : Unit
                               }
                             )
                         }
@@ -223,5 +221,5 @@ object LocalFacade:
 
         new LocalFacade(
           nodes.toMap,
-          threadId => shutdownFlag.put(threadId, true)
+          threadId => shutdownFlag.put(threadId, true) : Unit
         )

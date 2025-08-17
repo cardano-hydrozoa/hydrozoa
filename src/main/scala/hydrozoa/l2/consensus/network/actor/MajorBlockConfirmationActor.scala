@@ -2,9 +2,7 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{emptyContext, toV3UTxO}
-import hydrozoa.infra.{Piper, addWitnessMultisig, serializeTxHex}
-import hydrozoa.l1.CardanoL1
+import hydrozoa.infra.{addWitnessMultisig, serializeTxHex}
 import hydrozoa.l1.multisig.tx.settlement.{SettlementRecipe, SettlementTxBuilder}
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
@@ -17,8 +15,6 @@ import hydrozoa.node.state.L1BlockEffect.SettlementTxEffect
 import ox.channels.{ActorRef, Channel, Source}
 import ox.resilience.{RetryConfig, retryEither}
 import scalus.cardano.ledger.TransactionHash
-import scalus.cardano.ledger.rules.Context
-import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt

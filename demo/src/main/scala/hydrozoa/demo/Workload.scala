@@ -281,7 +281,7 @@ object Workload extends OxApp:
 
     def runCommand(cmd: WorkloadCommand): Unit =
         log.info(s"Running command: $cmd")
-        cmd.runSut(sut)
+        cmd.runSut(sut) : Unit
 
     // Run Gen with random seed
     extension [T](g: Gen[T])
@@ -305,8 +305,6 @@ class InitializeCommand(
 ) extends WorkloadCommand:
 
     override type Result = Either[InitializationError, TransactionHash]
-    private val log = Logger(getClass)
-
     override def toString: String =
         s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 
@@ -346,8 +344,10 @@ class DepositCommand(
 ) extends WorkloadCommand:
 
     override type Result = Either[DepositError, DepositResponse]
+    @annotation.unused
     private val log = Logger(getClass)
 
+    @annotation.unused
     override def toString: String =
         s"Deposit command { depositor = $depositor, amount = $depositAmount, fund utxo = $fundUtxo, L2 address = $address, refund address = $refundAddress}"
 
@@ -376,6 +376,7 @@ class DepositCommand(
 class TransactionL2Command(simpleTransaction: L2EventTransaction) extends WorkloadCommand:
 
     override type Result = Unit
+    @annotation.unused
     private val log = Logger(getClass)
 
     override def toString: String = s"Transaction L2 command { $simpleTransaction }"
@@ -387,7 +388,7 @@ class TransactionL2Command(simpleTransaction: L2EventTransaction) extends Worklo
     override def runState(state: HydrozoaState): HydrozoaState = state
 
     override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
-        sut.ask(_.submitL2(simpleTransaction))
+        sut.ask(_.submitL2(simpleTransaction)) : Unit
 
 class WithdrawalL2Command(simpleWithdrawal: L2EventWithdrawal) extends WorkloadCommand:
 
@@ -404,7 +405,7 @@ class WithdrawalL2Command(simpleWithdrawal: L2EventWithdrawal) extends WorkloadC
     override def runState(state: HydrozoaState): HydrozoaState = state
 
     override def runSut(sut: ActorRef[HydrozoaFacade]): Unit =
-        sut.ask(_.submitL2(simpleWithdrawal))
+        sut.ask(_.submitL2(simpleWithdrawal)) : Unit
 
 enum PeersNetworkPhase derives CanEqual:
     case NewlyCreated

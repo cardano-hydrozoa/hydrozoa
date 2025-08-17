@@ -3,7 +3,6 @@ package hydrozoa.l1.event
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
@@ -11,15 +10,11 @@ import hydrozoa.node.state.NodeState
 import ox.channels.ActorRef
 import ox.scheduling.{RepeatConfig, repeat}
 import ox.{fork, sleep, supervised}
-import scalus.bloxbean.Interop
-import scalus.builtin.ByteString
 import scalus.builtin.Data.fromData
-import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 
-import java.math.BigInteger
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -145,7 +140,7 @@ class MultisigL1EventSource(
                                                 .put(
                                                   depositUtxo.untagged.input,
                                                   depositUtxo.untagged.output
-                                                )
+                                                ) : Unit
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )

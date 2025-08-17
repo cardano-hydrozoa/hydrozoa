@@ -3,7 +3,7 @@ package hydrozoa.l1.rulebased.onchain
 import com.bloxbean.cardano.client.cip.cip67.CIP67AssetNameUtil.labelToPrefix
 import hydrozoa.UtxoIdL1
 import hydrozoa.infra.CryptoHash.H28
-import hydrozoa.infra.{Piper, encodeHex}
+import hydrozoa.infra.encodeHex
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.AssetName
 

@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}

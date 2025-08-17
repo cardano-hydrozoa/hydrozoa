@@ -124,7 +124,7 @@ given L2ConformanceValidator[Transaction] with
         for
             _ <- given_L2ConformanceValidator_TransactionBody.l2Validate(l1.body.value)
             _ <- given_L2ConformanceValidator_TransactionWitnessSet.l2Validate(l1.witnessSet)
-        yield Right(())
+        yield () : Unit
 
 given L2ConformanceValidator[TransactionBody] with
     /** Differs from the L1 Tx Body as follows: \- The following omissions from the current spec

@@ -13,21 +13,16 @@ import co.nstant.in.cbor.model.{
     ByteString as CborByteString
 }
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
-import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.spec.Era
 import com.bloxbean.cardano.client.transaction.spec.script.{
     ScriptAll,
     NativeScript as BBNativeScript
 }
 import com.bloxbean.cardano.client.transaction.spec.{TransactionOutput, Value}
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
-import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
-import hydrozoa.node.TestPeer
 import io.bullet.borer.Cbor
-import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
@@ -36,14 +31,11 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{
     AssetName,
     Blake2b_224,
-    Blake2b_256,
     Hash,
     HashPurpose,
     MultiAsset,
     OriginalCborByteArray,
-    PolicyId,
     Sized,
-    TransactionHash,
     TransactionInput,
     VKeyWitness,
     Transaction as STransaction,
@@ -83,7 +75,7 @@ def addWitness[L <: AnyLayer](tx: Tx[L], wit: VKeyWitness): Tx[L] =
         else new CborArray
 
     if (vkWitnessArrayDI == null)
-        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray)
+        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray) : Unit
 
     val vkeyWitness = new CborArray
     vkeyWitness.add(CborByteString(wit.vkey.bytes))

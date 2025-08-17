@@ -1,11 +1,9 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.l2.consensus.network.{AckUnit, Req, ReqEventL2}
-import hydrozoa.node.state.{NodeState, WalletId}
+import hydrozoa.node.state.NodeState
 import ox.channels.{ActorRef, Channel, Source}
-import ox.{forkDiscard, supervised}
 
 import scala.collection.mutable
 

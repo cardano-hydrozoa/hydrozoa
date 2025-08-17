@@ -9,7 +9,6 @@ import hydrozoa.node.{
     l2EventTransactionFromInputsAndPeer,
     l2EventWithdrawalFromInputsAndPeer
 }
-import io.bullet.borer.Cbor
 import monocle.Iso
 import monocle.syntax.all.*
 import org.scalacheck.Prop.{forAll, propBoolean}
@@ -174,9 +173,9 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     address(Bob)
 
     test("init empty STS constituents") {
-        val context = emptyContext
-        val state = emptyState
-        val event = L2EventTransaction(Tx[L2](emptyTransaction))
+        @annotation.unused val context = emptyContext
+        @annotation.unused val state = emptyState
+        @annotation.unused val event = L2EventTransaction(Tx[L2](emptyTransaction))
     }
 
     property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(Alice)) {
@@ -197,7 +196,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                             )) :|
                             "All TransactionInputs resulting from the genesis should have the same txId" && {
                                 // Checking that all expected indexes appear somewhere in the new state
-                                var allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
+                                val allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
                                 allIdx == actualIndexes
                             } :| s"All expected transaction indexes appear (0 to ${event.resolvedL2UTxOs.length}); actualIdxs are ${actualIndexes}"
 

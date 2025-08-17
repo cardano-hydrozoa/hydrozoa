@@ -2,24 +2,19 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
-import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import io.bullet.borer.Cbor
 import ox.channels.{ActorRef, Channel, Source}
-import scalus.builtin.{ByteString, given}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Shelley
 import scalus.cardano.ledger.{AssetName, PolicyId, TransactionHash, VKeyWitness}
 
 import scala.collection.mutable
@@ -57,7 +52,6 @@ private class InitHeadActor(
                 )
         }
         val headNativeScript = mkHeadNativeScript(headVKeys)
-        val headMintingPolicy: PolicyId = (headNativeScript.scriptHash)
 
         val headAddress: AddressL1 = Address[L1](
           ShelleyAddress(

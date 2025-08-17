@@ -1,24 +1,20 @@
 package hydrozoa.l1.rulebased.tx.deinit
 
 import co.nstant.in.cbor.model.Array
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
+import com.bloxbean.cardano.client.api.model.Amount
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.function.helper.SignerProviders
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{encodeHex, getUtxoWithDatum, mkBuilder, numberOfSignatories, toEither}
+import hydrozoa.infra.{encodeHex, getUtxoWithDatum, mkBuilder, numberOfSignatories}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, TreasuryRedeemer}
 import hydrozoa.{TxL1, UtxoId, UtxoIdL1}
 import scalus.bloxbean.*
-import scalus.builtin.Data.{fromData, toData}
-import scalus.builtin.FromData
+import scalus.builtin.Data.toData
 
 import scala.jdk.CollectionConverters.*
-import scala.util.{Failure, Success, Try}
 
 class BloxBeanDeinitTxBuilder(
     backendService: BackendService,
@@ -86,7 +82,7 @@ class BloxBeanDeinitTxBuilder(
                         // .preBalanceTx should be called only once
                         .preBalanceTx((_, t) =>
                             t.getWitnessSet.getNativeScripts.add(headNativeScript)
-                            t.getBody.getMint.add(headTokensToBurn)
+                            t.getBody.getMint.add(headTokensToBurn) : Unit
                         )
                         .postBalanceTx((_, t) =>
                             val outputs = t.getBody.getOutputs

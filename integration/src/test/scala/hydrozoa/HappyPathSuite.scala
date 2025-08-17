@@ -1,15 +1,12 @@
 package hydrozoa
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.rest.SubmitRequestL2.Transaction
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.node.state.L1BlockEffect.{FinalizationTxEffect, SettlementTxEffect}
 import hydrozoa.node.{TestPeer, l2EventWithdrawalFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionHash
 import sttp.client4.Response
 import sttp.client4.quick.*
@@ -67,7 +64,9 @@ class HappyPathSuite extends FunSuite {
               Alice,
               testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
-              TransactionHash.fromHex("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
+              TransactionHash.fromHex(
+                "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
+              ),
               TxIx(0)
             )
 
@@ -75,21 +74,22 @@ class HappyPathSuite extends FunSuite {
 
             // Deposit change from initialization transaction
             deposit1 <- sut.deposit(
-                    Alice,
-                    DepositRequest(
-                            initTxId,
-                            TxIx(1),
-            100_000_000,
-                            None,
-                            Address[L2](TestPeer.address(Alice)),
-                            None,
-                            Address[L1](TestPeer.address(Alice)),
-                            None
-                    )
+              Alice,
+              DepositRequest(
+                initTxId,
+                TxIx(1),
+                100_000_000,
+                None,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](TestPeer.address(Alice)),
+                None
+              )
             )
-          
 
-            deposit1Tx = sut.awaitTxL1(deposit1.depositId.transactionId).toRight("Deposit tx is missing")
+            deposit1Tx = sut
+                .awaitTxL1(deposit1.depositId.transactionId)
+                .toRight("Deposit tx is missing")
 
             deposit2 <- sut.deposit(
               Alice,
@@ -105,7 +105,9 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            deposit2Tx = sut.awaitTxL1(deposit2.depositId.transactionId).toRight("Deposit tx is missing")
+            deposit2Tx = sut
+                .awaitTxL1(deposit2.depositId.transactionId)
+                .toRight("Deposit tx is missing")
 
             major1 <- sut.produceBlock(false)
 
@@ -129,7 +131,9 @@ class HappyPathSuite extends FunSuite {
 
             finalBlock <- sut.produceBlock(false)
             finalTx = sut
-                .awaitTxL1((finalBlock._1.l1Effect.asInstanceOf[FinalizationTxEffect].effect.untagged.id))
+                .awaitTxL1(
+                  (finalBlock._1.l1Effect.asInstanceOf[FinalizationTxEffect].effect.untagged.id)
+                )
                 .toRight("Final tx is missing")
         yield (
           deposit1Tx,

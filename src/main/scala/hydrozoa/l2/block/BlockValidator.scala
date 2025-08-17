@@ -2,17 +2,14 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.Piper
-import hydrozoa.infra.transitionary.toScalus
-import hydrozoa.l1.multisig.state.{DepositTag, DepositUtxos}
+import hydrozoa.l1.multisig.state.DepositUtxos
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.ValidationFailure.*
 import hydrozoa.l2.block.ValidationResolution.*
 import hydrozoa.l2.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
-import scalus.cardano.ledger.{TransactionHash, TransactionInput, TransactionOutput, UTxO}
-import scalus.ledger.api.v3
+import scalus.cardano.ledger.{TransactionHash, TransactionOutput}
 
 import scala.collection.mutable
 import scala.language.{implicitConversions, strictEquality}
@@ -20,8 +17,7 @@ import scala.util.boundary
 import scala.util.boundary.break
 
 // TODO: unify in terms of abstract ledger and types
-
-enum ValidationFailure(msg: String):
+enum ValidationFailure(@annotation.unused msg: String):
     case MinorBlockContainsWithdrawals
         extends ValidationFailure("A minor block can't contain withdrawals.")
 

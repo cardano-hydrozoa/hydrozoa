@@ -5,8 +5,7 @@ import hydrozoa.infra.encodeHex
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.commitment.{UtxoSetCommitment, infG2}
 import hydrozoa.l2.ledger.{L2EventLabel, L2EventTransactionLabel, L2EventWithdrawalLabel}
-import scalus.cardano.ledger
-import scalus.cardano.ledger.{TransactionHash, TransactionInput}
+import scalus.cardano.ledger.TransactionHash
 
 case class Block(
     blockHeader: BlockHeader,

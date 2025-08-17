@@ -13,9 +13,8 @@ import hydrozoa.l1.rulebased.tx.withdraw.WithdrawTxBuilder
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.HeadPeerNetwork
-import hydrozoa.l2.ledger.{L2EventLabel, L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.node.TestPeer
-import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
+import hydrozoa.l2.ledger.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.Finalized
 import hydrozoa.{AddressL1, VerificationKeyBytes}
 import ox.channels.ActorRef
@@ -58,7 +57,6 @@ class NodeState(autonomousBlocks: Boolean):
     private var resolutionTxBuilder: ResolutionTxBuilder = _
     private var withdrawTxBuilder: WithdrawTxBuilder = _
     private var deinitTxBuilder: DeinitTxBuilder = _
-    private var ownPeer: TestPeer = _
     // The head state. Currently, we support only one head per a [set] of nodes.
     private var headState: Option[HeadStateGlobal] = None
 

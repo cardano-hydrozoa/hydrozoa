@@ -1,14 +1,12 @@
 package hydrozoa.l1.rulebased.tx.resolution
 
 import com.bloxbean.cardano.client.address.Address
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo}
+import com.bloxbean.cardano.client.api.model.Amount
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.function.helper.SignerProviders
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.infra.{getUtxoWithDatum, mkBuilder, toEither}
+import hydrozoa.infra.{getUtxoWithDatum, mkBuilder}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{DisputeRedeemer, VoteDatum}
@@ -19,8 +17,7 @@ import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
 }
 import hydrozoa.{TxL1, UtxoIdL1}
 import scalus.bloxbean.*
-import scalus.builtin.Data.{fromData, toData}
-import scalus.builtin.FromData
+import scalus.builtin.Data.toData
 
 import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions

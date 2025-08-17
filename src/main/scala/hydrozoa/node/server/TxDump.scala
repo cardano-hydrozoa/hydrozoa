@@ -6,8 +6,8 @@ import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx, MultisigTxTag}
 /** TODO: review, currently broken
   */
 object TxDump:
-    private val txDumpL1: os.Path = os.pwd / "txsl1.out"
-    private val txDumpL2: os.Path = os.pwd / "txsl2.out"
+    @annotation.unused private val  txDumpL1: os.Path = os.pwd / "txsl1.out"
+    @annotation.unused private val  txDumpL2: os.Path = os.pwd / "txsl2.out"
 
     def dumpInitTx(initTx: InitTx): Unit =
 //        TxDump.resetLogs()
@@ -26,6 +26,4 @@ object TxDump:
 //        else os.write(txDumpL2, cbor)
         ()
 
-    private def resetLogs(): Unit =
-        os.remove(txDumpL1)
-        os.remove(txDumpL2)
+    

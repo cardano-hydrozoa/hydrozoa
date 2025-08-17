@@ -1,7 +1,7 @@
 package hydrozoa.l1.rulebased.tx.resolution
 
 import com.bloxbean.cardano.client.account.Account
-import hydrozoa.{TxIx, TxL1, UtxoIdL1}
+import hydrozoa.{TxL1, UtxoIdL1}
 
 trait ResolutionTxBuilder {
 

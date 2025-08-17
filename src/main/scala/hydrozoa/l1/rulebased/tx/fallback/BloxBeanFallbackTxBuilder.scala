@@ -24,11 +24,10 @@ import hydrozoa.l1.rulebased.onchain.{
     mkVoteDatum,
     mkVoteTokenName
 }
-import hydrozoa.{TxIx, TxL1, UtxoId, UtxoIdL1}
+import hydrozoa.{TxIx, TxL1, UtxoId}
 import scalus.bloxbean.*
-import scalus.builtin.ByteString
 import scalus.builtin.Data.{fromData, toData}
-import scalus.cardano.ledger.{Blake2b_256, Hash, TransactionHash, TransactionInput}
+import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 import scalus.prelude.asScalus
 
 import java.math.BigInteger
@@ -161,7 +160,7 @@ class BloxBeanFallbackTxBuilder(
                 outputs.remove(1)
                 // proper set of utxos (def + voting)
                 outputs.add(defVoteUtxo)
-                outputs.addAll(voteUtxos.asJava)
+                outputs.addAll(voteUtxos.asJava) : Unit
             )
             // Remove the change and update coins in the treasury
             .postBalanceTx((_, t) =>

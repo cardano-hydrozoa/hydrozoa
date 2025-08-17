@@ -1,8 +1,5 @@
 package hydrozoa.l1
 
-import com.bloxbean.cardano.client.api.model.Amount.lovelace
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
-import com.bloxbean.cardano.client.api.util.AssetUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{serializeTxHex, txInputs, txOutputs}
@@ -19,7 +16,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.PosixTime
 
 import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
 
 class CardanoL1Mock() extends CardanoL1:
 

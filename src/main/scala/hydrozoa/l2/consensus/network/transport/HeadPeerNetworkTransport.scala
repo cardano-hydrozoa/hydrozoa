@@ -314,12 +314,6 @@ class HeadPeerNetworkTransportWS(
             )
             .handleSuccess(_ => mkPipe(mkOutgoingFlowCopy()))
 
-    // Creates a new channel and returns a flow from it
-    private def mkOutgoingFlowCopy(): Flow[AnyMsg] =
-        val newChannel: Channel[AnyMsg] = Channel.unlimited
-        outgoingChannels.append(newChannel)
-        Flow.fromSource(newChannel)
-
     // Requests and responses can be treated separately despite the Pipe representation which is Flow[A] => Flow[B]
     // This is called for every new incoming connection
     def mkPipe(outgoingFlow: Flow[AnyMsg]): Pipe[AnyMsg, AnyMsg] =
@@ -327,8 +321,6 @@ class HeadPeerNetworkTransportWS(
             in.tap(incoming.send)
                 .drain()
                 .merge(outgoingFlow)
-
-    // "Client" component
 
     def wsConsensusClient()(ws: SyncWebSocket): Unit =
         supervised:
@@ -363,6 +355,14 @@ class HeadPeerNetworkTransportWS(
                     case Missing =>
             }
 
+    // "Client" component
+
+    // Creates a new channel and returns a flow from it
+    private def mkOutgoingFlowCopy(): Flow[AnyMsg] =
+        val newChannel: Channel[AnyMsg] = Channel.unlimited
+        outgoingChannels.append(newChannel)
+        Flow.fromSource(newChannel)
+
     override def broadcastReq(seq: Option[Long])(req: Req): Long =
         log.info(s"broadcastReq")
         val next: Long = seq.getOrElse(nextSeq)
@@ -373,6 +373,11 @@ class HeadPeerNetworkTransportWS(
         log.info(s"Done!")
         next
 
+    override def nextSeq: Long =
+        val ret = counter + 1
+        counter = ret
+        ret
+
     override def broadcastAck(replyTo: TestPeer, replyToSeq: Long)(ack: Ack): Long =
         log.info(s"broadcastAck")
         val next = nextSeq
@@ -382,11 +387,6 @@ class HeadPeerNetworkTransportWS(
         outgoing.send(anyMsg)
         log.info(s"Done!")
         next
-
-    override def nextSeq: Long =
-        val ret = counter + 1
-        counter = ret
-        ret
 
 end HeadPeerNetworkTransportWS
 

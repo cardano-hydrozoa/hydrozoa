@@ -12,20 +12,10 @@ import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import io.bullet.borer.Cbor
 import ox.channels.ActorRef
-import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.Script.Native
-import scalus.ledger.api.v3.Value
-import sttp.tapir.Schema.schemaForMap
-import sttp.tapir.SchemaType.SBinary
 import sttp.tapir.generic.auto.*
-import sttp.tapir.json.jsoniter.*
 import sttp.tapir.{Schema, SchemaType}
 
 import scala.collection.mutable

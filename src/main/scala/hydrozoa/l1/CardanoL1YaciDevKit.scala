@@ -1,6 +1,5 @@
 package hydrozoa.l1
 
-import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.toEither

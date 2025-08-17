@@ -2,32 +2,19 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
-import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.{DeinitTx, InitTx}
-import hydrozoa.l1.rulebased.tx.deinit.{DeinitTxBuilder, DeinitTxRecipe}
-import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
-import hydrozoa.l2.consensus.HeadParams
+import hydrozoa.l1.multisig.tx.DeinitTx
 import hydrozoa.l2.consensus.network.*
-import hydrozoa.node.server.TxDump
-import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import io.bullet.borer.Cbor
+import hydrozoa.node.state.{NodeState, WalletId}
 import ox.channels.{ActorRef, Channel, Source}
-import scalus.builtin.{ByteString, given}
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Shelley
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 
 import scala.collection.mutable
 
 private class DeinitHeadActor(
     // TODO: remove
-    stateActor: ActorRef[NodeState],
+    @annotation.unused stateActor: ActorRef[NodeState],
     walletActor: ActorRef[Wallet],
     cardanoActor: ActorRef[CardanoL1],
     dropMyself: () => Unit

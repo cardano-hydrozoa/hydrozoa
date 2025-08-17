@@ -13,15 +13,12 @@ import hydrozoa.infra.{Piper, toEither, valueTokens}
 import hydrozoa.{Address, *}
 import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
-import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.*
-import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.Transaction.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
@@ -34,7 +31,6 @@ import scalus.prelude.Option
 import scalus.{ledger, prelude}
 
 import scala.collection.immutable.SortedMap
-import scala.given
 import scala.jdk.CollectionConverters.ListHasAsScala
 import scala.language.implicitConversions
 

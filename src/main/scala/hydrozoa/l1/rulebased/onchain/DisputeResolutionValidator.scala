@@ -9,7 +9,6 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{C
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidatorScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
 import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
@@ -25,25 +24,11 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
-import scalus.cardano.ledger.TransactionOutput.Shelley
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{
-    !==,
-    ===,
-    AssocMap,
-    Eq,
-    List,
-    Option,
-    SortedMap,
-    Validator,
-    fail,
-    log,
-    require,
-    given
-}
+import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
 import scalus.uplc.DeBruijnedProgram
 import scalus.uplc.eval.*
 

@@ -2,7 +2,6 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.{addWitnessMultisig, serializeTxHex}
-import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.tx.FinalizationTx
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationRecipe, FinalizationTxBuilder}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution}
@@ -120,7 +119,7 @@ private class FinalBlockConfirmationActor(
         else None
 
     private def deliverAck2(ack2: AckFinal2): Unit =
-        acks2.put(ack2.peer, ack2)
+        acks2.put(ack2.peer, ack2) : Unit
 
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")

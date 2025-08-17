@@ -3,7 +3,6 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
@@ -18,9 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
-import scalus.builtin.Data
 import scalus.cardano.ledger.{LedgerToPlutusTranslation, TransactionHash}
-import scalus.ledger.api.v3.{TxOut, TxOutRef}
 import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt

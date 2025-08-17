@@ -3,7 +3,7 @@ package hydrozoa.l1.rulebased.tx.vote
 import com.bloxbean.cardano.client.account.Account
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.BlockHeader
 import hydrozoa.node.state.L1BlockEffect.MinorBlockL1Effect
-import hydrozoa.{AddressL1, Ed25519Signature, TxL1, UtxoIdL1}
+import hydrozoa.{AddressL1, TxL1, UtxoIdL1}
 
 trait VoteTxBuilder {
 

@@ -5,7 +5,6 @@ import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.VKeyWitness
 

@@ -1,6 +1,5 @@
 package hydrozoa
 
-import com.bloxbean.cardano.client.function.helper.SignerProviders
 import hydrozoa.node.state.WalletId
 import scalus.cardano.ledger.VKeyWitness
 

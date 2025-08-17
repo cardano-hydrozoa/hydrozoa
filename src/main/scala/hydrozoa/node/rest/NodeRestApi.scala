@@ -6,23 +6,20 @@ But this may be achievable earlier with tapirs schemas? I'm not sure.
  */
 
 import com.github.plokhotnyuk.jsoniter_scala.core.{
-    JsonKeyCodec,
     JsonReader,
     JsonValueCodec,
     JsonWriter
 }
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
-import hydrozoa.l2.consensus.network.{*, given}
+import hydrozoa.l2.consensus.network.{given}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.*
 import hydrozoa.node.server.{*, given}
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
 import sttp.tapir.*
 import sttp.tapir.CodecFormat.TextPlain
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -107,10 +104,10 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runSubmitL2(req: SubmitRequestL2): Either[String, String] =
         node.ask(_.submitL2(req).map(_.toString))
 
-    private def runStateL2(_unit: Unit): Either[Unit, StateL2Response] =
+    private def runStateL2(@annotation.unused _unit: Unit): Either[Unit, StateL2Response] =
         Right(node.ask(_.stateL2()))
 
-    private def runFinalize(_unit: Unit): Either[String, String] =
+    private def runFinalize(@annotation.unused _unit: Unit): Either[String, String] =
         node.ask(_.tryFinalize())
 
 object NodeRestApi:

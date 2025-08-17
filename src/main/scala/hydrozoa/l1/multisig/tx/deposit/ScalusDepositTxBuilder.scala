@@ -1,12 +1,11 @@
 package hydrozoa.l1.multisig.tx.deposit
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
 import hydrozoa.{AddressL1, Tx, TxIx, TxL1}
-import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart, StakePayload}
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 

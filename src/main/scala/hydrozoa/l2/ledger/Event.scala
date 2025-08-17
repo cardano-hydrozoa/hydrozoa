@@ -76,14 +76,14 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)]) extends L2Ev
           // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
           // yet
           utxosL1
-              .map((ti, to) => ti.transactionId.toHex ++ ti.index.toString)
+              .map((ti, _) => ti.transactionId.toHex ++ ti.index.toString)
               .sorted
               .flatMap(ti => Cbor.encode(ti).toByteArray)
               .toArray
         )
       )
     )
-    def volume: Long = utxosL1.map((ti, to) => to.value.coin.value).sum
+    def volume: Long = utxosL1.map((_, to) => to.value.coin.value).sum
 
 }
 

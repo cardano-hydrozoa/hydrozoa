@@ -2,8 +2,7 @@ package hydrozoa.l1.multisig.tx.initialization
 
 import hydrozoa.*
 import hydrozoa.l1.multisig.tx.InitTx
-import scalus.cardano.address.{Address, Network}
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.address.Network
 
 // TODO: Make the Address fit better into the hydrazoa type heirarchy
 // (i.e., this should read InitTx instead of Transaction

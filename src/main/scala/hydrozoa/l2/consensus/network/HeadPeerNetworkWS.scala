@@ -54,7 +54,7 @@ class HeadPeerNetworkWS(
     override def reqMinor(req: ReqMinor): Unit =
         log.info(s"ReqMinor for block: $req.block")
         val seq = transport.nextSeq
-        val ret = dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
+        dispatcher.ask(_.spawnActorProactively(ownPeer, seq, req)).receive()
         log.info(s"reqMinor done")
 
     override def reqMajor(req: ReqMajor): Unit =

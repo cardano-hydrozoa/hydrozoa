@@ -85,7 +85,9 @@ ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-unchecked",
   "-Werror",
-  "-language:implicitConversions"
+  "-language:implicitConversions",
+  "-Wvalue-discard",
+  "-Wunused:all"
 )
 
 // Add the Scalus compiler plugin
@@ -105,3 +107,11 @@ lazy val demo = (project in file("demo"))
 ThisBuild / testFrameworks += new TestFramework("munit.Framework")
 val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
 val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
+
+inThisBuild(
+  List(
+    scalaVersion := "3.3.6",
+    semanticdbEnabled := true,
+    semanticdbVersion := scalafixSemanticdb.revision
+  )
+)

@@ -1,26 +1,17 @@
 package hydrozoa.l1.multisig.tx.settlement
 
 import cats.implicits.*
-import com.bloxbean.cardano.client.api.model.Utxo
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.Tx
-import hydrozoa.infra.force
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody}
 import hydrozoa.l1.multisig.state.mkMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.{MultisigTx, SettlementTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import io.bullet.borer.Cbor
-import scalus.bloxbean.Interop.toPlutusData
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyAddress}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.api
-import scalus.ledger.api.Timelock
-import scalus.ledger.api.Timelock.Signature
 
 import scala.collection
 import scala.language.implicitConversions

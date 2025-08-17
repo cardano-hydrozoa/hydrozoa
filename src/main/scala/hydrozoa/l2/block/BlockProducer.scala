@@ -2,8 +2,7 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toScalus
-import hydrozoa.infra.{Piper, encodeHex}
+import hydrozoa.infra.encodeHex
 import hydrozoa.l1.multisig.state.DepositUtxos
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
@@ -14,7 +13,6 @@ import ox.sleep
 import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
-import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt

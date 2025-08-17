@@ -166,7 +166,7 @@ class ConsensusActorFactory(
                 Some(actor) -> mbAck
             case ack: AckRefundLater =>
                 val actor = mkRefundLaterActor(dropMyself)
-                val mbAck = actor.deliver(ack)
+                actor.deliver(ack)
                 Some(actor) -> None
             case _: AckUnit =>
                 (None, None)

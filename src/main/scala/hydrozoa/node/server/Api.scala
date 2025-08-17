@@ -1,12 +1,11 @@
 package hydrozoa.node.server
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
-import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.serializeTxHex
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import scalus.builtin.Data
-import scalus.cardano.ledger.{DatumOption, TransactionHash, Value}
+import scalus.cardano.ledger.TransactionHash
 import sttp.tapir.Schema
 
 // Types for NODE API

@@ -38,7 +38,6 @@ prefer to do this is by:
  * */
 
 import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
-import hydrozoa.TaggedUtxoSet.TaggedUtxoSet
 import hydrozoa.infra.transitionary.{toScalus, toScalusLedger}
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 import io.bullet.borer.Cbor

@@ -1,10 +1,8 @@
 package hydrozoa.infra
 
-import com.bloxbean.cardano.client.api.model.Amount.lovelace
 import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.crypto.KeyGenUtil.getKeyHash
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.transaction.spec.TransactionOutput
 import com.bloxbean.cardano.client.util.HexUtil
@@ -12,7 +10,7 @@ import hydrozoa.*
 import scalus.bloxbean.Interop
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Data.fromData
-import scalus.builtin.{ByteString, FromData}
+import scalus.builtin.FromData
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{AddrKeyHash, Hash}
 import scalus.ledger.api.v3.{TxId, TxOutRef}

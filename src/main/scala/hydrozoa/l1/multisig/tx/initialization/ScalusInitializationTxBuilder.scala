@@ -1,16 +1,14 @@
 package hydrozoa.l1.multisig.tx.initialization
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody}
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.state.mkInitMultisigTreasuryDatum
 import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
-import hydrozoa.{Address, AddressL1, L1, Tx}
-import io.bullet.borer.Cbor
-import scalus.builtin.ByteString
+import hydrozoa.{Address, AddressL1, L1}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart, Address as SAddress}
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 

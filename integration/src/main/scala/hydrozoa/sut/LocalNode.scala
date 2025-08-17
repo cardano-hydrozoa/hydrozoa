@@ -184,10 +184,11 @@ object LocalNode:
                     log.info(s"Node own peer: $ownPeer, node client API port: $ownApiPort")
 
                     // Client node API
-                    val serverBinding =
+                    @annotation.unused
+                    val serverBinding  =
                         useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(
                           _.stop()
-                        )
+                        ) 
 
                 never
             }

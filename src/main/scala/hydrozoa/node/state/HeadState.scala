@@ -1,22 +1,10 @@
 package hydrozoa.node.state
 
 import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.api.model
-import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.util.HexUtil
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.UtxoSet.getContextAndState
-import hydrozoa.infra.transitionary.{toScalus, toScalusLedger, toV3UTxO}
-import hydrozoa.infra.{
-    Piper,
-    decodeHex,
-    encodeHex,
-    extractVoteTokenNameFromFallbackTx,
-    serializeTxHex,
-    verKeyHash
-}
+import hydrozoa.infra.{Piper, extractVoteTokenNameFromFallbackTx, serializeTxHex, verKeyHash}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.l1.multisig.tx.*
@@ -45,14 +33,11 @@ import hydrozoa.node.state.HeadPhase.{Finalized, Finalizing, Initializing, Open}
 import hydrozoa.node.state.L1BlockEffect.MinorBlockL1Effect
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retry}
-import scalus.bloxbean.Interop
 import scalus.builtin.Data.fromData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.{AssetName, Hash, PolicyId, TransactionHash}
-import scalus.ledger.api.v3
 import scalus.prelude.crypto.bls12_381.G2
-import supranational.blst.{P1, P2}
 
 import scala.CanEqual.derived
 import scala.collection.mutable
@@ -268,7 +253,7 @@ class HeadStateGlobal(
     private var mbIsNextBlockFinal: Option[Boolean] = None
     // TODO: handle it the same way we do `mbIsNextBlockFinal`
     //   so all nodes can actively submit transactions
-    private var mbQuitConsensusImmediately: Option[Boolean] = None
+    @annotation.unused private var mbQuitConsensusImmediately: Option[Boolean] = None
     // L1 states
     private var stateL1: Option[MultisigHeadStateL1] = None
     // L2 state
@@ -510,7 +495,27 @@ class HeadStateGlobal(
             )
             // Try produce block
             log.info("Try to produce a block due to getting new L2 event...")
-            tryProduceBlock(false)
+            tryProduceBlock(false) : Unit
+
+        def isL2EventInPool(txId: TransactionHash): Boolean =
+            self.poolEventsL2.map(_.getEventId).contains(txId)
+
+        override def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
+            log.info(s"Setting a new treasury utxo: $treasuryUtxo")
+            self.stateL1.get.treasuryUtxo = treasuryUtxo
+            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.untagged.output.value.coin.value))
+
+        def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
+            log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
+            depositIds.foreach(self.stateL1.get.depositUtxos.utxoMap.remove)
+            updateDepositLiquidity()
+
+        def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
+            log.info(s"Adding new deposit utxos: $depositUtxos")
+            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.untagged)
+            updateDepositLiquidity()
+            log.info("Try to produce a new block due to observing a new deposit utxo...")
+            tryProduceBlock(false) : Unit
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
@@ -562,29 +567,9 @@ class HeadStateGlobal(
                 Left(msg)
         }
 
-        def isL2EventInPool(txId: TransactionHash): Boolean =
-            self.poolEventsL2.map(_.getEventId).contains(txId)
-
-        override def setNewTreasuryUtxo(treasuryUtxo: TreasuryUtxo): Unit =
-            log.info(s"Setting a new treasury utxo: $treasuryUtxo")
-            self.stateL1.get.treasuryUtxo = treasuryUtxo
-            metrics.tell(_.setTreasuryLiquidity(treasuryUtxo.untagged.output.value.coin.value))
-
-        def removeDepositUtxos(depositIds: Set[UtxoIdL1]): Unit =
-            log.info(s"Removing deposit utxos that don't exist anymore: $depositIds")
-            depositIds.foreach(self.stateL1.get.depositUtxos.utxoMap.remove)
-            updateDepositLiquidity()
-
         private def updateDepositLiquidity(): Unit =
             val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.value.coin.value).sum
             metrics.tell(_.setDepositsLiquidity(coins.toLong))
-
-        def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
-            log.info(s"Adding new deposit utxos: $depositUtxos")
-            self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.untagged)
-            updateDepositLiquidity()
-            log.info("Try to produce a new block due to observing a new deposit utxo...")
-            tryProduceBlock(false)
 
         override def applyBlockRecord(
             record: BlockRecord,
@@ -671,7 +656,7 @@ class HeadStateGlobal(
                         val depositsNum = body.depositsAbsorbed.size
                         m.observeBlockSize("deposit", depositsNum)
                         m.incAbsorbedDeposits(depositsNum)
-                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
+                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost) : Unit
             })
 
             // TODO: L1 effects submission should be carried on by a separate process
@@ -769,7 +754,7 @@ class HeadStateGlobal(
             log.info("Putting head into Finalizing phase.")
             self.headPhase = Finalizing
             log.info("Try to produce the final block...")
-            tryProduceBlock(true)
+            tryProduceBlock(true) : Unit
 
         override def runTestDispute(): Unit = {
 
@@ -852,7 +837,7 @@ class HeadStateGlobal(
 
                         log.info("Checking for resolved treasury utxo")
                         val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
-                        val beaconTokenUnit = AssetName(
+                        AssetName(
                           this.headMintingPolicy ++
                               this.beaconTokenName.bytes
                         )
@@ -974,7 +959,7 @@ class HeadStateGlobal(
                           "Some tallying txs have been submitted, the next round is needed"
                         )
                     }
-                }).toEither
+                }).toEither : Unit
             }
 
             def runResolution(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
@@ -1008,7 +993,7 @@ class HeadStateGlobal(
                                   "Still see votes, waiting for the resolution tx to get through"
                                 )
                             }
-                        }).toEither
+                        }).toEither : Unit
 
                     case _vote1 :: _vote2 :: _vs =>
                         val msg = "More than one vote."
@@ -1086,7 +1071,7 @@ class HeadStateGlobal(
                 log.info("Waiting for the deinit tx...")
                 cardano.ask(
                   _.awaitTx(deinitTxDraft.id, RetryConfig.delay(10, 1.second))
-                )
+                ) : Unit
             }
         }
         end runTestDispute
@@ -1173,8 +1158,6 @@ class HeadStateGlobal(
                 val header = record.block.blockHeader
                 val body = record.block.blockBody
                 val blockType = header.blockType
-                val blockNum = header.blockNum
-
                 val validTxs =
                     body.eventsValid
                         .map(_._2)
@@ -1203,7 +1186,7 @@ class HeadStateGlobal(
                         val depositsNum = body.depositsAbsorbed.size
                         m.observeBlockSize("deposit", depositsNum)
                         m.incAbsorbedDeposits(depositsNum)
-                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost)
+                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost) : Unit
             })
 
             record.l1Effect |> maybeMultisigL1Tx match {

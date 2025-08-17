@@ -15,13 +15,13 @@ object CryptoHash:
         def hash[A](input: IArray[Byte]): H28[A] =
             apply(IArray.from[Byte](blake2bHash224(IArray.genericWrapArray(input).toArray)))
 
-        // TODO: Remove once we migrate to IArray
-        def hash_[A](input: Array[Byte]): H28[A] =
-            apply(IArray.from[Byte](blake2bHash224(input)))
-
         private def apply[A](bytes: IArray[Byte]): H28[A] =
             require(bytes.length == 28, "Blake2b224 hash must be exactly 28 bytes long")
             bytes
+
+        // TODO: Remove once we migrate to IArray
+        def hash_[A](input: Array[Byte]): H28[A] =
+            apply(IArray.from[Byte](blake2bHash224(input)))
 
         extension [A](x: H28[A]) {
             def bytes: IArray[Byte] = x

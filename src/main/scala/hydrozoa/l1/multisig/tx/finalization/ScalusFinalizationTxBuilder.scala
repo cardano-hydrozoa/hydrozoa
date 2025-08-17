@@ -1,16 +1,12 @@
 package hydrozoa.l1.multisig.tx.finalization
 
 import com.bloxbean.cardano.client.backend.api.BackendService
-import com.typesafe.scalalogging.Logger
-import hydrozoa.Tx
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody}
 import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import io.bullet.borer.Cbor
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.prelude.log
 
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions

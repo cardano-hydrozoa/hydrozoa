@@ -1,30 +1,21 @@
 package hydrozoa.l1.rulebased.tx.withdraw
 
 import com.bloxbean.cardano.client.address.Address
-import com.bloxbean.cardano.client.api.model.{Amount, Utxo as BBUtxo}
+import com.bloxbean.cardano.client.api.model.Amount
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.function.helper.SignerProviders
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.infra.{
-    getUtxoWithDatum,
-    mkBuilder,
-    toBloxBeanTransactionOutput,
-    toEither,
-    toTxOutRefV3
-}
+import hydrozoa.infra.{getUtxoWithDatum, mkBuilder, toBloxBeanTransactionOutput, toTxOutRefV3}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{
     TreasuryDatum,
     TreasuryRedeemer,
     WithdrawRedeemer
 }
 import scalus.bloxbean.*
-import scalus.builtin.Data.{fromData, toData}
-import scalus.builtin.{ByteString, FromData}
-import scalus.prelude.List.asScala
+import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 import scalus.prelude.asScalus
 
 import java.math.BigInteger
@@ -107,7 +98,7 @@ class BloxBeanWithdrawTxBuilder(
                         // .preBalanceTx should be called only once
                         .preBalanceTx((_, t) =>
                             val outputs = t.getBody.getOutputs
-                            outputs.addAll(withdrawals.asJava)
+                            outputs.addAll(withdrawals.asJava) : Unit
                         )
                         .buildAndSign()
                 yield (TxL1(tx.serialize))

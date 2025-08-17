@@ -1,7 +1,6 @@
 package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.toV3UTxO
 import hydrozoa.infra.{decodeHex, encodeHex}
 import hydrozoa.l2.block.{BlockValidator, ValidationResolution, mkBlockHeaderSignatureMessage}
 import hydrozoa.l2.consensus.network.*
@@ -9,7 +8,6 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.L1BlockEffect.MinorBlockL1Effect
 import hydrozoa.{Ed25519Signature, Ed25519SignatureHex, UtxoSetL2, Wallet}
 import ox.channels.{ActorRef, Channel, Source}
-import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.language.implicitConversions

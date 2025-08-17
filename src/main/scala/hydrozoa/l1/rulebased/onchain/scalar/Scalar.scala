@@ -26,14 +26,14 @@ object Scalar:
     // TODO: Why doesn't it work?
     inline def apply(inline s: String): Option[Scalar] = Scalar(BigInt(s))
 
-    // Conversions
-    def fromByteStringBigEndian(bytes: ByteString): Option[Scalar] =
-        Scalar(byteStringToInteger(true, bytes))
-
     // Construction
     def apply(n: BigInt): Option[Scalar] =
         if n >= 0 && n < fieldPrime then Some(new Scalar(n))
         else None
+
+    // Conversions
+    def fromByteStringBigEndian(bytes: ByteString): Option[Scalar] =
+        Scalar(byteStringToInteger(true, bytes))
 
     def fromByteStringBigEndianUnsafe(bytes: ByteString): Scalar =
         Scalar.applyUnsafe(byteStringToInteger(true, bytes))

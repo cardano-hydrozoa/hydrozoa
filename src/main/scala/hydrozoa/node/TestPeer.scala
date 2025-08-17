@@ -30,7 +30,7 @@ import scalus.cardano.ledger.{
 
 import scala.collection.mutable
 
-enum TestPeer(ix: Int) derives CanEqual:
+enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
     case Bob extends TestPeer(1)
     case Carol extends TestPeer(2)

@@ -2,7 +2,6 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
 import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx}

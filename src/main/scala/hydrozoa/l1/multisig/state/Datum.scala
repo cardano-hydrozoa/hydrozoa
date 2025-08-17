@@ -1,10 +1,7 @@
 package hydrozoa.l1.multisig.state
 
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.OutputL1
 import scalus.*
-import scalus.bloxbean.Interop
 import scalus.builtin.Data.{FromData, ToData, fromData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.ledger.DatumOption
