@@ -62,7 +62,8 @@ class MultisigL1EventSource(
 
                         // repeat polling for head address while head exists
                         supervised {
-                            fork {
+                            @annotation.unused
+                            val _ = fork {
                                 repeat(RepeatConfig.fixedRateForever(1000.millis))(
                                   updateL1State(headAddress, treasuryTokenAmount)
                                 )
@@ -133,14 +134,15 @@ class MultisigL1EventSource(
                                         then mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
-                                        existingDeposits.add(utxoId)
+                                        @annotation.unused
+                                        val _ = existingDeposits.add(utxoId)
                                         if (!knownDepositIds.contains(utxoId)) then
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
                                             depositsNew.utxoMap
                                                 .put(
                                                   depositUtxo.untagged.input,
                                                   depositUtxo.untagged.output
-                                                ) : Unit
+                                                ): Unit
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )

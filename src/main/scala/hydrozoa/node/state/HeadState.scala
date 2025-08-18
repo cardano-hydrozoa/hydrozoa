@@ -253,7 +253,8 @@ class HeadStateGlobal(
     private var mbIsNextBlockFinal: Option[Boolean] = None
     // TODO: handle it the same way we do `mbIsNextBlockFinal`
     //   so all nodes can actively submit transactions
-    @annotation.unused private var mbQuitConsensusImmediately: Option[Boolean] = None
+    @annotation.unused
+    private var mbQuitConsensusImmediately: Option[Boolean] = None
     // L1 states
     private var stateL1: Option[MultisigHeadStateL1] = None
     // L2 state
@@ -495,7 +496,7 @@ class HeadStateGlobal(
             )
             // Try produce block
             log.info("Try to produce a block due to getting new L2 event...")
-            tryProduceBlock(false) : Unit
+            tryProduceBlock(false): Unit
 
         def isL2EventInPool(txId: TransactionHash): Boolean =
             self.poolEventsL2.map(_.getEventId).contains(txId)
@@ -515,7 +516,7 @@ class HeadStateGlobal(
             self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.untagged)
             updateDepositLiquidity()
             log.info("Try to produce a new block due to observing a new deposit utxo...")
-            tryProduceBlock(false) : Unit
+            tryProduceBlock(false): Unit
 
         override def tryProduceBlock(
             nextBlockFinal: Boolean,
@@ -656,7 +657,7 @@ class HeadStateGlobal(
                         val depositsNum = body.depositsAbsorbed.size
                         m.observeBlockSize("deposit", depositsNum)
                         m.incAbsorbedDeposits(depositsNum)
-                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost) : Unit
+                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost): Unit
             })
 
             // TODO: L1 effects submission should be carried on by a separate process
@@ -688,7 +689,8 @@ class HeadStateGlobal(
                         val event = self.poolEventsL2.remove(i)
                         self.nonGenesisEventsConfirmedL2.append((event, blockNum))
                         // Remove possible duplicates form the pool
-                        self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
+                        @annotation.unused
+                        val _ = self.poolEventsL2.filter(e => e.getEventId == event.getEventId)
                             |> self.poolEventsL2.subtractAll
 //                        // Dump L2 tx
 //                        TxDump.dumpL2Tx(event match
@@ -723,7 +725,8 @@ class HeadStateGlobal(
             log.info(s"Pool events before removing: ${self.poolEventsL2.size}")
 
             log.info(s"Removing invalid events: $eventsInvalid")
-            self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
+            @annotation.unused
+            val _ = self.poolEventsL2.filter(e => eventsInvalid.map(_._1).contains(e.getEventId))
                 |> self.poolEventsL2.subtractAll
 
             log.info(s"Pool events after removing: ${self.poolEventsL2.size}")
@@ -754,7 +757,7 @@ class HeadStateGlobal(
             log.info("Putting head into Finalizing phase.")
             self.headPhase = Finalizing
             log.info("Try to produce the final block...")
-            tryProduceBlock(true) : Unit
+            tryProduceBlock(true): Unit
 
         override def runTestDispute(): Unit = {
 
@@ -766,7 +769,8 @@ class HeadStateGlobal(
             val fallbackResult = cardano.ask(_.submit(fallbackTx))
             log.info(s"fallbackResult = $fallbackResult")
             // Since fallback is the same tx for all nodes, we can use awaitTx here.
-            cardano.ask(_.awaitTx(fallbackTxHash))
+            @annotation.unused
+            val _ = cardano.ask(_.awaitTx(fallbackTxHash))
 
             // Build and submit a vote
             // The idea for testing (tallying) is as follows:
@@ -826,7 +830,8 @@ class HeadStateGlobal(
                     log.info(s"Submitting vote tx: $voteTxHash")
                     val voteResult = cardano.ask(_.submit(voteTx))
                     log.info(s"voteResult = $voteResult")
-                    cardano.ask(_.awaitTx(voteTxHash))
+                    @annotation.unused
+                    val _ = cardano.ask(_.awaitTx(voteTxHash))
 
                     runTallying(unresolvedTreasuryUtxo, ownAccount)
 
@@ -837,10 +842,6 @@ class HeadStateGlobal(
 
                         log.info("Checking for resolved treasury utxo")
                         val treasuryAddress = TreasuryValidatorScript.address(networkL1static)
-                        AssetName(
-                          this.headMintingPolicy ++
-                              this.beaconTokenName.bytes
-                        )
 
                         // TODO: use more effective endpoint that based on vote tokens' assets.
                         cardano
@@ -959,7 +960,7 @@ class HeadStateGlobal(
                           "Some tallying txs have been submitted, the next round is needed"
                         )
                     }
-                }).toEither : Unit
+                }).toEither: Unit
             }
 
             def runResolution(unresolvedTreasuryUtxo: UtxoIdL1, ownAccount: Account): Unit = {
@@ -993,7 +994,7 @@ class HeadStateGlobal(
                                   "Still see votes, waiting for the resolution tx to get through"
                                 )
                             }
-                        }).toEither : Unit
+                        }).toEither: Unit
 
                     case _vote1 :: _vote2 :: _vs =>
                         val msg = "More than one vote."
@@ -1037,7 +1038,8 @@ class HeadStateGlobal(
                 submitResult match {
                     case Right(txHash) =>
                         log.info(s"Withdraw tx submitted, tx hash id is: $txHash")
-                        cardano.ask(_.awaitTx(txHash))
+                        @annotation.unused
+                        val _ = cardano.ask(_.awaitTx(txHash))
                         txHash
                     case Left(err) =>
                         log.error(s"Withdraw tx submission failed with: $err")
@@ -1071,7 +1073,7 @@ class HeadStateGlobal(
                 log.info("Waiting for the deinit tx...")
                 cardano.ask(
                   _.awaitTx(deinitTxDraft.id, RetryConfig.delay(10, 1.second))
-                ) : Unit
+                ): Unit
             }
         }
         end runTestDispute
@@ -1186,7 +1188,7 @@ class HeadStateGlobal(
                         val depositsNum = body.depositsAbsorbed.size
                         m.observeBlockSize("deposit", depositsNum)
                         m.incAbsorbedDeposits(depositsNum)
-                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost) : Unit
+                        mbSettlementFees(record.l1Effect).map(m.observeSettlementCost): Unit
             })
 
             record.l1Effect |> maybeMultisigL1Tx match {

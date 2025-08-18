@@ -89,12 +89,14 @@ private class MinorBlockConfirmationActor(
         val signatureHex = Ed25519SignatureHex(encodeHex(signature))
 
         val ownAck: AckType = AckMinor(me, signatureHex, isNextBlockFinal)
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")
-        acks.put(ack.peer, ack)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack)
         if ack.nextBlockFinal then this.finalizeHead = true
         tryMakeResult()
         None

@@ -25,12 +25,14 @@ private class VerificationKeyActor(
         val (me, key) =
             walletActor.ask(w => (w.getWalletId, w.exportVerificationKeyBytes))
         val ownAck = AckVerKey(me, key)
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"deliver ack: $ack")
-        acks.put(ack.peer, ack.verKey)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack.verKey)
         tryMakeResult()
         None
 

@@ -132,7 +132,8 @@ object BlockProducer:
             case tx: L2EventTransaction =>
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, tx) match
                     case Right(newState) =>
-                        txValid.add(tx.getEventId)
+                        @annotation.unused
+                        val _ = txValid.add(tx.getEventId)
                         state = newState
                     case Left(err) =>
                         log.debug(s"Transaction can't be applied to STSL2: ${err}")
@@ -140,7 +141,8 @@ object BlockProducer:
             case wd: L2EventWithdrawal =>
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, wd) match
                     case Right(newState) =>
-                        wdValid.add(wd.getEventId)
+                        @annotation.unused
+                        val _ = wdValid.add(wd.getEventId)
                         val utxosDiff: Set[(UtxoIdL2, OutputL2)] =
                             wd.transaction.body.value.inputs.foldLeft(Set.empty)((set, input) =>
                                 set +
@@ -173,7 +175,8 @@ object BlockProducer:
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, genesis) match {
                     case Left(err) =>
                         log.debug(s"Genesis can't be applied to STSL2: ${err}")
-                        eventsInvalid.add(genesis.getEventId, L2EventGenesisLabel)
+                        @annotation.unused
+                        val _ = eventsInvalid.add(genesis.getEventId, L2EventGenesisLabel)
                         None
                     case Right(newState) =>
                         state = newState

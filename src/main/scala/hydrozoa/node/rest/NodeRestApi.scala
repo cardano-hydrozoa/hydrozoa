@@ -5,11 +5,7 @@ boundary; i.e., where we go from an endpoint that contains a Bech32 string to a 
 But this may be achievable earlier with tapirs schemas? I'm not sure.
  */
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{
-    JsonReader,
-    JsonValueCodec,
-    JsonWriter
-}
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.l2.consensus.network.{given}

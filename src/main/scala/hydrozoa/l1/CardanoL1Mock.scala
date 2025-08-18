@@ -35,7 +35,7 @@ class CardanoL1Mock() extends CardanoL1:
             log.info(s"Submitting tx hash $txId, tx: ${serializeTxHex(tx)}")
             if knownTxs.contains(txId) then Right(txId)
             else
-                knownTxs.put(txId, tx)
+                val _ = knownTxs.put(txId, tx)
                 val setSizeBefore = utxosActive.size
                 val inputs = txInputs(tx)
                 if (!inputs.toSet.subsetOf(utxosActive.keySet))

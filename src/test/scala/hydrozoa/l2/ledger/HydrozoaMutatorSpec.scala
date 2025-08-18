@@ -168,14 +168,13 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(200)
     }
 
-    // Pre-compute and cache addresses
-    address(Alice)
-    address(Bob)
-
     test("init empty STS constituents") {
-        @annotation.unused val context = emptyContext
-        @annotation.unused val state = emptyState
-        @annotation.unused val event = L2EventTransaction(Tx[L2](emptyTransaction))
+        @annotation.unused
+        val context = emptyContext
+        @annotation.unused
+        val state = emptyState
+        @annotation.unused
+        val event = L2EventTransaction(Tx[L2](emptyTransaction))
     }
 
     property("Random genesis event should succeed")(forAll(genL2EventGenesisFromPeer(Alice)) {

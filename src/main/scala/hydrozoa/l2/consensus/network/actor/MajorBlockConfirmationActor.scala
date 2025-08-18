@@ -189,7 +189,8 @@ private class MajorBlockConfirmationActor(
         log.debug(s"deliver ack: $ack")
         ack match
             case ack: AckMajor =>
-                acks.put(ack.peer, ack)
+                @annotation.unused
+                val _ = acks.put(ack.peer, ack)
                 ()
             case ack2: AckMajor2 =>
                 deliverAck2(ack2)
@@ -217,7 +218,8 @@ private class MajorBlockConfirmationActor(
         else None
 
     private def deliverAck2(ack2: AckMajor2): Unit = {
-        acks2.put(ack2.peer, ack2)
+        @annotation.unused
+        val _ = acks2.put(ack2.peer, ack2)
         if ack2.nextBlockFinal then this.finalizeHead = true
     }
 

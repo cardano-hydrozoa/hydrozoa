@@ -232,7 +232,8 @@ object DisputeResolutionValidator extends Validator:
                   treasuryDatum.peers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
                 )
-                List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                @annotation.unused
+                val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
                     require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
                 )
                 // The versionMajor field must match between treasury and voteRedeemer.

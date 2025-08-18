@@ -82,7 +82,7 @@ class BloxBeanDeinitTxBuilder(
                         // .preBalanceTx should be called only once
                         .preBalanceTx((_, t) =>
                             t.getWitnessSet.getNativeScripts.add(headNativeScript)
-                            t.getBody.getMint.add(headTokensToBurn) : Unit
+                            t.getBody.getMint.add(headTokensToBurn): Unit
                         )
                         .postBalanceTx((_, t) =>
                             val outputs = t.getBody.getOutputs

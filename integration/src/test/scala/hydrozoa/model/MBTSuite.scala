@@ -517,7 +517,7 @@ object MBTSuite extends Commands:
                 val txId = initTx.untagged.id
                 log.info(s"Init initTx hash: $txId")
 
-                l1Mock.submit(initTx)
+                val _ = l1Mock.submit(initTx)
 
                 val treasuryUtxoId = onlyOutputToAddress(initTx, headAddress) match
                     case Right((ix : Integer), _, _) => UtxoId[L1](txId, ix)
@@ -798,7 +798,7 @@ object MBTSuite extends Commands:
 
                     // Calculate new state
                     // Submit L1
-                    (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
+                    val _ = (l1Effect |> maybeMultisigL1Tx).map(l1Mock.submit)
 
                     // TODO: delete block events (both valid and invalid)
                     val blockEvents = block.blockBody.eventsValid.map(_._1) ++ block.blockBody.eventsInvalid.map(_._1)
@@ -1182,9 +1182,9 @@ def cmpLabel[A](id: Int, actual: A, expected: A)(using CanEqual[A, A]): Prop =
     Prop.apply(r)
 
 object HydrozoaOneNodeWithL1Mock extends Properties0("Hydrozoa One node mode with L1 mock"):
-    property("Just works, nothing bad happens") = MBTSuite.property0()
+    val _ = property("Just works, nothing bad happens") = MBTSuite.property0()
 
 object HydrozoaOneNodeWithYaci extends Properties0("Hydrozoa One node mode with Yaci"):
     MBTSuite.useYaci = true
     // It doesn't work in fact, since Yaci hangs up once in a while
-    property("Just works, nothing bad happens") = MBTSuite.property0()
+    val _ = property("Just works, nothing bad happens") = MBTSuite.property0()

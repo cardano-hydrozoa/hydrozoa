@@ -87,7 +87,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
-  "-Wunused:all"
+  "-Wunused:all",
+  "-Wall"
 )
 
 // Add the Scalus compiler plugin

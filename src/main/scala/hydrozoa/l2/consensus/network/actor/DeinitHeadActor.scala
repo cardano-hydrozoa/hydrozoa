@@ -43,12 +43,14 @@ private class DeinitHeadActor(
         this.ownAck = ownAck
         this.txDraft = txDraft
 
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.info(s"Deliver ack: $ack")
-        acks.put(ack.peer, ack.signature)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack.signature)
         tryMakeResult()
         None
 

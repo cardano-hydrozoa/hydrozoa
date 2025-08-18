@@ -26,7 +26,8 @@ private class EventL2Actor(
         log.info(s"init req: $req")
         stateActor.tell(_.head.openPhase(_.poolEventL2(req.eventL2)))
         this.req = req
-        deliver(AckUnit)
+        @annotation.unused
+        val _ = deliver(AckUnit)
         Seq(AckUnit)
 
     override def deliver(ack: AckType): Option[AckType] =

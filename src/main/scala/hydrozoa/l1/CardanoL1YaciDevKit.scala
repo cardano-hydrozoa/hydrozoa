@@ -39,7 +39,8 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
         log.info(s"Submitting tx $hash")
 
         def handleSubmit(): Unit = {
-            knownTxs.put(hash, tx)
+            @annotation.unused
+            val _ = knownTxs.put(hash, tx)
             metrics.tell(_.addFeesL1Volume(tx.body.value.fee.value))
         }
 

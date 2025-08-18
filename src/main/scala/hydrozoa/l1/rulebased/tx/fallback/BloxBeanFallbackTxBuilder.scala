@@ -160,7 +160,7 @@ class BloxBeanFallbackTxBuilder(
                 outputs.remove(1)
                 // proper set of utxos (def + voting)
                 outputs.add(defVoteUtxo)
-                outputs.addAll(voteUtxos.asJava) : Unit
+                outputs.addAll(voteUtxos.asJava): Unit
             )
             // Remove the change and update coins in the treasury
             .postBalanceTx((_, t) =>

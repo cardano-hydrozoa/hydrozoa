@@ -56,12 +56,14 @@ private class RefundLaterActor(
 
         this.req = req
         this.txDraft = txDraft
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
-        acks.put(ack.peer, ack.signature)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack.signature)
         tryMakeResult()
         None
 

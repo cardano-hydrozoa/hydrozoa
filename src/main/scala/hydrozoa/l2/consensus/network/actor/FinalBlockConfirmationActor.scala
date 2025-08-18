@@ -81,7 +81,8 @@ private class FinalBlockConfirmationActor(
         log.debug(s"deliver ack: $ack")
         ack match
             case ack: AckFinal =>
-                acks.put(ack.peer, ack)
+                @annotation.unused
+                val _ = acks.put(ack.peer, ack)
                 ()
             case ack2: AckFinal2 =>
                 deliverAck2(ack2)
@@ -119,7 +120,7 @@ private class FinalBlockConfirmationActor(
         else None
 
     private def deliverAck2(ack2: AckFinal2): Unit =
-        acks2.put(ack2.peer, ack2) : Unit
+        acks2.put(ack2.peer, ack2): Unit
 
     private def tryMakeResult(): Unit =
         log.debug("tryMakeResult")

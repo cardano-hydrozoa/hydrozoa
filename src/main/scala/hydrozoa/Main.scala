@@ -68,7 +68,8 @@ object HydrozoaNode extends OxApp:
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
 
-        forkUser {
+        @annotation.unused
+        val _ = forkUser {
 
             val ownPeer = TestPeer.valueOf(args.apply(0))
             val ownPort = peers(ownPeer).port.get
@@ -198,7 +199,8 @@ object HydrozoaNode extends OxApp:
 
                 // Client node API
                 val apiPort = args.apply(1).toInt
-                useInScope(NodeRestApi(nodeActor).mkServer(apiPort).start())(_.stop())
+                @annotation.unused
+                val _ = useInScope(NodeRestApi(nodeActor).mkServer(apiPort).start())(_.stop())
 
                 never
             }

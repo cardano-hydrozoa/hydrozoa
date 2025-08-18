@@ -75,7 +75,7 @@ def addWitness[L <: AnyLayer](tx: Tx[L], wit: VKeyWitness): Tx[L] =
         else new CborArray
 
     if (vkWitnessArrayDI == null)
-        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray) : Unit
+        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray): Unit
 
     val vkeyWitness = new CborArray
     vkeyWitness.add(CborByteString(wit.vkey.bytes))

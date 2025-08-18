@@ -32,7 +32,8 @@ class SimTransportSpec extends munit.ScalaCheckSuite {
                 bob.setDispatcher(Actor.create(new SinkDispatcher(sink)))
                 bob.run()
             }
-            alice.broadcastReq(None)(ReqVerKey())
+            @annotation.unused
+            val _ = alice.broadcastReq(None)(ReqVerKey())
 
             val msg = sink.receive()
             assert(msg.origin == (Alice, 1))

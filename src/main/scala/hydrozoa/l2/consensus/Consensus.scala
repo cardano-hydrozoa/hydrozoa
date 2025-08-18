@@ -58,13 +58,13 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                         val acks = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
                         log.info(s"Replying with acks: $acks")
                         acks.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack) : Unit)
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                     case Right(_, _, originPeer, originSeq, ack) =>
                         val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))
                         log.info(s"Replying with mbAck: $mbAck")
                         mbAck.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack) : Unit)
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
             case None =>
                 log.info(s"Actor was NOT found for origin: $origin")
@@ -81,13 +81,13 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                     case Left(originPeer, originSeq, req) =>
                         val (newActor, acks) = consensusActorFactory.spawnByReq(req, dropMyself)
                         acks.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack) : Unit)
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                         Some(newActor)
                     case Right(_, _, originPeer, originSeq, ack) =>
                         val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack, dropMyself)
                         mbAck.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack) : Unit)
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                         mbActor
                 mbNewActor match
@@ -95,7 +95,7 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                         spawnActorReactivelyIn.send(newActor)
                         val newActorRef = spawnActorReactivelyOut.receive()
                         log.info(s"Adding new actor for $origin")
-                        actors.put(origin, newActorRef) : Unit
+                        actors.put(origin, newActorRef): Unit
                     case None => ()
 
     override def spawnActorProactively(
@@ -110,9 +110,10 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.trace(s"Deinit acks = $acks")
         spawnActorReactivelyIn.send(newActor)
         val newActorRef = spawnActorReactivelyOut.receive()
-        actors.put(origin, newActorRef)
-        transport.tell(_.broadcastReq(Some(seq))(req) : Unit)
-        acks.foreach(ack => transport.tell(_.broadcastAck(from, seq)(ack) : Unit))
+        @annotation.unused
+        val _ = actors.put(origin, newActorRef)
+        transport.tell(_.broadcastReq(Some(seq))(req): Unit)
+        acks.foreach(ack => transport.tell(_.broadcastAck(from, seq)(ack): Unit))
         log.info("Getting result source...")
         val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
         source

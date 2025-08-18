@@ -98,7 +98,7 @@ class BloxBeanWithdrawTxBuilder(
                         // .preBalanceTx should be called only once
                         .preBalanceTx((_, t) =>
                             val outputs = t.getBody.getOutputs
-                            outputs.addAll(withdrawals.asJava) : Unit
+                            outputs.addAll(withdrawals.asJava): Unit
                         )
                         .buildAndSign()
                 yield (TxL1(tx.serialize))

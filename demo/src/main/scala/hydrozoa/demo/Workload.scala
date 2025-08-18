@@ -57,7 +57,8 @@ object Workload extends OxApp:
         sut = Actor.create(RealFacade.apply(demoPeers))
 
         // Command generator
-        forkUser {
+        @annotation.unused
+        val _ = forkUser {
             var s = genInitialState().runGen().get
             log.info(s"Initial state: $s")
             repeat(RepeatConfig.fixedRateForever(500.millis, Some(1.second))) {
@@ -73,16 +74,16 @@ object Workload extends OxApp:
         }
 
         // Command sender
-        forkUser {
+        val _ = forkUser {
             log.info("Started command executor thread...")
             Flow.fromSource(commands).runForeach(cmd => runCommand(cmd))
         }
 
         // L2 state update loop
-        forkUser {
+        val _ = forkUser {
             repeat(RepeatConfig.fixedRateForever(1.seconds, Some(10.seconds))) {
                 val stateL2 = sut.ask(_.stateL2()).toMap
-                l2State.ask(m =>
+                val _ = l2State.ask(m =>
                     m.clear()
                     m.addAll(stateL2)
                 )

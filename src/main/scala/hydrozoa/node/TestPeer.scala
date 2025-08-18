@@ -94,7 +94,8 @@ extension [K, V](map: mutable.Map[K, V])
     def cache(key: K): V = map.get(key) match {
         case None =>
             val missing = map.default(key)
-            map.put(key, missing)
+            @annotation.unused
+            val _ = map.put(key, missing)
             missing
         case Some(value) => value
     }
