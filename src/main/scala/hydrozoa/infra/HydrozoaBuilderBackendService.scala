@@ -1,5 +1,6 @@
 package hydrozoa.infra
 
+import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.helper.{FeeCalculationService, UtxoTransactionBuilder}
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}

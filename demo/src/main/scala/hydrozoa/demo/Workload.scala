@@ -306,6 +306,7 @@ class InitializeCommand(
 ) extends WorkloadCommand:
 
     override type Result = Either[InitializationError, TransactionHash]
+
     override def toString: String =
         s"Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
 

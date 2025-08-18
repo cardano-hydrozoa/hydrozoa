@@ -69,9 +69,7 @@ class CardanoL1Mock() extends CardanoL1:
 
     override def utxosAtAddress(address: AddressL1): List[(Utxo[L1])] =
         utxosActive
-            .filter((_, utxo) => utxo.address == address)
-            .toList
-            .map((in, out) => Utxo(in, out))
+            .filter((_, utxo) => utxo.address == address).toList.map((in, out) => Utxo[L1](in, out))
 
     override def utxoIdsAdaAtAddress(address: AddressL1): Map[UtxoIdL1, Coin] =
         utxosActive
