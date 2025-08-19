@@ -4,7 +4,7 @@ import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.toEither
-import hydrozoa.infra.transitionary.{toHydrozoa, toScalus}
+import hydrozoa.infra.transitionary.{toScalus}
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.{Utxo as HUtxo, *}
 import ox.channels.ActorRef
@@ -93,7 +93,10 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
             .toEither match
             case Left(err) =>
                 throw RuntimeException(err)
-            case Right(utxos) => utxos.asScala.toList.map(bbutxo => bbutxo.toHydrozoa)
+            case Right(utxos) => utxos.asScala.toList.map(bbutxo =>{
+                val sutxo = bbutxo.toScalus
+                HUtxo[L1](UtxoId[L1](sutxo._1), Output[L1](sutxo._2))
+            })
 
     override def utxoIdsAdaAtAddress(headAddress: AddressL1): Map[UtxoIdL1, Coin] =
         // NB: can't be more than 100

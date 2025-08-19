@@ -51,11 +51,76 @@ import scala.util.{Failure, Success, Try}
 
 object MBTSuite extends Commands:
 
-    var useYaci = false
-    private val log = Logger(getClass)
-
     override type State = HydrozoaState // Immutable simplified head's state
     override type Sut = HydrozoaFacade // Facade to a network of Hydrozoa's peers
+    private type Commands0 = List[Command0]
+    // This is used to numerate commands we generate
+    val cnt = AtomicInteger(0)
+    private val log = Logger(getClass)
+    var useYaci = false
+
+    /** ------------------------------------------------------------------------------------------
+     * Copy-paste from Commands
+     * ------------------------------------------------------------------------------------------
+     */
+
+    final def property0(): Prop = {
+        val suts = collection.mutable.Map.empty[AnyRef, (State, Option[Sut])]
+
+        Prop.forAll(actions()) { as =>
+            println("----------------------------------------")
+            as.seqCmds.foreach(println)
+            println("----------------------------------------")
+
+            try {
+                val sutId = suts.synchronized {
+                    val initSuts = suts.values.collect { case (state, None) => state }
+                    val runningSuts = suts.values.collect { case (_, Some(sut)) => sut }
+                    if (canCreateNewSut(as.s, initSuts, runningSuts)) {
+                        val sutId = new AnyRef
+                        suts += (sutId -> (as.s -> None))
+                        Some(sutId)
+                    } else None
+                }
+                sutId match {
+                    case Some(id) =>
+                        val sut = newSut(as.s)
+
+                        def removeSut(): Unit = {
+                            suts.synchronized {
+                                suts -= id
+                                destroySut(sut)
+                            }
+                        }
+
+                        val doRun = suts.synchronized {
+                            if (suts.contains(id)) {
+                                suts += (id -> (as.s -> Some(sut)))
+                                true
+                            } else false
+                        }
+                        if (doRun) {
+                            runActions(sut, as, removeSut())
+                        }
+                        else {
+                            print("you should not see that")
+                            removeSut()
+                            Prop.undecided
+                        }
+
+                    case None => // NOT IMPLEMENTED Block until canCreateNewSut is true
+                        println("NOT IMPL")
+                        Prop.undecided
+                }
+            } catch {
+                case e: Throwable =>
+                    suts.synchronized {
+                        suts.clear()
+                    }
+                    throw e
+            }
+        }
+    }
 
     override def canCreateNewSut(
         newState: State,
@@ -77,6 +142,39 @@ object MBTSuite extends Commands:
         log.warn("<-------------------- destroy SUT")
         sut.shutdownSut()
 
+    private def actions(): Gen[Actions] = {
+        import Gen.{const, sized}
+
+        def sizedCmds(s: State)(sz: Int): Gen[(State, Commands0)] = {
+            val l: List[Unit] = List.fill(sz)(())
+            l.foldLeft(const((s, Nil: Commands0))) { case (g, ()) =>
+                for {
+                    (s0, cs) <- g
+                    c <- genCommand(s0).suchThat(_.preCondition(s0))
+                } yield (c.nextState(s0), cs :+ c)
+            }
+        }
+
+        def cmdsPrecond(s: State, cmds: Commands0): (State, Boolean) = cmds match {
+            case Nil => (s, true)
+            case c :: cs if c.preCondition(s) => cmdsPrecond(c.nextState(s), cs)
+            case _ => (s, false)
+        }
+
+        def actionsPrecond(as: Actions): Boolean =
+            initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
+                case (s, true) => true
+                case _ => false
+            })
+
+        val g = for {
+            s0 <- genInitialState
+            (s1, seqCmds) <- resize(100,sized(sizedCmds(s0)))
+        } yield Actions(s0, seqCmds)
+
+        g.suchThat(actionsPrecond)
+    }
+
     override def initialPreCondition(state: State): Boolean =
         state.peersNetworkPhase == NewlyCreated
 
@@ -84,9 +182,6 @@ object MBTSuite extends Commands:
         numberOfNetworkPeers <- Gen.chooseNum(3, 8)
         networkPeers <- Gen.pick(numberOfNetworkPeers, TestPeer.values)
     yield HydrozoaState(Utils.protocolParams, networkPeers.toSet)
-
-    // This is used to numerate commands we generate
-    val cnt = AtomicInteger(0)
 
     override def genCommand(s: State): Gen[Command0] =
         s.peersNetworkPhase match
@@ -243,6 +338,40 @@ object MBTSuite extends Commands:
         for finalize <- Gen.prob(0.01)
     yield ProduceBlockCommand(cnt.incrementAndGet(), finalize)
 
+    private def runActions(sut: Sut, as: Actions, finalize: => Unit): Prop = {
+        val maxLength = as.seqCmds.length
+        val (p1, s, rs1, lastCmd) = runSeqCmds(sut, as.s, as.seqCmds)
+        val l1 = s"Initial State:\n  ${as.s}\n" +
+            s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}\n" +
+            s"Last executed command: $lastCmd"
+        p1 :| l1
+    }
+
+    // Added the last succeded command (last `Int`)
+    private def runSeqCmds(sut: Sut, s0: State, cs: Commands0): (Prop, State, List[Try[String]], Int) =
+        cs.foldLeft((Prop.proved, s0, List[Try[String]](), 0)) { case ((p, s, rs, lastCmd), c) =>
+            val (r, pf) = c.runPC0(sut)
+            (p && pf(s), c.nextState(s), rs :+ r, lastCmd + 1)
+        }
+
+    private def prettyCmdsRes(rs: List[(Command0, Try[String])], maxLength: Int) = {
+        val maxNumberWidth = "%d".format(maxLength).length
+        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
+        val cs = rs.zipWithIndex.map {
+            case (r, i) => lineLayout.format(
+                i + 1,
+                r match {
+                    case (c, Success("()")) => c.toString
+                    case (c, Success(r)) => s"$c => $r"
+                    case (c, r) => s"$c => $r"
+                })
+        }
+        if (cs.isEmpty)
+            "  <no commands>"
+        else
+            cs.mkString("\n")
+    }
+
     /** ------------------------------------------------------------------------------------------
      * StateLikeCommand
      * ------------------------------------------------------------------------------------------
@@ -256,25 +385,11 @@ object MBTSuite extends Commands:
             (r.map(_.toString), s => preCondition(s) ==> postCondition(s, r))
         }
 
-    case class NoOp0(override val id: Int) extends Command0(id) {
-        type Result = Null
-
-        def run(sut: Sut) = null
-
-        def nextState(state: State) = state
-
-        def preCondition(state: State) = true
-
-        def postCondition(state: State, result: Try[Null]) = true
-    }
-
     /** State-like Command that uses Haskell-style `runState` instead of `nextState`.
       */
     trait StateLikeCommand extends Command0:
 
         final override def nextState(state: State): State = runState(state)._2
-
-        def runState(state: State): (Result, State)
 
         final override def postCondition(stateBefore: State, result: Try[Result]): Prop =
             val (expectedResult, stateAfter) = runState(stateBefore)
@@ -288,6 +403,8 @@ object MBTSuite extends Commands:
                     )
                 case Failure(e) =>
                     postConditionFailure(expectedResult, stateBefore, stateAfter, e)
+
+        def runState(state: State): (Result, State)
 
         def postConditionSuccess(
             expectedResult: Result,
@@ -303,6 +420,31 @@ object MBTSuite extends Commands:
             err: Throwable
         ): Prop
 
+    /** ------------------------------------------------------------------------------------------
+     * Shutdown Command
+     * ------------------------------------------------------------------------------------------
+     */
+
+    trait UnitCommand0 extends Command0 {
+        final type Result = Unit
+
+        final override def postCondition(state: State, result: Try[Unit]) =
+            postCondition(state, result.isSuccess)
+
+        def postCondition(state: State, success: Boolean): Prop
+    }
+
+    case class NoOp0(override val id: Int) extends Command0(id) {
+        type Result = Null
+
+        def run(sut: Sut) = null
+
+        def nextState(state: State) = state
+
+        def preCondition(state: State) = true
+
+        def postCondition(state: State, result: Try[Null]) = true
+    }
 
     /** ------------------------------------------------------------------------------------------
      * InitializeCommand
@@ -316,9 +458,8 @@ object MBTSuite extends Commands:
         seedUtxo: UtxoIdL1
     ) extends StateLikeCommand with Command0(id):
 
-        private val log = Logger(getClass)
-
         override type Result = Either[InitializationError, TransactionHash]
+        private val log = Logger(getClass)
 
         override def toString: String =
             s"($id) Initialize command {initiator=$initiator, other peers = $otherHeadPeers, seed utxo = $seedUtxo}"
@@ -347,7 +488,7 @@ object MBTSuite extends Commands:
                 val initTxRecipe = InitTxRecipe(
                   networkL1static,
                   seedUtxo,
-                  1000_000_000,
+                  Coin(1000_000_000L),
                   pubKeys
                 )
 
@@ -427,9 +568,8 @@ object MBTSuite extends Commands:
         refundAddress: Address[L1]
     ) extends StateLikeCommand with Command0(id):
 
-        private val log = Logger(getClass)
-
         override type Result = Either[DepositError, DepositResponse]
+        private val log = Logger(getClass)
 
         override def toString: String =
             s"($id) Deposit command { depositor = $depositor, " +
@@ -537,9 +677,8 @@ object MBTSuite extends Commands:
 
     class TransactionL2Command(override val id: Int, simpleTransaction: L2EventTransaction) extends Command0(id):
 
-        private val log = Logger(getClass)
-
         override type Result = Unit
+        private val log = Logger(getClass)
 
         override def toString: String = s"($id) Transaction L2 command { $simpleTransaction }"
 
@@ -566,9 +705,8 @@ object MBTSuite extends Commands:
 
     class WithdrawalL2Command(override val id: Int, simpleWithdrawal: L2EventWithdrawal) extends Command0(id):
 
-        private val log = Logger(getClass)
-
         override type Result = Unit
+        private val log = Logger(getClass)
 
         override def toString: String = s"($id) Withdrawal L2 command { $simpleWithdrawal }"
 
@@ -594,9 +732,8 @@ object MBTSuite extends Commands:
      */
     class ProduceBlockCommand(override val id: Int, finalization: Boolean) extends StateLikeCommand with Command0(id):
 
-        private val log = Logger(getClass)
-
         override type Result = Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])]
+        private val log = Logger(getClass)
 
         override def toString: String = s"($id) Produce block command {finalization = $finalization}"
 
@@ -755,18 +892,6 @@ object MBTSuite extends Commands:
                 log.error(s"Negative!")
             ret
 
-    /** ------------------------------------------------------------------------------------------
-     * Shutdown Command
-     * ------------------------------------------------------------------------------------------
-     */
-
-    trait UnitCommand0 extends Command0 {
-        final type Result = Unit
-        def postCondition(state: State, success: Boolean): Prop
-        final override def postCondition(state: State, result: Try[Unit]) =
-            postCondition(state, result.isSuccess)
-    }
-
     class ShutdownCommand(override val id: Int) extends UnitCommand0 with Command0(id):
 
         private val log = Logger(getClass)
@@ -796,142 +921,10 @@ object MBTSuite extends Commands:
                 log.error(s"Negative!")
                 false
 
-    /** ------------------------------------------------------------------------------------------
-     * Copy-paste from Commands
-     * ------------------------------------------------------------------------------------------
-     */
-
-    final def property0(): Prop = {
-        val suts = collection.mutable.Map.empty[AnyRef, (State, Option[Sut])]
-
-        Prop.forAll(actions()) { as =>
-            println("----------------------------------------")
-            as.seqCmds.foreach(println)
-            println("----------------------------------------")
-
-            try {
-                val sutId = suts.synchronized {
-                    val initSuts = suts.values.collect { case (state, None) => state }
-                    val runningSuts = suts.values.collect { case (_, Some(sut)) => sut }
-                    if (canCreateNewSut(as.s, initSuts, runningSuts)) {
-                        val sutId = new AnyRef
-                        suts += (sutId -> (as.s -> None))
-                        Some(sutId)
-                    } else None
-                }
-                sutId match {
-                    case Some(id) =>
-                        val sut = newSut(as.s)
-
-                        def removeSut(): Unit = {
-                            suts.synchronized {
-                                suts -= id
-                                destroySut(sut)
-                            }
-                        }
-
-                        val doRun = suts.synchronized {
-                            if (suts.contains(id)) {
-                                suts += (id -> (as.s -> Some(sut)))
-                                true
-                            } else false
-                        }
-                        if (doRun) {
-                            runActions(sut, as, removeSut())
-                        }
-                        else {
-                            print("you should not see that")
-                            removeSut()
-                            Prop.undecided
-                        }
-
-                    case None => // NOT IMPLEMENTED Block until canCreateNewSut is true
-                        println("NOT IMPL")
-                        Prop.undecided
-                }
-            } catch {
-                case e: Throwable =>
-                    suts.synchronized {
-                        suts.clear()
-                    }
-                    throw e
-            }
-        }
-    }
-
-    private type Commands0 = List[Command0]
-
     private case class Actions(
                                   s: State,
                                   seqCmds: Commands0
                               )
-
-    private def actions(): Gen[Actions] = {
-        import Gen.{const, sized}
-
-        def sizedCmds(s: State)(sz: Int): Gen[(State, Commands0)] = {
-            val l: List[Unit] = List.fill(sz)(())
-            l.foldLeft(const((s, Nil: Commands0))) { case (g, ()) =>
-                for {
-                    (s0, cs) <- g
-                    c <- genCommand(s0).suchThat(_.preCondition(s0))
-                } yield (c.nextState(s0), cs :+ c)
-            }
-        }
-
-        def cmdsPrecond(s: State, cmds: Commands0): (State, Boolean) = cmds match {
-            case Nil => (s, true)
-            case c :: cs if c.preCondition(s) => cmdsPrecond(c.nextState(s), cs)
-            case _ => (s, false)
-        }
-
-        def actionsPrecond(as: Actions): Boolean =
-            initialPreCondition(as.s) && (cmdsPrecond(as.s, as.seqCmds) match {
-                case (s, true) => true
-                case _ => false
-            })
-
-        val g = for {
-            s0 <- genInitialState
-            (s1, seqCmds) <- resize(100,sized(sizedCmds(s0)))
-        } yield Actions(s0, seqCmds)
-
-        g.suchThat(actionsPrecond)
-    }
-
-    private def runActions(sut: Sut, as: Actions, finalize: => Unit): Prop = {
-        val maxLength = as.seqCmds.length
-        val (p1, s, rs1, lastCmd) = runSeqCmds(sut, as.s, as.seqCmds)
-        val l1 = s"Initial State:\n  ${as.s}\n" +
-            s"Sequential Commands:\n${prettyCmdsRes(as.seqCmds zip rs1, maxLength)}\n" +
-            s"Last executed command: $lastCmd"
-        p1 :| l1
-    }
-
-    // Added the last succeded command (last `Int`)
-    private def runSeqCmds(sut: Sut, s0: State, cs: Commands0): (Prop, State, List[Try[String]], Int) =
-        cs.foldLeft((Prop.proved, s0, List[Try[String]](), 0)) { case ((p, s, rs, lastCmd), c) =>
-            val (r, pf) = c.runPC0(sut)
-            (p && pf(s), c.nextState(s), rs :+ r, lastCmd + 1)
-        }
-
-    private def prettyCmdsRes(rs: List[(Command0, Try[String])], maxLength: Int) = {
-        val maxNumberWidth = "%d".format(maxLength).length
-        val lineLayout = "  %%%dd. %%s".format(maxNumberWidth)
-        val cs = rs.zipWithIndex.map {
-            case (r, i) => lineLayout.format(
-                i + 1,
-                r match {
-                    case (c, Success("()")) => c.toString
-                    case (c, Success(r)) => s"$c => $r"
-                    case (c, r) => s"$c => $r"
-                })
-        }
-        if (cs.isEmpty)
-            "  <no commands>"
-        else
-            cs.mkString("\n")
-    }
 
 
 /** ------------------------------------------------------------------------------------------
@@ -960,53 +953,7 @@ class Properties0(override val name: String) extends Properties(name):
 
 trait CmdLineParser {
 
-    trait Opt[+T] {
-        val default: T
-        val names: Set[String]
-        val help: String
-    }
-
-    trait Flag extends Opt[Unit]
-
-    trait IntOpt extends Opt[Int]
-
-    trait FloatOpt extends Opt[Float]
-
-    trait StrOpt extends Opt[String]
-
-    trait OpStrOpt extends Opt[Option[String]]
-
-    abstract class OpStrOptCompat extends OpStrOpt {
-        val default: Option[String] = None
-    }
-
-    class OptMap(private val opts: Map[Opt[?], Any] = Map.empty) {
-        def apply(flag: Flag): Boolean = opts.contains(flag)
-
-        def apply[T](opt: Opt[T]): T = opts.get(opt) match {
-            case None => opt.default
-            case Some(v) => v.asInstanceOf[T]
-        }
-
-        def set[T](o: (Opt[T], T)) = new OptMap(opts + o)
-    }
-
     val opts: Set[Opt[?]]
-
-    private def getOpt(s: String) = {
-        if (s == null || s.isEmpty || s.charAt(0) != '-') None
-        else opts.find(_.names.contains(s.drop(1)))
-    }
-
-    private def getStr(s: String) = Some(s)
-
-    private def getInt(s: String) =
-        if (s != null && s.nonEmpty && s.forall(_.isDigit)) Some(s.toInt)
-        else None
-
-    private def getFloat(s: String) =
-        if (s != null && s.matches("[0987654321]+\\.?[0987654321]*")) Some(s.toFloat)
-        else None
 
     def printHelp(): Unit = {
         Console.out.println("Available options:")
@@ -1049,10 +996,106 @@ trait CmdLineParser {
 
         parse(args.toList, new OptMap(), Nil)
     }
+
+    private def getOpt(s: String) = {
+        if (s == null || s.isEmpty || s.charAt(0) != '-') None
+        else opts.find(_.names.contains(s.drop(1)))
+    }
+
+    private def getStr(s: String) = Some(s)
+
+    private def getInt(s: String) =
+        if (s != null && s.nonEmpty && s.forall(_.isDigit)) Some(s.toInt)
+        else None
+
+    private def getFloat(s: String) =
+        if (s != null && s.matches("[0987654321]+\\.?[0987654321]*")) Some(s.toFloat)
+        else None
+
+    trait Opt[+T] {
+        val default: T
+        val names: Set[String]
+        val help: String
+    }
+
+    trait Flag extends Opt[Unit]
+
+    trait IntOpt extends Opt[Int]
+
+    trait FloatOpt extends Opt[Float]
+
+    trait StrOpt extends Opt[String]
+
+    trait OpStrOpt extends Opt[Option[String]]
+
+    abstract class OpStrOptCompat extends OpStrOpt {
+        val default: Option[String] = None
+    }
+
+    class OptMap(private val opts: Map[Opt[?], Any] = Map.empty) {
+        def apply(flag: Flag): Boolean = opts.contains(flag)
+
+        def apply[T](opt: Opt[T]): T = opts.get(opt) match {
+            case None => opt.default
+            case Some(v) => v.asInstanceOf[T]
+        }
+
+        def set[T](o: (Opt[T], T)) = new OptMap(opts + o)
+    }
 }
 
 
 object CmdLineParser extends CmdLineParser{
+    val opts: Set[Opt[?]] = Set[Opt[?]](
+        OptMinSuccess,
+        OptMaxDiscardRatio,
+        OptMinSize,
+        OptMaxSize,
+        OptWorkers,
+        OptVerbosity,
+        OptPropFilter,
+        OptInitialSeed,
+        OptDisableLegacyShrinking,
+        OptMaxRNGSpins
+    )
+
+    def parseParams(args: Array[String]): (Parameters => Parameters, List[String]) = {
+        val (optMap, us) = parseArgs(args)
+        val minSuccess0: Int = optMap(OptMinSuccess)
+        val minSize0: Int = optMap(OptMinSize)
+        val maxSize0: Int = optMap(OptMaxSize)
+        val workers0: Int = optMap(OptWorkers)
+        val verbosity0 = optMap(OptVerbosity)
+        val discardRatio0: Float = optMap(OptMaxDiscardRatio)
+        val propFilter0: Option[String] = optMap(OptPropFilter)
+        val initialSeed0: Option[Seed] =
+            optMap(OptInitialSeed).flatMap { str =>
+                Seed.fromBase64(str) match {
+                    case Success(seed) =>
+                        Some(seed)
+                    case Failure(_) =>
+                        println(s"WARNING: ignoring invalid Base-64 seed ($str)")
+                        None
+                }
+            }
+
+        val useLegacyShrinking0: Boolean = !optMap(OptDisableLegacyShrinking)
+        val maxRNGSpins: Int = optMap(OptMaxRNGSpins)
+        val params = { (p: Parameters) =>
+            p.withMinSuccessfulTests(minSuccess0)
+                .withMinSize(minSize0)
+                .withMaxSize(maxSize0)
+                .withWorkers(workers0)
+                .withTestCallback(ConsoleReporter(verbosity0, 100000))
+                .withMaxDiscardRatio(discardRatio0)
+                .withPropFilter(propFilter0)
+                .withInitialSeed(initialSeed0)
+                .withLegacyShrinking(useLegacyShrinking0)
+                .withMaxRNGSpins(maxRNGSpins)
+        }
+        (params, us)
+    }
+
     object OptMinSuccess extends IntOpt {
         val default: Int = Parameters.default.minSuccessfulTests
         val names: Set[String] = Set("minSuccessfulTests", "s")
@@ -1114,56 +1157,6 @@ object CmdLineParser extends CmdLineParser{
         val default = 1
         val names: Set[String] = Set("maxRNGSpins")
         val help = "Maximum number of RNG spins to perform between checks"
-    }
-
-    val opts: Set[Opt[?]] = Set[Opt[?]](
-        OptMinSuccess,
-        OptMaxDiscardRatio,
-        OptMinSize,
-        OptMaxSize,
-        OptWorkers,
-        OptVerbosity,
-        OptPropFilter,
-        OptInitialSeed,
-        OptDisableLegacyShrinking,
-        OptMaxRNGSpins
-    )
-
-    def parseParams(args: Array[String]): (Parameters => Parameters, List[String]) = {
-        val (optMap, us) = parseArgs(args)
-        val minSuccess0: Int = optMap(OptMinSuccess)
-        val minSize0: Int = optMap(OptMinSize)
-        val maxSize0: Int = optMap(OptMaxSize)
-        val workers0: Int = optMap(OptWorkers)
-        val verbosity0 = optMap(OptVerbosity)
-        val discardRatio0: Float = optMap(OptMaxDiscardRatio)
-        val propFilter0: Option[String] = optMap(OptPropFilter)
-        val initialSeed0: Option[Seed] =
-            optMap(OptInitialSeed).flatMap { str =>
-                Seed.fromBase64(str) match {
-                    case Success(seed) =>
-                        Some(seed)
-                    case Failure(_) =>
-                        println(s"WARNING: ignoring invalid Base-64 seed ($str)")
-                        None
-                }
-            }
-
-        val useLegacyShrinking0: Boolean = !optMap(OptDisableLegacyShrinking)
-        val maxRNGSpins: Int = optMap(OptMaxRNGSpins)
-        val params = { (p: Parameters) =>
-            p.withMinSuccessfulTests(minSuccess0)
-                .withMinSize(minSize0)
-                .withMaxSize(maxSize0)
-                .withWorkers(workers0)
-                .withTestCallback(ConsoleReporter(verbosity0, 100000))
-                .withMaxDiscardRatio(discardRatio0)
-                .withPropFilter(propFilter0)
-                .withInitialSeed(initialSeed0)
-                .withLegacyShrinking(useLegacyShrinking0)
-                .withMaxRNGSpins(maxRNGSpins)
-        }
-        (params, us)
     }
 }
 

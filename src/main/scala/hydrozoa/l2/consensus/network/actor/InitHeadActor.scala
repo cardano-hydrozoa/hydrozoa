@@ -61,6 +61,7 @@ private class InitHeadActor(
           )
         )
 
+        this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         log.info(s"Head's address: $headAddress, beacon token name: $beaconTokenName")
 
         val initTxRecipe = InitTxRecipe(
@@ -87,7 +88,6 @@ private class InitHeadActor(
         this.headNativeScript = headNativeScript
         this.headMintingPolicy = headNativeScript.scriptHash
         this.headAddress = headAddress
-        this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress
 
         deliver(ownAck)
@@ -140,9 +140,9 @@ private class InitHeadActor(
 
                     case Left(err) =>
                          val msg = s"Can't submit init tx: $err"
-                        log.error(msg)
-                        // FIXME: what should go next here?
-                        throw RuntimeException(msg)
+                         log.error(msg)
+                         // FIXME: what should go next here?
+                         throw RuntimeException(msg)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]
