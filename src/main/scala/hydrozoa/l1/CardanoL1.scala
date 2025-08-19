@@ -18,9 +18,9 @@ trait CardanoL1 {
 
     def awaitTx(
         txId: TransactionHash,
-        retryConfig: RetryConfig[Throwable, Option[TxL1]] =
+        retryConfig: RetryConfig[Throwable, Option[Unit]] =
             RetryConfig.backoff(10, 100.millis, 1.seconds, Jitter.Equal)
-    ): Option[TxL1]
+    ): Option[Unit]
 
     def network: Network
 
@@ -34,6 +34,13 @@ trait CardanoL1 {
     def utxoIdsAdaAtAddress(headAddress: AddressL1): Map[UtxoIdL1, Coin]
 
     def slotToTime(slot: Slot): PosixTime
+
+    /** Try to find a tx and take its upper bound validity interval a.k.a. TTL.
+      * @param txId
+      * @return
+      *   None if a tx not found or it TTL was not set.
+      */
+    def txTtl(txId: TransactionHash): Option[Slot]
 }
 
 type SubmissionError = String

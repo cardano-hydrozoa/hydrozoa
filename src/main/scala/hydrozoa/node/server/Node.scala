@@ -201,6 +201,7 @@ class Node:
         )
 
         // the upper bound AKA ttl for deposit tx
+        // we need an additional parameter - ttlMargin
         val ttl = Slot(cardano.ask(_.lastBlockSlot).slot + ttlMargin)
 
         val depositTxRecipe =
@@ -239,7 +240,7 @@ class Node:
     def submitL1(hex: String): Either[String, TransactionHash] =
         cardano.ask(_.submit(deserializeTxHex[L1](hex)))
 
-    def awaitTxL1(txId: TransactionHash): Option[TxL1] = cardano.ask(_.awaitTx(txId))
+    def awaitTxL1(txId: TransactionHash): Option[Unit] = cardano.ask(_.awaitTx(txId))
 
     def submitL2(req: SubmitRequestL2): Either[String, TransactionHash] =
         req match

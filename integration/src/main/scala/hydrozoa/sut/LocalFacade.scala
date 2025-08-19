@@ -85,7 +85,7 @@ class LocalFacade(
                 })
                 ret
 
-    override def awaitTxL1(txId: TransactionHash): Option[TxL1] = randomNode.awaitTxL1(txId)
+    override def awaitTxL1(txId: TransactionHash): Option[Unit] = randomNode.awaitTxL1(txId)
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal

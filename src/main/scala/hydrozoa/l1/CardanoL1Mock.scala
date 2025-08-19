@@ -57,8 +57,8 @@ class CardanoL1Mock() extends CardanoL1:
 
     override def awaitTx(
         txId: TransactionHash,
-        retryConfig: RetryConfig[Throwable, Option[TxL1]]
-    ): Option[TxL1] = knownTxs.get(txId)
+        retryConfig: RetryConfig[Throwable, Option[Unit]]
+    ): Option[Unit] = knownTxs.get(txId).map(_tx => ())
 
     override def network: Network = Testnet
 
@@ -86,6 +86,8 @@ class CardanoL1Mock() extends CardanoL1:
             .toMap
 
     override def slotToTime(slot: Slot): PosixTime = ???
+
+    override def txTtl(txId: TransactionHash): Option[Slot] = ???
 
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =

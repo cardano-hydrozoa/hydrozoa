@@ -6,7 +6,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.*
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{Piper, toEither}
-import hydrozoa.l1.YaciCluster.YaciClusterInfo
+import hydrozoa.l1.YaciCluster.{YaciClusterInfo, adminApiBaseUri, blockfrostApiBaseUri}
 import hydrozoa.node.monitoring.Metrics
 import hydrozoa.{Utxo as HUtxo, *}
 import ox.channels.ActorRef
@@ -80,13 +80,13 @@ class CardanoL1YaciDevKit(
 
     override def awaitTx(
         txId: TransactionHash,
-        retryConfig: RetryConfig[Throwable, Option[TxL1]]
-    ): Option[TxL1] =
+        retryConfig: RetryConfig[Throwable, Option[Unit]]
+    ): Option[Unit] =
         def tryAwait =
             backendService.getTransactionService.getTransaction(txId.toHex).toEither match
                 case Left(_) => throw RuntimeException(s"Tx: $txId hasn't appeared.")
                 // TODO: this won't work now for deposit txs :-(
-                case Right(_) => knownTxs.get(txId)
+                case Right(_) => Some(())
 
         Try(retry(retryConfig)(tryAwait)).get
 
@@ -148,6 +148,25 @@ class CardanoL1YaciDevKit(
         val secondsDecimal = slot.slot * yaciClusterInfo.slotLength + yaciClusterInfo.startTime
         secondsDecimal.rounded.toBigInt
 
+    case class TransactionContent(
+        ttl: Long
+    )
+
+    implicit val codec: JsonValueCodec[TransactionContent] = JsonCodecMaker.make
+
+    override def txTtl(txId: TransactionHash): Option[Slot] =
+        // TODO: Obtain TTL, report the issue to Satya
+        Try(quickRequest
+            .get(uri"$blockfrostApiBaseUri/txs/${txId.toHex}")
+            .response(asJsoniterBytes[TransactionContent])
+            .send()).toEither match
+            case Left(err) =>
+                log.error(s"Error while getting tx content: $err")
+                None
+            case Right(txInfo) =>
+                Option(txInfo.body.ttl)
+                    .map(s => Slot.apply(BigInt.apply(s).longValue))
+
 object YaciCluster:
 
     val adminApiBaseUri = "http://localhost:10000/local-cluster/api/admin"
@@ -165,10 +184,6 @@ object YaciCluster:
     )
 
     implicit val codec: JsonValueCodec[YaciClusterInfo] = JsonCodecMaker.make
-
-    // ResponseAs that decodes from Array[Byte] using jsoniter
-    def asJsoniterBytes[T: JsonValueCodec]: ResponseAs[T] =
-        asByteArray.map(bytes => readFromArray[T](bytes.toOption.get))
 
     def reset(): YaciClusterInfo =
         log.info("Resetting Yaci cluster...")
@@ -190,3 +205,7 @@ object YaciCluster:
         log.info(s"Cluster info: $clusterInfo")
 
         clusterInfo
+
+// ResponseAs that decodes from Array[Byte] using jsoniter
+def asJsoniterBytes[T: JsonValueCodec]: ResponseAs[T] =
+    asByteArray.map(bytes => readFromArray[T](bytes.toOption.get))

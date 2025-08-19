@@ -2,6 +2,7 @@ package hydrozoa
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l1.YaciCluster
+import hydrozoa.l1.YaciCluster.YaciClusterInfo
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.node.{TestPeer, l2EventWithdrawalFromInputsAndPeer}
@@ -39,6 +40,8 @@ class HappyPathSuite extends FunSuite {
 
     private var sut: HydrozoaFacade = _
 
+    private var clusterInfo: YaciClusterInfo = _
+
     // We reset Yaci before each test run in order to have clean UTxO state.
     // Any alternative would be to nonce the protocol/regenerate wallets.
     override def beforeEach(context: BeforeEach): Unit =
@@ -46,6 +49,7 @@ class HappyPathSuite extends FunSuite {
             if (useYaci)
             then
                 val clusterInfo = YaciCluster.reset()
+                this.clusterInfo = clusterInfo
                 LocalFacade.apply(testPeers, false, Some(clusterInfo), None, None)
             else LocalFacade.apply(testPeers, false, None, None, None)
 
@@ -68,6 +72,8 @@ class HappyPathSuite extends FunSuite {
 
             _ = sut.awaitTxL1(initTxId)
 
+            feasibleDeadline = clusterInfo.startTime + 60
+
             // Deposit change from initialization transaction
             deposit1 <- sut.deposit(
               Alice,
@@ -75,7 +81,7 @@ class HappyPathSuite extends FunSuite {
                 initTxId,
                 TxIx(1),
                 100_000_000,
-                0,
+                feasibleDeadline,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](TestPeer.address(Alice)),
@@ -93,7 +99,7 @@ class HappyPathSuite extends FunSuite {
                 deposit1.depositId.transactionId,
                 TxIx(1),
                 100_000_000,
-                0,
+                feasibleDeadline,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](TestPeer.address(Alice)),

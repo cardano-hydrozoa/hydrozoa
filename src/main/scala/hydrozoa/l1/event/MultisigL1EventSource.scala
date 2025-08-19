@@ -32,63 +32,55 @@ class MultisigL1EventSource(
 ):
     private val log = Logger(getClass)
 
+    // TODO: treat the init tx the same way we treat settlement txs, i.e. - don't await
     def awaitInitTx(
         txId: TransactionHash,
         headAddress: AddressL1,
+        initialTreasury: Value,
         headNativeScript: Native,
         beaconTokenName: AssetName
     ): Unit =
         log.info("awaitInitTx")
         cardano.ask(_.awaitTx(txId)) match
-            case Some(initTx) =>
+            case Some(_) =>
                 log.info(s"Init tx $txId appeared on-chain.")
-                onlyOutputToAddress(initTx, headAddress) match
-                    case Right(ix, value, _) =>
-                        val utxo = TaggedUtxo[L1, TreasuryTag](Utxo(txId, ix, headAddress, value))
-                        log.info(s"Treasury utxo index is: $ix, utxo $utxo");
-                        nodeState.tell(s =>
-                            s.head.initializingPhase(
-                              _.openHead(utxo)
-                            )
+                val utxo = TaggedUtxo[L1, TreasuryTag](Utxo(txId, 0, headAddress, initialTreasury))
+                log.info(s"Treasury utxo is: $utxo");
+                nodeState.tell(s =>
+                    s.head.initializingPhase(
+                      _.openHead(utxo)
+                    )
+                )
+
+                val beaconToken =
+                    MultiAsset(
+                      SortedMap(
+                        headNativeScript.scriptHash ->
+                            SortedMap(beaconTokenName -> 1L)
+                      )
+                    )
+
+                // repeat polling for head address while head exists
+                supervised {
+                    fork {
+                        repeat(RepeatConfig.fixedRateForever(1000.millis))(
+                          updateL1State(headAddress, beaconToken)
                         )
+                    }
 
-                        val beaconToken =
-                            MultiAsset(
-                              SortedMap(
-                                headNativeScript.scriptHash ->
-                                    SortedMap(beaconTokenName -> 1L)
-                              )
+                    var loop = true
+                    while loop do
+                        sleep(100.millis)
+                        loop = nodeState.ask(_.mbInitializedOn.isDefined)
+                            && (
+                              nodeState.ask(_.head.currentPhase == Open)
+                                  || nodeState.ask(_.head.currentPhase == Finalizing)
                             )
 
-                        // repeat polling for head address while head exists
-                        supervised {
-                            fork {
-                                repeat(RepeatConfig.fixedRateForever(1000.millis))(
-                                  updateL1State(headAddress, beaconToken)
-                                )
-                            }
-
-                            var loop = true
-                            while loop do
-                                sleep(100.millis)
-                                loop = nodeState.ask(_.mbInitializedOn.isDefined)
-                                    && (
-                                      nodeState.ask(_.head.currentPhase == Open)
-                                          || nodeState.ask(_.head.currentPhase == Finalizing)
-                                    )
-
-                            log.info("Leaving L1 source supervised scope")
-                        }
-                    case Left(err) =>
-                        err match
-                            case _: NoMatch =>
-                                throw RuntimeException("Can't find treasury in the init tx!")
-                            case _: TooManyMatches =>
-                                throw RuntimeException(
-                                  "Init tx contains more than one multisig outputs!"
-                                )
+                    log.info("Leaving L1 source supervised scope")
+                }
             case None =>
-                throw RuntimeException("initTx hasn't appeared")
+                throw RuntimeException("initTx hasn't appeared onchain after a while...")
 
     private enum MultisigUtxoType:
         case Treasury(utxo: Utxo[L1])
@@ -167,11 +159,13 @@ class MultisigL1EventSource(
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
                                         // We need deposit tx to observe its TTL
-                                        cardano.ask(_.awaitTx(utxo.input.transactionId)) match
-                                            case Some(depositTx) =>
-                                                depositTx.body.value.ttl match
+                                        val depositTxId = utxo.input.transactionId
+                                        cardano.ask(_.awaitTx(depositTxId)) match
+                                            case Some(_) =>
+                                                cardano.ask(_.txTtl(depositTxId)) match
                                                     case Some(slot) =>
-                                                        // TODO: use George's idea that the sourcer should be in charge of checking deposits eligibility
+                                                        log.info(s"Deposit info: ttl=$slot")
+                                                        // TODO: check eligibility
                                                         existingDeposits.add(utxoId)
                                                         if (!knownDepositIds.contains(utxoId)) then
                                                             val depositUtxo =
