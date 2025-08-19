@@ -5,16 +5,14 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither}
+import hydrozoa.l1.YaciCluster
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
-import hydrozoa.l2.ledger.L2EventTransaction
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionHash
 import sttp.client4.Response
 import sttp.client4.quick.*
@@ -84,12 +82,9 @@ class DisputeSuite extends FunSuite {
                     throw RuntimeException(err)
         }
 
-        val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId) = if (useYaci)
-            // Reset Yaci DevKit
-            log.info("Resetting Yaci...")
-            val _: Response[String] = quickRequest
-                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-                .send()
+        val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId, mbYaciClusterInfo) = if (useYaci)
+
+            val clusterInfo = YaciCluster.reset()
 
             // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
             log.info("Topping up peers' wallets...")
@@ -115,8 +110,8 @@ class DisputeSuite extends FunSuite {
                   DisputeResolutionScript.plutusScript
                 )
 
-            (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
-        else (None, None)
+            (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId), Some(clusterInfo))
+        else (None, None, None)
 
         log.info(
           s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId"
@@ -126,7 +121,8 @@ class DisputeSuite extends FunSuite {
         log.info("Making a Hydrozoa head using a local network...")
         sut = LocalFacade.apply(
           testPeers,
-          useYaci = useYaci,
+          false,
+          mbYaciClusterInfo,
           mbTreasuryScriptRefUtxoId,
           mbDisputeScriptRefUtxoId
         )

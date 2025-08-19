@@ -1,12 +1,11 @@
 //noinspection OptionEqualsSome
 package hydrozoa.model
 
-import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.*
+import hydrozoa.UtxoSet.getContextAndState
 import hydrozoa.infra.{NoMatch, PSStyleAssoc, Piper, TooManyMatches, onlyOutputToAddress, serializeTxHex}
-import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
+import hydrozoa.l1.multisig.onchain.mkHeadNativeScript
 import hydrozoa.l1.multisig.state.{DepositDatum, DepositTag}
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, DepositTxRecipe, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.ScalusFinalizationTxBuilder
@@ -14,12 +13,12 @@ import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe, Scal
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder, ScalusRefundTxBuilder}
 import hydrozoa.l1.multisig.tx.settlement.ScalusSettlementTxBuilder
 import hydrozoa.l1.multisig.tx.toL1Tx
-import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock}
+import hydrozoa.l1.{BackendServiceMock, CardanoL1Mock, YaciCluster}
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.block.{BlockEffect, BlockProducer}
 import hydrozoa.l2.ledger.*
 import hydrozoa.model.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
-import hydrozoa.node.TestPeer.{account, mkWallet}
+import hydrozoa.node.TestPeer.mkWallet
 import hydrozoa.node.server.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import hydrozoa.node.state.{*, given}
@@ -32,20 +31,14 @@ import org.scalacheck.commands.Commands
 import org.scalacheck.rng.Seed
 import org.scalacheck.util.{ConsoleReporter, Pretty}
 import org.scalacheck.{Gen, Prop, Properties, Test}
-import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
-import hydrozoa.*
-import hydrozoa.UtxoSet.getContextAndState
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.prelude.Option as ScalusOption
-import sttp.client4.Response
 import sttp.client4.quick.*
 
 import java.util.concurrent.atomic.AtomicInteger
-import scala.Tuple.canEqualTuple
-import scala.collection.immutable.Set as Opt
-import scala.jdk.CollectionConverters.*
-import scala.language.strictEquality
+import scala.language.{implicitConversions, strictEquality}
 import scala.util.{Failure, Success, Try}
 
 
@@ -65,13 +58,8 @@ object MBTSuite extends Commands:
 
     override def newSut(state: State): Sut =
         log.warn("--------------------> create SUT")
-        // Reset Yaci DevKit
-        if useYaci then
-            println("/// resetting Yaci dev kit")
-            val response: Response[String] = quickRequest
-                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-                .send()
-        LocalFacade.apply(state.knownPeers, false, useYaci, None, None)
+        val mbYaciClusterinfo = if useYaci then Some(YaciCluster.reset()) else None
+        LocalFacade.apply(state.knownPeers, false, mbYaciClusterinfo, None, None)
 
     override def destroySut(sut: Sut): Unit =
         log.warn("<-------------------- destroy SUT")
@@ -623,6 +611,8 @@ object MBTSuite extends Commands:
                 depositsPending = if finalizing then TaggedUtxoSet.apply() else state.depositUtxos,
                 prevHeader = state.l2Tip.blockHeader,
                 timeCreation = timeCurrent,
+                maturityMargin = ???,
+                expiryMargin = ???,
                 finalizing = finalizing
             )
 

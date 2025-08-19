@@ -3,7 +3,8 @@ package hydrozoa.sut
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.l1.CardanoL1Mock
+import hydrozoa.l1.{CardanoL1Mock, YaciCluster}
+import hydrozoa.l1.YaciCluster.YaciClusterInfo
 import hydrozoa.l2.consensus.network.transport.SimNetwork
 import hydrozoa.l2.ledger.{L2EventGenesis, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer
@@ -14,17 +15,17 @@ import ox.*
 import ox.logback.InheritableMDC
 import ox.resilience.{RetryConfig, retry}
 import scalus.cardano.ledger.TransactionHash
+import sttp.client4.UriContext
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.language.implicitConversions
 
-/**
- * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
- * it selects a random peer.
- * @param peers
- * @param shutdown
- */
+/** This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting
+  * Txs to L2, it selects a random peer.
+  * @param peers
+  * @param shutdown
+  */
 class LocalFacade(
     peers: Map[TestPeer, Node],
     shutdown: Long => Unit
@@ -42,7 +43,7 @@ class LocalFacade(
         ada: Long,
         txId: TransactionHash,
         txIx: TxIx
-                               ): Either[InitializationError, TransactionHash] =
+    ): Either[InitializationError, TransactionHash] =
         log.info("SUT: initializing head...")
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
@@ -71,7 +72,12 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash.transactionId))
+                        _.head.openPhase(
+                          _.stateL1.depositUtxos.utxoMap.keys
+                              .map(_.transactionId)
+                              .toSeq
+                              .contains(depositTxHash.transactionId)
+                        )
                       )
                     )
                     // println(veracity)
@@ -83,7 +89,7 @@ class LocalFacade(
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
-                         ): Either[String, TransactionHash] =
+    ): Either[String, TransactionHash] =
         log.info("SUT: submitting L2 transaction/withdrawal...")
 
         val request = tx match
@@ -107,8 +113,8 @@ class LocalFacade(
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-                             ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
               s" nextBlockFinal = $nextBlockFinal"
@@ -164,7 +170,7 @@ object LocalFacade:
     def apply(
         peers: Set[TestPeer],
         autonomousBlocks: Boolean = false,
-        useYaci: Boolean = false,
+        yaciCluster: Option[YaciClusterInfo] = None,
         mbTreasuryScriptRefUtxoId: Option[UtxoIdL1],
         mbDisputeScriptRefUtxoId: Option[UtxoIdL1]
     ): HydrozoaFacade =
@@ -183,11 +189,11 @@ object LocalFacade:
                         forkDiscard {
                             LocalNode.runNode(
                               simNetwork = simNetwork,
-                              mbCardanoL1Mock = if useYaci then None else Some(cardanoL1Mock),
+                              mbCardanoL1Mock =
+                                  if yaciCluster.isDefined then None else Some(cardanoL1Mock),
                               ownPeer = peer,
                               autonomousBlocks = autonomousBlocks,
-                              useYaci = useYaci,
-                              pp = Some(Utils.protocolParams),
+                              mockOrYaci = yaciCluster.toRight(Utils.protocolParams).map(i => (YaciCluster.blockfrostApiBaseUri,i)),
                               mbTreasuryScriptRefUtxoId = mbTreasuryScriptRefUtxoId,
                               mbDisputeScriptRefUtxoId = mbDisputeScriptRefUtxoId,
                               nodeCallback = (p, n) => {

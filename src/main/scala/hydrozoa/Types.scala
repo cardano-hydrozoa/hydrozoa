@@ -42,13 +42,14 @@ import hydrozoa.TaggedUtxoSet.TaggedUtxoSet
 import hydrozoa.infra.transitionary.{toScalus, toScalusLedger}
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 import io.bullet.borer.Cbor
-import scalus.builtin.Data.{fromData, toData}
+import scalus.builtin.Data.{FromData, fromData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v3
+import scalus.cardano.ledger.DatumOption.Inline
 
 import scala.collection.mutable
 import scala.language.implicitConversions
@@ -179,7 +180,13 @@ object Output:
     opaque type Output[L <: AnyLayer] = Babbage
     def apply[L <: AnyLayer](o: Babbage): Output[L] = o
     given [L <: AnyLayer]: Conversion[Output[L], Babbage] = identity
-    extension [L <: AnyLayer](output: Output[L]) def untagged: Babbage = identity(output)
+    extension [L <: AnyLayer](output: Output[L])
+        def untagged: Babbage = identity(output)
+        def mbInlineDatumAs[D](using FromData[D]): Option[D] =
+            output.datumOption match {
+                case Some(Inline(data)) => Some(data.to[D])
+                case _                  => None
+            }
 
 type Output[L <: AnyLayer] = Output.Output[L]
 type OutputL1 = Output.Output[L1]

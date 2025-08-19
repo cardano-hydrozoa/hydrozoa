@@ -85,6 +85,8 @@ class CardanoL1Mock() extends CardanoL1:
             .mapValues(_.value.coin)
             .toMap
 
+    override def slotToTime(slot: Slot): PosixTime = ???
+
 object CardanoL1Mock:
     def apply(): CardanoL1Mock =
         val l1Mock = new CardanoL1Mock

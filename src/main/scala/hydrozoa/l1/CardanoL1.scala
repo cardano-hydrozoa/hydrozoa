@@ -32,6 +32,8 @@ trait CardanoL1 {
     def utxosAtAddress(headAddress: AddressL1): List[(Utxo[L1])]
 
     def utxoIdsAdaAtAddress(headAddress: AddressL1): Map[UtxoIdL1, Coin]
+
+    def slotToTime(slot: Slot): PosixTime
 }
 
 type SubmissionError = String

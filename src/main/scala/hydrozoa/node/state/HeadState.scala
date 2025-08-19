@@ -521,6 +521,8 @@ class HeadStateGlobal(
                     peekDeposits,
                     tipHeader,
                     timeCurrent,
+                    ???,
+                    ???,
                     finalizing
                   )
                 ) match
@@ -1090,6 +1092,8 @@ class HeadStateGlobal(
                     TaggedUtxoSet.apply(),
                     tipHeader,
                     timeCurrent,
+                    ???,
+                    ???,
                     true
                   )
                 ) match

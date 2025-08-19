@@ -4,8 +4,8 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.toEither
 import hydrozoa.l1.*
+import hydrozoa.l1.YaciCluster.{YaciClusterInfo, blockfrostApiBaseUri}
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, ScalusDepositTxBuilder}
 import hydrozoa.l1.multisig.tx.finalization.{FinalizationTxBuilder, ScalusFinalizationTxBuilder}
@@ -29,28 +29,12 @@ import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
-import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import hydrozoa.node.state.{HeadStateReader, NodeState}
 import io.prometheus.metrics.exporter.httpserver.HTTPServer
 import ox.*
-import ox.channels.{Actor, ActorRef}
+import ox.channels.Actor
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
-import scalus.bloxbean.Interop
-import scalus.builtin.ByteString
-import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
-import scalus.cardano.ledger.{
-    AssetName,
-    Coin,
-    DatumOption,
-    Hash,
-    MultiAsset,
-    TransactionOutput,
-    Value
-}
-import scalus.cardano.ledger.TransactionOutput.Shelley
-import scalus.prelude.AssocMap
 import sttp.client4.UriContext
 import sttp.model.Uri
 
@@ -65,7 +49,6 @@ val peers = Map.from(
     Carol -> uri"ws://carol:4939/ws"
   )
 )
-val yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
 
 //// Local peers and Yaci endpoint
 //val peers = Map.from(
@@ -75,7 +58,6 @@ val yaciBFApiUri = "http://yaci-cli:8080/api/v1/"
 //    Carol -> uri"ws://localhost:4939/ws"
 //  )
 //)
-//val yaciBFApiUri = "http://localhost:8080/api/v1/"
 
 object HydrozoaNode extends OxApp:
 
@@ -101,7 +83,9 @@ object HydrozoaNode extends OxApp:
                 // Network peers minus own peer
                 val knownPeers = peers.keySet.-(ownPeer).map(mkWalletId)
 
-                val (cardano, backendService) = mkCardanoL1(true, yaciBFApiUri = yaciBFApiUri)
+                val yaciClusterInfo = YaciCluster.obtainClusterInfo()
+                val (cardano, backendService) =
+                    mkCardanoL1(Right((blockfrostApiBaseUri, yaciClusterInfo)))
                 val cardanoActor = Actor.create(cardano)
 
                 val nodeState: NodeState = NodeState.apply(knownPeers)
@@ -226,21 +210,19 @@ object HydrozoaNode extends OxApp:
         ExitCode.Success
 
 def mkCardanoL1(
-    useYaci: Boolean = false,
-    yaciBFApiUri: String = "http://localhost:8080/api/v1/",
-    pp: Option[ProtocolParams] = None
-) =
+    mockOrYaci: Either[ProtocolParams, (Uri, YaciClusterInfo)]
+): (CardanoL1, BackendService) =
     // Cardano L1
-    val (cardano, backendService) =
-        if useYaci then
-            val backendService = BFBackendService(yaciBFApiUri, "")
-            val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService)
-            (cardano, backendService)
-        else
+    mockOrYaci match {
+        case Left(pp) =>
             val cardano = CardanoL1Mock()
-            val backendService = BackendServiceMock(cardano, pp.get)
+            val backendService = BackendServiceMock(cardano, pp)
             (cardano, backendService)
-    (cardano, backendService)
+        case Right(blockfrostBaseUri, clusterInfo) =>
+            val backendService = BFBackendService(blockfrostBaseUri.toString, "")
+            val cardano: CardanoL1 = CardanoL1YaciDevKit(backendService, clusterInfo)
+            (cardano, backendService)
+    }
 end mkCardanoL1
 
 def mkTxBuilders(

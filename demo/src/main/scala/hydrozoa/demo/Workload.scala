@@ -6,7 +6,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.demo.PeersNetworkPhase.{Freed, NewlyCreated, RunningHead, Shutdown}
 import hydrozoa.infra.transitionary.toScalus
-import hydrozoa.l1.CardanoL1YaciDevKit
+import hydrozoa.l1.{CardanoL1YaciDevKit, YaciCluster}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
 import hydrozoa.node.server.{DepositError, DepositRequest, DepositResponse, InitializationError}
@@ -43,10 +43,9 @@ object Workload extends OxApp:
 
     private val log = Logger("main")
 
-    val backendService = BFBackendService("http://localhost:8080/api/v1/", "")
-
-    val cardanoL1YaciDevKit = CardanoL1YaciDevKit(backendService)
-
+    val backendService = BFBackendService(YaciCluster.blockfrostApiBaseUri.toString, "")
+    val clusterInfo = YaciCluster.obtainClusterInfo()
+    val cardanoL1YaciDevKit = CardanoL1YaciDevKit(backendService, clusterInfo)
     var l2State: ActorRef[mutable.Map[UtxoIdL2, OutputL2]] = _
     var sut: ActorRef[HydrozoaFacade] = _
 
@@ -221,15 +220,21 @@ object Workload extends OxApp:
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
                 // a single element for the required signer. This is the desired behavior
-                txBody.inputs.map(ti => addrMap(Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])))
+                txBody.inputs.map(ti =>
+                    addrMap(
+                      Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])
+                    )
+                )
             }
 
-            txUnsigned: Tx[L2] = Tx[L2](Transaction(
-              body = KeepRaw(txBody),
-              witnessSet = TransactionWitnessSet.empty,
-              isValid = true,
-              auxiliaryData = None
-            ))
+            txUnsigned: Tx[L2] = Tx[L2](
+              Transaction(
+                body = KeepRaw(txBody),
+                witnessSet = TransactionWitnessSet.empty,
+                isValid = true,
+                auxiliaryData = None
+              )
+            )
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
         yield TransactionL2Command(L2EventTransaction(tx))
@@ -257,15 +262,21 @@ object Workload extends OxApp:
 
                 // Note: `Set` isn't a functor, so if multiple inputs resolve to the same address, we'll only keep
                 // a single element for the required signer. This is the desired behavior
-                txBody.inputs.map(ti => addrMap(Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])))
+                txBody.inputs.map(ti =>
+                    addrMap(
+                      Address[L2](l2state(UtxoId[L2](ti)).address.asInstanceOf[ShelleyAddress])
+                    )
+                )
             }
 
-            txUnsigned: Tx[L2] = Tx[L2](Transaction(
-              body = KeepRaw(txBody),
-              witnessSet = TransactionWitnessSet.empty,
-              isValid = true,
-              auxiliaryData = None
-            ))
+            txUnsigned: Tx[L2] = Tx[L2](
+              Transaction(
+                body = KeepRaw(txBody),
+                witnessSet = TransactionWitnessSet.empty,
+                isValid = true,
+                auxiliaryData = None
+              )
+            )
 
             tx = neededSigners.foldLeft(txUnsigned)((tx, peer) => signTx(peer, tx))
         yield WithdrawalL2Command(L2EventWithdrawal(tx))
