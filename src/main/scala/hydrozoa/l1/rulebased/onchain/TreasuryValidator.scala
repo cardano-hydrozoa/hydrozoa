@@ -266,6 +266,9 @@ object TreasuryValidator extends Validator:
                   WithdrawBeaconTokenShouldBePreserved
                 )
 
+                //log(showBigInt(withdrawalOutputs.size))
+                //log(showBigInt(utxoIds.size))
+
                 // Withdrawals
                 // The number of withdrawals should match the number of utxos ids in the redeemer
                 // FIXME: in reality the change outputs gets in - hence +1 for now

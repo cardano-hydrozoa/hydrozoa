@@ -42,4 +42,4 @@ def mkBuilder[T](
 
         QuickTxBuilder(backendService)
             .compose(tx)
-            .withTxEvaluator(evaluator)
+            .withTxEvaluator(evaluator).ignoreScriptCostEvaluationError(false)

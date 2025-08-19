@@ -3,6 +3,7 @@ package hydrozoa.l1.rulebased.tx.withdraw
 import com.bloxbean.cardano.client.address.Address
 import com.bloxbean.cardano.client.api.model.Amount
 import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.function.exception.TxBuildException
 import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
@@ -86,21 +87,25 @@ class BloxBeanWithdrawTxBuilder(
                     nodeAddress = r.nodeAccount.enterpriseAddress()
                     txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-                    tx: Transaction = builder
-                        .apply(txPartial)
-                        // TODO: this should be LEQ than what an unresolved treasury datum contains
-                        // see MajorBlockConfirmationActor.scala:210
-                        .validTo(1024)
-                        .withRequiredSigners(Address(nodeAddress))
-                        .collateralPayer(nodeAddress)
-                        .feePayer(nodeAddress)
-                        .withSigner(txSigner)
-                        // .preBalanceTx should be called only once
-                        .preBalanceTx((_, t) =>
-                            val outputs = t.getBody.getOutputs
-                            outputs.addAll(withdrawals.asJava): Unit
-                        )
-                        .buildAndSign()
+                    tx: Transaction <- try
+                      Right(builder
+                          .apply(txPartial)
+                          // TODO: this should be LEQ than what an unresolved treasury datum contains
+                          // see MajorBlockConfirmationActor.scala:210
+                          .validTo(1024)
+                          .withRequiredSigners(Address(nodeAddress))
+                          .collateralPayer(nodeAddress)
+                          .feePayer(nodeAddress)
+                          .withSigner(txSigner)
+                          // .preBalanceTx should be called only once
+                          .preBalanceTx((_, t) =>
+                              val outputs = t.getBody.getOutputs
+                              outputs.addAll(withdrawals.asJava): Unit
+                          )
+                          .buildAndSign()
+                      ) catch
+                            case (e: TxBuildException) =>  Left(s"buildWithdrawTx failed during transaction building. Original error: ${e.getCause}")
+
                 yield (TxL1(tx.serialize))
 
             case _ => Left("Ref scripts are not set")
