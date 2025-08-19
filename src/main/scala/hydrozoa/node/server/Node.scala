@@ -3,7 +3,6 @@ package hydrozoa.node.server
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.DepositDatum
 import hydrozoa.l1.multisig.tx.*
@@ -18,9 +17,7 @@ import hydrozoa.node.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
 import ox.channels.ActorRef
 import ox.resilience.{RetryConfig, retryEither}
-import scalus.builtin.Data
 import scalus.cardano.ledger.{LedgerToPlutusTranslation, TransactionHash}
-import scalus.ledger.api.v3.{TxOut, TxOutRef}
 import scalus.prelude.asScalus
 
 import scala.concurrent.duration.DurationInt
@@ -124,10 +121,10 @@ class Node:
         // Make the datum and the recipe
         // TODO: should we check that datum is sound?
         val depositDatum = DepositDatum(
-            LedgerToPlutusTranslation.getAddress(r.address),
+          LedgerToPlutusTranslation.getAddress(r.address),
           r.datum.asScalus,
           BigInt.apply(0), // deadline,
-            LedgerToPlutusTranslation.getAddress(r.refundAddress),
+          LedgerToPlutusTranslation.getAddress(r.refundAddress),
           r.datum.asScalus
         )
 
@@ -135,8 +132,14 @@ class Node:
             DepositTxRecipe(UtxoId[L1](r.txId, r.txIx), r.depositAmount, depositDatum)
 
         // Build a deposit transaction draft as a courtesy of Hydrozoa (no signature)
-        val Right(depositTxDraft, index) =
-            depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe))
+        val (depositTxDraft, index) =
+            depositTxBuilder.ask(_.buildDepositTxDraft(depositTxRecipe)) match {
+                case Right(res) => res
+                case Left(e) =>
+                    throw RuntimeException(
+                      s"node could note builder deposit tx draft. Error from builder: ${e}"
+                    )
+            }
         val depositTxHash = depositTxDraft.id
 
         val serializedTx = serializeTxHex(depositTxDraft)
@@ -153,12 +156,16 @@ class Node:
 
         // TODO: temporarily we submit the deposit tx here on the node that handles the request
         // TODO: shall we add a combined function for signing?
-        val Right(depositTxId) =
+        val (depositTxId) =
             cardano.ask(
               _.submit(
                 addWitness(depositTxDraft, wallet.ask(_.createTxKeyWitness(depositTxDraft)))
               )
-            )
+            ) match {
+                case Right(res) => res
+                case Left(err) =>
+                    throw RuntimeException(s"Error when submitting or signing deposit tx: ${err}")
+            }
 
         log.info(s"Deposit tx submitted: $depositTxId")
         Right(DepositResponse(refundTx, UtxoId[L1](depositTxHash, index)))
@@ -194,7 +201,7 @@ class Node:
       * @return
       */
     def produceNextBlockLockstep(
-        nextBlockFinal: Boolean,
+        nextBlockFinal: Boolean
     ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         assert(
           !nodeState.ask(_.autonomousBlockProduction),
@@ -251,9 +258,7 @@ class Node:
                             .ask(s => s.head.openPhase(os => os.stateL2))
                             .toList
                         stateL2
-                            .map((utxoId, output) =>
-                                utxoId -> OutputNoTokens(output)
-                            )
+                            .map((utxoId, output) => utxoId -> OutputNoTokens(output))
 
                     }
                     case _ => List.empty

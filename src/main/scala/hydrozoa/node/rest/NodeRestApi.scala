@@ -5,38 +5,17 @@ boundary; i.e., where we go from an endpoint that contains a Bech32 string to a 
 But this may be achievable earlier with tapirs schemas? I'm not sure.
  */
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{
-    JsonKeyCodec,
-    JsonReader,
-    JsonValueCodec,
-    JsonWriter
-}
-import scalus.cardano.ledger.*
-import scalus.cardano.address.Address as SAddress
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
-import hydrozoa.l2.consensus.network.{*, given}
+import hydrozoa.l2.consensus.network.given
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
-import hydrozoa.node.rest.NodeRestApi.{
-    depositEndpoint,
-    finalizeEndpoint,
-    initEndpoint,
-    stateL2Endpoint,
-    submitL1Endpoint,
-    submitL2Endpoint
-}
-import hydrozoa.node.server.{
-    DepositRequest,
-    DepositResponse,
-    Node,
-    depositResponseCodec,
-    depositResponseSchema
-}
+import hydrozoa.node.rest.NodeRestApi.*
+import hydrozoa.node.server.{*, given}
 import hydrozoa.node.state.WalletId
 import ox.channels.ActorRef
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.*
 import sttp.tapir.*
 import sttp.tapir.CodecFormat.TextPlain
 import sttp.tapir.generic.auto.schemaForCaseClass
@@ -44,7 +23,7 @@ import sttp.tapir.json.jsoniter.*
 import sttp.tapir.server.netty.sync.NettySyncServer
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-import scala.util.{Try, Success, Failure}
+import scala.util.{Failure, Success, Try}
 
 /** Hydrozoa Node API, currently implemented in terms of Tapir HTTP server.
   */
@@ -121,10 +100,10 @@ class NodeRestApi(node: ActorRef[Node]):
     private def runSubmitL2(req: SubmitRequestL2): Either[String, String] =
         node.ask(_.submitL2(req).map(_.toString))
 
-    private def runStateL2(_unit: Unit): Either[Unit, StateL2Response] =
+    private def runStateL2(@annotation.unused _unit: Unit): Either[Unit, StateL2Response] =
         Right(node.ask(_.stateL2()))
 
-    private def runFinalize(_unit: Unit): Either[String, String] =
+    private def runFinalize(@annotation.unused _unit: Unit): Either[String, String] =
         node.ask(_.tryFinalize())
 
 object NodeRestApi:

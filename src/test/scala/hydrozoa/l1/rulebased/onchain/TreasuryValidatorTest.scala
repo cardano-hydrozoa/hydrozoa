@@ -2,8 +2,7 @@ package hydrozoa.l1.rulebased.onchain
 
 import hydrozoa.infra.encodeHex
 import hydrozoa.l1.rulebased.onchain.scalar.Scalar as SScalar
-import hydrozoa.l2.ledger.mkDummySetupG2
-import hydrozoa.l2.ledger.getG2Commitment
+import hydrozoa.l2.ledger.{getG2Commitment, mkDummySetupG2}
 import munit.FunSuite
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.ledger.api.v3.ScriptContext
@@ -94,7 +93,7 @@ class TreasuryValidatorTest extends FunSuite:
         val ss = subset.map(ss => Scalar().from_bendian(ss._1.toByteArray))
         println(s"utxos active hashes: ${ss.map(e => BigInt.apply(e.to_bendian()))}")
 
-        val setup = mkDummySetupG2(subset.size.toInt)
+        val setup = mkDummySetupG2(subset.size.toInt + 1)
 
         val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
         setupBS.foreach(println)

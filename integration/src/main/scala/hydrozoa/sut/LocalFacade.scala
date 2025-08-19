@@ -19,12 +19,11 @@ import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.language.implicitConversions
 
-/**
- * This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting Txs to L2,
- * it selects a random peer.
- * @param peers
- * @param shutdown
- */
+/** This facade is used in the happy-path suite. When waiting for Txs to appear on L1 or submitting
+  * Txs to L2, it selects a random peer.
+  * @param peers
+  * @param shutdown
+  */
 class LocalFacade(
     peers: Map[TestPeer, Node],
     shutdown: Long => Unit
@@ -32,17 +31,13 @@ class LocalFacade(
 
     private val log = Logger(getClass)
 
-    private def randomNode =
-        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
-        peers.values.toList(millis % peers.size)
-
     override def initializeHead(
         initiator: TestPeer,
         otherHeadPeers: Set[WalletId],
         ada: Long,
         txId: TransactionHash,
         txIx: TxIx
-                               ): Either[InitializationError, TransactionHash] =
+    ): Either[InitializationError, TransactionHash] =
         log.info("SUT: initializing head...")
         val ret = peers(initiator).initializeHead(otherHeadPeers, ada, txId, txIx)
         ret match
@@ -71,7 +66,12 @@ class LocalFacade(
                     // println(s"waiting for deposit utxo from tx: $depositTxHash")
                     val veracity = peers.values.map(
                       _.nodeState.ask(
-                          _.head.openPhase(_.stateL1.depositUtxos.utxoMap.keys.map(_.transactionId).toSeq.contains(depositTxHash.transactionId))
+                        _.head.openPhase(
+                          _.stateL1.depositUtxos.utxoMap.keys
+                              .map(_.transactionId)
+                              .toSeq
+                              .contains(depositTxHash.transactionId)
+                        )
                       )
                     )
                     // println(veracity)
@@ -83,7 +83,7 @@ class LocalFacade(
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal
-                         ): Either[String, TransactionHash] =
+    ): Either[String, TransactionHash] =
         log.info("SUT: submitting L2 transaction/withdrawal...")
 
         val request = tx match
@@ -103,12 +103,16 @@ class LocalFacade(
                 })
                 ret
 
+    private def randomNode =
+        val millis = System.currentTimeMillis().toString.takeRight(3).toInt
+        peers.values.toList(millis % peers.size)
+
     override def stateL2(): List[(UtxoId[L2], Output[L2])] =
         randomNode.stateL2().map((utxoId, output) => utxoId -> Output.apply(output))
 
     override def produceBlock(
-        nextBlockFinal: Boolean,
-                             ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
+        nextBlockFinal: Boolean
+    ): Either[String, (BlockRecord, Option[(TransactionHash, L2EventGenesis)])] =
         log.info(
           s"SUT: producing a block in a lockstep manner " +
               s" nextBlockFinal = $nextBlockFinal"
@@ -134,11 +138,10 @@ class LocalFacade(
             case None =>
                 answers.foreach(a => log.error(s"Lockstep block answer was: $a"))
                 Left("Block can't be produced at the moment")
-            case Some(answer) =>
-                log.info(
-                  s"Block details are here #${answer.right.get._1.block.blockHeader.blockNum}"
-                )
-                Right(answer.right.get)
+            case Some(Left(answer)) => throw RuntimeException("Impossible pattern match")
+            case Some(Right(answer)) =>
+                log.info(s"Block details are here #${answer._1.block.blockHeader.blockNum}")
+                Right(answer)
 
     override def runDispute(): Unit =
         log.info("running test dispute...")
@@ -158,8 +161,6 @@ class LocalFacade(
 val shutdownFlag: mutable.Map[Long, Boolean] = mutable.Map.empty
 
 object LocalFacade:
-
-    private val log = Logger("LocalFacade")
 
     def apply(
         peers: Set[TestPeer],
@@ -191,7 +192,7 @@ object LocalFacade:
                               mbTreasuryScriptRefUtxoId = mbTreasuryScriptRefUtxoId,
                               mbDisputeScriptRefUtxoId = mbDisputeScriptRefUtxoId,
                               nodeCallback = (p, n) => {
-                                  synchronized(nodes.put(p, n))
+                                  synchronized(nodes.put(p, n)): Unit
                               }
                             )
                         }
@@ -220,5 +221,5 @@ object LocalFacade:
 
         new LocalFacade(
           nodes.toMap,
-          threadId => shutdownFlag.put(threadId, true)
+          threadId => shutdownFlag.put(threadId, true): Unit
         )

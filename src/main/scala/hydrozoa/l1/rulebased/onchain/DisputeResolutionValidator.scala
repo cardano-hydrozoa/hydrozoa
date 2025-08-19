@@ -9,10 +9,13 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{C
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.{TreasuryDatum, cip67BeaconTokenPrefix}
-import hydrozoa.l1.rulebased.onchain.TreasuryValidatorScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.lib.ByteStringExtensions.take
 import hydrozoa.l1.rulebased.onchain.lib.TxOutExtensions.inlineDatumOfType
-import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{containsCurrencySymbol, containsExactlyOneAsset, onlyNonAdaAsset}
+import hydrozoa.l1.rulebased.onchain.lib.ValueExtensions.{
+    containsCurrencySymbol,
+    containsExactlyOneAsset,
+    onlyNonAdaAsset
+}
 import hydrozoa.l2.block.BlockTypeL2
 import hydrozoa.{PosixTime, Address as HAddress, *}
 import scalus.*
@@ -21,12 +24,11 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
-import scalus.cardano.ledger.TransactionOutput.Shelley
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, AssocMap, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
+import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
 import scalus.uplc.DeBruijnedProgram
 import scalus.uplc.eval.*
 
@@ -40,95 +42,8 @@ object DisputeResolutionValidator extends Validator:
 
     // The result of `bls12_381_G2_compress` function
     private type UtxoSetCommitment = ByteString
-
-    // Datum
-    case class VoteDatum(
-        key: BigInt,
-        link: BigInt,
-        peer: Option[PubKeyHash],
-        voteStatus: VoteStatus
-    )
-
-    given FromData[VoteDatum] = FromData.derived
-    given ToData[VoteDatum] = ToData.derived
-
-    enum VoteStatus:
-        case NoVote
-        case Vote(voteDetails: VoteDetails)
-
-    given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
-        a match
-            case VoteStatus.NoVote =>
-                b match
-                    case VoteStatus.NoVote  => true
-                    case VoteStatus.Vote(_) => false
-            case VoteStatus.Vote(as) =>
-                a match {
-                    case VoteStatus.NoVote   => false
-                    case VoteStatus.Vote(bs) => as === bs
-                }
-
-    given FromData[VoteStatus] = FromData.derived
-    given ToData[VoteStatus] = ToData.derived
-
-    case class VoteDetails(
-        utxosActive: UtxoSetCommitment,
-        versionMinor: BigInt
-    )
-
-    given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
-        a.utxosActive == b.utxosActive && a.versionMinor == b.versionMinor
-
-    given FromData[VoteDetails] = FromData.derived
-    given ToData[VoteDetails] = ToData.derived
-
-    // Redeemer
-    enum DisputeRedeemer:
-        case Vote(voteRedeemer: MinorBlockL1Effect)
-        case Tally(tallyRedeemer: TallyRedeemer)
-        case Resolve
-
-    given FromData[DisputeRedeemer] = FromData.derived
-    given ToData[DisputeRedeemer] = ToData.derived
-
-    case class MinorBlockL1Effect(
-        blockHeader: BlockHeader,
-        multisig: List[Signature]
-    )
-
-    given FromData[MinorBlockL1Effect] = FromData.derived
-    given ToData[MinorBlockL1Effect] = ToData.derived
-
-    enum TallyRedeemer:
-        case Continuing
-        case Removed
-
-    given FromData[TallyRedeemer] = FromData.derived
-    given ToData[TallyRedeemer] = ToData.derived
-
-    // TODO: should we re-use Hydrozoa's type more broadly?
-    // issues: some types from scalus won't work well with Hydrozoa's transport
-    case class BlockHeader(
-        blockNum: BigInt,
-        // TODO: should we re-use Hydrozoa's type more broadly?
-        blockType: BlockTypeL2,
-        timeCreation: PosixTime,
-        versionMajor: BigInt,
-        versionMinor: BigInt,
-        utxosActive: UtxoSetCommitment
-    )
-
-    given FromData[BlockHeader] = FromData.derived
-    given ToData[BlockHeader] = ToData.derived
-
-    given FromData[BlockTypeL2] = FromData.derived
-    given ToData[BlockTypeL2] = ToData.derived
-
-    inline def cip67DisputeTokenPrefix = hex"00d950b0"
-
     // Common errors
     private inline val DatumIsMissing = "Vote datum should be present"
-
     // Vote redeemer
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
     private inline val VoteAlreadyCast = "Vote is already has been cast"
@@ -150,7 +65,6 @@ object DisputeResolutionValidator extends Validator:
         "voteStatus field of voteOutput must be a correct Vote"
     private inline val VoteOutputDatumAdditionalChecks =
         "other fields of voteOutput must match voteInput"
-
     // Tally redeemer
     private inline val VotingInputsNotFound =
         "Continuing and removed inputs not found"
@@ -180,7 +94,6 @@ object DisputeResolutionValidator extends Validator:
         "The link field of removedInput and continuingOutput must match"
     private inline val KeyCheck =
         "Key field of continuingInput and continuingOutput must match"
-
     // Resolve redeemer
     private inline val ResolveTreasurySpent =
         "Treasury that holds head beacon must be spent"
@@ -189,17 +102,54 @@ object DisputeResolutionValidator extends Validator:
     private inline val ResolveTreasuryVoteMatch =
         "Treasury datum should match vote datum on (headMp, disputeId)"
 
-    // Utility to decide on higher vote
-    def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{NoVote, Vote}
-        a match {
-            case NoVote => b
-            case Vote(ad) =>
-                b match {
-                    case NoVote   => a
-                    case Vote(bd) => if ad.versionMinor > bd.versionMinor then a else b
+    given FromData[VoteDatum] = FromData.derived
+
+    given ToData[VoteDatum] = ToData.derived
+
+    given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
+        a match
+            case VoteStatus.NoVote =>
+                b match
+                    case VoteStatus.NoVote  => true
+                    case VoteStatus.Vote(_) => false
+            case VoteStatus.Vote(as) =>
+                a match {
+                    case VoteStatus.NoVote   => false
+                    case VoteStatus.Vote(bs) => as === bs
                 }
-        }
+
+    given FromData[VoteStatus] = FromData.derived
+
+    given ToData[VoteStatus] = ToData.derived
+
+    given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
+        a.utxosActive == b.utxosActive && a.versionMinor == b.versionMinor
+
+    given FromData[VoteDetails] = FromData.derived
+
+    given ToData[VoteDetails] = ToData.derived
+
+    given FromData[DisputeRedeemer] = FromData.derived
+
+    given ToData[DisputeRedeemer] = ToData.derived
+
+    given FromData[MinorBlockL1Effect] = FromData.derived
+
+    given ToData[MinorBlockL1Effect] = ToData.derived
+
+    given FromData[TallyRedeemer] = FromData.derived
+
+    given ToData[TallyRedeemer] = ToData.derived
+
+    given FromData[BlockHeader] = FromData.derived
+
+    given ToData[BlockHeader] = ToData.derived
+
+    given FromData[BlockTypeL2] = FromData.derived
+
+    given ToData[BlockTypeL2] = ToData.derived
+
+    inline def cip67DisputeTokenPrefix = hex"00d950b0"
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
@@ -247,7 +197,10 @@ object DisputeResolutionValidator extends Validator:
                 }
 
                 // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
-                treasuryReference.resolved.value.toSortedMap.get(headMp).getOrElse(SortedMap.empty).toList match
+                treasuryReference.resolved.value.toSortedMap
+                    .get(headMp)
+                    .getOrElse(SortedMap.empty)
+                    .toList match
                     case List.Cons((tokenName, amount), none) =>
                         require(
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
@@ -279,7 +232,8 @@ object DisputeResolutionValidator extends Validator:
                   treasuryDatum.peers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
                 )
-                List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                @annotation.unused
+                val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
                     require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
                 )
                 // The versionMajor field must match between treasury and voteRedeemer.
@@ -415,7 +369,10 @@ object DisputeResolutionValidator extends Validator:
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
                         .find { i =>
-                            i.resolved.value.toSortedMap.get(contCs).getOrElse(SortedMap.empty).toList match
+                            i.resolved.value.toSortedMap
+                                .get(contCs)
+                                .getOrElse(SortedMap.empty)
+                                .toList match
                                 case List.Cons((tokenName, amount), none) =>
                                     tokenName.take(4) == cip67BeaconTokenPrefix
                                     && amount == BigInt(1)
@@ -483,7 +440,10 @@ object DisputeResolutionValidator extends Validator:
                 // prefix 4937.
                 val treasuryInput = tx.inputs
                     .find { i =>
-                        i.resolved.value.toSortedMap.get(headMp).getOrElse(SortedMap.empty).toList match
+                        i.resolved.value.toSortedMap
+                            .get(headMp)
+                            .getOrElse(SortedMap.empty)
+                            .toList match
                             case List.Cons((tokenName, amount), none) =>
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
@@ -503,6 +463,62 @@ object DisputeResolutionValidator extends Validator:
                 // in treasury.
                 require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
                 require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
+
+    // Utility to decide on higher vote
+    def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
+        import VoteStatus.{NoVote, Vote}
+        a match {
+            case NoVote => b
+            case Vote(ad) =>
+                b match {
+                    case NoVote   => a
+                    case Vote(bd) => if ad.versionMinor > bd.versionMinor then a else b
+                }
+        }
+
+    // Datum
+    case class VoteDatum(
+        key: BigInt,
+        link: BigInt,
+        peer: Option[PubKeyHash],
+        voteStatus: VoteStatus
+    )
+
+    enum VoteStatus:
+        case NoVote
+        case Vote(voteDetails: VoteDetails)
+
+    case class VoteDetails(
+        utxosActive: UtxoSetCommitment,
+        versionMinor: BigInt
+    )
+
+    // Redeemer
+    enum DisputeRedeemer:
+        case Vote(voteRedeemer: MinorBlockL1Effect)
+        case Tally(tallyRedeemer: TallyRedeemer)
+        case Resolve
+
+    case class MinorBlockL1Effect(
+        blockHeader: BlockHeader,
+        multisig: List[Signature]
+    )
+
+    enum TallyRedeemer:
+        case Continuing
+        case Removed
+
+    // TODO: should we re-use Hydrozoa's type more broadly?
+    // issues: some types from scalus won't work well with Hydrozoa's transport
+    case class BlockHeader(
+        blockNum: BigInt,
+        // TODO: should we re-use Hydrozoa's type more broadly?
+        blockType: BlockTypeL2,
+        timeCreation: PosixTime,
+        versionMajor: BigInt,
+        versionMinor: BigInt,
+        utxosActive: UtxoSetCommitment
+    )
 
 end DisputeResolutionValidator
 
@@ -528,7 +544,9 @@ object DisputeResolutionScript {
 
     def address(n: Network): AddressL1 = {
         val address = AddressProvider.getEntAddress(plutusScript, n.toBB)
-        address.getAddress |> (s => SLAddress.fromBech32(s).asInstanceOf[ShelleyAddress]) |> HAddress[L1].apply
+        address.getAddress |> (s =>
+            SLAddress.fromBech32(s).asInstanceOf[ShelleyAddress]
+        ) |> HAddress[L1].apply
     }
 }
 

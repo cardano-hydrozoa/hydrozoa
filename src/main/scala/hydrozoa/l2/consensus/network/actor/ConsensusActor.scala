@@ -19,11 +19,10 @@ trait ConsensusActor:
       */
     type ReqType <: Req
 
-    protected var req: ReqType = _
-
     /** Type for acknowledges that an actor produces.
       */
     type AckType <: Ack // FIXME: this guy is already in the ReqType
+    protected var req: ReqType = _
 
     /** Non-reentrant method that handles a Req*, producing own Ack*. For proactive spawning should
       * be called immediately after instantiating. The method should call deliver to deliver the own
@@ -104,6 +103,8 @@ class ConsensusActorFactory(
                 val ownAck = actor.init(req)
                 actor -> ownAck
 
+    private def mkEventL2Actor(dropMyself: () => Unit) = new EventL2Actor(stateActor, dropMyself)
+
     def spawnByAck(ack: Ack, dropMyself: () => Unit): (Option[ConsensusActor], Option[Ack]) =
         log.info("spawnByAck")
         ack match
@@ -117,7 +118,8 @@ class ConsensusActorFactory(
                 Some(actor) -> mbAck
             case ack: AckRefundLater =>
                 val actor = mkRefundLaterActor(dropMyself)
-                val mbAck = actor.deliver(ack)
+                @annotation.unused
+                val _ = actor.deliver(ack)
                 Some(actor) -> None
             case _: AckUnit =>
                 (None, None)
@@ -165,8 +167,6 @@ class ConsensusActorFactory(
           initTxBuilder,
           dropMyself
         )
-
-    private def mkEventL2Actor(dropMyself: () => Unit) = new EventL2Actor(stateActor, dropMyself)
 
     private def mkMinorBlockActor(dropMyself: () => Unit) =
         new MinorBlockConfirmationActor(stateActor, walletActor, dropMyself)

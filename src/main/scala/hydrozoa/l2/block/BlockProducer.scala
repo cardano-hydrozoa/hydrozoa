@@ -2,24 +2,17 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toScalus
-import hydrozoa.infra.{Piper, encodeHex}
+import hydrozoa.infra.encodeHex
 import hydrozoa.l1.multisig.state.DepositUtxos
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.L2EventLabel.{
-    L2EventGenesisLabel,
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
 import ox.channels.ActorRef
 import ox.sleep
-import scalus.cardano.ledger.{TransactionHash}
+import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
-import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -39,7 +32,7 @@ class BlockProducer:
           * production
           */
         l2Ledger: (Context, State),
-        poolEvents: Seq[L2Event],
+        poolEvents: Seq[L2EventWithdrawal | L2EventTransaction],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
@@ -106,7 +99,7 @@ object BlockProducer:
       */
     def createBlock(
         l2Ledger: (Context, State),
-        poolEvents: Seq[L2Event],
+        poolEvents: Seq[L2EventWithdrawal | L2EventTransaction],
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
@@ -139,7 +132,8 @@ object BlockProducer:
             case tx: L2EventTransaction =>
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, tx) match
                     case Right(newState) =>
-                        txValid.add(tx.getEventId)
+                        @annotation.unused
+                        val _ = txValid.add(tx.getEventId)
                         state = newState
                     case Left(err) =>
                         log.debug(s"Transaction can't be applied to STSL2: ${err}")
@@ -147,7 +141,8 @@ object BlockProducer:
             case wd: L2EventWithdrawal =>
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, wd) match
                     case Right(newState) =>
-                        wdValid.add(wd.getEventId)
+                        @annotation.unused
+                        val _ = wdValid.add(wd.getEventId)
                         val utxosDiff: Set[(UtxoIdL2, OutputL2)] =
                             wd.transaction.body.value.inputs.foldLeft(Set.empty)((set, input) =>
                                 set +
@@ -180,7 +175,8 @@ object BlockProducer:
                 HydrozoaL2Mutator.transit(l2Ledger._1, state, genesis) match {
                     case Left(err) =>
                         log.debug(s"Genesis can't be applied to STSL2: ${err}")
-                        eventsInvalid.add(genesis.getEventId, L2EventGenesisLabel)
+                        @annotation.unused
+                        val _ = eventsInvalid.add(genesis.getEventId, L2EventGenesisLabel)
                         None
                     case Right(newState) =>
                         state = newState

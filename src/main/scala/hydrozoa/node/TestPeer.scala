@@ -1,28 +1,36 @@
 package hydrozoa.node
 
-import com.bloxbean.cardano.client.common.model.Network
 import com.bloxbean.cardano.client.account.Account
+import com.bloxbean.cardano.client.common.model.Network
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.infra.transitionary.toScalus
+import hydrozoa.*
 import hydrozoa.infra.{WalletModuleBloxbean, addWitness}
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
-import hydrozoa.node.TestPeer.account
 import hydrozoa.node.state.WalletId
-import hydrozoa.{AnyLayer, L2, Output, Tx, TxL2, UtxoId, Wallet, networkL1static}
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.Network.Testnet
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Transaction as STransaction, given}
-import scalus.ledger.api.v3
+import scalus.cardano.ledger.{
+    Coin,
+    Hash,
+    KeepRaw,
+    Sized,
+    TransactionBody,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    Value,
+    Transaction as STransaction
+}
 
 import scala.collection.mutable
 
-enum TestPeer(ix: Int) derives CanEqual:
+enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
     case Bob extends TestPeer(1)
     case Carol extends TestPeer(2)
@@ -47,7 +55,7 @@ object TestPeer:
 
     private val accountCache: mutable.Map[TestPeer, Account] = mutable.Map.empty
         .withDefault(peer =>
-            new Account(
+            Account.createFromMnemonic(
               Network(0, 42),
               mnemonic,
               createExternalAddressDerivationPathForAccount(peer.ordinal)
@@ -86,7 +94,8 @@ extension [K, V](map: mutable.Map[K, V])
     def cache(key: K): V = map.get(key) match {
         case None =>
             val missing = map.default(key)
-            map.put(key, missing)
+            @annotation.unused
+            val _ = map.put(key, missing)
             missing
         case Some(value) => value
     }
@@ -147,12 +156,12 @@ def l2EventTransactionFromInputsAndPeer(
     )
 
     val txUnsigned: Tx[L2] = Tx[L2](
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = false,
-          auxiliaryData = None
-        )
+      STransaction(
+        body = KeepRaw(txBody),
+        witnessSet = TransactionWitnessSet.empty,
+        isValid = false,
+        auxiliaryData = None
+      )
     )
 
     L2EventTransaction(signTx(inPeer, txUnsigned))

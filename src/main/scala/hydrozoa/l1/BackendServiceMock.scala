@@ -11,12 +11,13 @@ import hydrozoa.*
 import hydrozoa.infra.{ResultUtils, toResult}
 import scalus.builtin.ByteString
 import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
-import scalus.cardano.ledger.{TransactionInput, Hash}
+import scalus.cardano.ledger.{Hash, TransactionInput}
 
 import java.math.BigInteger
 import java.util
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
+import scala.language.implicitConversions
 
 class BackendServiceMock(cardanoL1: CardanoL1Mock, pp: ProtocolParams) extends BackendService:
     override def getAssetService: AssetService = ???
@@ -78,34 +79,14 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
         _order: OrderEnum
     ): Result[util.List[Utxo]] =
         val addressUtxos = cardanoL1Mock.getUtxosActive
-            .filter((_, output) => output.address == (SAddress.fromBech32(address).asInstanceOf[ShelleyAddress]))
+            .filter((_, output) =>
+                output.address == (SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])
+            )
             .map((id, output) => mkUtxo(id.transactionId.toHex, id.index)(output))
 
         addressUtxos.drop(count * (page - 1)).take(count) match
             case Nil       => ResultUtils.mkResultError
             case pageElems => ResultUtils.mkResult(pageElems.toList.asJava)
-
-    override def getUtxos(
-        address: String,
-        unit: String,
-        count: Int,
-        page: Int
-    ): Result[util.List[Utxo]] = ???
-
-    override def getUtxos(
-        address: String,
-        unit: String,
-        count: Int,
-        page: Int,
-        order: OrderEnum
-    ): Result[util.List[Utxo]] = ???
-
-    override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
-        val utxoId = UtxoIdL1(TransactionInput(Hash(ByteString.fromArray(HexUtil.decodeHexString(txHash))), outputIndex))
-        val opt = cardanoL1Mock.getUtxosActive
-            .get(utxoId)
-            .map(mkUtxo(txHash, outputIndex))
-        opt.toResult(s"utxo not found: $txHash#$outputIndex")
 
     def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo =
 
@@ -129,6 +110,30 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
               )).toList.asJava
             )
             .build()
+
+    override def getUtxos(
+        address: String,
+        unit: String,
+        count: Int,
+        page: Int
+    ): Result[util.List[Utxo]] = ???
+
+    override def getUtxos(
+        address: String,
+        unit: String,
+        count: Int,
+        page: Int,
+        order: OrderEnum
+    ): Result[util.List[Utxo]] = ???
+
+    override def getTxOutput(txHash: String, outputIndex: Int): Result[Utxo] =
+        val utxoId = UtxoIdL1(
+          TransactionInput(Hash(ByteString.fromArray(HexUtil.decodeHexString(txHash))), outputIndex)
+        )
+        val opt = cardanoL1Mock.getUtxosActive
+            .get(utxoId)
+            .map(mkUtxo(txHash, outputIndex))
+        opt.toResult(s"utxo not found: $txHash#$outputIndex")
 
 class EpochServiceMock(pp: ProtocolParams) extends EpochService:
     override def getLatestEpoch: Result[EpochContent] = ???

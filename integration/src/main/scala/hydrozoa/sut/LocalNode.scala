@@ -142,7 +142,7 @@ object LocalNode:
                 val networkActor = Actor.create(network)
 
                 nodeState.setNetwork(networkActor)
-                
+
                 // Static actors for node state
                 val multisigL1EventSource =
                     new MultisigL1EventSource(nodeStateActor, cardanoActor)
@@ -184,6 +184,7 @@ object LocalNode:
                     log.info(s"Node own peer: $ownPeer, node client API port: $ownApiPort")
 
                     // Client node API
+                    @annotation.unused
                     val serverBinding =
                         useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(
                           _.stop()

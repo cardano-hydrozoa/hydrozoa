@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.address.AddressProvider
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import hydrozoa.infra.{encodeHex, toBB}
 import hydrozoa.l1.multisig.state.L2ConsensusParamsH32
-import hydrozoa.l1.rulebased.onchain.DisputeResolutionScript.plutusScript
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteDatum
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.VoteStatus.{NoVote, Vote}
 import hydrozoa.l1.rulebased.onchain.TreasuryValidator.TreasuryDatum.{Resolved, Unresolved}
@@ -29,6 +28,7 @@ import scalus.builtin.{
 }
 import scalus.cardano.address.{Network, ShelleyAddress, Address as SLAddress}
 import scalus.cardano.ledger.{AssetName, PolicyId}
+import scalus.cardano.onchain.RequirementError
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.List.Nil
@@ -40,6 +40,10 @@ import scalus.prelude.{*, given}
 @Compile
 object TreasuryValidator extends Validator:
 
+    // EdDSA / ed25519 Cardano verification key
+    private type VerificationKey = ByteString
+    // The result of `bls12_381_G2_compress` function
+    private type MembershipProof = ByteString
     // TODO: we don't know exactly how to handle this
     // most likely we want to create an utxo with the setup
     // upon switching into rule-based mode so it will be
@@ -54,70 +58,28 @@ object TreasuryValidator extends Validator:
             hex"8ce3b57b791798433fd323753489cac9bca43b98deaafaed91f4cb010730ae1e38b186ccd37a09b8aed62ce23b699c48",
             List.Cons(
               hex"8ed36ed5fb9a1b099d84cba0686d8af9a2929a348797cd51c335cdcea1099e3d6f95126dfbc93abcfb3b56a7fc14477b",
-              Nil
+              List.Cons(
+                hex"8f3f78ee37dbcbbc784fa2a75e047e02f8748af86365f3961cfc1b21055e552b46ec0377085da06914e0cffec0d3f0a4",
+                List.Cons(
+                  hex"8ab3f4fbbea07b771705f27bb470481ab6c44c46afcb317500df564b1177fa6dc7a3d27506b9e2d672ac1edd888a7a65",
+                  List.Cons(
+                    hex"b12d0c357016caa5c0ec0a6bdc07e60c2af4631c477366eeb6ab4fffbd0ca40ab9ec195091478a2698bf26349b785ae8",
+                    List.Cons(
+                      hex"b48e56bd66650adb1e4f0c68b745f35f08d9829a06dbd5c67b2cc03dcf4cc5f9a85c84654f9596163b59d693eab14c34",
+                      List.Cons(
+                        hex"8381fd8ef4c0ffa000945de01a4d3d1bd8ed21d1fa42d8e794b6e6a5cc0b1d79160d55ac60df11b06e14b4a011baf1bc",
+                        Nil
+                      )
+                    )
+                  )
+                )
+              )
             )
           )
         ).map(G1.uncompress)
-
-    // EdDSA / ed25519 Cardano verification key
-    private type VerificationKey = ByteString
-
-    // The result of `bls12_381_G2_compress` function
-    private type MembershipProof = ByteString
-
-    // Datum
-    enum TreasuryDatum:
-        case Unresolved(unresolvedDatum: UnresolvedDatum)
-        case Resolved(resolvedDatum: ResolvedDatum)
-
-    given FromData[TreasuryDatum] = FromData.derived
-    given ToData[TreasuryDatum] = ToData.derived
-
-    case class UnresolvedDatum(
-        headMp: CurrencySymbol,
-        disputeId: TokenName,
-        peers: List[VerificationKey],
-        peersN: BigInt,
-        deadlineVoting: PosixTime,
-        versionMajor: BigInt,
-        params: L2ConsensusParamsH32
-    )
-
-    given FromData[UnresolvedDatum] = FromData.derived
-    given ToData[UnresolvedDatum] = ToData.derived
-
-    case class ResolvedDatum(
-        headMp: CurrencySymbol,
-        utxosActive: MembershipProof,
-        version: (BigInt, BigInt),
-        params: L2ConsensusParamsH32
-    )
-
-    given FromData[ResolvedDatum] = FromData.derived
-    given ToData[ResolvedDatum] = ToData.derived
-
-    // Script redeemer
-    enum TreasuryRedeemer:
-        case Resolve
-        case Withdraw(withdrawRedeemer: WithdrawRedeemer)
-        case Deinit
-
-    given FromData[TreasuryRedeemer] = FromData.derived
-    given ToData[TreasuryRedeemer] = ToData.derived
-
-    case class WithdrawRedeemer(
-        utxoIds: List[TxOutRef],
-        // membership proof for utxoIds and the updated accumulator at the same time
-        proof: MembershipProof
-    )
-
-    given FromData[WithdrawRedeemer] = FromData.derived
-    given ToData[WithdrawRedeemer] = ToData.derived
-
     // Common errors
     private inline val DatumIsMissing =
         "Treasury datum should be present"
-
     // Resolve redeemer
     private inline val ResolveNeedsUnresolvedDatumInInput =
         "Resolve redeemer requires unresolved datum in treasury input"
@@ -139,10 +101,11 @@ object TreasuryValidator extends Validator:
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedNoVote =
         "Unexpected NoVot when trying to resolve"
-
     // Withdraw redeemer
     private inline val WithdrawNeedsResolvedDatum =
         "Withdraw redeemer requires resolved datum"
+    private inline val WithdrawOutputNeedsResolvedDatum =
+        "Treasury output from withdrawal redeemer require resolved datum"
     private inline val WithdrawWrongNumberOfWithdrawals =
         "Number of outputs should match the number of utxo ids"
     private inline val WithdrawBeaconTokenFailure =
@@ -155,14 +118,33 @@ object TreasuryValidator extends Validator:
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
     private inline val WithdrawOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
-
+    private inline val WithdrawZKSetupIsNotBigEnough =
+        "Number of withdrawn UTxOs exceed the size of the ZK Setup"
     // Deinit redeemer
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
     private inline val DeinitTokensNotBurned =
         "All head tokens should be burned"
 
-    def cip67BeaconTokenPrefix = hex"01349900"
+    given FromData[TreasuryDatum] = FromData.derived
+
+    given ToData[TreasuryDatum] = ToData.derived
+
+    given FromData[UnresolvedDatum] = FromData.derived
+
+    given ToData[UnresolvedDatum] = ToData.derived
+
+    given FromData[ResolvedDatum] = FromData.derived
+
+    given ToData[ResolvedDatum] = ToData.derived
+
+    given FromData[TreasuryRedeemer] = FromData.derived
+
+    given ToData[TreasuryRedeemer] = ToData.derived
+
+    given FromData[WithdrawRedeemer] = FromData.derived
+
+    given ToData[WithdrawRedeemer] = ToData.derived
 
     // Entry point
     override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
@@ -301,11 +283,14 @@ object TreasuryValidator extends Validator:
                   WithdrawBeaconTokenShouldBePreserved
                 )
 
+                // log(showBigInt(withdrawalOutputs.size))
+                // log(showBigInt(utxoIds.size))
+
                 // Withdrawals
                 // The number of withdrawals should match the number of utxos ids in the redeemer
                 // FIXME: in reality the change outputs gets in - hence +1 for now
                 require(
-                  withdrawalOutputs.size == utxoIds.size + 1,
+                  withdrawalOutputs.size == utxoIds.size,
                   WithdrawWrongNumberOfWithdrawals
                 )
                 // Calculate the final poly for withdrawn subset
@@ -314,12 +299,12 @@ object TreasuryValidator extends Validator:
                 // I blame this lines in Scalus, though it's not clear how to fix that since it uses
 
                 // TODO:
-                val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
+                // val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
 
                 // Zip utxo ids and outputs
                 val withdrawnUtxos: List[ScalusScalar] = utxoIds
                     // .zip(withdrawalOutputs)
-                    .zip(withdrawalOutputsNoChange)
+                    .zip(withdrawalOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars
                     .map(e =>
                         e.toData
@@ -338,7 +323,10 @@ object TreasuryValidator extends Validator:
                 )
 
                 // Accumulator updated commitment
-                val Resolved(outputResolvedDatum) = treasuryOutput.inlineDatumOfType[TreasuryDatum]
+                val outputResolvedDatum = treasuryOutput.inlineDatumOfType[TreasuryDatum] match {
+                    case Resolved(od) => od
+                    case _            => fail(WithdrawOutputNeedsResolvedDatum)
+                }
 
                 require(
                   outputResolvedDatum.utxosActive == proof,
@@ -349,7 +337,7 @@ object TreasuryValidator extends Validator:
                 // withdrawals.
                 // TODO: combine with iterating for poly calculation up above?
                 val withdrawnValue =
-                    withdrawalOutputsNoChange.foldLeft(Value.zero)((acc, o) => acc + o.value)
+                    withdrawalOutputs.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
@@ -394,30 +382,7 @@ object TreasuryValidator extends Validator:
 
                 require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
 
-    // Utility functions
-    /*
-     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
-     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
-     * */
-    def getFinalPolyScalus(binomial_poly: List[ScalusScalar]): List[ScalusScalar] = {
-        binomial_poly
-            .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
-                val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
-                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
-                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
-    }
-
-    def getG1Commitment(
-        setup: List[BLS12_381_G1_Element],
-        subset: List[ScalusScalar]
-    ): BLS12_381_G1_Element = {
-        val subsetInG1 =
-            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
-                st.scale(sb.toInt)
-
-        subsetInG1.foldLeft(G1.zero): (a, b) =>
-            bls12_381_G1_add(a, b)
-    }
+    def cip67BeaconTokenPrefix = hex"01349900"
 
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
       * `acc`.
@@ -442,6 +407,66 @@ object TreasuryValidator extends Validator:
         val rhs = bls12_381_millerLoop(getG1Commitment(setup, subset), proof)
         bls12_381_finalVerify(lhs, rhs)
     }
+
+    def getG1Commitment(
+        setup: List[BLS12_381_G1_Element],
+        subset: List[ScalusScalar]
+    ): BLS12_381_G1_Element = {
+        require(subset.size < setup.size, WithdrawZKSetupIsNotBigEnough)
+        val subsetInG1 =
+            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
+                st.scale(sb.toInt)
+
+        subsetInG1.foldLeft(G1.zero): (a, b) =>
+            bls12_381_G1_add(a, b)
+    }
+
+    // Utility functions
+    /*
+     * Multiply a list of n coefficients that belong to a binomial each to get a final polynomial of degree n+1
+     * Example: for (x+2)(x+3)(x+5)(x+7)(x+11)=x^5 + 28 x^4 + 288 x^3 + 1358 x^2 + 2927 x + 2310
+     * */
+    def getFinalPolyScalus(binomial_poly: List[ScalusScalar]): List[ScalusScalar] = {
+        binomial_poly
+            .foldLeft(List.single(ScalusScalar.one)): (acc, term) =>
+                val shiftedPoly: List[ScalusScalar] = List.Cons(ScalusScalar.zero, acc)
+                val multipliedPoly = acc.map(s => s * term).appended(ScalusScalar.zero)
+                List.map2(shiftedPoly, multipliedPoly)((l, r) => l + r)
+    }
+
+    // Datum
+    enum TreasuryDatum:
+        case Unresolved(unresolvedDatum: UnresolvedDatum)
+        case Resolved(resolvedDatum: ResolvedDatum)
+
+    case class UnresolvedDatum(
+        headMp: CurrencySymbol,
+        disputeId: TokenName,
+        peers: List[VerificationKey],
+        peersN: BigInt,
+        deadlineVoting: PosixTime,
+        versionMajor: BigInt,
+        params: L2ConsensusParamsH32
+    )
+
+    case class ResolvedDatum(
+        headMp: CurrencySymbol,
+        utxosActive: MembershipProof,
+        version: (BigInt, BigInt),
+        params: L2ConsensusParamsH32
+    )
+
+    // Script redeemer
+    enum TreasuryRedeemer:
+        case Resolve
+        case Withdraw(withdrawRedeemer: WithdrawRedeemer)
+        case Deinit
+
+    case class WithdrawRedeemer(
+        utxoIds: List[TxOutRef],
+        // membership proof for utxoIds and the updated accumulator at the same time
+        proof: MembershipProof
+    )
 
 end TreasuryValidator
 

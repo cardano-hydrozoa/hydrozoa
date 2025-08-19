@@ -9,7 +9,6 @@ import hydrozoa.node.{
     l2EventTransactionFromInputsAndPeer,
     l2EventWithdrawalFromInputsAndPeer
 }
-import io.bullet.borer.Cbor
 import monocle.Iso
 import monocle.syntax.all.*
 import org.scalacheck.Prop.{forAll, propBoolean}
@@ -38,16 +37,16 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
         )
     Some(
       Inline(
-              toData(
-                DepositDatum(
-                  address = v3Addr,
-                  datum = SOption.None,
-                  deadline = 100,
-                  refundAddress = v3Addr,
-                  refundDatum = SOption.None
-                )
-              )
-            )
+        toData(
+          DepositDatum(
+            address = v3Addr,
+            datum = SOption.None,
+            deadline = 100,
+            refundAddress = v3Addr,
+            refundDatum = SOption.None
+          )
+        )
+      )
     )
 }
 
@@ -169,13 +168,12 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(200)
     }
 
-    // Pre-compute and cache addresses
-    address(Alice)
-    address(Bob)
-
     test("init empty STS constituents") {
+        @annotation.unused
         val context = emptyContext
+        @annotation.unused
         val state = emptyState
+        @annotation.unused
         val event = L2EventTransaction(Tx[L2](emptyTransaction))
     }
 
@@ -197,7 +195,7 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
                             )) :|
                             "All TransactionInputs resulting from the genesis should have the same txId" && {
                                 // Checking that all expected indexes appear somewhere in the new state
-                                var allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
+                                val allIdx = Seq.range(0, event.resolvedL2UTxOs.length)
                                 allIdx == actualIndexes
                             } :| s"All expected transaction indexes appear (0 to ${event.resolvedL2UTxOs.length}); actualIdxs are ${actualIndexes}"
 
@@ -230,7 +228,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
         forAll(genL2EventGenesisFromPeer(Bob)) { event =>
             // First apply the randomly generated genesis event with Bob's UTxOs
             // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
-            val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
+            val Right(postGenesisState) =
+                HydrozoaL2Mutator(emptyContext, emptyState, event): @unchecked
             // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
             val withdrawlEvent = l2EventWithdrawalFromInputsAndPeer(
               postGenesisState.utxo.keySet,
@@ -278,7 +277,8 @@ class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
       forAll(genL2EventGenesisFromPeer(Alice)) { event =>
           // First apply the randomly generated genesis event with Alice's UTxOs
           // N.B.: we perform a partial pattern match, because we assume the validity of the above tests
-          val Right(postGenesisState) = HydrozoaL2Mutator(emptyContext, emptyState, event)
+          val Right(postGenesisState) =
+              HydrozoaL2Mutator(emptyContext, emptyState, event): @unchecked
 
           // Then generate the withdrawal event, where Alice tries to withdrawal all UTxOs with her own key
           val allTxInputs = postGenesisState.utxo.keySet

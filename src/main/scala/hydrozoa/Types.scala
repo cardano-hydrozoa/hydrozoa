@@ -37,9 +37,7 @@ prefer to do this is by:
     L2; etc.
  * */
 
-import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
-import hydrozoa.TaggedUtxoSet.TaggedUtxoSet
-import hydrozoa.infra.transitionary.{toScalus, toScalusLedger}
+import hydrozoa.infra.transitionary.toScalusLedger
 import hydrozoa.l1.multisig.state.MultisigUtxoTag
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.{fromData, toData}
@@ -123,7 +121,7 @@ object Ed25519Signature:
     opaque type Ed25519Signature = IArray[Byte]
     def apply(signature: IArray[Byte]): Ed25519Signature = signature
     given Conversion[Ed25519Signature, IArray[Byte]] = identity
-    given Conversion[Ed25519Signature, Array[Byte]] = (sig => sig.toArray)
+    given Conversion[Ed25519Signature, Array[Byte]] = (sig => IArray.genericWrapArray(sig).toArray)
     extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
 
 type Ed25519Signature = Ed25519Signature.Ed25519Signature
@@ -209,7 +207,7 @@ type OutputNoTokens[L <: AnyLayer] = OutputNoTokens.OutputNoTokens[L]
   */
 object Utxo:
     opaque type Utxo[L <: AnyLayer] = (UtxoId[L], Output[L])
-    def apply[L <: AnyLayer](io: (UtxoId[L], Output[L])) : Utxo[L] = io
+    def apply[L <: AnyLayer](io: (UtxoId[L], Output[L])): Utxo[L] = io
     def apply[L <: AnyLayer](input: UtxoId[L], output: Output[L]): Utxo[L] = (input, output)
     def apply[L <: AnyLayer](
         txId: TransactionHash,

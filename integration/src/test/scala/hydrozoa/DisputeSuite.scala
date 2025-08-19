@@ -1,27 +1,32 @@
 package hydrozoa
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither}
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
-import hydrozoa.l2.ledger.L2EventTransaction
-import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
+import hydrozoa.l2.block.Block
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
+import hydrozoa.node.state.L1BlockEffect.SettlementTxEffect
+import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionHash
 import sttp.client4.Response
 import sttp.client4.quick.*
 import sttp.model.MediaType.ApplicationJson
 
 import scala.concurrent.duration.Duration
+import scala.language.implicitConversions
+
+//TODO: Relocate
+/** Throws an exception if the given event does not appear in the block */
+def assertEventValid(block: Block, eventId: TransactionHash): Unit = {
+    assert(block.blockBody.eventsValid.map(_._1).contains(eventId))
+}
 
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
@@ -91,9 +96,9 @@ class DisputeSuite extends FunSuite {
                 .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
                 .send()
 
-            // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
+            // Top up nodes' wallets - every participant gets 5 utxos with 100 ada each
             log.info("Topping up peers' wallets...")
-            topUpNodeWallets(testPeers, 50, 1)
+            topUpNodeWallets(testPeers, 100, 5)
 
             println(TreasuryValidatorScript.scriptHashString)
             println(TreasuryValidatorScript.scriptHash)
@@ -141,17 +146,20 @@ class DisputeSuite extends FunSuite {
               Alice,
               testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
-              TransactionHash.fromHex("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
+              TransactionHash.fromHex(
+                "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
+              ),
               TxIx(0)
             )
             _ = sut.awaitTxL1(initTxId)
+
             // 2. Make a deposit
             deposit1 <- sut.deposit(
               Alice,
               DepositRequest(
                 initTxId,
                 TxIx(1),
-                100_000_000,
+                10_000_000,
                 None,
                 Address[L2](TestPeer.address(Alice)),
                 None,
@@ -167,7 +175,7 @@ class DisputeSuite extends FunSuite {
               DepositRequest(
                 deposit1.depositId.transactionId,
                 TxIx(1),
-                100_000_000,
+                10_000_000,
                 None,
                 Address[L2](TestPeer.address(Alice)),
                 None,
@@ -179,61 +187,106 @@ class DisputeSuite extends FunSuite {
             )
             _ = sut.awaitTxL1(deposit2.depositId.transactionId)
 
-            // Make a major block
+            // 2. Make another deposit
+            deposit3 <- sut.deposit(
+              Alice,
+              DepositRequest(
+                deposit2.depositId.transactionId,
+                TxIx(1),
+                10_000_000,
+                None,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](
+                  TestPeer.address(Alice)
+                ),
+                None
+              )
+            )
+            _ = sut.awaitTxL1(deposit3.depositId.transactionId)
+
+            // 2. Make another deposit
+            deposit4 <- sut.deposit(
+              Alice,
+              DepositRequest(
+                deposit3.depositId.transactionId,
+                TxIx(1),
+                10_000_000,
+                None,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](
+                  TestPeer.address(Alice)
+                ),
+                None
+              )
+            )
+            _ = sut.awaitTxL1(deposit4.depositId.transactionId)
+
             major1 <- sut.produceBlock(false)
+            // Alice has 4 L2 UTxOs with 10 ADA each
             major1SettlementTx = sut
-                .awaitTxL1((major1._1.l1Effect.asInstanceOf[TxL1]).id)
-                .toRight("No settlement tx for th major 1")
+                .awaitTxL1(major1._1.l1Effect.asInstanceOf[SettlementTxEffect].effect.untagged.id)
+                .toRight("No settlement tx for the major 1")
 
             // L2 tx + minor block 1.1
             utxoL2 = sut.stateL2().head
 
-            _ <- sut.submitL2(
+            l2Hash_1 <- sut.submitL2(
               l2EventTransactionFromInputsAndPeer(
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Bob
+                outPeer = Isabel
               )
             )
 
             minor1_1 <- sut.produceBlock(false)
+            // Alice has 3x 10 ADA Utxos, Bob has 1x 10 ADA UTxO
+
+            // ensure l2 transaction is observed
+            _ = assertEventValid(minor1_1._1.block, l2Hash_1)
 
             // Another L2 tx + minor block 1.2
             utxoL2: (UtxoId[L2], OutputL2) = sut.stateL2().head
-            _ <- sut.submitL2(
+            l2Hash_2 <- sut.submitL2(
               l2EventTransactionFromInputsAndPeer(
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Carol
+                outPeer = Isabel
               )
             )
+
             minor1_2 <- sut.produceBlock(false)
+            _ = assertEventValid(minor1_2._1.block, l2Hash_2)
 
             // Another L2 tx + minor block 1.3
             utxoL2 = sut.stateL2().head
-            _ <- sut.submitL2(
+            l2Hash_3 <- sut.submitL2(
               l2EventTransactionFromInputsAndPeer(
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Daniella
+                outPeer = Isabel
               )
             )
             minor1_3 <- sut.produceBlock(false)
+            _ = assertEventValid(minor1_3._1.block, l2Hash_3)
 
             // Another L2 tx + minor block 1.4
             utxoL2 = sut.stateL2().head
-            _ <- sut.submitL2(
+            l2Hash_4 <- sut.submitL2(
               l2EventTransactionFromInputsAndPeer(
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Erin
+                outPeer = Isabel
               )
             )
             minor1_4 <- sut.produceBlock(false)
+            _ = assertEventValid(minor1_4._1.block, l2Hash_4)
+            // Bob, Carol, Daniella, and Erin each have 1x 10 ADA L2 UTxO
 
             _ = sut.runDispute()
 

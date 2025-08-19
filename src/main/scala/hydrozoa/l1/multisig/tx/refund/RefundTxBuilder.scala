@@ -1,6 +1,6 @@
 package hydrozoa.l1.multisig.tx.refund
 
-import hydrozoa.{TxIx, TxL1}
+import hydrozoa.TxIx
 import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.Transaction

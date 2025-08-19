@@ -13,21 +13,16 @@ import co.nstant.in.cbor.model.{
     ByteString as CborByteString
 }
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
-import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.spec.Era
 import com.bloxbean.cardano.client.transaction.spec.script.{
     ScriptAll,
     NativeScript as BBNativeScript
 }
 import com.bloxbean.cardano.client.transaction.spec.{TransactionOutput, Value}
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
-import com.bloxbean.cardano.client.transaction.util.TransactionUtil.getTxHash
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag, toL1Tx}
-import hydrozoa.node.TestPeer
+import hydrozoa.l1.multisig.tx.{MultisigTx, MultisigTxTag}
 import io.bullet.borer.Cbor
-import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
@@ -36,14 +31,11 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{
     AssetName,
     Blake2b_224,
-    Blake2b_256,
     Hash,
     HashPurpose,
     MultiAsset,
     OriginalCborByteArray,
-    PolicyId,
     Sized,
-    TransactionHash,
     TransactionInput,
     VKeyWitness,
     Transaction as STransaction,
@@ -59,10 +51,6 @@ import scala.language.implicitConversions
 
 // TODO: make an API
 // We should expose more of it, probably add more tagged types, and unifying the naming of the functions
-
-// QUESTION: why isn't this just exposed as class methods?
-def txHash[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): TransactionHash =
-    tx.id
 
 def serializeTxHex[T <: MultisigTxTag, L <: AnyLayer](tx: MultisigTx[T] | TxAny): String =
     ByteString.fromArray(Cbor.encode(tx.asInstanceOf[STransaction]).toByteArray).toHex
@@ -87,7 +75,7 @@ def addWitness[L <: AnyLayer](tx: Tx[L], wit: VKeyWitness): Tx[L] =
         else new CborArray
 
     if (vkWitnessArrayDI == null)
-        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray)
+        witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray): Unit
 
     val vkeyWitness = new CborArray
     vkeyWitness.add(CborByteString(wit.vkey.bytes))
@@ -103,7 +91,7 @@ end addWitness
 
 // A variant for multisig functions.
 def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness): MultisigTx[T] =
-    MultisigTx(addWitness(tx.toL1Tx, wit))
+    MultisigTx(addWitness(tx.untagged, wit))
 
 /** @param tx
   * @param address
@@ -113,15 +101,22 @@ def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness):
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressL1
-                       ): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Integer, SValue, Data)] =
+): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Integer, SValue, Data)] =
     val outputs = tx.body.value.outputs
     outputs.filter(output => output.value.address == address) match
         case IndexedSeq(elem: Sized[STransactionOutput]) =>
             elem.value match
                 case b: Babbage if b.datumOption.isDefined =>
                     b.datumOption.get match {
-                        case i: Inline => Right((outputs.indexOf(Sized(b.asInstanceOf[STransactionOutput])), b.value, i.data))
-                        case _         => Left(NoInlineDatum())
+                        case i: Inline =>
+                            Right(
+                              (
+                                outputs.indexOf(Sized(b.asInstanceOf[STransactionOutput])),
+                                b.value,
+                                i.data
+                              )
+                            )
+                        case _ => Left(NoInlineDatum())
                     }
                 case _ => Left(NonBabbageMatch())
         case i: IndexedSeq[Any] if i.isEmpty => Left(NoMatch())
@@ -143,12 +138,17 @@ def txInputs[L <: AnyLayer](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = tx.body.value.inputs
     inputs.map(i => UtxoId(i)).toSeq
 
-
 def valueTokens[L <: AnyLayer](tokens: Value): MultiAsset = MultiAsset({
-    SortedMap.from(tokens.toMap.asScala.toMap.map((k, v) =>
-        Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
-            -> SortedMap.from(v.asScala.toMap.map((k, v) => AssetName(ByteString.fromHex(k.drop(2))) -> v.longValue()))
-    ))
+    SortedMap.from(
+      tokens.toMap.asScala.toMap.map((k, v) =>
+          Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
+              -> SortedMap.from(
+                v.asScala.toMap.map((k, v) =>
+                    AssetName(ByteString.fromHex(k.drop(2))) -> v.longValue()
+                )
+              )
+      )
+    )
 })
 def txOutputs[L <: AnyLayer](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = tx.body.value.outputs

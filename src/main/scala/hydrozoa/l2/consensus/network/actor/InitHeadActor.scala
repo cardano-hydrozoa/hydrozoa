@@ -2,25 +2,20 @@ package hydrozoa.l2.consensus.network.actor
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.{toIArray, toScalus}
 import hydrozoa.infra.{addWitness, serializeTxHex}
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.onchain.{mkBeaconTokenName, mkHeadNativeScript}
 import hydrozoa.l1.multisig.tx.initialization.{InitTxBuilder, InitTxRecipe}
-import hydrozoa.l1.multisig.tx.{InitTx, toL1Tx}
-import hydrozoa.l1.rulebased.tx.fallback.{FallbackTxBuilder, FallbackTxRecipe}
+import hydrozoa.l1.multisig.tx.{InitTx, MultisigTx}
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.server.TxDump
 import hydrozoa.node.state.{InitializingHeadParams, NodeState, WalletId}
-import io.bullet.borer.Cbor
 import ox.channels.{ActorRef, Channel, Source}
-import scalus.builtin.{ByteString, given}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{PolicyId, AssetName, VKeyWitness, TransactionHash}
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Shelley
+import scalus.cardano.ledger.{AssetName, PolicyId, TransactionHash, VKeyWitness}
 
 import scala.collection.mutable
 
@@ -32,28 +27,31 @@ private class InitHeadActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqInit
     override type AckType = AckInit
-
+    private val log = Logger(getClass)
+    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
+    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
     private var ownAck: AckInit = _
-
     private var txDraft: InitTx = _
     private var headNativeScript: Native = _
     private var headMintingPolicy: PolicyId = _
     private var headAddress: AddressL1 = _
     private var beaconTokenName: AssetName = _
     private var seedAddress: AddressL1 = _
-    private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
 
         val headPeers = req.otherHeadPeers + req.initiator
-        val Some(headVKeys) = stateActor.ask(_.getVerificationKeys(headPeers))
+        val headVKeys = stateActor.ask(_.getVerificationKeys(headPeers)) match {
+            case Some(keys) => keys
+            case _ =>
+                throw RuntimeException(
+                  "State actor could not provide verification keys for head peers"
+                )
+        }
         val headNativeScript = mkHeadNativeScript(headVKeys)
-        val headMintingPolicy: PolicyId = (headNativeScript.scriptHash)
 
         val headAddress: AddressL1 = Address[L1](
           ShelleyAddress(
@@ -75,10 +73,16 @@ private class InitHeadActor(
         log.info(s"initTxRecipe: $initTxRecipe")
 
         // Builds and balance initialization tx
-        val Right(txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe)
+        val (txDraft, seedAddress) = initTxBuilder.mkInitializationTxDraft(initTxRecipe) match {
+            case Right(res) => res
+            case Left(e) =>
+                throw new RuntimeException(
+                  s"Init head actor could not produce initialization tx draft. Error from builder: ${e}"
+                )
+        }
 
         log.info("Init tx draft: " + serializeTxHex(txDraft))
-        log.info("Init tx draft hash: " + txDraft.id)
+        log.info("Init tx draft hash: " + txDraft.untagged.id)
 
         val (me, ownWit) = walletActor.ask(w => (w.getWalletId, w.createTxKeyWitness(txDraft)))
         val ownAck: AckType = AckInit(me, ownWit)
@@ -92,12 +96,14 @@ private class InitHeadActor(
         this.beaconTokenName = mkBeaconTokenName(req.seedUtxoId)
         this.seedAddress = seedAddress
 
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
-        acks.put(ack.peer, ack.signature)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack.signature)
         tryMakeResult()
         None
 
@@ -110,12 +116,12 @@ private class InitHeadActor(
             if acks.keySet == headPeers
             then
                 // All wits are here, we can sign and submit
-                val initTx = acks.values.foldLeft(txDraft)(addWitness)
+                val initTx = acks.values.foldLeft(txDraft.untagged)(addWitness)
                 val serializedTx = serializeTxHex(initTx)
                 log.info("Initialization tx: " + serializedTx)
 
                 // TODO: submission should be carried on by a separate thread
-                cardanoActor.ask(_.submit(toL1Tx(initTx))) match
+                cardanoActor.ask(_.submit(initTx)) match
                     case Right(txHash) =>
                         // Put the head into Initializing phase
                         val (headPeersVKs, autonomousBlocks) =
@@ -131,12 +137,12 @@ private class InitHeadActor(
                           headAddress,
                           beaconTokenName,
                           seedAddress,
-                          initTx,
+                          MultisigTx(initTx),
                           System.currentTimeMillis(),
                           autonomousBlocks
                         )
                         stateActor.tell(_.tryInitializeHead(params))
-                        TxDump.dumpInitTx(initTx)
+                        TxDump.dumpInitTx(MultisigTx(initTx))
                         resultChannel.send(txHash)
                         dropMyself()
 
@@ -145,8 +151,6 @@ private class InitHeadActor(
                         log.error(msg)
                         // FIXME: what should go next here?
                         throw RuntimeException(msg)
-
-    private val resultChannel: Channel[TransactionHash] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

@@ -13,9 +13,8 @@ import hydrozoa.l1.rulebased.tx.withdraw.WithdrawTxBuilder
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.HeadParams
 import hydrozoa.l2.consensus.network.HeadPeerNetwork
-import hydrozoa.l2.ledger.L2EventLabel.{L2EventTransactionLabel, L2EventWithdrawalLabel}
-import hydrozoa.node.TestPeer
-import hydrozoa.node.monitoring.{Metrics, PrometheusMetrics}
+import hydrozoa.l2.ledger.{L2EventTransactionLabel, L2EventWithdrawalLabel}
+import hydrozoa.node.monitoring.Metrics
 import hydrozoa.node.state.HeadPhase.Finalized
 import hydrozoa.{AddressL1, VerificationKeyBytes}
 import ox.channels.ActorRef
@@ -31,65 +30,65 @@ class NodeState(autonomousBlocks: Boolean):
     val log: Logger = Logger(getClass)
 
     // Actors
-
+    // Returns read-only API for head state.
+    val reader: HeadStateReader = new {
+        override def currentPhase: HeadPhase = getOrThrow.currentPhase
+        override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
+            getOrThrow.multisigRegimeReader(foo)
+        override def initializingPhaseReader[A](foo: InitializingPhaseReader => A): A =
+            getOrThrow.initializingPhaseReader(foo)
+        override def openPhaseReader[A](foo: OpenPhaseReader => A): A =
+            getOrThrow.openPhaseReader(foo)
+        override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
+            getOrThrow.finalizingPhaseReader(foo)
+    }
+    // All known peers in a peer network (not to confuse with head's peers)
+    private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
+    // All learned peers' verification keys
+    private val knownPeersVKeys: mutable.Map[WalletId, VerificationKeyBytes] = mutable.Map.empty
     private var multisigL1EventSource: ActorRef[MultisigL1EventSource] = _
+    private var blockProductionActor: ActorRef[BlockProducer] = _
+    private var cardano: ActorRef[CardanoL1] = _
+    private var network: ActorRef[HeadPeerNetwork] = _
+    private var metrics: ActorRef[Metrics] = _
+    // TODO: move away
+    private var voteTxBuilder: VoteTxBuilder = _
+    private var tallyTxBuilder: TallyTxBuilder = _
+    private var resolutionTxBuilder: ResolutionTxBuilder = _
+    private var withdrawTxBuilder: WithdrawTxBuilder = _
+    private var deinitTxBuilder: DeinitTxBuilder = _
+    // The head state. Currently, we support only one head per a [set] of nodes.
+    private var headState: Option[HeadStateGlobal] = None
 
     def setMultisigL1EventSource(multisigL1EventSource: ActorRef[MultisigL1EventSource]): Unit =
         this.multisigL1EventSource = multisigL1EventSource
 
-    private var blockProductionActor: ActorRef[BlockProducer] = _
-
     def setBlockProductionActor(blockProductionActor: ActorRef[BlockProducer]): Unit =
         this.blockProductionActor = blockProductionActor
-
-    private var cardano: ActorRef[CardanoL1] = _
 
     def setCardano(cardano: ActorRef[CardanoL1]): Unit =
         this.cardano = cardano
 
-    private var network: ActorRef[HeadPeerNetwork] = _
-
     def setNetwork(network: ActorRef[HeadPeerNetwork]) =
         this.network = network
-
-    private var metrics: ActorRef[Metrics] = _
 
     def setMetrics(metrics: ActorRef[Metrics]): Unit =
         this.metrics = metrics
 
-    // TODO: move away
-    private var voteTxBuilder: VoteTxBuilder = _
+    //
 
     def setVoteTxBuilder(builder: VoteTxBuilder): Unit = this.voteTxBuilder = builder
 
-    private var tallyTxBuilder: TallyTxBuilder = _
-
     def setTallyTxBuilder(builder: TallyTxBuilder): Unit = this.tallyTxBuilder = builder
-
-    private var resolutionTxBuilder: ResolutionTxBuilder = _
 
     def setResolutionTxBuilder(builder: ResolutionTxBuilder): Unit = this.resolutionTxBuilder =
         builder
 
-    private var withdrawTxBuilder: WithdrawTxBuilder = _
-
     def setWithdrawTxBuilder(builder: WithdrawTxBuilder): Unit = this.withdrawTxBuilder = builder
-
-    private var deinitTxBuilder: DeinitTxBuilder = _
 
     def setDeinitTxBuilder(builder: DeinitTxBuilder): Unit = this.deinitTxBuilder = builder
 
-    //
-
-    private var ownPeer: TestPeer = _
-
-    // All known peers in a peer network (not to confuse with head's peers)
-    private val knownPeers: mutable.Set[WalletId] = mutable.Set.empty
-
     def getKnownPeers: Set[WalletId] = knownPeers.toSet
-
-    // All learned peers' verification keys
-    private val knownPeersVKeys: mutable.Map[WalletId, VerificationKeyBytes] = mutable.Map.empty
 
     def getVerificationKeys(peers: Set[WalletId]): Option[Set[VerificationKeyBytes]] =
         val mbList = peers.toList.map(knownPeersVKeys.get) |> sequence
@@ -106,9 +105,6 @@ class NodeState(autonomousBlocks: Boolean):
 
     def autonomousBlockProduction: Boolean = autonomousBlocks
 
-    // The head state. Currently, we support only one head per a [set] of nodes.
-    private var headState: Option[HeadStateGlobal] = None
-
     def tryInitializeHead(params: InitializingHeadParams): Unit =
 
         def initializeHead(): Unit = {
@@ -124,7 +120,7 @@ class NodeState(autonomousBlocks: Boolean):
             this.headState.get.setWithdrawTxBuilder(withdrawTxBuilder)
             this.headState.get.setDeinitTxBuilder(deinitTxBuilder)
             log.info(s"Setting up L1 event sourcing...")
-            val initTxId = params.initTx.id
+            val initTxId = params.initTx.untagged.id
             multisigL1EventSource.tell(
               _.awaitInitTx(
                 initTxId,
@@ -156,22 +152,6 @@ class NodeState(autonomousBlocks: Boolean):
     // Returns read-write API for head state.
     def head: HeadState = getOrThrow
 
-    // TODO: move to state-safe reader
-    def mbInitializedOn: Option[Long] = headState.map(_.initializedOn)
-
-    // Returns read-only API for head state.
-    val reader: HeadStateReader = new {
-        override def currentPhase: HeadPhase = getOrThrow.currentPhase
-        override def multisigRegimeReader[A](foo: MultisigRegimeReader => A): A =
-            getOrThrow.multisigRegimeReader(foo)
-        override def initializingPhaseReader[A](foo: InitializingPhaseReader => A): A =
-            getOrThrow.initializingPhaseReader(foo)
-        override def openPhaseReader[A](foo: OpenPhaseReader => A): A =
-            getOrThrow.openPhaseReader(foo)
-        override def finalizingPhaseReader[A](foo: FinalizingPhaseReader => A): A =
-            getOrThrow.finalizingPhaseReader(foo)
-    }
-
     private def getOrThrow = {
         headState match
             case Some(v) => v
@@ -180,6 +160,9 @@ class NodeState(autonomousBlocks: Boolean):
                 log.warn(err)
                 throw IllegalStateException(err)
     }
+
+    // TODO: move to state-safe reader
+    def mbInitializedOn: Option[Long] = headState.map(_.initializedOn)
 
 object NodeState:
     def apply(

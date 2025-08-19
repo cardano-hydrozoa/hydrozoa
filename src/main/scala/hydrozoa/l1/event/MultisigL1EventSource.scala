@@ -1,10 +1,8 @@
 package hydrozoa.l1.event
 
-import scala.language.implicitConversions
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.*
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.l1.CardanoL1
 import hydrozoa.l1.multisig.state.*
 import hydrozoa.node.state.HeadPhase.{Finalizing, Open}
@@ -12,31 +10,16 @@ import hydrozoa.node.state.NodeState
 import ox.channels.ActorRef
 import ox.scheduling.{RepeatConfig, repeat}
 import ox.{fork, sleep, supervised}
-import scalus.bloxbean.Interop
-import scalus.builtin.ByteString
 import scalus.builtin.Data.fromData
-import scalus.cardano.address.{ShelleyAddress, Address as SAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{
-    AssetName,
-    Blake2b_256,
-    Coin,
-    Hash,
-    HashPurpose,
-    MultiAsset,
-    TransactionHash,
-    TransactionInput,
-    TransactionOutput,
-    Value
-}
 
-import java.math.BigInteger
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scala.jdk.CollectionConverters.*
-import scala.language.strictEquality
+import scala.language.{implicitConversions, strictEquality}
 import scala.util.Try
 
 /** This class is in charge of sourcing L1 events in the multisig regime.
@@ -79,7 +62,8 @@ class MultisigL1EventSource(
 
                         // repeat polling for head address while head exists
                         supervised {
-                            fork {
+                            @annotation.unused
+                            val _ = fork {
                                 repeat(RepeatConfig.fixedRateForever(1000.millis))(
                                   updateL1State(headAddress, treasuryTokenAmount)
                                 )
@@ -104,43 +88,12 @@ class MultisigL1EventSource(
                                 throw RuntimeException(
                                   "Init tx contains more than one multisig outputs!"
                                 )
+                            case _: NonBabbageMatch =>
+                                throw RuntimeException("Init tx contains a non-Babbage output")
+                            case _: NoInlineDatum =>
+                                throw RuntimeException("Init tx does not contain an inline datum")
             case None =>
                 throw RuntimeException("initTx hasn't appeared")
-
-    private enum MultisigUtxoType:
-        case Treasury(utxo: Utxo[L1])
-        case Deposit(utxo: Utxo[L1])
-        case Unknown(utxo: Utxo[L1])
-
-    private def utxoType(treasuryTokenAmount: MultiAsset)(utxo: Utxo[L1]): MultisigUtxoType = {
-        // TODO: Multiasset needs a (type safe) `contains` method
-        val treasuryTokenId = treasuryTokenAmount.assets.toList.head._1
-        val treasuryTokenName = treasuryTokenAmount.assets(treasuryTokenId).toList.head._1
-        val utxoAssets = utxo.output.value.assets.assets
-        if utxoAssets.contains(treasuryTokenId) && utxoAssets(treasuryTokenId).contains(
-              treasuryTokenName
-            ) && utxoAssets(treasuryTokenId)(treasuryTokenName) == 1
-        then MultisigUtxoType.Treasury(utxo)
-        else
-            // FIXME: use depositDatum function
-            val datum = Try(
-              fromData[DepositDatum](utxo.output.datumOption.get.asInstanceOf[Inline].data)
-            ).toOption
-
-            datum match
-                case Some(_) => MultisigUtxoType.Deposit(utxo)
-                case None    => MultisigUtxoType.Unknown(utxo)
-    }
-
-    private def mkNewTreasuryUtxo(utxo: Utxo[L1]): TreasuryUtxo = {
-        TaggedUtxo[L1, TreasuryTag](utxo)
-    }
-
-    /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
-      */
-    private def mkDepositUtxoUnsafe(utxo: Utxo[L1]): DepositUtxo = {
-        TaggedUtxo[L1, DepositTag](utxo)
-    }
 
     private def updateL1State(
         headAddress: AddressL1,
@@ -176,19 +129,19 @@ class MultisigL1EventSource(
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
                                         // FIXME: TransactionHash and TransactionHash can't be compared with == (????)
-                                        if currentL1State.treasuryUtxo.untagged.input.index == utxoId.index &&
-                                            currentL1State.treasuryUtxo.untagged.input.transactionId.toHex == utxoId.transactionId.toHex
+                                        if !(currentL1State.treasuryUtxo.untagged.input.transactionId.toHex == utxoId.transactionId.toHex)
                                         then mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")
-                                        existingDeposits.add(utxoId)
+                                        @annotation.unused
+                                        val _ = existingDeposits.add(utxoId)
                                         if (!knownDepositIds.contains(utxoId)) then
                                             val depositUtxo = mkDepositUtxoUnsafe(utxo)
                                             depositsNew.utxoMap
                                                 .put(
                                                   depositUtxo.untagged.input,
                                                   depositUtxo.untagged.output
-                                                )
+                                                ): Unit
                                     case MultisigUtxoType.Unknown(utxo) =>
                                         log.debug(s"UTXO type: unknown: $utxoId")
                             )
@@ -239,3 +192,38 @@ class MultisigL1EventSource(
                           )
                         )
                     case other => log.warn(s"Unsupported phase: $other")
+
+    private def utxoType(treasuryTokenAmount: MultiAsset)(utxo: Utxo[L1]): MultisigUtxoType = {
+        // TODO: Multiasset needs a (type safe) `contains` method
+        val treasuryTokenId = treasuryTokenAmount.assets.toList.head._1
+        val treasuryTokenName = treasuryTokenAmount.assets(treasuryTokenId).toList.head._1
+        val utxoAssets = utxo.output.value.assets.assets
+        if utxoAssets.contains(treasuryTokenId) && utxoAssets(treasuryTokenId).contains(
+              treasuryTokenName
+            ) && utxoAssets(treasuryTokenId)(treasuryTokenName) == 1
+        then MultisigUtxoType.Treasury(utxo)
+        else
+            // FIXME: use depositDatum function
+            val datum = Try(
+              fromData[DepositDatum](utxo.output.datumOption.get.asInstanceOf[Inline].data)
+            ).toOption
+
+            datum match
+                case Some(_) => MultisigUtxoType.Deposit(utxo)
+                case None    => MultisigUtxoType.Unknown(utxo)
+    }
+
+    private def mkNewTreasuryUtxo(utxo: Utxo[L1]): TreasuryUtxo = {
+        TaggedUtxo[L1, TreasuryTag](utxo)
+    }
+
+    /** Doesn't check the datum, use only when you are sure it's a deposit utxo.
+      */
+    private def mkDepositUtxoUnsafe(utxo: Utxo[L1]): DepositUtxo = {
+        TaggedUtxo[L1, DepositTag](utxo)
+    }
+
+    private enum MultisigUtxoType:
+        case Treasury(utxo: Utxo[L1])
+        case Deposit(utxo: Utxo[L1])
+        case Unknown(utxo: Utxo[L1])

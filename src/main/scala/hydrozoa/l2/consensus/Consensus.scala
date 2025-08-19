@@ -3,11 +3,7 @@ package hydrozoa.l2.consensus
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.Req
 import hydrozoa.l2.consensus.network.actor.{ConsensusActor, ConsensusActorFactory}
-import hydrozoa.l2.consensus.network.transport.{
-    AnyMsg,
-    HeadPeerNetworkTransport,
-    HeadPeerNetworkTransportWS
-}
+import hydrozoa.l2.consensus.network.transport.{AnyMsg, HeadPeerNetworkTransport}
 import hydrozoa.node.TestPeer
 import ox.Ox
 import ox.channels.{Actor, ActorRef, Channel, Source}
@@ -31,24 +27,23 @@ end ConsensusDispatcher
 
 class DefaultConsensusDispatcher extends ConsensusDispatcher:
 
+    private val log = Logger(getClass)
+    private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] = mutable.Map.empty
+    // TODO: rename
+    private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
+    private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
     private var transport: ActorRef[HeadPeerNetworkTransport] = _
+    private var ownActor: ActorRef[ConsensusDispatcher] = _
+    private var consensusActorFactory: ConsensusActorFactory = _
 
     override def setTransport(transport: ActorRef[HeadPeerNetworkTransport]): Unit =
         this.transport = transport
 
-    private var ownActor: ActorRef[ConsensusDispatcher] = _
-
     override def setOwnActor(ownActor: ActorRef[ConsensusDispatcher]): Unit =
         this.ownActor = ownActor
 
-    private var consensusActorFactory: ConsensusActorFactory = _
-
     override def setConsensusActorFactory(consensusActorFactory: ConsensusActorFactory): Unit =
         this.consensusActorFactory = consensusActorFactory
-
-    private val log = Logger(getClass)
-
-    private val actors: mutable.Map[(TestPeer, Long), ActorRef[ConsensusActor]] = mutable.Map.empty
 
     def dispatchMessage(msg: AnyMsg): Unit =
         log.info(s"Dispatching incoming message: $msg")
@@ -63,13 +58,13 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                         val acks = actor.ask(act => act.init(req.asInstanceOf[act.ReqType]))
                         log.info(s"Replying with acks: $acks")
                         acks.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                     case Right(_, _, originPeer, originSeq, ack) =>
                         val mbAck = actor.ask(act => act.deliver(ack.asInstanceOf[act.AckType]))
                         log.info(s"Replying with mbAck: $mbAck")
                         mbAck.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
             case None =>
                 log.info(s"Actor was NOT found for origin: $origin")
@@ -86,13 +81,13 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                     case Left(originPeer, originSeq, req) =>
                         val (newActor, acks) = consensusActorFactory.spawnByReq(req, dropMyself)
                         acks.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                         Some(newActor)
                     case Right(_, _, originPeer, originSeq, ack) =>
                         val mbActor -> mbAck = consensusActorFactory.spawnByAck(ack, dropMyself)
                         mbAck.foreach(ack =>
-                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack))
+                            transport.tell(_.broadcastAck(originPeer, originSeq)(ack): Unit)
                         )
                         mbActor
                 mbNewActor match
@@ -100,7 +95,7 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
                         spawnActorReactivelyIn.send(newActor)
                         val newActorRef = spawnActorReactivelyOut.receive()
                         log.info(s"Adding new actor for $origin")
-                        actors.put(origin, newActorRef)
+                        actors.put(origin, newActorRef): Unit
                     case None => ()
 
     override def spawnActorProactively(
@@ -115,9 +110,10 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.trace(s"Deinit acks = $acks")
         spawnActorReactivelyIn.send(newActor)
         val newActorRef = spawnActorReactivelyOut.receive()
-        actors.put(origin, newActorRef)
-        transport.tell(_.broadcastReq(Some(seq))(req))
-        acks.foreach(ack => transport.tell(_.broadcastAck(from, seq)(ack)))
+        @annotation.unused
+        val _ = actors.put(origin, newActorRef)
+        transport.tell(_.broadcastReq(Some(seq))(req): Unit)
+        acks.foreach(ack => transport.tell(_.broadcastAck(from, seq)(ack): Unit))
         log.info("Getting result source...")
         val source: Source[req.resultType] = newActorRef.ask(act => act.result(using req))
         source
@@ -126,10 +122,6 @@ class DefaultConsensusDispatcher extends ConsensusDispatcher:
         log.info(s"Dropping actor for origin $origin")
         val ret = actors.remove(origin)
         assert(ret.isDefined)
-
-    // TODO: rename
-    private val spawnActorReactivelyIn: Channel[ConsensusActor] = Channel.rendezvous
-    private val spawnActorReactivelyOut: Channel[ActorRef[ConsensusActor]] = Channel.rendezvous
 
     def run()(using Ox): Unit =
         log.info("running actor spawner...")

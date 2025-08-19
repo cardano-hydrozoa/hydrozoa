@@ -1,273 +1,273 @@
 {
-	"info": {
-		"_postman_id": "29868ea9-597a-4c90-bf21-00122e284749",
-		"name": "Hydrozoa Node v0.1",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "42594555",
-		"_collection_link": "https://cardano-hydrozoa.postman.co/workspace/My-Workspace~8fffec9a-4c14-4030-85d6-4e86f0d71ff7/collection/42594555-29868ea9-597a-4c90-bf21-00122e284749?action=share&source=collection_link&creator=42594555"
-	},
-	"item": [
-		{
-			"name": "Initialize head",
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"otherPeers\": [\n        {\n            \"name\": \"Bob\"\n        },\n        {\n            \"name\": \"Carol\"\n        }\n    ],\n    \"amount\": 100,\n    \"seedUtxoTxId\": {\n        \"hash\": \"6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508\"\n    },\n    \"seedUtxoTxIx\": {\n        \"ix\": 0\n    }\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
-				},
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/init",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"init"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Make deposit",
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/deposit?txId=39174fac6bab286ec46e3ffc156b6c59b9bf2c85a8e24164f8cf99c8e13e78b0&txIx=1&depositAmount=42000000&address=addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex&datum=d8799f400040ff&refundAddress=addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex&refundDatum=d8799f400040ff",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"deposit"
-					],
-					"query": [
-						{
-							"key": "txId",
-							"value": "39174fac6bab286ec46e3ffc156b6c59b9bf2c85a8e24164f8cf99c8e13e78b0"
-						},
-						{
-							"key": "txIx",
-							"value": "1"
-						},
-						{
-							"key": "depositAmount",
-							"value": "42000000"
-						},
-						{
-							"key": "deadline",
-							"value": "",
-							"disabled": true
-						},
-						{
-							"key": "address",
-							"value": "addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex"
-						},
-						{
-							"key": "datum",
-							"value": "d8799f400040ff"
-						},
-						{
-							"key": "refundAddress",
-							"value": "addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex"
-						},
-						{
-							"key": "refundDatum",
-							"value": "d8799f400040ff"
-						}
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Submit to L1",
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"body": {
-					"mode": "raw",
-					"raw": "84a400d9010281825820eb7161510d8ef3933f8ce68d7591075a61c61dc3bb3d4d990148d3114ff7ae81000181a300583900c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f8ed3a0eea0ef835ffa7bbfcde55f7fe9d2cc5d55ea62cecb42bab3c011a05f32383028201d81847d8799f400040ff021a0002bd7d08190309a201d90102818201838200581cb71fea70d995b9b48b2cbe1b5472cf2abe3bb9ea4a95137b654222b98200581c77f2ba592ef2df64ec8199b677d38ae303fbc3a91c2fed1f809ed6068200581c74976a984a71dd9095cb7376a9dd3ace6a0703e77917c03f3883a66e0083825820d489fc7557875dcf343f5eda9e47051a18d50066c864ed80a761cba34ce24e6058404f93b0e49c22d4bfe7948f982a64f0394e48d9bb5f038c9d0c9c66c1708966b716a1e1385c01488c471b6f5104a478671332d2810604dae0cb7333803ddf470b82582077f64e88e3f48083097b64b12be4682f92a867660c4337b2176c44b88534dc295840031b019c3d336566ebf55f1249a192328e7ea37ac519e9fc8c22ca3d5c5a8091165b2b0ef0a66f77ce4874341ac3308651b0dd757808f8bee79674c06091ae06825820bcdc08ceee1878902bdb4b4bc249771055011470af7b8825067eb561c31e487058406fbb981712208bd0266612d84c8ac231a99b6ed0777aa6f3d7658ad422086a6984d24a68944e79730a46afaa16c877be4ad18a3b61447bf9bb22f1db74366f03f5f6",
-					"options": {
-						"raw": {
-							"language": "text"
-						}
-					}
-				},
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/l1/submit",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"l1",
-						"submit"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "L2 State",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/l2/state",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"l2",
-						"state"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Submit L2 Tx",
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"type\": \"Transaction\",\n    \"transaction\": {\n        \"inputs\": [\n            {\n                \"txId\": {\n                    \"hash\": \"1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf\"\n                },\n                \"outputIx\": {\n                    \"ix\": 0\n                }\n            }\n        ],\n        \"outputs\": [\n            {\n                \"address\": {\n                    \"bech32\": \"addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q\"\n                },\n                \"coins\": 50000000\n            },\n            {\n                \"address\": {\n                    \"bech32\": \"addr_test1qqe5df3su6tjhuuve6rjr8d36ccxre7dxfx2mzxp3egy72vsetrga9el2yjke2fcdql6f6sjzu7h6prajs8mhzpm6r5qpkfq9m\"\n                },\n                \"coins\": 50000000\n            }\n        ]\n    }\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
-				},
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/l2/submit",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"l2",
-						"submit"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Submit L2 Withdrawal",
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"type\": \"Withdrawal\",\n    \"withdrawal\": {\n        \"inputs\": [\n            {\n                \"txId\": {\n                    \"hash\": \"4d5288ec592a5ed8a92d7c260bc9a64f9fba9045ac1129b4a78eb65a972f1538\"\n                },\n                \"outputIx\": {\n                    \"ix\": 0\n                }\n            }\n        ]\n    }\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
-				},
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/l2/submit",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"l2",
-						"submit"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Finalize head",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/finalize",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"finalize"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Produce block",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"url": {
-					"raw": "{{nodeHost}}:{{nodePort}}/l2/next",
-					"host": [
-						"{{nodeHost}}"
-					],
-					"port": "{{nodePort}}",
-					"path": [
-						"l2",
-						"next"
-					],
-					"query": [
-						{
-							"key": "nextBlockFinal",
-							"value": "",
-							"description": "Whether the block should be final",
-							"disabled": true
-						}
-					]
-				}
-			},
-			"response": []
-		}
-	],
-	"event": [
-		{
-			"listen": "prerequest",
-			"script": {
-				"type": "text/javascript",
-				"packages": {},
-				"exec": [
-					""
-				]
-			}
-		},
-		{
-			"listen": "test",
-			"script": {
-				"type": "text/javascript",
-				"packages": {},
-				"exec": [
-					""
-				]
-			}
-		}
-	],
-	"variable": [
-		{
-			"key": "nodeHost",
-			"value": "localhost",
-			"type": "string"
-		},
-		{
-			"key": "nodePort",
-			"value": "8093",
-			"type": "string"
-		}
-	]
+  "info": {
+    "_postman_id": "29868ea9-597a-4c90-bf21-00122e284749",
+    "name": "Hydrozoa Node v0.1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "42594555",
+    "_collection_link": "https://cardano-hydrozoa.postman.co/workspace/My-Workspace~8fffec9a-4c14-4030-85d6-4e86f0d71ff7/collection/42594555-29868ea9-597a-4c90-bf21-00122e284749?action=share&source=collection_link&creator=42594555"
+  },
+  "item": [
+    {
+      "name": "Initialize head",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"otherPeers\": [\n        {\n            \"name\": \"Bob\"\n        },\n        {\n            \"name\": \"Carol\"\n        }\n    ],\n    \"amount\": 100,\n    \"seedUtxoTxId\": {\n        \"hash\": \"6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508\"\n    },\n    \"seedUtxoTxIx\": {\n        \"ix\": 0\n    }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/init",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "init"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Make deposit",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/deposit?txId=39174fac6bab286ec46e3ffc156b6c59b9bf2c85a8e24164f8cf99c8e13e78b0&txIx=1&depositAmount=42000000&address=addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex&datum=d8799f400040ff&refundAddress=addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex&refundDatum=d8799f400040ff",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "deposit"
+          ],
+          "query": [
+            {
+              "key": "txId",
+              "value": "39174fac6bab286ec46e3ffc156b6c59b9bf2c85a8e24164f8cf99c8e13e78b0"
+            },
+            {
+              "key": "txIx",
+              "value": "1"
+            },
+            {
+              "key": "depositAmount",
+              "value": "42000000"
+            },
+            {
+              "key": "deadline",
+              "value": "",
+              "disabled": true
+            },
+            {
+              "key": "address",
+              "value": "addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex"
+            },
+            {
+              "key": "datum",
+              "value": "d8799f400040ff"
+            },
+            {
+              "key": "refundAddress",
+              "value": "addr_test1qryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana68ca5aqa6swlq6llfamln09tal7n5kvt4275ckwedpt4v7q48uhex"
+            },
+            {
+              "key": "refundDatum",
+              "value": "d8799f400040ff"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Submit to L1",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "84a400d9010281825820eb7161510d8ef3933f8ce68d7591075a61c61dc3bb3d4d990148d3114ff7ae81000181a300583900c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8f8ed3a0eea0ef835ffa7bbfcde55f7fe9d2cc5d55ea62cecb42bab3c011a05f32383028201d81847d8799f400040ff021a0002bd7d08190309a201d90102818201838200581cb71fea70d995b9b48b2cbe1b5472cf2abe3bb9ea4a95137b654222b98200581c77f2ba592ef2df64ec8199b677d38ae303fbc3a91c2fed1f809ed6068200581c74976a984a71dd9095cb7376a9dd3ace6a0703e77917c03f3883a66e0083825820d489fc7557875dcf343f5eda9e47051a18d50066c864ed80a761cba34ce24e6058404f93b0e49c22d4bfe7948f982a64f0394e48d9bb5f038c9d0c9c66c1708966b716a1e1385c01488c471b6f5104a478671332d2810604dae0cb7333803ddf470b82582077f64e88e3f48083097b64b12be4682f92a867660c4337b2176c44b88534dc295840031b019c3d336566ebf55f1249a192328e7ea37ac519e9fc8c22ca3d5c5a8091165b2b0ef0a66f77ce4874341ac3308651b0dd757808f8bee79674c06091ae06825820bcdc08ceee1878902bdb4b4bc249771055011470af7b8825067eb561c31e487058406fbb981712208bd0266612d84c8ac231a99b6ed0777aa6f3d7658ad422086a6984d24a68944e79730a46afaa16c877be4ad18a3b61447bf9bb22f1db74366f03f5f6",
+          "options": {
+            "raw": {
+              "language": "text"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/l1/submit",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "l1",
+            "submit"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "L2 State",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/l2/state",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "l2",
+            "state"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Submit L2 Tx",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"type\": \"Transaction\",\n    \"transaction\": {\n        \"inputs\": [\n            {\n                \"txId\": {\n                    \"hash\": \"1b61bc8cd0cd1e39280c0749b4e243ebf1b079e58a02aff8bf302098b66e47bf\"\n                },\n                \"outputIx\": {\n                    \"ix\": 0\n                }\n            }\n        ],\n        \"outputs\": [\n            {\n                \"address\": {\n                    \"bech32\": \"addr_test1qr79wm0n5fucskn6f58u2qph9k4pm9hjd3nkx4pwe54ds4gh2vpy4h4r0sf5ah4mdrwqe7hdtfcqn6pstlslakxsengsgyx75q\"\n                },\n                \"coins\": 50000000\n            },\n            {\n                \"address\": {\n                    \"bech32\": \"addr_test1qqe5df3su6tjhuuve6rjr8d36ccxre7dxfx2mzxp3egy72vsetrga9el2yjke2fcdql6f6sjzu7h6prajs8mhzpm6r5qpkfq9m\"\n                },\n                \"coins\": 50000000\n            }\n        ]\n    }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/l2/submit",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "l2",
+            "submit"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Submit L2 Withdrawal",
+      "request": {
+        "method": "PUT",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"type\": \"Withdrawal\",\n    \"withdrawal\": {\n        \"inputs\": [\n            {\n                \"txId\": {\n                    \"hash\": \"4d5288ec592a5ed8a92d7c260bc9a64f9fba9045ac1129b4a78eb65a972f1538\"\n                },\n                \"outputIx\": {\n                    \"ix\": 0\n                }\n            }\n        ]\n    }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/l2/submit",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "l2",
+            "submit"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Finalize head",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/finalize",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "finalize"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Produce block",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{nodeHost}}:{{nodePort}}/l2/next",
+          "host": [
+            "{{nodeHost}}"
+          ],
+          "port": "{{nodePort}}",
+          "path": [
+            "l2",
+            "next"
+          ],
+          "query": [
+            {
+              "key": "nextBlockFinal",
+              "value": "",
+              "description": "Whether the block should be final",
+              "disabled": true
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "packages": {},
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "nodeHost",
+      "value": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "nodePort",
+      "value": "8093",
+      "type": "string"
+    }
+  ]
 }

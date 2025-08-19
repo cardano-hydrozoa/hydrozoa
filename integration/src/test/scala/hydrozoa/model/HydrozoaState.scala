@@ -6,7 +6,7 @@ import hydrozoa.infra.Piper
 import hydrozoa.l1.genesisUtxos
 import hydrozoa.l1.multisig.state.{DepositUtxos, MultisigHeadStateL1}
 import hydrozoa.l2.block.{Block, zeroBlock}
-import hydrozoa.l2.ledger.L2Event
+import hydrozoa.l2.ledger.{L2Event, L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.model.PeersNetworkPhase.NewlyCreated
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.*
@@ -31,7 +31,7 @@ case class HydrozoaState(
     treasuryUtxoId: Option[UtxoIdL1] = None,
 
     // Node
-    poolEvents: Seq[L2Event] = Seq.empty,
+    poolEvents: Seq[L2EventWithdrawal | L2EventTransaction] = Seq.empty,
 
     // L1
     knownTxs: Map[TransactionHash, TxL1] = Map.empty,
@@ -102,7 +102,7 @@ class NodeStateReaderMock(s: HydrozoaState) extends HeadStateReader:
 
     override def openPhaseReader[A](foo: OpenPhaseReader => A): A =
         (new OpenPhaseReader:
-            def immutablePoolEventsL2: Seq[L2Event] = ???
+            def immutablePoolEventsL2: Seq[L2EventWithdrawal | L2EventTransaction] = ???
             def immutableBlocksConfirmedL2: Seq[BlockRecord] = ???
             def immutableEventsConfirmedL2: Seq[(L2Event, Int)] = ???
             def l2Tip: Block = ???

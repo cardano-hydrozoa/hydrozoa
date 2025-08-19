@@ -82,7 +82,7 @@ services:
     env_file:
       - ./docker/yaci/node.properties
       - ./docker/yaci/env
-    entrypoint: ["/app/yaci-cli.sh", "create-node", "-o", "--start"]
+    entrypoint: [ "/app/yaci-cli.sh", "create-node", "-o", "--start" ]
     logging: *default-logging
     networks:
       hydrozoa_network:
@@ -198,7 +198,7 @@ services:
   tempo:
     container_name: tempo
     image: grafana/tempo:latest
-    command: [-config.file=/etc/tempo.yaml]
+    command: [ -config.file=/etc/tempo.yaml ]
     volumes:
       - ./docker/tempo.yaml:/etc/tempo.yaml
       - tempo-data:/var/tempo

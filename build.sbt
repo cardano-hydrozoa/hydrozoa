@@ -10,17 +10,6 @@ dockerExposedPorts ++= Seq(4937)
 //dockerEnvVars ++= Map(("COCKROACH_HOST", "dev.localhost"))
 //dockerExposedVolumes := Seq("/opt/docker/.logs", "/opt/docker/.keys")
 
-val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
-val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
-
-// Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.6"
-
-ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
-
-// Add the Scalus compiler plugin
-addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
-
 // Main application
 lazy val core = (project in file("."))
     .settings(
@@ -73,10 +62,6 @@ lazy val core = (project in file("."))
         "dev.optics" %% "monocle-macro" % "3.1.0" % Test
       )
     )
-
-// Test dependencies
-ThisBuild / testFrameworks += new TestFramework("munit.Framework")
-
 // Integration tests
 lazy val integration = (project in file("integration"))
     .dependsOn(core)
@@ -92,6 +77,22 @@ lazy val integration = (project in file("integration"))
       )
     )
 
+// Latest Scala 3 LTS version
+ThisBuild / scalaVersion := "3.3.6"
+
+ThisBuild / scalacOptions ++= Seq(
+  "-feature",
+  "-deprecation",
+  "-unchecked",
+  "-Werror",
+  "-language:implicitConversions",
+  "-Wvalue-discard",
+  "-Wunused:all",
+  "-Wall"
+)
+
+// Add the Scalus compiler plugin
+addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
 // Demo workload
 lazy val demo = (project in file("demo"))
     .dependsOn(core, integration)
@@ -102,3 +103,16 @@ lazy val demo = (project in file("demo"))
         "org.scalacheck" %% "scalacheck" % "1.18.1"
       )
     )
+
+// Test dependencies
+ThisBuild / testFrameworks += new TestFramework("munit.Framework")
+val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
+val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
+
+inThisBuild(
+  List(
+    scalaVersion := "3.3.6",
+    semanticdbEnabled := true,
+    semanticdbVersion := scalafixSemanticdb.revision
+  )
+)

@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.toEither
 import hydrozoa.l1.*
 import hydrozoa.l1.event.MultisigL1EventSource
 import hydrozoa.l1.multisig.tx.deposit.{DepositTxBuilder, ScalusDepositTxBuilder}
@@ -29,28 +28,12 @@ import hydrozoa.node.monitoring.PrometheusMetrics
 import hydrozoa.node.rest.NodeRestApi
 import hydrozoa.node.server.Node
 import hydrozoa.node.state.HeadPhase.{Finalizing, Initializing, Open}
-import hydrozoa.node.state.{HeadStateReader, NodeState, WalletId}
+import hydrozoa.node.state.{HeadStateReader, NodeState}
 import io.prometheus.metrics.exporter.httpserver.HTTPServer
 import ox.*
-import ox.channels.{Actor, ActorRef}
+import ox.channels.Actor
 import ox.logback.InheritableMDC
 import ox.scheduling.{RepeatConfig, repeat}
-import scalus.bloxbean.Interop
-import scalus.builtin.ByteString
-import scalus.builtin.Data.toData
-import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
-import scalus.cardano.ledger.{
-    AssetName,
-    Coin,
-    DatumOption,
-    Hash,
-    MultiAsset,
-    TransactionOutput,
-    Value
-}
-import scalus.cardano.ledger.TransactionOutput.Shelley
-import scalus.prelude.AssocMap
 import sttp.client4.UriContext
 import sttp.model.Uri
 
@@ -85,7 +68,8 @@ object HydrozoaNode extends OxApp:
     override def run(args: Vector[String])(using Ox): ExitCode =
         InheritableMDC.init
 
-        forkUser {
+        @annotation.unused
+        val _ = forkUser {
 
             val ownPeer = TestPeer.valueOf(args.apply(0))
             val ownPort = peers(ownPeer).port.get
@@ -215,8 +199,8 @@ object HydrozoaNode extends OxApp:
 
                 // Client node API
                 val apiPort = args.apply(1).toInt
-                val serverBinding =
-                    useInScope(NodeRestApi(nodeActor).mkServer(apiPort).start())(_.stop())
+                @annotation.unused
+                val _ = useInScope(NodeRestApi(nodeActor).mkServer(apiPort).start())(_.stop())
 
                 never
             }

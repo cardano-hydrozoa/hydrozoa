@@ -1,13 +1,7 @@
 package hydrozoa.l1.rulebased.onchain.lib
 
 import scalus.*
-import scalus.builtin.Builtins.{
-    indexByteString,
-    lengthOfByteString,
-    lessThanByteString,
-    lessThanEqualsByteString,
-    sliceByteString
-}
+import scalus.builtin.Builtins.*
 import scalus.builtin.{Builtins, ByteString}
 
 @Compile

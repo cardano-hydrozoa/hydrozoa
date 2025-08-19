@@ -1,6 +1,6 @@
 package hydrozoa.l1.multisig.state
 
-import hydrozoa.{L1, TaggedUtxo, TaggedUtxoSet, Utxo, UtxoSet, TaggedUtxoSetMutable}
+import hydrozoa.*
 
 import scala.collection.mutable
 

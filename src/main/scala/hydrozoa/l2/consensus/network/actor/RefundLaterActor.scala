@@ -3,12 +3,11 @@ package hydrozoa.l2.consensus.network.actor
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.infra.{addWitness, serializeTxHex}
-import hydrozoa.l1.multisig.tx.PostDatedRefundTx
 import hydrozoa.l1.multisig.tx.refund.{PostDatedRefundRecipe, RefundTxBuilder}
+import hydrozoa.l1.multisig.tx.{MultisigTx, PostDatedRefundTx}
 import hydrozoa.l2.consensus.network.*
 import hydrozoa.node.state.{NodeState, WalletId}
 import ox.channels.{ActorRef, Channel, Source}
-import hydrozoa.infra.transitionary.toScalus
 import scalus.cardano.ledger.{TransactionInput, VKeyWitness}
 
 import scala.collection.mutable
@@ -20,18 +19,17 @@ private class RefundLaterActor(
     dropMyself: () => Unit
 ) extends ConsensusActor:
 
-    private val log = Logger(getClass)
-
     override type ReqType = ReqRefundLater
     override type AckType = AckRefundLater
-
-    private var txDraft: PostDatedRefundTx = _
+    private val log = Logger(getClass)
     private val acks: mutable.Map[WalletId, VKeyWitness] = mutable.Map.empty
+    private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
+    private var txDraft: PostDatedRefundTx = _
 
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"Init req: $req")
 
-        val Right(txDraft) =
+        val txDraft =
             refundTxBuilder.mkPostDatedRefundTxDraft(
               PostDatedRefundRecipe(
                 depositTx = req.depositTx,
@@ -42,8 +40,14 @@ private class RefundLaterActor(
                 ,
                 network = networkL1static
               )
-            )
-        log.info("Post-dated refund tx hash: " + txDraft.id)
+            ) match {
+                case Right(res) => res
+                case Left(e) =>
+                    throw new RuntimeException(
+                      s"RefundLaterActor could not build refund tx. Error from builder: ${e}"
+                    )
+            }
+        log.info("Post-dated refund tx hash: " + txDraft.untagged.id)
 
         // TxDump.dumpMultisigTx(refundTxDraft)
 
@@ -52,12 +56,14 @@ private class RefundLaterActor(
 
         this.req = req
         this.txDraft = txDraft
-        deliver(ownAck)
+        @annotation.unused
+        val _ = deliver(ownAck)
         Seq(ownAck)
 
     override def deliver(ack: AckType): Option[AckType] =
         log.trace(s"Deliver ack: $ack")
-        acks.put(ack.peer, ack.signature)
+        @annotation.unused
+        val _ = acks.put(ack.peer, ack.signature)
         tryMakeResult()
         None
 
@@ -67,16 +73,14 @@ private class RefundLaterActor(
         if (req != null && acks.keySet == headPeers)
             // All wits are here, we can sign and save post-dated
             // refund transaction for future's use.
-            val refundTx = acks.values.foldLeft(txDraft)(addWitness)
+            val refundTx = acks.values.foldLeft(txDraft.untagged)(addWitness)
             val serializedTx = serializeTxHex(refundTx)
             log.info("Post-dated refund refundTx: " + serializedTx)
 
             val depositUtxoId = UtxoIdL1.apply(TransactionInput(req.depositTx.id, req.index))
-            stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, refundTx)))
-            resultChannel.send(refundTx)
+            stateActor.tell(_.head.openPhase(_.enqueueDeposit(depositUtxoId, MultisigTx(refundTx))))
+            resultChannel.send(MultisigTx(refundTx))
             dropMyself()
-
-    private val resultChannel: Channel[PostDatedRefundTx] = Channel.buffered(1)
 
     override def result(using req: Req): Source[req.resultType] =
         resultChannel.asInstanceOf[Source[req.resultType]]

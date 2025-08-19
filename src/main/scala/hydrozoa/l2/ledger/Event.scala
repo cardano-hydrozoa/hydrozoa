@@ -28,8 +28,7 @@ final case class L2EventWithdrawal(transaction: TxL2) extends L2Event {
   * outputs. The TxId of a Genesis Event comes from sorting the TxIds of the absorbed UTxOs,
   * encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
   */
-final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
-    extends L2Event {
+final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)]) extends L2Event {
     require(utxosL1.nonEmpty, "L2EventGenesis must consume at least one L1 deposit")
 
     /** The list of UTxOs that should appear on L2 corresponding to this genesis event. Malformed
@@ -52,13 +51,14 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
                             val dd: DepositDatum = fromData(datum)
                             Some(
                               UtxoId[L2](l2TxIn),
-                              Output[L2](Babbage(
-                                address = dd.address.toScalusLedger,
-                                value = Value(babbageTxOut.value.coin),
-                                datumOption =
-                                    dd.datum.asScala.map(Inline(_)),
-                                scriptRef = None
-                              ))
+                              Output[L2](
+                                Babbage(
+                                  address = dd.address.toScalusLedger,
+                                  value = Value(babbageTxOut.value.coin),
+                                  datumOption = dd.datum.asScala.map(Inline(_)),
+                                  scriptRef = None
+                                )
+                              )
                             )
 
                         case _ => None
@@ -76,25 +76,26 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
           // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
           // yet
           utxosL1
-              .map((ti, to) => ti.transactionId.toHex ++ ti.index.toString)
+              .map((ti, _) => ti.transactionId.toHex ++ ti.index.toString)
               .sorted
               .flatMap(ti => Cbor.encode(ti).toByteArray)
               .toArray
         )
       )
     )
-    def volume: Long = utxosL1.map((ti, to) => to.value.coin.value).sum
+    def volume: Long = utxosL1.map((_, to) => to.value.coin.value).sum
 
 }
 
-// Tags used in blocks
-enum L2EventLabel derives CanEqual:
-    case L2EventGenesisLabel
-    case L2EventTransactionLabel
-    case L2EventWithdrawalLabel
+/** Tags used in blocks */
+sealed trait L2EventLabel derives CanEqual
+
+case object L2EventGenesisLabel extends L2EventLabel derives CanEqual
+case object L2EventTransactionLabel extends L2EventLabel derives CanEqual
+case object L2EventWithdrawalLabel extends L2EventLabel derives CanEqual
 
 def l2EventLabel(e: L2Event): L2EventLabel =
     e match
-        case _: L2EventGenesis     => L2EventLabel.L2EventGenesisLabel
-        case _: L2EventTransaction => L2EventLabel.L2EventTransactionLabel
-        case _: L2EventWithdrawal  => L2EventLabel.L2EventWithdrawalLabel
+        case _: L2EventGenesis     => L2EventGenesisLabel
+        case _: L2EventTransaction => L2EventTransactionLabel
+        case _: L2EventWithdrawal  => L2EventWithdrawalLabel

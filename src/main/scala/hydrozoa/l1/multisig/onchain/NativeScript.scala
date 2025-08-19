@@ -2,7 +2,6 @@ package hydrozoa.l1.multisig.onchain
 
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.infra.verKeyHash
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AddrKeyHash, Hash, Script}
 import scalus.ledger.api.Timelock.{AllOf, Signature}
 

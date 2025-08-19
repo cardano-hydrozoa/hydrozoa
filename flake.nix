@@ -26,6 +26,7 @@
             sbt
             scala-cli
      	    visualvm
+            scalafix
           ];
         };
       })

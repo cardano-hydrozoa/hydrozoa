@@ -1,11 +1,7 @@
 package hydrozoa.l1.multisig.state
 
-import scala.language.implicitConversions
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.OutputL1
 import scalus.*
-import scalus.bloxbean.Interop
 import scalus.builtin.Data.{FromData, ToData, fromData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.ledger.DatumOption
@@ -13,6 +9,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.ledger.api.v1.{Address, PosixTime}
 import scalus.prelude.Option
 
+import scala.language.implicitConversions
 import scala.util.Try
 
 // MultisigTreasuryDatum

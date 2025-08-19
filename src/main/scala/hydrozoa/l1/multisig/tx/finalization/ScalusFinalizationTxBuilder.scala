@@ -1,19 +1,15 @@
 package hydrozoa.l1.multisig.tx.finalization
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.api.BackendService
-import com.typesafe.scalalogging.Logger
-import hydrozoa.Tx
-import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody, toScalus}
-import hydrozoa.l1.multisig.tx.FinalizationTx
+import hydrozoa.infra.transitionary.{bloxToScalusUtxoQuery, emptyTxBody}
+import hydrozoa.l1.multisig.tx.{FinalizationTx, MultisigTx}
 import hydrozoa.node.state.{HeadStateReader, multisigRegime}
-import io.bullet.borer.Cbor
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.prelude.log
 
 import scala.collection.immutable.SortedMap
+import scala.language.implicitConversions
 
 class ScalusFinalizationTxBuilder(
     backendService: BackendService,
@@ -83,7 +79,9 @@ class ScalusFinalizationTxBuilder(
         val txBody =
             emptyTxBody.copy(
               inputs = Set(treasuryUtxoId),
-              outputs = outputsToWithdraw.toIndexedSeq.map((b : Babbage) => Sized(b.asInstanceOf[TransactionOutput])).appended(Sized(changeOutput)),
+              outputs = outputsToWithdraw.toIndexedSeq
+                  .map((b: Babbage) => Sized(b.asInstanceOf[TransactionOutput]))
+                  .appended(Sized(changeOutput)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin,
               mint = Some(beaconTokenBurn)
@@ -96,7 +94,7 @@ class ScalusFinalizationTxBuilder(
           auxiliaryData = None
         )
 
-        Right(Tx(scalusTransaction))
+        Right(MultisigTx(scalusTransaction))
     }
 
 }

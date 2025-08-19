@@ -37,9 +37,9 @@ import hydrozoa.*
 import hydrozoa.infra.encodeHex
 import hydrozoa.l2.commitment.infG2Point
 import hydrozoa.l2.ledger
-import scalus.builtin.BLS12_381_G2_Element
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.Data.toData
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
 import scalus.cardano.ledger.*
 import scalus.ledger.api.v3
 import scalus.ledger.api.v3.TxInInfo
@@ -57,9 +57,9 @@ sealed trait STSL2 {
     // An L2 Event is a Transaction (re-using the L1 transaction type) that can
     // also absorb deposits or release withdrawals.
     final type Event = L2Event
-    type Value
     final type Error = String | TransactionException
     final type Result = Either[Error, Value]
+    type Value
 
     def apply(context: Context, state: State, event: Event): Result
 
@@ -69,22 +69,21 @@ sealed trait STSL2 {
 object STSL2 {
     trait Validator extends STSL2 {
         override final type Value = Unit
-
-        def validate(context: Context, state: State, event: Event): Result
+        protected final val success: Result = Right(())
 
         override final def apply(context: Context, state: State, event: Event): Result =
             validate(context, state, event)
 
-        protected final val success: Result = Right(())
+        def validate(context: Context, state: State, event: Event): Result
     }
 
     trait Mutator extends STSL2 {
         override final type Value = State
 
-        def transit(context: Context, state: State, event: Event): Result
-
         override final def apply(context: Context, state: State, event: Event): Result =
             transit(context, state, event)
+
+        def transit(context: Context, state: State, event: Event): Result
 
         protected final def success(state: State): Result = Right(state)
     }
@@ -168,4 +167,14 @@ def getG2Commitment(
 
     subsetInG2.foldLeft(zero.dup()): (a, b) =>
         a.add(b)
+}
+
+@main
+def dumpSetupG1(): Unit = {
+    val setup = mkDummySetupG1(6)
+    val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
+    setupBS.foreach(println)
+
+    //    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
+    //    println(G1.generator.toCompressedByteString)
 }

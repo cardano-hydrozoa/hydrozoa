@@ -4,36 +4,18 @@ import com.github.plokhotnyuk.jsoniter_scala.core.*
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
 import hydrozoa.infra.transitionary.emptyTxBody
-import hydrozoa.l1.multisig.tx.PostDatedRefundTx
+import hydrozoa.l1.multisig.tx.{DeinitTx, PostDatedRefundTx}
 import hydrozoa.l2.block.{Block, BlockBody, BlockHeader, BlockTypeL2}
 import hydrozoa.l2.consensus.ConsensusDispatcher
 import hydrozoa.l2.ledger.*
-import hydrozoa.l2.ledger.L2EventLabel.{
-    L2EventGenesisLabel,
-    L2EventTransactionLabel,
-    L2EventWithdrawalLabel
-}
 import hydrozoa.node.TestPeer
 import hydrozoa.node.state.WalletId
 import io.bullet.borer.Cbor
 import ox.channels.ActorRef
-import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.Script.Native
-import scalus.ledger.api.v3.Value
-import sttp.tapir.Schema.schemaForMap
-import sttp.tapir.SchemaType.SBinary
-import sttp.tapir.generic.auto.*
-import sttp.tapir.json.jsoniter.*
 import sttp.tapir.{Schema, SchemaType}
-
-import scala.collection.mutable
+import sttp.tapir.generic.auto._
 
 // FIXME: revise return types?
 trait HeadPeerNetwork {
@@ -273,7 +255,7 @@ case class AckMinor(
 ) extends Ack
 
 given ackMinorCodec: JsonValueCodec[AckMinor] =
-    ??? //FIXME: JsonCodecMaker.make
+    ??? // FIXME: JsonCodecMaker.make
 
 given ackMinorSchema: Schema[AckMinor] =
     Schema.derived[AckMinor]
@@ -371,14 +353,13 @@ given ackFinal2Schema: Schema[AckFinal2] =
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
 
-
 /** ------------------------------------------------------------------------------------------
   * ReqDeinit
   * ------------------------------------------------------------------------------------------
   */
 
 case class ReqDeinit(
-    deinitTx: TxL1,
+    deinitTx: DeinitTx,
     // TODO: this should not be here. I added it to avoid calling HeadState from the actor
     //   since I saw a deadlock once I tried. We have to figure it out, since the actor
     //   needs the state to effectively deinit the head.
@@ -388,10 +369,10 @@ case class ReqDeinit(
     type resultType = Unit
 
 given reqDeinitCodec: JsonValueCodec[ReqDeinit] =
-    JsonCodecMaker.make
+    ??? // JsonCodecMaker.make
 
 given reqDeinitSchema: Schema[ReqDeinit] =
-    Schema.derived[ReqDeinit]
+    ??? // Schema.derived[ReqDeinit]
 
 /** ------------------------------------------------------------------------------------------
   * AckDeinit
@@ -501,12 +482,14 @@ given transactionCodec[L <: AnyLayer]: JsonValueCodec[Tx[L]] = new JsonValueCode
         out.writeBase64Val(Cbor.encode[Transaction](tx.untagged).toByteArray, false)
     }
 
-    override val nullValue: Tx[L] = Tx[L](Transaction(
-      body = KeepRaw(emptyTxBody),
-      witnessSet = TransactionWitnessSet(),
-      isValid = false,
-      auxiliaryData = None
-    ))
+    override val nullValue: Tx[L] = Tx[L](
+      Transaction(
+        body = KeepRaw(emptyTxBody),
+        witnessSet = TransactionWitnessSet(),
+        isValid = false,
+        auxiliaryData = None
+      )
+    )
 }
 
 given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
@@ -525,9 +508,9 @@ given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
 given [L <: AnyLayer]: JsonValueCodec[UtxoId[L]] =
     new JsonValueCodec[UtxoId[L]] {
         override def decodeValue(
-                                    in: JsonReader,
-                                    default: UtxoId[L] 
-                                ): UtxoId[L] = ???
+            in: JsonReader,
+            default: UtxoId[L]
+        ): UtxoId[L] = ???
 
         override def encodeValue(x: UtxoId[L], out: JsonWriter): Unit =
             ???
@@ -538,9 +521,9 @@ given [L <: AnyLayer]: JsonValueCodec[UtxoId[L]] =
 given JsonValueCodec[TxIx] =
     new JsonValueCodec[TxIx] {
         override def decodeValue(
-                                    in: JsonReader,
-                                    default: TxIx
-                                ): TxIx = ???
+            in: JsonReader,
+            default: TxIx
+        ): TxIx = ???
 
         override def encodeValue(x: TxIx, out: JsonWriter): Unit =
             ???
