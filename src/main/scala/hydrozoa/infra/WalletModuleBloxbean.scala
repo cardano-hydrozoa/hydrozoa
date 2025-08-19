@@ -29,7 +29,10 @@ object WalletModuleBloxbean extends WalletModule:
         val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
         val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
         val signature = signingProvider.signExtended(txnBodyHash, signingKey.getKeyData)
-        VKeyWitness(signature = ByteString.fromArray(signature), vkey = ByteString.fromArray(verificationKey.getKeyData))
+        VKeyWitness(
+          signature = ByteString.fromArray(signature),
+          vkey = ByteString.fromArray(verificationKey.getKeyData)
+        )
 
     override def createEd25519Signature(
         msg: IArray[Byte],

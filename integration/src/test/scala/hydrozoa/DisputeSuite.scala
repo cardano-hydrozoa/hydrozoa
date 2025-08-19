@@ -1,27 +1,25 @@
 package hydrozoa
 
-import scala.language.implicitConversions
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.spec.Script
 import com.typesafe.scalalogging.Logger
 import hydrozoa.deploy.mkDeployTx
-import hydrozoa.infra.transitionary.toScalus
 import hydrozoa.infra.{encodeHex, serializeTxHex, toEither}
+import hydrozoa.l1.YaciCluster
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, TreasuryValidatorScript}
-import hydrozoa.l2.ledger.L2EventTransaction
-import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.node.TestPeer.*
 import hydrozoa.node.server.DepositRequest
+import hydrozoa.node.{TestPeer, l2EventTransactionFromInputsAndPeer}
 import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
 import munit.FunSuite
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionHash
 import sttp.client4.Response
 import sttp.client4.quick.*
 import sttp.model.MediaType.ApplicationJson
 
 import scala.concurrent.duration.Duration
+import scala.language.implicitConversions
 
 /** This integration test runs "unhappy" case, when a head switches to rule-based regime and goes
   * throw an onchain dispute.
@@ -84,12 +82,9 @@ class DisputeSuite extends FunSuite {
                     throw RuntimeException(err)
         }
 
-        val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId) = if (useYaci)
-            // Reset Yaci DevKit
-            log.info("Resetting Yaci...")
-            val _: Response[String] = quickRequest
-                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-                .send()
+        val (mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId, mbYaciClusterInfo) = if (useYaci)
+
+            val clusterInfo = YaciCluster.reset()
 
             // Top up nodes' wallets - every participant gets 3 utxos with 10 ada each
             log.info("Topping up peers' wallets...")
@@ -115,8 +110,8 @@ class DisputeSuite extends FunSuite {
                   DisputeResolutionScript.plutusScript
                 )
 
-            (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId))
-        else (None, None)
+            (Some(treasuryScriptRefUtxoId), Some(disputeScriptRefUtxoId), Some(clusterInfo))
+        else (None, None, None)
 
         log.info(
           s"mbTreasuryScriptRefUtxoId=$mbTreasuryScriptRefUtxoId, mbDisputeScriptRefUtxoId=$mbDisputeScriptRefUtxoId"
@@ -126,7 +121,8 @@ class DisputeSuite extends FunSuite {
         log.info("Making a Hydrozoa head using a local network...")
         sut = LocalFacade.apply(
           testPeers,
-          useYaci = useYaci,
+          false,
+          mbYaciClusterInfo,
           mbTreasuryScriptRefUtxoId,
           mbDisputeScriptRefUtxoId
         )
@@ -141,7 +137,9 @@ class DisputeSuite extends FunSuite {
               Alice,
               testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
-              TransactionHash.fromHex("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
+              TransactionHash.fromHex(
+                "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
+              ),
               TxIx(0)
             )
             _ = sut.awaitTxL1(initTxId)
@@ -152,7 +150,7 @@ class DisputeSuite extends FunSuite {
                 initTxId,
                 TxIx(1),
                 100_000_000,
-                None,
+                0,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](TestPeer.address(Alice)),
@@ -168,7 +166,7 @@ class DisputeSuite extends FunSuite {
                 deposit1.depositId.transactionId,
                 TxIx(1),
                 100_000_000,
-                None,
+                0,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](

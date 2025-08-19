@@ -83,7 +83,9 @@ class ScalusFinalizationTxBuilder(
         val txBody =
             emptyTxBody.copy(
               inputs = Set(treasuryUtxoId),
-              outputs = outputsToWithdraw.toIndexedSeq.map((b : Babbage) => Sized(b.asInstanceOf[TransactionOutput])).appended(Sized(changeOutput)),
+              outputs = outputsToWithdraw.toIndexedSeq
+                  .map((b: Babbage) => Sized(b.asInstanceOf[TransactionOutput]))
+                  .appended(Sized(changeOutput)),
               // TODO: we set the fee to 1 ada, but this doesn't need to be
               fee = feeCoin,
               mint = Some(beaconTokenBurn)

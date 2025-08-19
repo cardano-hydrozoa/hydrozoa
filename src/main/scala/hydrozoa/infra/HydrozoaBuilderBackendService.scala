@@ -2,7 +2,11 @@ package hydrozoa.infra
 
 import scala.language.implicitConversions
 import com.bloxbean.cardano.client.api.common.OrderEnum
-import com.bloxbean.cardano.client.api.helper.{FeeCalculationService, TransactionHelperService, UtxoTransactionBuilder}
+import com.bloxbean.cardano.client.api.helper.{
+    FeeCalculationService,
+    TransactionHelperService,
+    UtxoTransactionBuilder
+}
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.*
 import com.bloxbean.cardano.client.transaction.spec.Transaction
@@ -51,7 +55,10 @@ class HydrozoaBuilderBackendService(backendService: BackendService, multisigTx: 
         ): Result[util.List[Utxo]] =
             if page > 1 then ResultUtils.mkResultError
             else
-                onlyOutputToAddress(multisigTx, Address[L1](SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])) match {
+                onlyOutputToAddress(
+                  multisigTx,
+                  Address[L1](SAddress.fromBech32(address).asInstanceOf[ShelleyAddress])
+                ) match {
                     case Left(_) => ResultUtils.mkResultError
                     case Right(treasuryOutputIx, _, multisigTreasuryDatum) =>
                         val tb = Transaction.deserialize(txBytes)

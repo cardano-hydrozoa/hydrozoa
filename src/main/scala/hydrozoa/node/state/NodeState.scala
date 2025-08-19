@@ -129,6 +129,7 @@ class NodeState(autonomousBlocks: Boolean):
               _.awaitInitTx(
                 initTxId,
                 params.headAddress,
+                params.initTx.body.value.outputs(0).value.value,
                 params.headNativeScript,
                 params.beaconTokenName
               )

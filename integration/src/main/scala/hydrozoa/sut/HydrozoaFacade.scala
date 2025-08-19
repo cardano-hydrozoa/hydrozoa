@@ -23,7 +23,7 @@ trait HydrozoaFacade:
         r: DepositRequest
     ): Either[DepositError, DepositResponse]
 
-    def awaitTxL1(txId: TransactionHash): Option[TxL1]
+    def awaitTxL1(txId: TransactionHash): Option[Unit]
 
     def submitL2(tx: L2EventTransaction | L2EventWithdrawal): Either[String, TransactionHash]
 

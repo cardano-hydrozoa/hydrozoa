@@ -113,15 +113,22 @@ def addWitnessMultisig[T <: MultisigTxTag](tx: MultisigTx[T], wit: VKeyWitness):
 def onlyOutputToAddress(
     tx: TxAny,
     address: AddressL1
-                       ): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Integer, SValue, Data)] =
+): Either[(NoMatch | TooManyMatches | NonBabbageMatch | NoInlineDatum), (Integer, SValue, Data)] =
     val outputs = tx.body.value.outputs
     outputs.filter(output => output.value.address == address) match
         case IndexedSeq(elem: Sized[STransactionOutput]) =>
             elem.value match
                 case b: Babbage if b.datumOption.isDefined =>
                     b.datumOption.get match {
-                        case i: Inline => Right((outputs.indexOf(Sized(b.asInstanceOf[STransactionOutput])), b.value, i.data))
-                        case _         => Left(NoInlineDatum())
+                        case i: Inline =>
+                            Right(
+                              (
+                                outputs.indexOf(Sized(b.asInstanceOf[STransactionOutput])),
+                                b.value,
+                                i.data
+                              )
+                            )
+                        case _ => Left(NoInlineDatum())
                     }
                 case _ => Left(NonBabbageMatch())
         case i: IndexedSeq[Any] if i.isEmpty => Left(NoMatch())
@@ -143,12 +150,17 @@ def txInputs[L <: AnyLayer](tx: Tx[L]): Seq[UtxoId[L]] =
     val inputs = tx.body.value.inputs
     inputs.map(i => UtxoId(i)).toSeq
 
-
 def valueTokens[L <: AnyLayer](tokens: Value): MultiAsset = MultiAsset({
-    SortedMap.from(tokens.toMap.asScala.toMap.map((k, v) =>
-        Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
-            -> SortedMap.from(v.asScala.toMap.map((k, v) => AssetName(ByteString.fromHex(k.drop(2))) -> v.longValue()))
-    ))
+    SortedMap.from(
+      tokens.toMap.asScala.toMap.map((k, v) =>
+          Hash[Blake2b_224, HashPurpose.ScriptHash](ByteString.fromHex(k))
+              -> SortedMap.from(
+                v.asScala.toMap.map((k, v) =>
+                    AssetName(ByteString.fromHex(k.drop(2))) -> v.longValue()
+                )
+              )
+      )
+    )
 })
 def txOutputs[L <: AnyLayer](tx: Tx[L]): Seq[(UtxoId[L], Output[L])] =
     val outputs = tx.body.value.outputs

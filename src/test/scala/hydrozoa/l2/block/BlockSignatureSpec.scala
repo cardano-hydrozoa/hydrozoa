@@ -21,7 +21,7 @@ class BlockSignatureSpec extends munit.ScalaCheckSuite {
 
         val vk = wallet.exportVerificationKeyBytes
         val result = verifyEd25519Signature(
-          vk.bytes, 
+          vk.bytes,
           ByteString.fromArray(sBh.toArray),
           ByteString.fromArray(signature.untagged.toArray)
         )

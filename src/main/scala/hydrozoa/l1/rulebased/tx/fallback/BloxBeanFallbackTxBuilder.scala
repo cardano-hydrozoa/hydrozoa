@@ -9,9 +9,21 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.quicktx.Tx
 import com.bloxbean.cardano.client.transaction.spec.*
 import com.bloxbean.cardano.client.transaction.spec.script.NativeScript
-import hydrozoa.infra.{HydrozoaBuilderBackendService, Piper, decodeHex, encodeHex, mkBuilder, numberOfSignatories}
+import hydrozoa.infra.{
+    HydrozoaBuilderBackendService,
+    Piper,
+    decodeHex,
+    encodeHex,
+    mkBuilder,
+    numberOfSignatories
+}
 import hydrozoa.l1.multisig.state.MultisigTreasuryDatum
-import hydrozoa.l1.rulebased.onchain.{mkDefVoteDatum, mkTreasuryDatumUnresolved, mkVoteDatum, mkVoteTokenName}
+import hydrozoa.l1.rulebased.onchain.{
+    mkDefVoteDatum,
+    mkTreasuryDatumUnresolved,
+    mkVoteDatum,
+    mkVoteTokenName
+}
 import hydrozoa.{TxIx, TxL1, UtxoId, UtxoIdL1}
 import scalus.prelude.asScalus
 import scalus.bloxbean.*
@@ -58,8 +70,9 @@ class BloxBeanFallbackTxBuilder(
             NativeScript.deserialize(hnsCborArray)
 
         // Calculate dispute id
-        val voteTokenName = mkVoteTokenName(UtxoId(TransactionInput(
-            TransactionHash.fromHex(multisigTreasuryUtxo.getTxHash), TxIx(0))))
+        val voteTokenName = mkVoteTokenName(
+          UtxoId(TransactionInput(TransactionHash.fromHex(multisigTreasuryUtxo.getTxHash), TxIx(0)))
+        )
 
         // Treasury datum
         val treasuryDatum = Interop.toPlutusData(

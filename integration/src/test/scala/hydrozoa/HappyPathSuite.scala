@@ -1,21 +1,18 @@
 package hydrozoa
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.transitionary.toScalus
+import hydrozoa.l1.YaciCluster
+import hydrozoa.l1.YaciCluster.YaciClusterInfo
 import hydrozoa.node.TestPeer.*
-import hydrozoa.node.rest.SubmitRequestL2.Transaction
 import hydrozoa.node.server.DepositRequest
 import hydrozoa.node.{TestPeer, l2EventWithdrawalFromInputsAndPeer}
-import hydrozoa.sut.{HydrozoaFacade, LocalFacade}
+import hydrozoa.sut.*
 import munit.FunSuite
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionHash
-import sttp.client4.Response
-import sttp.client4.quick.*
 
 import scala.concurrent.duration.Duration
 
-/** This integration test runs simple Hydrozoa happy-path on a Yaci dev net that is reset before
+/** This integration test runs a simple Hydrozoa happy-path on a Yaci dev net that is reset before
   * each test run to ensure a clean UTxO state.
   *
   * It uses 4 static (i.e., they are the same each time) peers: Alice, Bob, Carol, and Daniella.
@@ -43,17 +40,18 @@ class HappyPathSuite extends FunSuite {
 
     private var sut: HydrozoaFacade = _
 
+    private var clusterInfo: YaciClusterInfo = _
+
     // We reset Yaci before each test run in order to have clean UTxO state.
     // Any alternative would be to nonce the protocol/regenerate wallets.
     override def beforeEach(context: BeforeEach): Unit =
-        if (useYaci)
-            // Reset Yaci DevKit
-            log.info("Resetting Yaci...")
-            val _: Response[String] = quickRequest
-                .post(uri"http://localhost:10000/local-cluster/api/admin/devnet/reset")
-                .send()
-
-    sut = LocalFacade.apply(testPeers, useYaci = useYaci, None, None)
+        sut =
+            if (useYaci)
+            then
+                val clusterInfo = YaciCluster.reset()
+                this.clusterInfo = clusterInfo
+                LocalFacade.apply(testPeers, false, Some(clusterInfo), None, None)
+            else LocalFacade.apply(testPeers, false, None, None, None)
 
     override def afterEach(context: AfterEach): Unit = sut.shutdownSut()
 
@@ -66,37 +64,24 @@ class HappyPathSuite extends FunSuite {
               Alice,
               testPeers.-(Alice).map(TestPeer.mkWalletId),
               100,
-              TransactionHash.fromHex("6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"),
+              TransactionHash.fromHex(
+                "6d36c0e2f304a5c27b85b3f04e95fc015566d35aef5f061c17c70e3e8b9ee508"
+              ),
               TxIx(0)
             )
 
             _ = sut.awaitTxL1(initTxId)
 
+            feasibleDeadline = clusterInfo.startTime + 60
+
             // Deposit change from initialization transaction
             deposit1 <- sut.deposit(
-                    Alice,
-                    DepositRequest(
-                            initTxId,
-                            TxIx(1),
-            100_000_000,
-                            None,
-                            Address[L2](TestPeer.address(Alice)),
-                            None,
-                            Address[L1](TestPeer.address(Alice)),
-                            None
-                    )
-            )
-          
-
-            deposit1Tx = sut.awaitTxL1(deposit1.depositId.transactionId).toRight("Deposit tx is missing")
-
-            deposit2 <- sut.deposit(
               Alice,
               DepositRequest(
-                deposit1.depositId.transactionId,
+                initTxId,
                 TxIx(1),
                 100_000_000,
-                None,
+                feasibleDeadline,
                 Address[L2](TestPeer.address(Alice)),
                 None,
                 Address[L1](TestPeer.address(Alice)),
@@ -104,7 +89,27 @@ class HappyPathSuite extends FunSuite {
               )
             )
 
-            deposit2Tx = sut.awaitTxL1(deposit2.depositId.transactionId).toRight("Deposit tx is missing")
+            deposit1Tx = sut
+                .awaitTxL1(deposit1.depositId.transactionId)
+                .toRight("Deposit tx is missing")
+
+            deposit2 <- sut.deposit(
+              Alice,
+              DepositRequest(
+                deposit1.depositId.transactionId,
+                TxIx(1),
+                100_000_000,
+                feasibleDeadline,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](TestPeer.address(Alice)),
+                None
+              )
+            )
+
+            deposit2Tx = sut
+                .awaitTxL1(deposit2.depositId.transactionId)
+                .toRight("Deposit tx is missing")
 
             major1 <- sut.produceBlock(false)
 

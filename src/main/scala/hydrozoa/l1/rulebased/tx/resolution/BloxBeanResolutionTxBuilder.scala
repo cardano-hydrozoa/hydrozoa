@@ -97,7 +97,10 @@ class BloxBeanResolutionTxBuilder(
                       treasuryScriptRefUtxoId.transactionId.toHex,
                       treasuryScriptRefUtxoId.index
                     )
-                    .readFrom(disputeScriptRefUtxoId.transactionId.toHex, disputeScriptRefUtxoId.index)
+                    .readFrom(
+                      disputeScriptRefUtxoId.transactionId.toHex,
+                      disputeScriptRefUtxoId.index
+                    )
 
                 val nodeAddress = r.nodeAccount.enterpriseAddress()
                 val txSigner = SignerProviders.signerFrom(r.nodeAccount)

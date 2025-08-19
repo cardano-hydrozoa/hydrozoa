@@ -2,8 +2,9 @@ package hydrozoa.sut
 
 import com.bloxbean.cardano.client.api.model.ProtocolParams
 import com.typesafe.scalalogging.Logger
+import hydrozoa.l1.YaciCluster.YaciClusterInfo
 import hydrozoa.l1.event.MultisigL1EventSource
-import hydrozoa.l1.{BackendServiceMock, CardanoL1, CardanoL1Mock}
+import hydrozoa.l1.{BackendServiceMock, CardanoL1, CardanoL1Mock, YaciCluster}
 import hydrozoa.l2.block.BlockProducer
 import hydrozoa.l2.consensus.network.actor.ConsensusActorFactory
 import hydrozoa.l2.consensus.network.transport.{SimNetwork, SimTransport}
@@ -19,6 +20,8 @@ import hydrozoa.{UtxoIdL1, mkCardanoL1, mkTxBuilders}
 import ox.*
 import ox.channels.Actor
 import ox.logback.InheritableMDC
+import sttp.client4.UriContext
+import sttp.model.Uri
 
 val peersApiPorts = Map.from(
   List(
@@ -62,9 +65,7 @@ object LocalNode:
         ownPeer: TestPeer,
         hoistApi: Boolean = false,
         autonomousBlocks: Boolean = true,
-        useYaci: Boolean = true,
-        yaciBFApiUri: String = "http://localhost:8080/api/v1/",
-        pp: Option[ProtocolParams] = None,
+        mockOrYaci: Either[ProtocolParams, (Uri, YaciClusterInfo)],
         mbTreasuryScriptRefUtxoId: Option[UtxoIdL1] = None,
         mbDisputeScriptRefUtxoId: Option[UtxoIdL1] = None,
         nodeCallback: ((TestPeer, Node) => Unit)
@@ -73,14 +74,8 @@ object LocalNode:
             supervised {
                 // Network peers minus own peer
                 val knownPeers = simNetwork.knownPeers.-(ownPeer).map(mkWalletId)
-
-                val (cardano, backendService) = mbCardanoL1Mock match
-                    case Some(mock) =>
-                        val backendService = BackendServiceMock(mock, pp.get)
-                        (mock, backendService)
-                    case None => mkCardanoL1(useYaci, yaciBFApiUri, pp)
-
                 val nodeState: NodeState = NodeState.apply(knownPeers, autonomousBlocks)
+                val (cardano, backendService) = mkCardanoL1(mockOrYaci)
                 val cardanoActor = Actor.create(cardano)
                 nodeState.setCardano(cardanoActor)
 
@@ -142,7 +137,7 @@ object LocalNode:
                 val networkActor = Actor.create(network)
 
                 nodeState.setNetwork(networkActor)
-                
+
                 // Static actors for node state
                 val multisigL1EventSource =
                     new MultisigL1EventSource(nodeStateActor, cardanoActor)
@@ -211,8 +206,8 @@ object HydrozoaLocalApp extends OxApp:
                       hoistApi = true,
                       // since produce block is not exposed in the API, doesn't make much sense
                       autonomousBlocks = true,
-                      useYaci = true,
-                      pp = Some(Utils.protocolParams),
+                      // Left(Utils.protocolParams)
+                      Right((YaciCluster.blockfrostApiBaseUri, YaciCluster.obtainClusterInfo())),
                       nodeCallback = (_, _) => ()
                     )
                 }

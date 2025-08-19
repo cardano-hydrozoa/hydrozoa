@@ -63,7 +63,7 @@ class RealFacade(peers: Map[TestPeer, Uri]) extends HydrozoaFacade:
             case DecodeResult.Value(v) => v
             case _                     => Left("decoding failed")
 
-    override def awaitTxL1(txId: TransactionHash): Option[TxL1] = ???
+    override def awaitTxL1(txId: TransactionHash): Option[Unit] = ???
 
     override def submitL2(
         tx: L2EventTransaction | L2EventWithdrawal

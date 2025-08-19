@@ -97,8 +97,8 @@ extension (addr: v3.Address) {
     def toScalusLedger[L <: AnyLayer]: Address[L] =
         Address[L](
           ShelleyAddress(
-              // FIXME: We use the static network here
-              network = networkL1static,
+            // FIXME: We use the static network here
+            network = networkL1static,
             payment = addr.credential match {
                 case PubKeyCredential(pkc) =>
                     ShelleyPaymentPart.Key(Hash(ByteString.fromArray(pkc.hash.bytes)))
@@ -222,27 +222,29 @@ def toV3UTxO(utxo: UTxO): Map[v3.TxOutRef, v3.TxOut] = {
     )
 }
 
-/** Warning: Partial. Assumes a Hydrozoa-valid UTxO; babbage output, shelley address, inline datum */
+/** Warning: Partial. Assumes a Hydrozoa-valid UTxO; babbage output, shelley address, inline datum
+  */
 extension (utxo: BBUtxo) {
     def toScalus: (TransactionInput, Babbage) = {
         val txIn: TransactionInput =
             TransactionInput(
-                Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(utxo.getTxHash)),
-                utxo.getOutputIndex
+              Hash[Blake2b_256, HashPurpose.TransactionHash](ByteString.fromHex(utxo.getTxHash)),
+              utxo.getOutputIndex
             )
-        val addr: ShelleyAddress = Address.unsafeFromBech32(utxo.getAddress).asInstanceOf[ShelleyAddress]
+        val addr: ShelleyAddress =
+            Address.unsafeFromBech32(utxo.getAddress).asInstanceOf[ShelleyAddress]
         val coins = utxo.getAmount.asScala.find(_.getUnit.equals("lovelace")).get.getQuantity
         val tokens = valueTokens(utxo.toValue)
         val inlineDatum = Data.fromCbor(HexUtil.decodeHexString(utxo.getInlineDatum))
 
         (
-            txIn,
-            Babbage(
-                address = addr,
-                value = Value(coin = Coin(coins.longValue()), multiAsset = tokens),
-                datumOption = Some(Inline(inlineDatum)),
-                scriptRef = None
-            )
+          txIn,
+          Babbage(
+            address = addr,
+            value = Value(coin = Coin(coins.longValue()), multiAsset = tokens),
+            datumOption = Some(Inline(inlineDatum)),
+            scriptRef = None
+          )
         )
 
     }

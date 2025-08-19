@@ -38,16 +38,16 @@ def depositDatumFromPeer(peer: TestPeer): Option[DatumOption] = {
         )
     Some(
       Inline(
-              toData(
-                DepositDatum(
-                  address = v3Addr,
-                  datum = SOption.None,
-                  deadline = 100,
-                  refundAddress = v3Addr,
-                  refundDatum = SOption.None
-                )
-              )
-            )
+        toData(
+          DepositDatum(
+            address = v3Addr,
+            datum = SOption.None,
+            deadline = 100,
+            refundAddress = v3Addr,
+            refundDatum = SOption.None
+          )
+        )
+      )
     )
 }
 

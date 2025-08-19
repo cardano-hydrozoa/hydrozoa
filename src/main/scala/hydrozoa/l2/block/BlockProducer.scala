@@ -2,9 +2,8 @@ package hydrozoa.l2.block
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.infra.transitionary.toScalus
-import hydrozoa.infra.{Piper, encodeHex}
-import hydrozoa.l1.multisig.state.DepositUtxos
+import hydrozoa.infra.encodeHex
+import hydrozoa.l1.multisig.state.{DepositDatum, DepositUtxos}
 import hydrozoa.l2.block.*
 import hydrozoa.l2.block.BlockTypeL2.{Final, Major, Minor}
 import hydrozoa.l2.consensus.network.{HeadPeerNetwork, ReqFinal, ReqMajor, ReqMinor}
@@ -16,10 +15,9 @@ import hydrozoa.l2.ledger.L2EventLabel.{
 }
 import ox.channels.ActorRef
 import ox.sleep
-import scalus.cardano.ledger.{TransactionHash}
+import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State}
-import scalus.ledger.api.v3
 
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -43,6 +41,8 @@ class BlockProducer:
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
+        maturityMargin: BigInt,
+        expiryMargin: BigInt,
         finalizing: Boolean
     ): Either[
       String,
@@ -63,6 +63,8 @@ class BlockProducer:
           depositsPending,
           prevHeader,
           timeCreation,
+          maturityMargin,
+          expiryMargin,
           finalizing
         ) match
             case Some(some @ (block, _, _, _, _)) =>
@@ -96,7 +98,11 @@ object BlockProducer:
       * @param prevHeader
       *   previsus block's header
       * @param timeCreation
-      *   timestamp fot the block
+      *   timestamp for the block
+      * @param maturityMargin
+      *   consensus parameter that defines the maturity margin for deposits
+      * @param expiryMargin
+      *   consensus parameter that defines the expiry margin for deposits
       * @param finalizing
       *   finalization flag
       * @return
@@ -110,6 +116,8 @@ object BlockProducer:
         depositsPending: DepositUtxos,
         prevHeader: BlockHeader,
         timeCreation: PosixTime,
+        maturityMargin: BigInt,
+        expiryMargin: BigInt,
         finalizing: Boolean
     ): Option[
       (Block, UtxoSet[L2], UtxoSet[L2], UtxoSet[L2], Option[(TransactionHash, L2EventGenesis)])
@@ -166,9 +174,25 @@ object BlockProducer:
 
         // 4. If finalizing is False...
         val mbGenesis: Option[(TransactionHash, L2EventGenesis)] = if !finalizing then
-            // TODO: check deposits timing
-            val depositsEligible: DepositUtxos =
-                TaggedUtxoSet.apply(depositsPending)
+            // Check pending deposits timing
+            val depositsEligible: DepositUtxos = TaggedUtxoSet.apply(
+              UtxoSet[L1](
+                depositsPending.untagged.filter((_, depositUtxo) =>
+                    depositUtxo.mbInlineDatumAs[DepositDatum] match
+                        case None =>
+                            log.warn("Deposit UTxO with no (correct) datum found. Ignoring.")
+                            false
+                        case Some(datum) =>
+                            // TODO:
+                            val depositTxTtl = 0
+                            val depositDeadline = datum.deadline
+                            // Eligibility condition
+                            timeCreation > (depositTxTtl + maturityMargin)
+                            && timeCreation < (depositDeadline - expiryMargin)
+                )
+              )
+            )
+
             if depositsEligible.untagged.isEmpty then None
             else
                 val depositsSorted = depositsEligible.untagged.toList

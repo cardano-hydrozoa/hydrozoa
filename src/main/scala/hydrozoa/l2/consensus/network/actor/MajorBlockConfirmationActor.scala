@@ -19,7 +19,6 @@ import scalus.ledger.api.v3
 import scalus.cardano.ledger.TransactionHash
 import scalus.cardano.ledger.rules.Context
 
-
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 
@@ -119,7 +118,7 @@ private class MajorBlockConfirmationActor(
         if ack2.nextBlockFinal then this.finalizeHead = true
     }
 
-    // As far as I can tell, this actor is spawned on demand to handling the validation of 
+    // As far as I can tell, this actor is spawned on demand to handling the validation of
     // incoming major blocks.
     override def init(req: ReqType): Seq[AckType] =
         log.trace(s"init req: $req")

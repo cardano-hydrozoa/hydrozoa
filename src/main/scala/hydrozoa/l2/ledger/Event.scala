@@ -28,8 +28,7 @@ final case class L2EventWithdrawal(transaction: TxL2) extends L2Event {
   * outputs. The TxId of a Genesis Event comes from sorting the TxIds of the absorbed UTxOs,
   * encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
   */
-final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
-    extends L2Event {
+final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)]) extends L2Event {
     require(utxosL1.nonEmpty, "L2EventGenesis must consume at least one L1 deposit")
 
     /** The list of UTxOs that should appear on L2 corresponding to this genesis event. Malformed
@@ -52,13 +51,14 @@ final case class L2EventGenesis(utxosL1: Seq[(UtxoIdL1, OutputL1)])
                             val dd: DepositDatum = fromData(datum)
                             Some(
                               UtxoId[L2](l2TxIn),
-                              Output[L2](Babbage(
-                                address = dd.address.toScalusLedger,
-                                value = Value(babbageTxOut.value.coin),
-                                datumOption =
-                                    dd.datum.asScala.map(Inline(_)),
-                                scriptRef = None
-                              ))
+                              Output[L2](
+                                Babbage(
+                                  address = dd.address.toScalusLedger,
+                                  value = Value(babbageTxOut.value.coin),
+                                  datumOption = dd.datum.asScala.map(Inline(_)),
+                                  scriptRef = None
+                                )
+                              )
                             )
 
                         case _ => None

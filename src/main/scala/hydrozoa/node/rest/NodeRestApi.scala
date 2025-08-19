@@ -83,7 +83,7 @@ class NodeRestApi(node: ActorRef[Node]):
         txId: String,
         txIx: Long,
         depositAmount: BigInt,
-        deadline: Option[BigInt],
+        deadline: BigInt,
         address: String,
         datum: Option[String],
         refundAddress: String,
@@ -140,7 +140,7 @@ object NodeRestApi:
         .in(query[String]("txId"))
         .in(query[Long]("txIx"))
         .in(query[BigInt]("depositAmount"))
-        .in(query[Option[BigInt]]("deadline"))
+        .in(query[BigInt]("depositDurationOuter"))
         .in(query[String]("address"))
         .in(query[Option[String]]("datum"))
         .in(query[String]("refundAddress"))

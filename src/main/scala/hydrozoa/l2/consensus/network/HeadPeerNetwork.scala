@@ -273,7 +273,7 @@ case class AckMinor(
 ) extends Ack
 
 given ackMinorCodec: JsonValueCodec[AckMinor] =
-    ??? //FIXME: JsonCodecMaker.make
+    ??? // FIXME: JsonCodecMaker.make
 
 given ackMinorSchema: Schema[AckMinor] =
     Schema.derived[AckMinor]
@@ -370,7 +370,6 @@ given ackFinal2Schema: Schema[AckFinal2] =
 // FIXME: remove, currently used in ReqAux
 given testPeerSchema: Schema[TestPeer] =
     Schema.derived[TestPeer]
-
 
 /** ------------------------------------------------------------------------------------------
   * ReqDeinit
@@ -501,12 +500,14 @@ given transactionCodec[L <: AnyLayer]: JsonValueCodec[Tx[L]] = new JsonValueCode
         out.writeBase64Val(Cbor.encode[Transaction](tx.untagged).toByteArray, false)
     }
 
-    override val nullValue: Tx[L] = Tx[L](Transaction(
-      body = KeepRaw(emptyTxBody),
-      witnessSet = TransactionWitnessSet(),
-      isValid = false,
-      auxiliaryData = None
-    ))
+    override val nullValue: Tx[L] = Tx[L](
+      Transaction(
+        body = KeepRaw(emptyTxBody),
+        witnessSet = TransactionWitnessSet(),
+        isValid = false,
+        auxiliaryData = None
+      )
+    )
 }
 
 given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
@@ -525,9 +526,9 @@ given JsonValueCodec[L2EventWithdrawal | L2EventTransaction] =
 given [L <: AnyLayer]: JsonValueCodec[UtxoId[L]] =
     new JsonValueCodec[UtxoId[L]] {
         override def decodeValue(
-                                    in: JsonReader,
-                                    default: UtxoId[L] 
-                                ): UtxoId[L] = ???
+            in: JsonReader,
+            default: UtxoId[L]
+        ): UtxoId[L] = ???
 
         override def encodeValue(x: UtxoId[L], out: JsonWriter): Unit =
             ???
@@ -538,9 +539,9 @@ given [L <: AnyLayer]: JsonValueCodec[UtxoId[L]] =
 given JsonValueCodec[TxIx] =
     new JsonValueCodec[TxIx] {
         override def decodeValue(
-                                    in: JsonReader,
-                                    default: TxIx
-                                ): TxIx = ???
+            in: JsonReader,
+            default: TxIx
+        ): TxIx = ???
 
         override def encodeValue(x: TxIx, out: JsonWriter): Unit =
             ???
