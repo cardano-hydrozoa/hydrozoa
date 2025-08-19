@@ -8,7 +8,7 @@ But this may be achievable earlier with tapirs schemas? I'm not sure.
 import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter}
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.*
-import hydrozoa.l2.consensus.network.{given}
+import hydrozoa.l2.consensus.network.given
 import hydrozoa.l2.ledger.{L2EventTransaction, L2EventWithdrawal}
 import hydrozoa.node.rest.NodeRestApi.*
 import hydrozoa.node.server.{*, given}

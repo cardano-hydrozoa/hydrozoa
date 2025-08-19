@@ -104,7 +104,8 @@ class BloxBeanWithdrawTxBuilder(
                           )
                           .buildAndSign()
                       ) catch
-                            case (e: TxBuildException) =>  Left(s"buildWithdrawTx failed during transaction building. Original error: ${e.getCause}")
+                            case (e: TxBuildException) =>  
+                                Left(s"buildWithdrawTx failed during transaction building. Original error: ${e.getCause}")
 
                 yield (TxL1(tx.serialize))
 

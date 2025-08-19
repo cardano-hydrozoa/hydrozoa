@@ -22,7 +22,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Transaction.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.ledger.api
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum}

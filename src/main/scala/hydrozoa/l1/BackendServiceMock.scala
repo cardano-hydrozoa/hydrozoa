@@ -88,6 +88,29 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
             case Nil       => ResultUtils.mkResultError
             case pageElems => ResultUtils.mkResult(pageElems.toList.asJava)
 
+    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo =
+
+        val amounts: mutable.Set[Amount] = mutable.Set.empty
+
+        output.value.assets.assets.toList.foreach((policyId, tokens) =>
+            tokens.toList.foreach((tokenName, quantity) =>
+                val unit = AssetUtil.getUnit(policyId.toHex, tokenName.bytes.toHex)
+                amounts.add(Amount.asset(unit, quantity.longValue))
+            )
+        )
+
+        Utxo
+            .builder()
+            .txHash(txHash)
+            .outputIndex(outputIndex)
+            .address(output.address.asInstanceOf[ShelleyAddress].toBech32.get)
+            .amount(
+              (amounts.toSet + Amount.lovelace(
+                BigInteger.valueOf(output.value.coin.value)
+              )).toList.asJava
+            )
+            .build()
+
     override def getUtxos(
         address: String,
         unit: String,
@@ -111,29 +134,6 @@ class UtxoServiceMock(cardanoL1Mock: CardanoL1Mock) extends UtxoService:
             .get(utxoId)
             .map(mkUtxo(txHash, outputIndex))
         opt.toResult(s"utxo not found: $txHash#$outputIndex")
-
-    def mkUtxo(txHash: String, outputIndex: Int)(output: OutputL1): Utxo =
-
-        val amounts: mutable.Set[Amount] = mutable.Set.empty
-
-        output.value.assets.assets.toList.foreach((policyId, tokens) =>
-            tokens.toList.foreach((tokenName, quantity) =>
-                val unit = AssetUtil.getUnit(policyId.toHex, tokenName.bytes.toHex)
-                amounts.add(Amount.asset(unit, quantity.longValue))
-            )
-        )
-
-        Utxo
-            .builder()
-            .txHash(txHash)
-            .outputIndex(outputIndex)
-            .address(output.address.asInstanceOf[ShelleyAddress].toBech32.get)
-            .amount(
-              (amounts.toSet + Amount.lovelace(
-                BigInteger.valueOf(output.value.coin.value)
-              )).toList.asJava
-            )
-            .build()
 
 class EpochServiceMock(pp: ProtocolParams) extends EpochService:
     override def getLatestEpoch: Result[EpochContent] = ???

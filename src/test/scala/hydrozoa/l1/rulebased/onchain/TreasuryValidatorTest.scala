@@ -93,7 +93,7 @@ class TreasuryValidatorTest extends FunSuite:
         val ss = subset.map(ss => Scalar().from_bendian(ss._1.toByteArray))
         println(s"utxos active hashes: ${ss.map(e => BigInt.apply(e.to_bendian()))}")
 
-        val setup = mkDummySetupG2(subset.size.toInt)
+        val setup = mkDummySetupG2(subset.size.toInt + 1)
 
         val setupBS = setup.map(e => BLS12_381_G2_Element.apply(e).toCompressedByteString)
         setupBS.foreach(println)

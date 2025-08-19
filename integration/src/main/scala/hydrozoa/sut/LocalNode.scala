@@ -185,10 +185,10 @@ object LocalNode:
 
                     // Client node API
                     @annotation.unused
-                    val serverBinding  =
+                    val serverBinding =
                         useInScope(NodeRestApi(nodeActor).mkServer(ownApiPort).start())(
                           _.stop()
-                        ) 
+                        )
 
                 never
             }

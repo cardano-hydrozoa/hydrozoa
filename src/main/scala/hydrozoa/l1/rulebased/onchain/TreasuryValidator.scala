@@ -58,7 +58,22 @@ object TreasuryValidator extends Validator:
             hex"8ce3b57b791798433fd323753489cac9bca43b98deaafaed91f4cb010730ae1e38b186ccd37a09b8aed62ce23b699c48",
             List.Cons(
               hex"8ed36ed5fb9a1b099d84cba0686d8af9a2929a348797cd51c335cdcea1099e3d6f95126dfbc93abcfb3b56a7fc14477b",
-              Nil
+              List.Cons(
+                hex"8f3f78ee37dbcbbc784fa2a75e047e02f8748af86365f3961cfc1b21055e552b46ec0377085da06914e0cffec0d3f0a4",
+                List.Cons(
+                  hex"8ab3f4fbbea07b771705f27bb470481ab6c44c46afcb317500df564b1177fa6dc7a3d27506b9e2d672ac1edd888a7a65",
+                  List.Cons(
+                    hex"b12d0c357016caa5c0ec0a6bdc07e60c2af4631c477366eeb6ab4fffbd0ca40ab9ec195091478a2698bf26349b785ae8",
+                    List.Cons(
+                      hex"b48e56bd66650adb1e4f0c68b745f35f08d9829a06dbd5c67b2cc03dcf4cc5f9a85c84654f9596163b59d693eab14c34",
+                      List.Cons(
+                        hex"8381fd8ef4c0ffa000945de01a4d3d1bd8ed21d1fa42d8e794b6e6a5cc0b1d79160d55ac60df11b06e14b4a011baf1bc",
+                        Nil
+                      )
+                    )
+                  )
+                )
+              )
             )
           )
         ).map(G1.uncompress)
@@ -103,6 +118,8 @@ object TreasuryValidator extends Validator:
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ withdrawalOutput"
     private inline val WithdrawOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
+    private inline val WithdrawZKSetupIsNotBigEnough =
+        "Number of withdrawn UTxOs exceed the size of the ZK Setup"
     // Deinit redeemer
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
@@ -266,14 +283,14 @@ object TreasuryValidator extends Validator:
                   WithdrawBeaconTokenShouldBePreserved
                 )
 
-                //log(showBigInt(withdrawalOutputs.size))
-                //log(showBigInt(utxoIds.size))
+                // log(showBigInt(withdrawalOutputs.size))
+                // log(showBigInt(utxoIds.size))
 
                 // Withdrawals
                 // The number of withdrawals should match the number of utxos ids in the redeemer
                 // FIXME: in reality the change outputs gets in - hence +1 for now
                 require(
-                  withdrawalOutputs.size == utxoIds.size + 1,
+                  withdrawalOutputs.size == utxoIds.size,
                   WithdrawWrongNumberOfWithdrawals
                 )
                 // Calculate the final poly for withdrawn subset
@@ -282,12 +299,12 @@ object TreasuryValidator extends Validator:
                 // I blame this lines in Scalus, though it's not clear how to fix that since it uses
 
                 // TODO:
-                val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
+                // val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
 
                 // Zip utxo ids and outputs
                 val withdrawnUtxos: List[ScalusScalar] = utxoIds
                     // .zip(withdrawalOutputs)
-                    .zip(withdrawalOutputsNoChange)
+                    .zip(withdrawalOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars
                     .map(e =>
                         e.toData
@@ -320,7 +337,7 @@ object TreasuryValidator extends Validator:
                 // withdrawals.
                 // TODO: combine with iterating for poly calculation up above?
                 val withdrawnValue =
-                    withdrawalOutputsNoChange.foldLeft(Value.zero)((acc, o) => acc + o.value)
+                    withdrawalOutputs.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
@@ -395,6 +412,7 @@ object TreasuryValidator extends Validator:
         setup: List[BLS12_381_G1_Element],
         subset: List[ScalusScalar]
     ): BLS12_381_G1_Element = {
+        require(subset.size < setup.size, WithdrawZKSetupIsNotBigEnough)
         val subsetInG1 =
             List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
                 st.scale(sb.toInt)

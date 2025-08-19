@@ -6,6 +6,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.function.helper.SignerProviders
 import com.bloxbean.cardano.client.quicktx.ScriptTx
 import com.bloxbean.cardano.client.transaction.spec.Transaction
+import hydrozoa.TxL1
 import hydrozoa.infra.{getUtxoWithDatum, mkBuilder}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{
@@ -14,7 +15,6 @@ import hydrozoa.l1.rulebased.onchain.DisputeResolutionValidator.{
     maxVote
 }
 import hydrozoa.l1.rulebased.onchain.{DisputeResolutionScript, DisputeResolutionValidator}
-import hydrozoa.TxL1
 import scalus.bloxbean.*
 import scalus.builtin.Data.toData
 import scalus.prelude.Option.None as SNone

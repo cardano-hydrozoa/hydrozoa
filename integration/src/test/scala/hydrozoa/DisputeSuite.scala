@@ -24,7 +24,7 @@ import scala.language.implicitConversions
 
 //TODO: Relocate
 /** Throws an exception if the given event does not appear in the block */
-def assertEventValid(block : Block, eventId : TransactionHash): Unit = {
+def assertEventValid(block: Block, eventId: TransactionHash): Unit = {
     assert(block.blockBody.eventsValid.map(_._1).contains(eventId))
 }
 
@@ -152,6 +152,7 @@ class DisputeSuite extends FunSuite {
               TxIx(0)
             )
             _ = sut.awaitTxL1(initTxId)
+
             // 2. Make a deposit
             deposit1 <- sut.deposit(
               Alice,
@@ -188,45 +189,45 @@ class DisputeSuite extends FunSuite {
 
             // 2. Make another deposit
             deposit3 <- sut.deposit(
-                Alice,
-                DepositRequest(
-                    deposit2.depositId.transactionId,
-                    TxIx(1),
-                    10_000_000,
-                    None,
-                    Address[L2](TestPeer.address(Alice)),
-                    None,
-                    Address[L1](
-                        TestPeer.address(Alice)
-                    ),
-                    None
-                )
+              Alice,
+              DepositRequest(
+                deposit2.depositId.transactionId,
+                TxIx(1),
+                10_000_000,
+                None,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](
+                  TestPeer.address(Alice)
+                ),
+                None
+              )
             )
             _ = sut.awaitTxL1(deposit3.depositId.transactionId)
 
             // 2. Make another deposit
             deposit4 <- sut.deposit(
-                Alice,
-                DepositRequest(
-                    deposit3.depositId.transactionId,
-                    TxIx(1),
-                    10_000_000,
-                    None,
-                    Address[L2](TestPeer.address(Alice)),
-                    None,
-                    Address[L1](
-                        TestPeer.address(Alice)
-                    ),
-                    None
-                )
+              Alice,
+              DepositRequest(
+                deposit3.depositId.transactionId,
+                TxIx(1),
+                10_000_000,
+                None,
+                Address[L2](TestPeer.address(Alice)),
+                None,
+                Address[L1](
+                  TestPeer.address(Alice)
+                ),
+                None
+              )
             )
             _ = sut.awaitTxL1(deposit4.depositId.transactionId)
 
-
             major1 <- sut.produceBlock(false)
+            // Alice has 4 L2 UTxOs with 10 ADA each
             major1SettlementTx = sut
                 .awaitTxL1(major1._1.l1Effect.asInstanceOf[SettlementTxEffect].effect.untagged.id)
-                .toRight("No settlement tx for th major 1")
+                .toRight("No settlement tx for the major 1")
 
             // L2 tx + minor block 1.1
             utxoL2 = sut.stateL2().head
@@ -236,12 +237,13 @@ class DisputeSuite extends FunSuite {
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Bob
+                outPeer = Isabel
               )
             )
-            _ = log.info("$$$$$$$" ++ l2Hash_1.toHex)
 
             minor1_1 <- sut.produceBlock(false)
+            // Alice has 3x 10 ADA Utxos, Bob has 1x 10 ADA UTxO
+
             // ensure l2 transaction is observed
             _ = assertEventValid(minor1_1._1.block, l2Hash_1)
 
@@ -252,13 +254,12 @@ class DisputeSuite extends FunSuite {
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Carol
+                outPeer = Isabel
               )
             )
 
             minor1_2 <- sut.produceBlock(false)
             _ = assertEventValid(minor1_2._1.block, l2Hash_2)
-
 
             // Another L2 tx + minor block 1.3
             utxoL2 = sut.stateL2().head
@@ -267,12 +268,11 @@ class DisputeSuite extends FunSuite {
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Daniella
+                outPeer = Isabel
               )
             )
             minor1_3 <- sut.produceBlock(false)
             _ = assertEventValid(minor1_3._1.block, l2Hash_3)
-
 
             // Another L2 tx + minor block 1.4
             utxoL2 = sut.stateL2().head
@@ -281,12 +281,12 @@ class DisputeSuite extends FunSuite {
                 inputs = Set(utxoL2._1),
                 utxoSet = sut.stateL2().toMap,
                 inPeer = Alice,
-                outPeer = Erin
+                outPeer = Isabel
               )
             )
             minor1_4 <- sut.produceBlock(false)
             _ = assertEventValid(minor1_4._1.block, l2Hash_4)
-
+            // Bob, Carol, Daniella, and Erin each have 1x 10 ADA L2 UTxO
 
             _ = sut.runDispute()
 

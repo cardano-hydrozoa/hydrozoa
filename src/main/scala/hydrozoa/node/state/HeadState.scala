@@ -511,66 +511,16 @@ class HeadStateGlobal(
             depositIds.foreach(self.stateL1.get.depositUtxos.utxoMap.remove)
             updateDepositLiquidity()
 
+        private def updateDepositLiquidity(): Unit =
+            val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.value.coin.value).sum
+            metrics.tell(_.setDepositsLiquidity(coins.toLong))
+
         def addDepositUtxos(depositUtxos: DepositUtxos): Unit =
             log.info(s"Adding new deposit utxos: $depositUtxos")
             self.stateL1.get.depositUtxos.utxoMap.addAll(depositUtxos.untagged)
             updateDepositLiquidity()
             log.info("Try to produce a new block due to observing a new deposit utxo...")
             tryProduceBlock(false): Unit
-
-        override def tryProduceBlock(
-            nextBlockFinal: Boolean,
-            force: Boolean = false
-        ): Either[String, Block] = {
-            // 2. The leader produces the block and starts consensus on it.
-            if (self.autonomousBlocks || force)
-                && this.isBlockLeader && !this.isBlockPending
-            then
-                log.info(s"Trying to produce next minor/major block...")
-
-                val finalizing = self.headPhase == Finalizing
-
-                val tipHeader = l2Tip.blockHeader
-
-                blockProductionActor.ask(
-                  _.produceBlock(
-                    stateL2.getContextAndState,
-                    immutablePoolEventsL2,
-                    peekDeposits,
-                    tipHeader,
-                    timeCurrent,
-                    finalizing
-                  )
-                ) match
-                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
-                        self.pendingOwnBlock = Some(
-                          OwnBlock(
-                            block,
-                            utxosActive,
-                            utxosWithdrawn,
-                            mbGenesis
-                          )
-                        )
-                        self.isBlockPending = Some(true)
-                        self.mbIsNextBlockFinal = Some(nextBlockFinal)
-                        Right(block)
-                    case Left(err) =>
-                        // TODO: this arguably should never happen
-                        setLeaderFlag(tipHeader.blockNum + 1)
-                        Left(err)
-            else
-                val msg = s"Block is not going to be produced: " +
-                    s"autonomousBlocks=${self.autonomousBlocks} " +
-                    s"force=$force " +
-                    s"isBlockLeader=${this.isBlockLeader} " +
-                    s"isBlockPending=${this.isBlockPending} "
-                log.info(msg)
-                Left(msg)
-        }
-
-        private def updateDepositLiquidity(): Unit =
-            val coins = self.stateL1.get.depositUtxos.utxoMap.values.map(_.value.coin.value).sum
-            metrics.tell(_.setDepositsLiquidity(coins.toLong))
 
         override def applyBlockRecord(
             record: BlockRecord,
@@ -758,6 +708,56 @@ class HeadStateGlobal(
             self.headPhase = Finalizing
             log.info("Try to produce the final block...")
             tryProduceBlock(true): Unit
+
+        override def tryProduceBlock(
+            nextBlockFinal: Boolean,
+            force: Boolean = false
+        ): Either[String, Block] = {
+            // 2. The leader produces the block and starts consensus on it.
+            if (self.autonomousBlocks || force)
+                && this.isBlockLeader && !this.isBlockPending
+            then
+                log.info(s"Trying to produce next minor/major block...")
+
+                val finalizing = self.headPhase == Finalizing
+
+                val tipHeader = l2Tip.blockHeader
+
+                blockProductionActor.ask(
+                  _.produceBlock(
+                    stateL2.getContextAndState,
+                    immutablePoolEventsL2,
+                    peekDeposits,
+                    tipHeader,
+                    timeCurrent,
+                    finalizing
+                  )
+                ) match
+                    case Right(block, utxosActive, _, utxosWithdrawn, mbGenesis) =>
+                        self.pendingOwnBlock = Some(
+                          OwnBlock(
+                            block,
+                            utxosActive,
+                            utxosWithdrawn,
+                            mbGenesis
+                          )
+                        )
+                        self.isBlockPending = Some(true)
+                        self.mbIsNextBlockFinal = Some(nextBlockFinal)
+                        Right(block)
+                    case Left(err) =>
+                        // TODO: this arguably should never happen
+                        setLeaderFlag(tipHeader.blockNum + 1)
+                        Left(err)
+            else
+                val msg = s"Block is not going to be produced: " +
+                    s"autonomousBlocks=${self.autonomousBlocks} " +
+                    s"force=$force " +
+                    s"isBlockLeader=${this.isBlockLeader} " +
+                    s"isBlockPending=${this.isBlockPending} "
+                log.info(msg)
+                Left(msg)
+        }
 
         override def runTestDispute(): Unit = {
 

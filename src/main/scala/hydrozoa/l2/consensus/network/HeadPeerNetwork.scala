@@ -13,12 +13,9 @@ import hydrozoa.node.state.WalletId
 import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import scalus.builtin.ByteString
-import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import sttp.tapir.generic.auto.*
 import sttp.tapir.{Schema, SchemaType}
-
-import scala.collection.mutable
+import sttp.tapir.generic.auto._
 
 // FIXME: revise return types?
 trait HeadPeerNetwork {

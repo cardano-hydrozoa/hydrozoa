@@ -105,6 +105,49 @@ class ConsensusActorFactory(
 
     private def mkEventL2Actor(dropMyself: () => Unit) = new EventL2Actor(stateActor, dropMyself)
 
+    def spawnByAck(ack: Ack, dropMyself: () => Unit): (Option[ConsensusActor], Option[Ack]) =
+        log.info("spawnByAck")
+        ack match
+            case ack: AckVerKey =>
+                val actor = mkVerificationKeyActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckInit =>
+                val actor = mkInitHeadActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckRefundLater =>
+                val actor = mkRefundLaterActor(dropMyself)
+                @annotation.unused
+                val _ = actor.deliver(ack)
+                Some(actor) -> None
+            case _: AckUnit =>
+                (None, None)
+            case ack: AckMinor =>
+                val actor = mkMinorBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckMajor =>
+                val actor = mkMajorBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckMajor2 =>
+                val actor = mkMajorBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckFinal =>
+                val actor = mkFinalBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckFinal2 =>
+                val actor = mkFinalBlockActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+            case ack: AckDeinit =>
+                val actor = mkDeinitActor(dropMyself)
+                val mbAck = actor.deliver(ack)
+                Some(actor) -> mbAck
+
     private def mkVerificationKeyActor(dropMyself: () => Unit) =
         new VerificationKeyActor(stateActor, walletActor, dropMyself)
 
@@ -152,48 +195,5 @@ class ConsensusActorFactory(
           cardanoActor,
           dropMyself
         )
-
-    def spawnByAck(ack: Ack, dropMyself: () => Unit): (Option[ConsensusActor], Option[Ack]) =
-        log.info("spawnByAck")
-        ack match
-            case ack: AckVerKey =>
-                val actor = mkVerificationKeyActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckInit =>
-                val actor = mkInitHeadActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckRefundLater =>
-                val actor = mkRefundLaterActor(dropMyself)
-                @annotation.unused
-                val _ = actor.deliver(ack)
-                Some(actor) -> None
-            case _: AckUnit =>
-                (None, None)
-            case ack: AckMinor =>
-                val actor = mkMinorBlockActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckMajor =>
-                val actor = mkMajorBlockActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckMajor2 =>
-                val actor = mkMajorBlockActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckFinal =>
-                val actor = mkFinalBlockActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckFinal2 =>
-                val actor = mkFinalBlockActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
-            case ack: AckDeinit =>
-                val actor = mkDeinitActor(dropMyself)
-                val mbAck = actor.deliver(ack)
-                Some(actor) -> mbAck
 
 end ConsensusActorFactory

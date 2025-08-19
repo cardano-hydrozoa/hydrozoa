@@ -282,7 +282,7 @@ object Workload extends OxApp:
 
     def runCommand(cmd: WorkloadCommand): Unit =
         log.info(s"Running command: $cmd")
-        cmd.runSut(sut) : Unit
+        cmd.runSut(sut): Unit
 
     // Run Gen with random seed
     extension [T](g: Gen[T])
@@ -390,7 +390,7 @@ class TransactionL2Command(simpleTransaction: L2EventTransaction) extends Worklo
     override def runState(state: HydrozoaState): HydrozoaState = state
 
     override def runSut(sut: ActorRef[HydrozoaFacade]): Result =
-        sut.ask(_.submitL2(simpleTransaction)) : Unit
+        sut.ask(_.submitL2(simpleTransaction)): Unit
 
 class WithdrawalL2Command(simpleWithdrawal: L2EventWithdrawal) extends WorkloadCommand:
 
@@ -407,7 +407,7 @@ class WithdrawalL2Command(simpleWithdrawal: L2EventWithdrawal) extends WorkloadC
     override def runState(state: HydrozoaState): HydrozoaState = state
 
     override def runSut(sut: ActorRef[HydrozoaFacade]): Unit =
-        sut.ask(_.submitL2(simpleWithdrawal)) : Unit
+        sut.ask(_.submitL2(simpleWithdrawal)): Unit
 
 enum PeersNetworkPhase derives CanEqual:
     case NewlyCreated

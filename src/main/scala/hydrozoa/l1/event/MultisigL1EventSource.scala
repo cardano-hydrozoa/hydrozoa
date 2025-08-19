@@ -129,8 +129,7 @@ class MultisigL1EventSource(
                                     case MultisigUtxoType.Treasury(utxo) =>
                                         // log.debug(s"UTXO type: treasury $utxoId")
                                         // FIXME: TransactionHash and TransactionHash can't be compared with == (????)
-                                        if currentL1State.treasuryUtxo.untagged.input.index == utxoId.index &&
-                                            currentL1State.treasuryUtxo.untagged.input.transactionId.toHex == utxoId.transactionId.toHex
+                                        if !(currentL1State.treasuryUtxo.untagged.input.transactionId.toHex == utxoId.transactionId.toHex)
                                         then mbNewTreasury = Some(mkNewTreasuryUtxo(utxo))
                                     case MultisigUtxoType.Deposit(utxo) =>
                                         // log.debug(s"UTXO type: deposit $utxoId")

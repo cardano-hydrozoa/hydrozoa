@@ -37,9 +37,9 @@ import hydrozoa.*
 import hydrozoa.infra.encodeHex
 import hydrozoa.l2.commitment.infG2Point
 import hydrozoa.l2.ledger
-import scalus.builtin.BLS12_381_G2_Element
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.Data.toData
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
 import scalus.cardano.ledger.*
 import scalus.ledger.api.v3
 import scalus.ledger.api.v3.TxInInfo
@@ -167,4 +167,14 @@ def getG2Commitment(
 
     subsetInG2.foldLeft(zero.dup()): (a, b) =>
         a.add(b)
+}
+
+@main
+def dumpSetupG1(): Unit = {
+    val setup = mkDummySetupG1(6)
+    val setupBS = setup.map(e => BLS12_381_G1_Element.apply(e).toCompressedByteString)
+    setupBS.foreach(println)
+
+    //    println(encodeHex(IArray.unsafeFromArray(P1.generator().compress())))
+    //    println(G1.generator.toCompressedByteString)
 }

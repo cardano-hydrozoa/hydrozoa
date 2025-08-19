@@ -92,11 +92,11 @@ class CardanoL1YaciDevKit(backendService: BackendService) extends CardanoL1:
             .toEither match
             case Left(err) =>
                 throw RuntimeException(err)
-            case Right(utxos) => utxos.asScala.toList.map(bbutxo => 
-              {
-                val sutxo = bbutxo.toScalus
-                HUtxo(UtxoId[L1](sutxo._1), Output[L1](sutxo._2))  
-              })
+            case Right(utxos) =>
+                utxos.asScala.toList.map(bbutxo => {
+                    val sutxo = bbutxo.toScalus
+                    HUtxo(UtxoId[L1](sutxo._1), Output[L1](sutxo._2))
+                })
 
     override def utxoIdsAdaAtAddress(headAddress: AddressL1): Map[UtxoIdL1, Coin] =
         // NB: can't be more than 100
