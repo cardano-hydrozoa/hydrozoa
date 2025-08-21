@@ -1,7 +1,7 @@
 package hydrozoa.l2.consensus.network.outbox
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.transport.AnyMsg
+import hydrozoa.l2.consensus.network.{Ack, Req}
 import hydrozoa.node.db.DBActor
 import ox.channels.ActorRef
 
@@ -32,12 +32,12 @@ class OutboxActor(db: ActorRef[DBActor]):
       * @return
       *   the id of the persisted message
       */
-    def addToOutbox(msg: AnyMsg): OutMsgId = {
+    def addToOutbox(msg: Req | Ack): OutMsgId = {
         log.info(s"Adding to outbox: $msg")
         // 1. Persist a message (not to lose them in case of a crash)
         val msgId = db.ask(_.persistOutgoingMessage(msg))
         // 2. Fanout to subscribers along with msgId
-        subscribers.values.foreach(_.tell(_.enqueue(msgId, msg)))
+        subscribers.values.foreach(_.tell(_.enqueue(OutMsg(msgId, msg))))
         // n. Return msg id
         // TODO: do we need to? Don't return if we can skip it.
         msgId

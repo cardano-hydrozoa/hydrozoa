@@ -1,6 +1,11 @@
 package hydrozoa.l2.consensus.network.outbox
 
+import hydrozoa.l2.consensus.network.{Ack, Req}
+
 // Common stuff for Outbox*
+
+/** Requests or acknowledge that originate from "this" peer and will be broadcast to all other peers */
+case class OutMsg(outMsgId: OutMsgId, content: Req | Ack)
 
 // Surrogate primary key for outgoing messages, starts with 1.
 opaque type OutMsgId = Long

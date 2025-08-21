@@ -1,7 +1,5 @@
 package hydrozoa.l2.consensus.network.outbox
 
-import hydrozoa.l2.consensus.network.transport.AnyMsg
-
 /** */
 trait Receiver {
 
@@ -15,7 +13,7 @@ trait Receiver {
       *   receiver's reply with the largest message ID successfully received.
      *
       */
-    def appendEntries(entries: List[(OutMsgId, AnyMsg)]): Option[MatchIndex]
+    def appendEntries(entries: List[OutMsg]): Option[MatchIndex]
 
     /**
      * Get the current match index. Equivalent to appendEntries(List.empty)

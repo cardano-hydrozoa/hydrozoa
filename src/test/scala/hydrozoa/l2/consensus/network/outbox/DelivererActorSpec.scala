@@ -2,11 +2,8 @@ package hydrozoa.l2.consensus.network.outbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
-import hydrozoa.l2.consensus.network.ReqVerKey
 import hydrozoa.l2.consensus.network.outbox.OutMsgId.toLong
-import hydrozoa.l2.consensus.network.transport.AnyMsg.ReqVerKeyMsg
-import hydrozoa.l2.consensus.network.transport.{AnyMsg, ReqAux}
-import hydrozoa.node.TestPeer.{Alice, Bob, Carol}
+import hydrozoa.l2.consensus.network.{Ack, AckUnit, Req}
 import hydrozoa.node.db.DBActor
 import munit.{FunSuite, ScalaCheckSuite}
 import ox.channels.{Actor, ActorRef}
@@ -29,14 +26,6 @@ def waitForEmptyQueue(deliverer: ActorRef[DelivererActor])(using ox: Ox): Unit =
 }
 
 class DelivererActorSpec extends ScalaCheckSuite:
-    /** Temporary function to ensure that some redundancy on IDs in AnyMsg's aux data
-     * is consistent with the ID assigned by the outbox actor */
-    def addToOutboxAndEnsureIdMatch(outbox: ActorRef[OutboxActor], msg: AnyMsg): OutMsgId = {
-        val outboxId = outbox.ask(_.addToOutbox(msg))
-        assertEquals(outboxId.toLong, msg.getFromSeq._2)
-        outboxId
-    }
-
     test("Deliverer initialization for the clean slate"):
         supervised {
             val db: ActorRef[DBActor] = Actor.create(InMemoryDBActor())
@@ -62,9 +51,7 @@ class DelivererActorSpec extends ScalaCheckSuite:
             assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(0L))
             assertEquals(outbox.ask(_.isSubscribed(peerId)), true)
 
-            // handle anyMsg
-            val anyMsg = ReqVerKeyMsg(ReqVerKey(), ReqAux(Alice, 1))
-            val outMsgId = addToOutboxAndEnsureIdMatch(outbox, anyMsg)
+            val outMsgId = outbox.ask(_.addToOutbox(AckUnit()))
             sleep(1.second)
 
             assertEquals(peer.counter.get(), 4L)
@@ -78,12 +65,9 @@ class DelivererActorSpec extends ScalaCheckSuite:
             val outbox = Actor.create(OutboxActor(db))
 
             // Add 3 messages to the outbox
-            val msg1 = ReqVerKeyMsg(ReqVerKey(), ReqAux(Alice, 1))
-            val _ = addToOutboxAndEnsureIdMatch(outbox, msg1)
-            val msg2 = ReqVerKeyMsg(ReqVerKey(), ReqAux(Bob, 2))
-            val _ = addToOutboxAndEnsureIdMatch(outbox, msg2)
-            val msg3 = ReqVerKeyMsg(ReqVerKey(), ReqAux(Carol, 3))
-            val outMsgId3 = addToOutboxAndEnsureIdMatch(outbox, msg3)
+            val _ = outbox.ask(_.addToOutbox(AckUnit()))
+            val _ = outbox.ask(_.addToOutbox(AckUnit()))
+            val outMsgId3 = outbox.ask(_.addToOutbox(AckUnit()))
 
             // Create a peer
             val peerId = "tellMeTwice"
@@ -107,15 +91,15 @@ class InMemoryDBActor extends DBActor:
     private val log = Logger(getClass)
 
     private val outboxSeq = AtomicLong(0L)
-    private val outbox = mutable.Buffer[AnyMsg]()
+    private val outbox = mutable.Buffer[Req | Ack]()
 
-    override def persistOutgoingMessage(msg: AnyMsg): OutMsgId =
+    override def persistOutgoingMessage(msg: Req | Ack): OutMsgId =
         outbox.append(msg)
         val outMsgId = outboxSeq.incrementAndGet() |> OutMsgId.apply
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
         outMsgId
 
-    override def getOutgoingMessages(startWithIncluding: OutMsgId): List[(OutMsgId, AnyMsg)] = {
+    override def getOutgoingMessages(startWithIncluding: OutMsgId): List[OutMsg] = {
         val msgIdLong = startWithIncluding.toLong
         val ret = outbox
             .clone()
@@ -123,7 +107,7 @@ class InMemoryDBActor extends DBActor:
             .drop(msgIdLong.toInt - 1)
             .zipWithIndex
             .map { case (msg, i) =>
-                (OutMsgId(i.toLong + msgIdLong), msg)
+                OutMsg(OutMsgId(i.toLong + msgIdLong), msg)
             }
         log.debug(
           s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
@@ -146,11 +130,11 @@ class TellMeNTimesReceiverFixture(n: Int = 2, peerId: String) extends Receiver:
 
     val counter = AtomicLong(0L)
 
-    private val entries = mutable.Buffer[(OutMsgId, AnyMsg)]()
+    private val entries = mutable.Buffer[OutMsg]()
 
     override def id: String = peerId
 
-    override def appendEntries(newEntries: List[(OutMsgId, AnyMsg)]): Option[MatchIndex] =
+    override def appendEntries(newEntries: List[OutMsg]): Option[MatchIndex] =
 
         if counter.incrementAndGet() % n == 0 then
             log.info(s"appendEntries: appending $newEntries")
@@ -158,7 +142,7 @@ class TellMeNTimesReceiverFixture(n: Int = 2, peerId: String) extends Receiver:
             entries.appendAll(newEntries)
             entries.lastOption match {
                 case None              => Some(MatchIndex(0L))
-                case Some((lastId, _)) => lastId.toLong |> MatchIndex.apply |> Some.apply
+                case Some(lastMsg) => lastMsg.outMsgId.toLong |> MatchIndex.apply |> Some.apply
             }
         else
             log.info(s"appendEntries: ignoring $newEntries")

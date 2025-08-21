@@ -3,7 +3,6 @@ package hydrozoa.l2.consensus.network.outbox
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.LongCompare
 import hydrozoa.infra.LongCompare.*
-import hydrozoa.l2.consensus.network.transport.AnyMsg
 import hydrozoa.node.db.DBActor
 import ox.channels.{Actor, ActorRef}
 import ox.resilience.{RetryConfig, retryEither}
@@ -52,7 +51,7 @@ private class DelivererActor(
 
     // Actor's volatile state
     // Delivery queue
-    private val queue: mutable.Buffer[(OutMsgId, AnyMsg)] = mutable.Buffer.empty
+    private val queue: mutable.Buffer[OutMsg] = mutable.Buffer.empty
 
     /** Messages sent with the AppendEntries RPC are grouped into batches. This parameter limits the
      * number of messages that can be grouped into one batch.
@@ -97,7 +96,7 @@ private class DelivererActor(
      * @param msgId
      * @param msg
      */
-    def enqueue(msgId: OutMsgId, msg: AnyMsg): Unit = recover(Some(msgId, msg))
+    def enqueue(msg: OutMsg): Unit = recover(Some(msg))
 
     def currentMatchIndex: MatchIndex = matchIndex
 
@@ -112,7 +111,7 @@ private class DelivererActor(
      *       and the ID of the last message in the queue (say, 8), the messages in between will be
      *       fetched from the DB actor (9, 10, 11)
      */
-    private def recover(mbMsg: Option[(OutMsgId, AnyMsg)] = None): Unit = {
+    private def recover(mbMsg: Option[OutMsg] = None): Unit = {
         (mbMsg, queue.lastOption.map(_._1)) match
 
             case (None, None) =>
@@ -128,7 +127,8 @@ private class DelivererActor(
                 queue.appendAll(db.ask(_.getOutgoingMessages(nextMsgId)))
 
             // Enqueuing `elem` to the non empty `queue`
-            case (Some(elem @ (msgId, _)), Some(lastMsgInQueue)) =>
+            case (Some(elem), Some(lastMsgInQueue)) =>
+                val msgId = elem.outMsgId
                 val nextMsgId = lastMsgInQueue.nextMsgId
                 (msgId.toLong ? nextMsgId.toLong) match
                     case LongCompare.LT =>
@@ -192,7 +192,7 @@ private class DelivererActor(
                 case Some(matchIndex) =>
                     log.info(s"tryDelivery: got response $matchIndex")
                     this.matchIndex = matchIndex
-                    queue.dropWhileInPlace((msgId, _) => msgId.toLong <= matchIndex.toLong)
+                    queue.dropWhileInPlace(outMsg => outMsg.outMsgId.toLong <= matchIndex.toLong)
                     log.debug(s"queue after dropWhileInPlace: $queue")
                 // TODO: update matchIndex and queue
                 case None =>
