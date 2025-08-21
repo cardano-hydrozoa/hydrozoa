@@ -40,10 +40,10 @@ import scala.concurrent.duration.DurationInt
  *      index of the last delivered message in the local state and removes delivered messages from
  *      the queue. The index is not persisted: on recovery, it is queried from the peer each time.
   */
-private class DelivererActor(
+private class DeliveryActor(
     private val db: ActorRef[DBActor],
     private val outbox: ActorRef[OutboxActor],
-    private val remotePeer: Receiver
+    private val remotePeer: ReceiverActor
 )(using ox: Ox):
 
     // Initialization code
@@ -77,11 +77,11 @@ private class DelivererActor(
         outbox.tell(_.subscribe(myself, remotePeer.id))
 
     // Get the receiver's matchIndex - the id of the highest message known to be received
-    private var matchIndex: MatchIndex = queryMatchIndex
+    private val matchIndex: MatchIndex = queryMatchIndex
     log.info(s"matchIndex for peer ${remotePeer.id} is $matchIndex")
 
     // The self-actor needed to snooze if the RPC call fails
-    private var myself: ActorRef[DelivererActor] = _
+    private var myself: ActorRef[DeliveryActor] = _
 
     def currentQueueSize: Int = this.queue.size
 
@@ -96,7 +96,7 @@ private class DelivererActor(
      * @param msgId
      * @param msg
      */
-    def enqueue(msg: OutMsg): Unit = recover(Some(msg))
+    def enqueue(msg: OutMsg): Unit = this.queue.append(msg)
 
     def currentMatchIndex: MatchIndex = matchIndex
 
@@ -175,6 +175,7 @@ private class DelivererActor(
      *       more messages. This has the effect of delivering all messages in batches until no more
      *       messages remain.
      */
+    @deprecated
     private def tryDelivery(): Unit = {
         val (msgs, silencePeriod) =
             if queue.size < immediateThreshold then (queue.take(maxEntriesPerCall), 0.seconds)
@@ -191,23 +192,20 @@ private class DelivererActor(
             remotePeer.appendEntries(msgs.toList) match {
                 case Some(matchIndex) =>
                     log.info(s"tryDelivery: got response $matchIndex")
-                    this.matchIndex = matchIndex
                     queue.dropWhileInPlace(outMsg => outMsg.outMsgId.toLong <= matchIndex.toLong)
                     log.debug(s"queue after dropWhileInPlace: $queue")
                 // TODO: update matchIndex and queue
                 case None =>
                     log.warn(s"tryDelivery: RPC call failed, snoozing")
             }
-            // QUESTION: This calls itself. Will it blow the stack without a @tailrec annotation?
-            myself.tell(_.tryDelivery())
-        } else log.info(s"tryDelivery: no messages to deliver")
+          } else log.info(s"tryDelivery: no messages to deliver")
     }
 
-object DelivererActor:
-    def initialize(db: ActorRef[DBActor], outbox: ActorRef[OutboxActor], remotePeer: Receiver)(using
-        ox: Ox
-    ): ActorRef[DelivererActor] =
-        val d = Actor.create(DelivererActor(db, outbox, remotePeer))
+object DeliveryActor:
+    def initialize(db: ActorRef[DBActor], outbox: ActorRef[OutboxActor], remotePeer: ReceiverActor)(using
+                                                                                                    ox: Ox
+    ): ActorRef[DeliveryActor] =
+        val d = Actor.create(DeliveryActor(db, outbox, remotePeer))
         d.ask(_.myself = d)
         d.tell(_.recover())
         d.tell(_.subscribe())

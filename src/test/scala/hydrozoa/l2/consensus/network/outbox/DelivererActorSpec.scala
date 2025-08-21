@@ -19,7 +19,7 @@ import scala.concurrent.duration.{Duration, DurationInt, MILLISECONDS}
  * Retries up to 10 times with a 200 ms delay
  * TODO: Maybe move away from polling?
  * */
-def waitForEmptyQueue(deliverer: ActorRef[DelivererActor])(using ox: Ox): Unit = {
+def waitForEmptyQueue(deliverer: ActorRef[DeliveryActor])(using ox: Ox): Unit = {
     retry(RetryConfig.delay(10, Duration(200, MILLISECONDS))) {
         if deliverer.ask(_.currentQueueSize == 0) then () else "Queue not empty"
     } : Unit
@@ -32,7 +32,7 @@ class DelivererActorSpec extends ScalaCheckSuite:
             val outbox = Actor.create(OutboxActor(db))
             val peerId = "tellMeTwice"
             val peer = TellMeNTimesReceiverFixture(2, peerId)
-            val deliverer = DelivererActor.initialize(db, outbox, peer)
+            val deliverer = DeliveryActor.initialize(db, outbox, peer)
 
             assertEquals(peer.counter.get(), 2L)
             assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(0L))
@@ -45,7 +45,7 @@ class DelivererActorSpec extends ScalaCheckSuite:
             val outbox = Actor.create(OutboxActor(db))
             val peerId = "tellMeTwice"
             val peer = TellMeNTimesReceiverFixture(2, peerId)
-            val deliverer = DelivererActor.initialize(db, outbox, peer)
+            val deliverer = DeliveryActor.initialize(db, outbox, peer)
 
             assertEquals(peer.counter.get(), 2L)
             assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(0L))
@@ -76,7 +76,7 @@ class DelivererActorSpec extends ScalaCheckSuite:
             assertEquals(peer.getMatchIndex, None)
 
             // Create a deliverer
-            val deliverer = DelivererActor.initialize(db, outbox, peer)
+            val deliverer = DeliveryActor.initialize(db, outbox, peer)
             waitForEmptyQueue(deliverer)
 
             // This may need to be retried multiple times, because the peer simulates failure for
@@ -124,7 +124,7 @@ class InMemoryDBActor extends DBActor:
  * @param n
  * @param peerId
  */
-class TellMeNTimesReceiverFixture(n: Int = 2, peerId: String) extends Receiver:
+class TellMeNTimesReceiverFixture(n: Int = 2, peerId: String, deliveryActor: DeliveryActor) extends ReceiverActor:
 
     private val log = Logger(getClass)
 
@@ -142,8 +142,9 @@ class TellMeNTimesReceiverFixture(n: Int = 2, peerId: String) extends Receiver:
             entries.appendAll(newEntries)
             entries.lastOption match {
                 case None              => Some(MatchIndex(0L))
-                case Some(lastMsg) => lastMsg.outMsgId.toLong |> MatchIndex.apply |> Some.apply
+                case Some(lastMsg) => deliveryActor.tell(_.matchIndex(
+                    lastMsg.outMsgId.toLong |> MatchIndex.apply |> Some.apply))
             }
         else
             log.info(s"appendEntries: ignoring $newEntries")
-            None
+            

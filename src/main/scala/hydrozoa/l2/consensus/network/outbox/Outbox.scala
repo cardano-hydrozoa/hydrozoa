@@ -21,7 +21,11 @@ object OutMsgId:
         def toLong: Long = self
     }
 
-// Matching index i.e., the position in the outbox that is confirmed by a recipient, starts with 0.
+/**
+ * Matching index for a remote peer i.e., the position in the outbox that is confirmed by a recipient.
+ * It is a non-negative Long under the hood.
+ * A MatchIndex of 0 indicates that the remote peer has not told us about their match index yet.
+ */
 opaque type MatchIndex = Long
 
 object MatchIndex:
