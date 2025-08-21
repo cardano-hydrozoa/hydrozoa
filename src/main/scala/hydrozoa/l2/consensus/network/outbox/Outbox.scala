@@ -7,7 +7,7 @@ opaque type OutMsgId = Long
 
 object OutMsgId:
     def apply(n: Long): OutMsgId = {
-        assert(n > 0)
+        assert(n > 0, "OutMsgIds must be positive")
         n
     }
 
@@ -21,7 +21,7 @@ opaque type MatchIndex = Long
 
 object MatchIndex:
     def apply(n: Long): MatchIndex = {
-        assert(n >= 0)
+        assert(n >= 0, "Match Indicies must be non-negative")
         n
     }
 

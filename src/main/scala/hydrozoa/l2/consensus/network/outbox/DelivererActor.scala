@@ -33,8 +33,9 @@ import scala.concurrent.duration.DurationInt
   *   - One AppendEntries RPC may include up to `maxEntriesPerCall` messages.
   *
   *   - The size of queue defines the minimal timeout between calls, such that a msg(s) should be
-  *     sent immediate if there is less than [[immediateThreshold]] in the queue, otherwise `timeout
-  *     \= perMsgDelay * (n - [[immediateThreshold]])` but not longer than `maxTimeout`.
+ *      sent immediately if there are less than [[immediateThreshold]] messages in the queue,
+ *      otherwise `timeout \= perMsgDelay * (n - [[immediateThreshold]])` but not longer than
+ *      `maxTimeout`.
   *
   *   - Upon getting a confirmation from the receiver, which may be ONLY `Ok <index>` update the
   *     index of the last delivered message in the local state and in the database, removes
@@ -66,7 +67,13 @@ private class DelivererActor(
     // -- end of the volatile state section
 
     // Some parameters
+
+    /** Messages sent with the AppendEntries RPC are grouped into batches. This parameter limits the
+     * number of messages that can be grouped into one batch.
+     */
     private val maxEntriesPerCall: Int = 10 // msgs
+
+    // -- end of the volatile state section
     private val immediateThreshold: Int = 5 // msgs
     private val maxTimeout = 120.seconds
     private val perMsgDelay = 1.second
@@ -79,7 +86,7 @@ private class DelivererActor(
         (mbMsg, queue.lastOption.map(_._1)) match
 
             case (None, None) =>
-                log.debug(s"recovering empty the queue with entries after matchIndex=$matchIndex")
+                log.debug(s"recovering to empty queue with entries after matchIndex=$matchIndex")
                 val nextMsgId = matchIndex.nextMsgId
                 queue.appendAll(db.ask(_.getOutgoingMessages(nextMsgId)))
 
@@ -121,13 +128,29 @@ private class DelivererActor(
         tryDelivery()
     }
 
+    /** Attempts to deliver a batches of messages from the queue (FIFO) according to the following
+     * logic.
+     *
+     *   - The messages are taken from the queue and grouped into "batches". The size of a batch is
+     *     limited by [[maxEntriesPerCall]].
+     *   - There is timeout (`silencePeriod`) between batches.
+     *   - If the size of the queue is less than the [[immediateThreshold]], then the
+     *     silencePeriond is 0. Otherwise, the timeout is calculated based on the number of
+     *     messages (see the implementation) and limited by the maxTimeout parameter.
+     *    - The method waits for a response from the remote peer, which contains the messageId of the last message
+     *      successfully recieved (known as the remote peer's `matchIndex`). The DelevererActor stores this in memory,
+     *      but does not persist it; on recovery, it can be queried again. The delivered messages are removed from the
+     *      queue.
+     *    - Regardless of whether delivery is successful, the actor calls itself again to deliver more messages.
+     *      This has the effect of delivering all messages in batches until no more messages remain.
+     */
     private def tryDelivery(): Unit = {
         val (msgs, silencePeriod) =
             if queue.size < immediateThreshold then (queue.take(maxEntriesPerCall), 0.seconds)
             else
                 val n = queue.size - immediateThreshold
                 val timeout = perMsgDelay.length.toInt * n
-                (queue.take(maxEntriesPerCall), math.max(timeout, maxTimeout.length.toInt).seconds)
+                (queue.take(maxEntriesPerCall), math.min(timeout, maxTimeout.length.toInt).seconds)
         if msgs.nonEmpty then {
             log.info(
               s"tryDelivery: sending ${msgs.size} messages after silencePeriod=$silencePeriod"
@@ -143,15 +166,18 @@ private class DelivererActor(
                 // TODO: update matchIndex and queue
                 case None =>
                     log.warn(s"tryDelivery: RPC call failed, snoozing")
-                    myself.tell(_.tryDelivery())
             }
+            myself.tell(_.tryDelivery())
         } else log.info(s"tryDelivery: no messages to deliver")
     }
 
+    // NOTE: Partial, will throw a runtime error if an actor for this peer is already subscribed to the outbox.
     private val subscribe: () => Unit = () =>
         log.info(s"Subscribing to outbox for peer ${remotePeer.id}")
         this.myself = Actor.create(this)
-        outbox.tell(_.subscribe(myself, remotePeer.id))
+        outbox.tell(_.subscribe(myself, remotePeer.id)) match
+            case Right(()) => ()
+            case Left(e) => throw runtime
 
     /** [[enqueue]] is just a case of [[recover]].
       * @param msgId

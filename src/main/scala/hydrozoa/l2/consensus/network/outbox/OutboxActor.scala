@@ -23,6 +23,7 @@ class OutboxActor(db: ActorRef[DBActor]):
     private val log = Logger(getClass)
 
     // Initially empty set of subscribed deliverers.
+    // Maps a subscribe ID to its actor ref.
     private val subscribers = mutable.Map[String, ActorRef[DelivererActor]]()
 
     /** Persist and fanout a message.
@@ -42,13 +43,18 @@ class OutboxActor(db: ActorRef[DBActor]):
         msgId
     }
 
-    /** Allows a delivery actor to subscribe.
-      * @param deliverer
+    /** Allows a delivery actor to subscribe to the global outbox actor. If a deliverer is already subscribed with the
+     * same ID, we will overwrite it.
+     *
+     * @param deliverer
       *   an actor that wants to subscribe for future outgoing events
       */
     def subscribe(deliverer: ActorRef[DelivererActor], id: String): Unit = {
         log.info(s"Subscribing deliverer: $id")
-        val _ = subscribers.put(id, deliverer)
+        if isSubscribed(id)
+        then log.warn(s"Peer ${id} was already subscribed to the outbox. This most likely either indicates failure recovery or that two distinct peers were assigned the same ID." +
+            s" Replacing actor ref ${subscribers(id)} with ${deliverer}")
+        subscribers.put(id, deliverer): Unit
     }
 
     /** Checks whether a deliverer for a peer [[id]] is currently subscribed.
