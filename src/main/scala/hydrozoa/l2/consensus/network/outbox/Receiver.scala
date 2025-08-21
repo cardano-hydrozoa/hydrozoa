@@ -7,10 +7,19 @@ trait Receiver {
 
     def id: String
 
-    /** @param entries
-      *   a list of messages to deliverm may be empty
+    /** Note: This message MUST NOT throw exceptions; on failure (e.g., network failure) it should return None.
+     * QUESTION: Should this return a Try instead of an Option?
+     * @param entries
+      *   a list of messages to deliver. May be empty.
       * @return
-      *   receiver's reply with the match index may be absent
+      *   receiver's reply with the largest message ID successfully received.
+     *
       */
     def appendEntries(entries: List[(OutMsgId, AnyMsg)]): Option[MatchIndex]
+
+    /**
+     * Get the current match index. Equivalent to appendEntries(List.empty)
+     * @return
+     */
+    final def getMatchIndex : Option[MatchIndex] = appendEntries(List.empty)
 }

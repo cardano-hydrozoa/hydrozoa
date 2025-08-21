@@ -38,8 +38,8 @@ import scala.concurrent.duration.DurationInt
  *      `maxTimeout`.
   *
   *   - Upon getting a confirmation from the receiver, which may be ONLY `Ok <index>` update the
-  *     index of the last delivered message in the local state and in the database, removes
-  *     delivered messages from the queue.
+ *      index of the last delivered message in the local state and removes delivered messages from
+ *      the queue. The index is not persisted: on recovery, it is queried from the peer each time.
   */
 private class DelivererActor(
     private val db: ActorRef[DBActor],
@@ -51,37 +51,67 @@ private class DelivererActor(
     private val log = Logger(getClass)
 
     // Actor's volatile state
-
-    // Get the receiver's matchIndex - the id of the highest message known to be received
-    private var matchIndex: MatchIndex =
-        retryEither(RetryConfig.backoffForever(1.second, 60.seconds)) {
-            log.info("try to get receiver's matchIndex")
-            remotePeer.appendEntries(List.empty).toRight(())
-        }.toOption.get
-
-    log.info(s"matchIndex for peer ${remotePeer.id} is $matchIndex")
-
     // Delivery queue
     private val queue: mutable.Buffer[(OutMsgId, AnyMsg)] = mutable.Buffer.empty
-
-    // -- end of the volatile state section
-
-    // Some parameters
 
     /** Messages sent with the AppendEntries RPC are grouped into batches. This parameter limits the
      * number of messages that can be grouped into one batch.
      */
     private val maxEntriesPerCall: Int = 10 // msgs
 
-    // -- end of the volatile state section
+    // Some parameters
+    /** If the queue contains fewer messages than this threshold, the messages will be sent
+     * immediately.
+     */
     private val immediateThreshold: Int = 5 // msgs
+    /** The maximum permissible timeout between batches of messages.
+     */
     private val maxTimeout = 120.seconds
+    /** If the queue contains more messages than [[immediateThreshold]], each additional message
+     * will contribute this amount to the timeout, up to [[maxTimeout]].
+     */
     private val perMsgDelay = 1.second
+    // NOTE: Partial, will throw a runtime error if an actor for this peer is already subscribed to the outbox.
+    private val subscribe: () => Unit = () =>
+        log.info(s"Subscribing to outbox for peer ${remotePeer.id}")
+        this.myself = Actor.create(this)
+        outbox.tell(_.subscribe(myself, remotePeer.id))
+
+    // Get the receiver's matchIndex - the id of the highest message known to be received
+    private var matchIndex: MatchIndex = queryMatchIndex
+    log.info(s"matchIndex for peer ${remotePeer.id} is $matchIndex")
 
     // The self-actor needed to snooze if the RPC call fails
     private var myself: ActorRef[DelivererActor] = _
 
-    // Internal methods
+    def currentQueueSize: Int = this.queue.size
+
+    /** Queries the remote peer for the last msgID they have seen */
+    def queryMatchIndex: MatchIndex = retryEither(RetryConfig.backoffForever(1.second, 60.seconds)) {
+        log.info("try to get receiver's matchIndex")
+        remotePeer.appendEntries(List.empty).toRight(())
+    }.toOption.get
+
+    /** [[enqueue]] is just a case of [[recover]].
+     *
+     * @param msgId
+     * @param msg
+     */
+    def enqueue(msgId: OutMsgId, msg: AnyMsg): Unit = recover(Some(msgId, msg))
+
+    def currentMatchIndex: MatchIndex = matchIndex
+
+    /** Appends messages into the Actor's queue.
+     *   - If the queue is empty, it will request from the database actor all messages subsequent
+     *     to the match Index
+     *   - If the queue is non-empty, it will request from the database actor all messages
+     *     subsequent to the last message in the queue
+     *   - If a `Some` is passed in the argument, the message will be appended to queue only if
+     *     it's message ID is greater than the last message in the queue.
+     *     - In the case that there is a gap between the message ID given in the argument (say, 12)
+     *       and the ID of the last message in the queue (say, 8), the messages in between will be
+     *       fetched from the DB actor (9, 10, 11)
+     */
     private def recover(mbMsg: Option[(OutMsgId, AnyMsg)] = None): Unit = {
         (mbMsg, queue.lastOption.map(_._1)) match
 
@@ -137,12 +167,13 @@ private class DelivererActor(
      *   - If the size of the queue is less than the [[immediateThreshold]], then the
      *     silencePeriond is 0. Otherwise, the timeout is calculated based on the number of
      *     messages (see the implementation) and limited by the maxTimeout parameter.
-     *    - The method waits for a response from the remote peer, which contains the messageId of the last message
-     *      successfully recieved (known as the remote peer's `matchIndex`). The DelevererActor stores this in memory,
-     *      but does not persist it; on recovery, it can be queried again. The delivered messages are removed from the
-     *      queue.
-     *    - Regardless of whether delivery is successful, the actor calls itself again to deliver more messages.
-     *      This has the effect of delivering all messages in batches until no more messages remain.
+     *     - The method waits for a response from the remote peer, which contains the messageId of
+     *       the last message successfully recieved (known as the remote peer's `matchIndex`). The
+     *       DelevererActor stores this in memory, but does not persist it; on recovery, it can be
+     *       queried again. The delivered messages are removed from the queue.
+     *     - Regardless of whether delivery is successful, the actor calls itself again to deliver
+     *       more messages. This has the effect of delivering all messages in batches until no more
+     *       messages remain.
      */
     private def tryDelivery(): Unit = {
         val (msgs, silencePeriod) =
@@ -161,37 +192,23 @@ private class DelivererActor(
                 case Some(matchIndex) =>
                     log.info(s"tryDelivery: got response $matchIndex")
                     this.matchIndex = matchIndex
-                    queue.dropWhileInPlace((msgId,_) => msgId.toLong <= matchIndex.toLong)
+                    queue.dropWhileInPlace((msgId, _) => msgId.toLong <= matchIndex.toLong)
                     log.debug(s"queue after dropWhileInPlace: $queue")
                 // TODO: update matchIndex and queue
                 case None =>
                     log.warn(s"tryDelivery: RPC call failed, snoozing")
             }
+            // QUESTION: This calls itself. Will it blow the stack without a @tailrec annotation?
             myself.tell(_.tryDelivery())
         } else log.info(s"tryDelivery: no messages to deliver")
     }
 
-    // NOTE: Partial, will throw a runtime error if an actor for this peer is already subscribed to the outbox.
-    private val subscribe: () => Unit = () =>
-        log.info(s"Subscribing to outbox for peer ${remotePeer.id}")
-        this.myself = Actor.create(this)
-        outbox.tell(_.subscribe(myself, remotePeer.id)) match
-            case Right(()) => ()
-            case Left(e) => throw runtime
-
-    /** [[enqueue]] is just a case of [[recover]].
-      * @param msgId
-      * @param msg
-      */
-    def enqueue(msgId: OutMsgId, msg: AnyMsg): Unit = recover(Some(msgId, msg))
-
-    def currentMatchIndex: MatchIndex = matchIndex
-
 object DelivererActor:
     def initialize(db: ActorRef[DBActor], outbox: ActorRef[OutboxActor], remotePeer: Receiver)(using
         ox: Ox
-    ) =
-        val d = DelivererActor(db, outbox, remotePeer)
-        d.recover()
-        d.subscribe()
+    ): ActorRef[DelivererActor] =
+        val d = Actor.create(DelivererActor(db, outbox, remotePeer))
+        d.ask(_.myself = d)
+        d.tell(_.recover())
+        d.tell(_.subscribe())
         d
