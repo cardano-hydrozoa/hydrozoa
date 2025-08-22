@@ -1,4 +1,4 @@
-package hydrozoa.l2.consensus.network.outbox
+package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.{Ack, Req}
@@ -6,6 +6,7 @@ import hydrozoa.node.db.{DBReader, DBWriterActor}
 import ox.channels.ActorRef
 
 import scala.collection.mutable
+import scala.util.{Try, Success, Failure}
 
 // TODO: wrappers/tags for outbox (and inbox for that matter)
 
@@ -30,7 +31,7 @@ class OutboxActor(
 
     // ---------------------------------------------  Volatile state
     // The common delivery queue
-    private val queue: mutable.Buffer[OutMsg] = mutable.Buffer.empty
+    private val queue: mutable.Buffer[Msg] = mutable.Buffer.empty
 
     private val matchIndices: mutable.Map[PeerId, MatchIndex] = mutable.Map.empty
 
@@ -58,12 +59,12 @@ class OutboxActor(
       * @return
       *   the id of the persisted message
       */
-    def addToOutbox(msg: Req | Ack): OutMsgId = {
+    def addToOutbox(msg: Req | Ack): MsgId = {
         log.info(s"Adding to outbox: $msg")
         // 1. Persist a message (not to lose them in case of a crash)
         val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
         // 2. Append to the end of the delivery queue
-        queue.append(OutMsg(msgId, msg))
+        queue.append(Msg(msgId, msg))
         // TODO: remove? 3. Return the msg ID
         msgId
     }
@@ -97,7 +98,7 @@ class OutboxActor(
         val lowestIndex: MatchIndex = matchIndices.values.minBy(_.toLong)
         log.info(s"Cleaning up messages with IDs < $lowestIndex")
         // Drop the prefix in the queue
-        queue.dropWhileInPlace(msg => msg.outMsgId.toLong < lowestIndex.toLong)
+        queue.dropWhileInPlace(msg => msg.id.toLong < lowestIndex.toLong)
     }
 
     // ---------------------------------------------  Private API
@@ -109,32 +110,37 @@ class OutboxActor(
       * @return
       *   possibly empty batch
       */
-    private def mkBatch(matchIndex: MatchIndex): List[OutMsg] =
+    private def mkBatch(matchIndex: MatchIndex): MsgBatch =
 
         // TODO: if matchIndex == highestOwnOutMsgId (queue.lastOption) return List.empty
 
         val firstMsgId = matchIndex.nextMsgId
-        val maxLastMsgId = OutMsgId(matchIndex.toLong + maxEntriesPerBatch)
+        val maxLastMsgId = MsgId(matchIndex.toLong + maxEntriesPerBatch)
 
         // First, we need to read from the database if needed
         queue.headOption match {
             case None => dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId)
             case Some(queueHead) =>
-                if queueHead.outMsgId.toLong > firstMsgId.toLong then {
+                if queueHead.id.toLong > firstMsgId.toLong then {
                     // Reading up to the queue's head or till the end of the batch
-                    val readUpTo = OutMsgId(
-                      math.min(queueHead.outMsgId.toLong - 1, maxLastMsgId.toLong)
+                    val readUpTo = MsgId(
+                      math.min(queueHead.id.toLong - 1, maxLastMsgId.toLong)
                     )
                     val dbPart = dbReader.readOutgoingMessages(firstMsgId, readUpTo)
 
                     // Then, if there is some space left in the batch, we can try adding messages from the queue.
                     if dbPart.length < maxEntriesPerBatch then {
                         val firstMsgIdFromQueue =
-                            dbPart.lastOption.map(_.outMsgId.nextMsgId).getOrElse(firstMsgId)
-                        val maxLastMsgIdFromQueue = OutMsgId(
+                            dbPart.lastOption.map(_.id.nextMsgId).getOrElse(firstMsgId)
+                        val maxLastMsgIdFromQueue = MsgId(
                           firstMsgIdFromQueue.toLong + maxEntriesPerBatch - dbPart.length
                         )
-                        dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)
+                        Try(MsgBatch.fromList(dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)).get) match
+                             case Success(b) => b
+                             // FIXME: Better exception type
+                             case Failure(e) => throw RuntimeException("Error constructing message batch: db part and queue part do not obey the required invariants.")
+
+
                     } else { dbPart }
                 } else {
                     // No need to read from the db
@@ -149,4 +155,4 @@ class OutboxActor(
       * @return
       *   possibly empty list of messages
       */
-    private def readFromQueue(firstMessage: OutMsgId, maxLastMsgId: OutMsgId): List[OutMsg] = ???
+    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = ???

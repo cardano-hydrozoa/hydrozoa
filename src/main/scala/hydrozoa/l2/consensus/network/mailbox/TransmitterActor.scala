@@ -1,4 +1,4 @@
-package hydrozoa.l2.consensus.network.outbox
+package hydrozoa.l2.consensus.network.mailbox
 
 /** Physically sends a batch of messages to a particular peer.
   *
@@ -18,7 +18,7 @@ trait TransmitterActor:
       * @param batch
       *   the messages may be empty
       */
-    def appendEntries(to: PeerId, batch: List[OutMsg]): Unit
+    def appendEntries(to: PeerId, batch: MsgBatch): Unit
 
     /** Called by node's [[InboxActor]] when it wants to confirm [[matchIndex]] for [[to]] peer.
       *
@@ -31,3 +31,13 @@ trait TransmitterActor:
       *   the current matchIndex for [[to]] peer in the local [[InboxActor]]
       */
     def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit
+
+
+/** 
+ * Transmits messages locally (for testing) via ox actors
+ * */
+class OxActorTransmitterActor extends TransmitterActor:
+    override def appendEntries(to: PeerId, batch: MsgBatch): Unit = ???
+
+    override def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit = ???
+    

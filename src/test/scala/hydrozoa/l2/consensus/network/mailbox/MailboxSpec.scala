@@ -1,18 +1,18 @@
-package hydrozoa.l2.consensus.network.outbox
+package hydrozoa.l2.consensus.network.mailbox
 
-//import com.typesafe.scalalogging.Logger
-//import hydrozoa.infra.Piper
-//import hydrozoa.l2.consensus.network.outbox.OutMsgId.toLong
-//import hydrozoa.l2.consensus.network.{Ack, AckUnit, Req}
-//import hydrozoa.node.db.DBWriterActor
+import com.typesafe.scalalogging.Logger
+import hydrozoa.infra.Piper
+import hydrozoa.l2.consensus.network.mailbox.MsgId.toLong
+import hydrozoa.l2.consensus.network.{Ack, AckUnit, Req}
+import hydrozoa.node.db.DBWriterActor
 import munit.{FunSuite, ScalaCheckSuite}
-//import ox.channels.{Actor, ActorRef}
-//import ox.resilience.{RetryConfig, retry}
-//import ox.{Ox, sleep, supervised}
-//
-//import java.util.concurrent.atomic.AtomicLong
-//import scala.collection.mutable
-//import scala.concurrent.duration.{Duration, DurationInt, MILLISECONDS}
+import ox.channels.{Actor, ActorRef}
+import ox.resilience.{RetryConfig, retry}
+import ox.{Ox, sleep, supervised}
+
+import java.util.concurrent.atomic.AtomicLong
+import scala.collection.mutable
+import scala.concurrent.duration.{Duration, DurationInt, MILLISECONDS}
 
 ///**
 // * Helper function to poll a deliverer actor to determine when it's queue is empty.
@@ -25,8 +25,8 @@ import munit.{FunSuite, ScalaCheckSuite}
 //    } : Unit
 //}
 
-class DelivererActorSpec extends ScalaCheckSuite
-//    test("Deliverer initialization for the clean slate"):
+//class MailboxSpec extends ScalaCheckSuite:
+//    test("Mailbox initialization (clean slate)"):
 //        supervised {
 //            val db: ActorRef[DBWriterActor] = Actor.create(InMemoryDBWriterActor())
 //            val outbox = Actor.create(OutboxActor(db))
@@ -38,7 +38,7 @@ class DelivererActorSpec extends ScalaCheckSuite
 //            assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(0L))
 //            assertEquals(outbox.ask(_.isSubscribed(peerId)), true)
 //        }
-//
+////
 //    test("Handle a message"):
 //        supervised {
 //            val db: ActorRef[DBWriterActor] = Actor.create(InMemoryDBWriterActor())
@@ -86,65 +86,68 @@ class DelivererActorSpec extends ScalaCheckSuite
 //            assertEquals(peerMatchIndex, MatchIndex(outMsgId3.toLong))
 //            assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(outMsgId3.toLong))
 //
-//class InMemoryDBWriterActor extends DBWriterActor:
-//
-//    private val log = Logger(getClass)
-//
-//    private val outboxSeq = AtomicLong(0L)
-//    private val outbox = mutable.Buffer[Req | Ack]()
-//
-//    override def persistOutgoingMessage(msg: Req | Ack): OutMsgId =
-//        outbox.append(msg)
-//        val outMsgId = outboxSeq.incrementAndGet() |> OutMsgId.apply
-//        log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
-//        outMsgId
-//
-//    override def getOutgoingMessages(startWithIncluding: OutMsgId): List[OutMsg] = {
-//        val msgIdLong = startWithIncluding.toLong
-//        val ret = outbox
-//            .clone()
-//            .toList
-//            .drop(msgIdLong.toInt - 1)
-//            .zipWithIndex
-//            .map { case (msg, i) =>
-//                OutMsg(OutMsgId(i.toLong + msgIdLong), msg)
-//            }
-//        log.debug(
-//          s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
-//        )
-//        ret
-//    }
-//
-///**
-// * A test fixture capable of receiving messages from an outbox. It maintains a counter and ignores all messages
-// * except those that arrive modulo `n` (default 2, i.e. ignoring every other message).
-// * NOTE: This will result in log.warn messages with failed RPC calls, since acknowledgements to messages wont be
-// * received by the deliverer
-// *
-// * @param n
-// * @param peerId
-// */
-//class TellMeNTimesInboxFixture(n: Int = 2, peerId: String, deliveryActor: DeliveryActor) extends InboxActor:
-//
-//    private val log = Logger(getClass)
-//
-//    val counter = AtomicLong(0L)
-//
-//    private val entries = mutable.Buffer[OutMsg]()
-//
-//    override def id: String = peerId
-//
-//    override def appendEntries(newEntries: List[OutMsg]): Option[MatchIndex] =
-//
-//        if counter.incrementAndGet() % n == 0 then
-//            log.info(s"appendEntries: appending $newEntries")
-//
-//            entries.appendAll(newEntries)
-//            entries.lastOption match {
-//                case None              => Some(MatchIndex(0L))
-//                case Some(lastMsg) => deliveryActor.tell(_.matchIndex(
-//                    lastMsg.outMsgId.toLong |> MatchIndex.apply |> Some.apply))
-//            }
-//        else
-//            log.info(s"appendEntries: ignoring $newEntries")
-//
+
+class InMemoryDBWriterActor extends DBWriterActor:
+
+    private val log = Logger(getClass)
+
+    private val outboxSeq = AtomicLong(0L)
+    private val outbox = mutable.Buffer[Req | Ack]()
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+
+    override def persistOutgoingMessage(msg: Req | Ack): MsgId =
+        outbox.append(msg)
+        val outMsgId = outboxSeq.incrementAndGet() |> MsgId.apply
+        log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
+        outMsgId
+
+    override def getOutgoingMessages(startWithIncluding: MsgId): List[Msg] = {
+        val msgIdLong = startWithIncluding.toLong
+        val ret = outbox
+            .clone()
+            .toList
+            .drop(msgIdLong.toInt - 1)
+            .zipWithIndex
+            .map { case (msg, i) =>
+                Msg(MsgId(i.toLong + msgIdLong), msg)
+            }
+        log.debug(
+            s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
+        )
+        ret
+    }
+
+    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit = {
+        val key = peerId
+        val newVal = (msg)
+        inboxes.updateWith(key) {
+            case None => Some(mutable.Buffer(newVal))
+            case Some(buffer) => Some(buffer.append(newVal))
+        }: Unit
+    }
+
+
+/**
+ * A test fixture capable of receiving messages from a (counterparty) outbox and responding. It maintains a counter and drops all incoming/outgoing messages
+ * that arrive modulo `n` (default 5, i.e. ignoring every fifth message).
+ * NOTE: This will result in log.warn messages with failed RPC calls.
+ *
+ * @param n
+ * @param peerId
+ */
+class DropModNInboxFixture(n: Int = 5, peerId: PeerId, dbWriter: ActorRef[DBWriterActor], transmitterActor: ActorRef[OxActorTransmitterActor])(using Ox):
+
+    // N.B.: InboxActor.create should create an ActorWithTimeout
+    val inboxActor: ActorRef[InboxActor] = InboxActor.create(peerId, dbWriter, transmitterActor)
+    val counter = AtomicLong(0L)
+    private val log = Logger(getClass)
+
+    override def id: String = peerId
+
+    override def appendEntries(from: PeerId, batch: MsgBatch): Unit = {
+        if counter.incrementAndGet() % n == 0
+        then log.info(s"appendEntries: ignoring $batch")
+        else    
+            log.info(s"appendEntries: appending $batch")
+            inboxActor.tell(_.appendEntries(from, batch))
+    }
