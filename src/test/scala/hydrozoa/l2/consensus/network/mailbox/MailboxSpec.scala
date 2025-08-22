@@ -2,17 +2,13 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
-import hydrozoa.l2.consensus.network.mailbox.MsgId.toLong
-import hydrozoa.l2.consensus.network.{Ack, AckUnit, Req}
-import hydrozoa.node.db.DBWriterActor
-import munit.{FunSuite, ScalaCheckSuite}
-import ox.channels.{Actor, ActorRef}
-import ox.resilience.{RetryConfig, retry}
-import ox.{Ox, sleep, supervised}
+import hydrozoa.l2.consensus.network.{Ack, Req}
+import hydrozoa.node.db.{DBReader, DBWriterActor}
+import ox.Ox
+import ox.channels.{ActorRef, BufferCapacity}
 
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
-import scala.concurrent.duration.{Duration, DurationInt, MILLISECONDS}
 
 ///**
 // * Helper function to poll a deliverer actor to determine when it's queue is empty.
@@ -87,7 +83,7 @@ import scala.concurrent.duration.{Duration, DurationInt, MILLISECONDS}
 //            assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(outMsgId3.toLong))
 //
 
-class InMemoryDBWriterActor extends DBWriterActor:
+class InMemoryDBWriterActor extends DBWriterActor, DBReader:
 
     private val log = Logger(getClass)
 
@@ -101,53 +97,62 @@ class InMemoryDBWriterActor extends DBWriterActor:
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
         outMsgId
 
-    override def getOutgoingMessages(startWithIncluding: MsgId): List[Msg] = {
-        val msgIdLong = startWithIncluding.toLong
-        val ret = outbox
-            .clone()
-            .toList
-            .drop(msgIdLong.toInt - 1)
-            .zipWithIndex
-            .map { case (msg, i) =>
-                Msg(MsgId(i.toLong + msgIdLong), msg)
-            }
-        log.debug(
-            s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
-        )
-        ret
-    }
+    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = ???
+//    override def getOutgoingMessages(startWithIncluding: MsgId): List[Msg] = {
+//        val msgIdLong = startWithIncluding.toLong
+//        val ret = outbox
+//            .clone()
+//            .toList
+//            .drop(msgIdLong.toInt - 1)
+//            .zipWithIndex
+//            .map { case (msg, i) =>
+//                Msg(MsgId(i.toLong + msgIdLong), msg)
+//            }
+//        log.debug(
+//          s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
+//        )
+//        ret
+//    }
 
     override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit = {
         val key = peerId
         val newVal = (msg)
         inboxes.updateWith(key) {
-            case None => Some(mutable.Buffer(newVal))
+            case None         => Some(mutable.Buffer(newVal))
             case Some(buffer) => Some(buffer.append(newVal))
         }: Unit
     }
 
-
-/**
- * A test fixture capable of receiving messages from a (counterparty) outbox and responding. It maintains a counter and drops all incoming/outgoing messages
- * that arrive modulo `n` (default 5, i.e. ignoring every fifth message).
- * NOTE: This will result in log.warn messages with failed RPC calls.
- *
- * @param n
- * @param peerId
- */
-class DropModNInboxFixture(n: Int = 5, peerId: PeerId, dbWriter: ActorRef[DBWriterActor], transmitterActor: ActorRef[OxActorTransmitterActor])(using Ox):
+/** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It
+  * maintains a counter and drops all incoming/outgoing messages that arrive modulo `n` (default 5,
+  * i.e. ignoring every fifth message). NOTE: This will result in log.warn messages with failed RPC
+  * calls.
+  *
+  * @param n
+  * @param peerId
+  */
+class DropModNInboxFixture(
+    n: Int = 5,
+    dbWriter: ActorRef[DBWriterActor],
+    transmitterActor: ActorRef[TransmitterActor]
+)(using ox: Ox, sc: BufferCapacity):
 
     // N.B.: InboxActor.create should create an ActorWithTimeout
-    val inboxActor: ActorRef[InboxActor] = InboxActor.create(peerId, dbWriter, transmitterActor)
+    val inboxActor: ActorRef[InboxActor] =
+        ActorWatchdog.create(InboxActor(dbWriter, transmitterActor))(using
+          ox,
+          sc,
+          WatchdogTimeoutSeconds.apply(5)
+        )
     val counter = AtomicLong(0L)
     private val log = Logger(getClass)
 
-    override def id: String = peerId
+//    override def id: String = peerId
 
-    override def appendEntries(from: PeerId, batch: MsgBatch): Unit = {
+    def appendEntries(from: PeerId, batch: MsgBatch): Unit = {
         if counter.incrementAndGet() % n == 0
         then log.info(s"appendEntries: ignoring $batch")
-        else    
+        else
             log.info(s"appendEntries: appending $batch")
             inboxActor.tell(_.appendEntries(from, batch))
     }
