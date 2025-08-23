@@ -3,7 +3,8 @@ package hydrozoa.l2.consensus.network.mailbox
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.{Ack, Req}
-import hydrozoa.node.db.{DBReader, DBWriterActor}
+import hydrozoa.node.db.DbReadOutgoingError.ValuesReadAreMalformed
+import hydrozoa.node.db.{DBReader, DBWriterActor, DbReadOutgoingError}
 import munit.ScalaCheckSuite
 import ox.channels.{Actor, ActorRef, BufferCapacity}
 import ox.{Ox, sleep, supervised}
@@ -78,9 +79,9 @@ class MailboxSpec extends ScalaCheckSuite:
             transmitterCarol.tell(_.connect(aliceId, receiverAlice))
             transmitterCarol.tell(_.connect(bobId, receiverBob))
 
-            inboxAlice.tell(_.start())
-            inboxBob.tell(_.start())
-            inboxCarol.tell(_.start())
+            inboxAlice.tellThrow(_.start())
+            inboxBob.tellThrow(_.start())
+            inboxCarol.tellThrow(_.start())
 
             sleep(10.seconds)
 
@@ -161,49 +162,52 @@ class MailboxSpec extends ScalaCheckSuite:
 class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, DBReader {
     lazy val noRead = throw RuntimeException("This test should not READ from the database!")
 
-    override def persistOutgoingMessage(msg: Req | Ack): MsgId =
+    override def persistOutgoingMessage(msg: Req | Ack): MsgId[Outbox] =
         inMemoryDBActor.persistOutgoingMessage(msg)
 
-    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = noRead
+    override def readOutgoingMessages(firstMessage: MsgId[Outbox], maxLastMsgId: MsgId[Outbox]): Either[DbReadOutgoingError, MsgBatch[Outbox]] = noRead
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit =
+    override def persistIncomingMessage(peerId: PeerId, msg: Msg[Inbox]): Unit =
         inMemoryDBActor.persistIncomingMessage(peerId, msg)
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg] = noRead
+    override def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]] = noRead
 }
 
+// TODO: I think this can essentially just wrap the inbox and outbox actors with some transmitters/receivers that just
+// swallow network requests
 class InMemoryDBActor extends DBWriterActor, DBReader:
 
     private val log = Logger(getClass)
 
     private val outboxSeq = AtomicLong(0L)
-    private val outbox = mutable.Buffer[Req | Ack]()
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+    private val outbox = mutable.Buffer[Msg[Outbox]]()
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg[Inbox]]] = mutable.Map.empty
 
-    override def persistOutgoingMessage(msg: Req | Ack): MsgId =
-        outbox.append(msg)
-        val outMsgId = outboxSeq.incrementAndGet() |> MsgId.apply
+    override def persistOutgoingMessage(msg: Req | Ack): MsgId[Outbox] =
+        val outMsgId = outboxSeq.incrementAndGet() |> MsgId.apply[Outbox]
+        outbox.append(Msg[Outbox](outMsgId, msg))
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
         outMsgId
 
-    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = ???
-//    override def getOutgoingMessages(startWithIncluding: MsgId): List[Msg] = {
-//        val msgIdLong = startWithIncluding.toLong
-//        val ret = outbox
-//            .clone()
-//            .toList
-//            .drop(msgIdLong.toInt - 1)
-//            .zipWithIndex
-//            .map { case (msg, i) =>
-//                Msg(MsgId(i.toLong + msgIdLong), msg)
-//            }
-//        log.debug(
-//          s"getOutgoingMessages: found ${ret.size} entries starting with outMsgId=$startWithIncluding"
-//        )
-//        ret
-//    }
+    override def readOutgoingMessages(firstMessage: MsgId[Outbox], maxLastMsgId: MsgId[Outbox]): Either[DbReadOutgoingError, MsgBatch[Outbox]] =
+        outbox.lastOption match {
+            case _ if maxLastMsgId.toLong < firstMessage.toLong => Left(DbReadOutgoingError.MaxIdLessThanFirstID)
+            case None => Left(DbReadOutgoingError.FirstMsgIdNotFound)
+            case Some(msg) if firstMessage.toLong > outboxSeq.get() => Left(DbReadOutgoingError.FirstMsgIdNotFound)
+            case Some(msg) => {
+                val msgs = outbox.clone().slice(firstMessage.toLong.toInt, maxLastMsgId.toLong.toInt)
+                log.debug(
+                    s"getOutgoingMessages: found ${msgs.size} entries starting with msgId=$firstMessage"
+                )
+                MsgBatch.fromList(msgs.toList) match {
+                    case None => Left(ValuesReadAreMalformed)
+                    case (Some(batch)) => Right(batch)
+                }
+            }
+        }
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit = {
+
+    override def persistIncomingMessage(peerId: PeerId, msg: Msg[Inbox]): Unit = {
         val key = peerId
         val newVal = (msg)
         inboxes.updateWith(key) {
@@ -212,7 +216,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
         }: Unit
     }
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg] =
+    override def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]] =
         inboxes.get(peer).map(_.toSeq).getOrElse(Seq.empty)
 
 /** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It
@@ -241,7 +245,7 @@ class DropModNInboxFixture(
 
 //    override def id: String = peerId
 
-    def appendEntries(from: PeerId, batch: MsgBatch): Unit = {
+    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit = {
         if counter.incrementAndGet() % n == 0
         then log.info(s"appendEntries: ignoring $batch")
         else

@@ -20,16 +20,16 @@ extension (self: WatchdogTimeoutSeconds) {
 
 /** An interface that actors with a watchdog timer should provide.
   */
-trait Watchdog:
+trait Watchdog[ErrorType]:
     /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions are not handled.
       */
-    def wakeUp(): Unit
+    def wakeUp(): Either[ErrorType, Unit]
 
 object ActorWatchdog:
     /** Creates a new actor and watchdog thread that wakes it up every [[WatchdogTimeoutSeconds]] in
       * scope.
       */
-    def create[T <: Watchdog](logic: T, close: Option[T => Unit] = None)(using
+    def create[ErrorType, T <: Watchdog[ErrorType]](logic: T, close: Option[T => Unit] = None)(using
         ox: Ox,
         sc: BufferCapacity,
         timeout: WatchdogTimeoutSeconds
@@ -38,7 +38,8 @@ object ActorWatchdog:
         forkDiscard {
             forever {
                 sleep(timeout.toInt.seconds)
-                ref.tell(_.wakeUp())
+                // N.B.: Swallows errors!
+                ref.tell(_.wakeUp(): Unit)
             }
         }
         ref

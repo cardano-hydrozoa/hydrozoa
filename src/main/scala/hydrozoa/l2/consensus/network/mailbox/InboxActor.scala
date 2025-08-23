@@ -1,5 +1,6 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.Heartbeat
 import hydrozoa.l2.consensus.network.mailbox.MsgBatch.MsgBatch
@@ -23,23 +24,26 @@ private class InboxActor(
     val transmitter: ActorRef[TransmitterActor],
     val ownPeerId: PeerId,
     val others: Set[PeerId]
-) extends Watchdog:
+                        ) extends Watchdog[InboxActorError]:
 
     private val log = Logger(getClass)
 
     // N.B.: see InMemoryDbMemoryActor
 
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg[Inbox]]] = mutable.Map.empty
+
+    // Match indexes per remote peer for the highest message of THEIRS that WE have successfully processed
+    private val matchIndices: mutable.Map[PeerId, MatchIndex[Inbox]] = mutable.Map.from(this.others.map(peer => (peer, MatchIndex[Inbox](0))))
 
     private val headPeers: mutable.Set[PeerId] = mutable.Set.empty
     private val pendingHeartbeats: mutable.Set[PeerId] = mutable.Set.empty
 
     /** It's more convenient to have a separate method so we can make connections first and then
-      * start.
-      *
-      * The inbox starts with a `pendingHeartbeats` set that includes all peer IDs.
-      */
-    def start(): Unit =
+     * start.
+     *
+     * The inbox starts with a `pendingHeartbeats` set that includes all peer IDs.
+     */
+    def start(): Either[InboxActorError, Unit] =
         // Initialization code
         others.foreach(id =>
             inboxes.put(id, mutable.Buffer.empty): Unit
@@ -55,12 +59,33 @@ private class InboxActor(
     @unused
     private val breakSilenceTimeout = 60.seconds
 
+    /** When an inbox receives a check-heartbeat (a watchdog signal, internally):
+      *   - For each peer ID in pendingHeartbeats, it sends out its current match index with that
+      *     peer to prompt the peer to send the next batch.
+      *   - Then it resets pendingHeartbeats to include all peer IDs for the next watchdog cycle.
+      */
+    override def wakeUp(): Either[InboxActorError, Unit] = {
+        // TODO: separate types for receiver and sender
+        pendingHeartbeats.map(peer =>
+            // TODO: Return either
+            matchIndices.get(peer) match {
+                case None => Left(InboxActorError.MatchIndexForPeerNotFound)
+                case Some(matchIndex) =>
+                    Right(transmitter.tell(_.confirmMatchIndex(peer, matchIndex)))
+            }
+        ).toList.traverse(identity) match {
+            case Left(err) => Left(err)
+            case Right(_) => Right(pendingHeartbeats.addAll(headPeers))
+
+        }
+    }
+
     /** @param from
       *   the sender
       * @param batch
       *   the batch, may be empty
       */
-    def appendEntries(from: PeerId, batch: MsgBatch): Unit =
+    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit =
 
         log.debug(s"Got a batch from $from: $batch");
 
@@ -75,28 +100,30 @@ private class InboxActor(
         batch.find(_ == Heartbeat()).foreach(_ => pendingHeartbeats.remove(from))
 
         // Calculate updated match index
-        val newMatchIndex: MatchIndex =
+        val newMatchIndex: MatchIndex[Inbox] =
             batch.newMatchIndex match {
                 // Received empty list of messages, return the current match index.
                 case None => inboxes.get(from).map(_.last.id.toMatchIndex).getOrElse(MatchIndex(0))
                 case Some(index) => index
             }
+        matchIndices.update(from, newMatchIndex)
 
         transmitter.tell(_.confirmMatchIndex(from, newMatchIndex))
 
-    /** When an inbox receives a check-heartbeat (a watchdog signal, internally):
-      *   - For each peer ID in pendingHeartbeats, it sends out its current match index with that
-      *     peer to prompt the peer to send the next batch.
-      *   - Then it resets pendingHeartbeats to include all peer IDs for the next watchdog cycle.
-      */
-    override def wakeUp(): Unit = {
-        // TODO: separate types for receiver and sender
-        pendingHeartbeats.foreach(peer =>
-            // Should always exist
-            val matchIndex =
-                inboxes(peer).lastOption.map(_.id.toMatchIndex).getOrElse(MatchIndex(0))
-            transmitter.tell(_.confirmMatchIndex(peer, matchIndex))
-        )
-        pendingHeartbeats.addAll(headPeers)
+    /** Send a new MatchIndex[Inbox] to a remove peer.
+     *
+     * @param peer
+     * @param matchIndex
+     */
+    def confirmMatchIndex(peer: PeerId): Either[InboxActorError, Unit] = {
+        this.matchIndices.get(peer) match {
+            case None => Left(InboxActorError.MatchIndexForPeerNotFound)
+            case Some(matchIndex) =>
+                log.info(s"Confirming match index from $peer: $matchIndex")
+                Right(transmitter.tell(_.confirmMatchIndex(peer, matchIndex)))
+        }
     }
 
+
+enum InboxActorError extends Throwable:
+    case MatchIndexForPeerNotFound
