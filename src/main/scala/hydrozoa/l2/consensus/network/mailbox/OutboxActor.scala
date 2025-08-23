@@ -31,7 +31,7 @@ class OutboxActor(
 
     // ---------------------------------------------  Volatile state
     // The common delivery queue
-    private val queue: mutable.Buffer[Msg] = mutable.Buffer.empty
+    private val queue: mutable.Buffer[MailboxMsg] = mutable.Buffer.empty
 
     private val matchIndices: mutable.Map[PeerId, MatchIndex] = mutable.Map.empty
 
@@ -64,7 +64,7 @@ class OutboxActor(
         // 1. Persist a message (not to lose them in case of a crash)
         val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
         // 2. Append to the end of the delivery queue
-        queue.append(Msg(msgId, msg))
+        queue.append(MailboxMsg(msgId, msg))
         // TODO: remove? 3. Return the msg ID
         msgId
     }

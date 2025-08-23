@@ -95,6 +95,78 @@ class MailboxSpec extends ScalaCheckSuite:
             // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
         }
 
+    test("WS server starts"):
+
+        def startNode(peerId: PeerId, others: Set[PeerId], port: Int)(using
+                                                           ox: Ox
+        ): (
+            DBWriterActor & DBReader,
+                WSReceiver,
+                ActorRef[LocalTransmitterActor],
+                ActorRef[InboxActor]
+            ) =
+            val db = InMemoryDBActor()
+            val dbWriteOnly = OnlyWriteDbActor(db)
+            val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
+            val transmitter: ActorRef[TransmitterActor] =
+                Actor.create(LocalTransmitterActor(peerId))
+            val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
+                timeout = WatchdogTimeoutSeconds(3)
+            )
+            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
+                timeout = WatchdogTimeoutSeconds(10)
+            )
+
+            (
+                db,
+                WSReceiver(outbox, inbox, port),
+                transmitter.asInstanceOf[ActorRef[LocalTransmitterActor]],
+                inbox
+            )
+
+        supervised {
+
+            // Start nodes
+            val aliceId = PeerId("Alice")
+            val bobId = PeerId("Bob")
+            val carolId = PeerId("Carol")
+
+            val (dbAlice, receiverAlice, transmitterAlice, inboxAlice) =
+                startNode(aliceId, Set(bobId, carolId), 4937)
+            val (dbBob, receiverBob, transmitterBob, inboxBob) =
+                startNode(bobId, Set(aliceId, carolId), 4938)
+            val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
+                startNode(carolId, Set(aliceId, bobId), 4939)
+
+//            // Connect nodes to each other
+//            transmitterAlice.tell(_.connect(bobId, receiverBob))
+//            transmitterAlice.tell(_.connect(carolId, receiverCarol))
+//
+//            transmitterBob.tell(_.connect(aliceId, receiverAlice))
+//            transmitterBob.tell(_.connect(carolId, receiverCarol))
+//
+//            transmitterCarol.tell(_.connect(aliceId, receiverAlice))
+//            transmitterCarol.tell(_.connect(bobId, receiverBob))
+//
+//            inboxAlice.tell(_.start())
+//            inboxBob.tell(_.start())
+//            inboxCarol.tell(_.start())
+
+            sleep(600.seconds)
+
+//            assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
+//            assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
+//            assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
+//
+//            assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
+//            assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
+//            assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
+
+            // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
+        }
+
+
+
 //    test("Mailbox initialization (clean slate)"):
 //        supervised {
 //            val db: ActorRef[DBWriterActor] = Actor.create(InMemoryDBWriterActor())
@@ -166,10 +238,10 @@ class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, 
 
     override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = noRead
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit =
+    override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg): Unit =
         inMemoryDBActor.persistIncomingMessage(peerId, msg)
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg] = noRead
+    override def readIncomingMessages(peer: PeerId): Seq[MailboxMsg] = noRead
 }
 
 class InMemoryDBActor extends DBWriterActor, DBReader:
@@ -178,7 +250,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
 
     private val outboxSeq = AtomicLong(0L)
     private val outbox = mutable.Buffer[Req | Ack]()
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg]] = mutable.Map.empty
 
     override def persistOutgoingMessage(msg: Req | Ack): MsgId =
         outbox.append(msg)
@@ -203,7 +275,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
 //        ret
 //    }
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit = {
+    override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg): Unit = {
         val key = peerId
         val newVal = (msg)
         inboxes.updateWith(key) {
@@ -212,7 +284,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
         }: Unit
     }
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg] =
+    override def readIncomingMessages(peer: PeerId): Seq[MailboxMsg] =
         inboxes.get(peer).map(_.toSeq).getOrElse(Seq.empty)
 
 /** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It

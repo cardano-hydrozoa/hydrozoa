@@ -1,6 +1,9 @@
 package hydrozoa.l2.consensus.network.mailbox
 
-import hydrozoa.l2.consensus.network.{Ack, Req}
+import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
+import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
+import hydrozoa.l2.consensus.network.{Msg, given}
+import sttp.tapir.Schema
 
 // TODO: find a better place?
 opaque type PeerId = String
@@ -17,16 +20,28 @@ object PeerId:
 
 /** Requests or acknowledgements tagged with a sequence ID
   */
-case class Msg(id: MsgId, content: Req | Ack)
+case class MailboxMsg(id: MsgId, content: Msg)
+
+given msgCodec: JsonValueCodec[MailboxMsg] =
+    JsonCodecMaker.make
+
+given msgSchema: Schema[MailboxMsg] =
+    Schema.binary[MailboxMsg]
 
 object MsgBatch:
     /** Opaque newtype around `List[Msg]`. Invariants:
       *   - The messages in the batch must be in sorted order of MsgId, strictly sequential (no
       *     gaps).
       */
-    opaque type MsgBatch = List[Msg]
+    opaque type MsgBatch = List[MailboxMsg]
 
-    given Conversion[MsgBatch, List[Msg]] = identity
+    given msgBatchCodec: JsonValueCodec[MsgBatch] =
+        JsonCodecMaker.make
+
+    given msgBatchSchema: Schema[MsgBatch] =
+        Schema.binary[MsgBatch]
+
+    given Conversion[MsgBatch, List[MailboxMsg]] = identity
 
     def empty: MsgBatch = List.empty
 
@@ -44,7 +59,7 @@ object MsgBatch:
       * @param list
       * @return
       */
-    def fromList(list: List[Msg]): Option[MsgBatch] =
+    def fromList(list: List[MailboxMsg]): Option[MsgBatch] =
         // TODO add checks
         Some(list)
 
@@ -53,6 +68,10 @@ type MsgBatch = MsgBatch.MsgBatch
 object MsgId:
     // Surrogate primary key for outgoing messages, starts with 1.
     opaque type MsgId = Long
+
+    given msgIdCodec: JsonValueCodec[MsgId.MsgId] = JsonCodecMaker.make
+
+    given msgIdSchema: Schema[MsgId.MsgId] = Schema.binary[MsgId.MsgId]
 
     def apply(n: Long): MsgId = {
         assert(n > 0, "MsgIds must be positive")

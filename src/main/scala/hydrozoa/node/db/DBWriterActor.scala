@@ -1,6 +1,6 @@
 package hydrozoa.node.db
 
-import hydrozoa.l2.consensus.network.mailbox.{Msg, MsgId, PeerId}
+import hydrozoa.l2.consensus.network.mailbox.{MailboxMsg, MsgId, PeerId}
 import hydrozoa.l2.consensus.network.{Ack, Req}
 
 /** Writing to the database is not concurrent, so we are wrapping it into an only actor.
@@ -23,5 +23,5 @@ trait DBWriterActor {
       * @param msg
       * @return
       */
-    def persistIncomingMessage(peer : PeerId, msg: Msg): Unit
+    def persistIncomingMessage(peer : PeerId, msg: MailboxMsg): Unit
 }

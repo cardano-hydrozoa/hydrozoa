@@ -29,7 +29,7 @@ private class InboxActor(
 
     // N.B.: see InMemoryDbMemoryActor
 
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg]] = mutable.Map.empty
 
     private val headPeers: mutable.Set[PeerId] = mutable.Set.empty
     private val pendingHeartbeats: mutable.Set[PeerId] = mutable.Set.empty

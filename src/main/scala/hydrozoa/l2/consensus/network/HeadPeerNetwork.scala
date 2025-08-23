@@ -14,8 +14,8 @@ import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
+import sttp.tapir.generic.auto.*
 import sttp.tapir.{Schema, SchemaType}
-import sttp.tapir.generic.auto._
 
 // FIXME: revise return types?
 trait HeadPeerNetwork {
@@ -55,13 +55,20 @@ sealed trait Req extends Msg:
 
 sealed trait Ack extends Msg
 
+given msgCodec: JsonValueCodec[Msg] = JsonCodecMaker.make
+given Schema[Msg] = Schema.derived[Msg]
+
+given reqCodec: JsonValueCodec[Req] = JsonCodecMaker.make
+given Schema[Req] = Schema.derived[Req]
+
+given ackCodec: JsonValueCodec[Ack] = JsonCodecMaker.make
+given Schema[Ack] = Schema.derived[Ack]
+
 case class Heartbeat() extends Ack
 
-given JsonValueCodec[Heartbeat] =
-    JsonCodecMaker.make
+given JsonValueCodec[Heartbeat] = JsonCodecMaker.make
 
-given Schema[Heartbeat] =
-    Schema.derived[Heartbeat]
+given Schema[Heartbeat] = Schema.derived[Heartbeat]
 
 /** ------------------------------------------------------------------------------------------
   * ReqVerKey
