@@ -1,12 +1,12 @@
 package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.{Ack, Req}
+import hydrozoa.l2.consensus.network.{Ack, Heartbeat, Req}
 import hydrozoa.node.db.{DBReader, DBWriterActor}
 import ox.channels.ActorRef
 
 import scala.collection.mutable
-import scala.util.{Try, Success, Failure}
+import scala.util.{Failure, Success, Try}
 
 // TODO: wrappers/tags for outbox (and inbox for that matter)
 
@@ -27,7 +27,7 @@ class OutboxActor(
     private val dbReader: DBReader,
     private val dbWriter: ActorRef[DBWriterActor],
     private val transmitter: ActorRef[TransmitterActor]
-):
+) extends Watchdog:
 
     // ---------------------------------------------  Volatile state
     // The common delivery queue
@@ -76,6 +76,8 @@ class OutboxActor(
       */
     def confirmMatchIndex(peer: PeerId, matchIndex: MatchIndex): Unit = {
 
+        log.info(s"Confirming match index from $peer: $matchIndex")
+
         // TODO: highestOwnOutMsgId may be the last element of the queue or the last known msg if from the database(?)
         // TODO: assert(matchIndex < highestOwnOutMsgId)
 
@@ -96,9 +98,14 @@ class OutboxActor(
 
         // Now the map has at least one value, so `minBy` won't throw.
         val lowestIndex: MatchIndex = matchIndices.values.minBy(_.toLong)
-        log.info(s"Cleaning up messages with IDs < $lowestIndex")
-        // Drop the prefix in the queue
-        queue.dropWhileInPlace(msg => msg.id.toLong < lowestIndex.toLong)
+        lowestIndex.toMsgId match {
+            case Some(cleanUpTo) =>
+                // Drop the prefix in the queue
+                log.info(s"Cleaning up messages up to id=$cleanUpTo (including) from the queue.")
+                queue.dropWhileInPlace(msg => msg.id.toLong < lowestIndex.toLong)
+
+            case None => ()
+        }
     }
 
     // ---------------------------------------------  Private API
@@ -119,7 +126,10 @@ class OutboxActor(
 
         // First, we need to read from the database if needed
         queue.headOption match {
-            case None => dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId)
+            case None =>
+                // This prevents from a db trip if `matchIndex` is zero
+                if !matchIndex.isZero then dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId)
+                else MsgBatch.empty
             case Some(queueHead) =>
                 if queueHead.id.toLong > firstMsgId.toLong then {
                     // Reading up to the queue's head or till the end of the batch
@@ -135,11 +145,19 @@ class OutboxActor(
                         val maxLastMsgIdFromQueue = MsgId(
                           firstMsgIdFromQueue.toLong + maxEntriesPerBatch - dbPart.length
                         )
-                        Try(MsgBatch.fromList(dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)).get) match
-                             case Success(b) => b
-                             // FIXME: Better exception type
-                             case Failure(e) => throw RuntimeException("Error constructing message batch: db part and queue part do not obey the required invariants.")
-
+                        Try(
+                          MsgBatch
+                              .fromList(
+                                dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)
+                              )
+                              .get
+                        ) match
+                            case Success(b) => b
+                            // FIXME: Better exception type
+                            case Failure(e) =>
+                                throw RuntimeException(
+                                  "Error constructing message batch: db part and queue part do not obey the required invariants."
+                                )
 
                     } else { dbPart }
                 } else {
@@ -155,4 +173,27 @@ class OutboxActor(
       * @return
       *   possibly empty list of messages
       */
-    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = ???
+    // TODO: use MsgId + Int/Long
+    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch =
+        val n = maxLastMsgId.toLong - firstMessage.toLong
+        queue.headOption match {
+            case None => MsgBatch.empty
+            case Some(head) =>
+                val startOffset = firstMessage.toLong - head.id.toLong
+                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt)
+                // TODO: remove option
+                MsgBatch.fromList(slice.toList).get
+        }
+
+    /** Unconditionally triggers a heartbeat message to be broadcasted to all peers.
+      */
+    override def wakeUp(): Unit =
+        if matchIndices.nonEmpty then
+            val _ = addToOutbox(Heartbeat())
+            // TODO: Initially this map is empty, so we need to wait till the first `matchIndex`
+            //      pops up from a peer or add them proactively.
+            matchIndices.foreach((peer, index) =>
+                val batch = mkBatch(index)
+                assert(batch.nonEmpty, "Batch in wakeUp should contain at least heartbeat message.")
+                transmitter.tell(_.appendEntries(peer, batch))
+            )

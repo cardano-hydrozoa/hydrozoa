@@ -1,9 +1,13 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import com.typesafe.scalalogging.Logger
+
+import scala.collection.mutable
+
 /** Physically sends a batch of messages to a particular peer.
   *
   * Planned implementations:
-  *   - OxChannelTransmitterActor / OxActorTransmitterActor (local)
+  *   - LocalTransmitterActor
   *   - SymmetricWSTransmitterActor (remote)
   */
 trait TransmitterActor:
@@ -32,12 +36,23 @@ trait TransmitterActor:
       */
     def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit
 
+/** Transmits messages locally (for testing) directly using ox actors
+  */
+final class LocalTransmitterActor(myself: PeerId) extends TransmitterActor:
 
-/** 
- * Transmits messages locally (for testing) via ox actors
- * */
-class OxActorTransmitterActor extends TransmitterActor:
-    override def appendEntries(to: PeerId, batch: MsgBatch): Unit = ???
+    private val log = Logger(getClass)
 
-    override def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit = ???
-    
+    val peers: mutable.Map[PeerId, Receiver] = mutable.Map.empty
+
+    override def appendEntries(to: PeerId, batch: MsgBatch): Unit = {
+        log.debug(s"appendEntries to: $to, batch: $batch")
+        peers(to).handleAppendEntries(myself, batch)
+    }
+
+    override def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit =
+        log.debug(s"confirmMatchIndex to: $to, matchIndex: $matchIndex")
+        peers(to).handleConfirmMatchIndex(myself, matchIndex)
+
+    def connect(to: PeerId, receiver: Receiver): Unit = peers.put(to, receiver): Unit
+
+    def disconnect(to: PeerId): Unit = peers.remove(to): Unit

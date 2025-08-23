@@ -4,11 +4,13 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.l2.consensus.network.{Ack, Req}
 import hydrozoa.node.db.{DBReader, DBWriterActor}
-import ox.Ox
-import ox.channels.{ActorRef, BufferCapacity}
+import munit.ScalaCheckSuite
+import ox.channels.{Actor, ActorRef, BufferCapacity}
+import ox.{Ox, sleep, supervised}
 
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
+import scala.concurrent.duration.DurationInt
 
 ///**
 // * Helper function to poll a deliverer actor to determine when it's queue is empty.
@@ -21,7 +23,78 @@ import scala.collection.mutable
 //    } : Unit
 //}
 
-//class MailboxSpec extends ScalaCheckSuite:
+class MailboxSpec extends ScalaCheckSuite:
+
+    test("Heartbeat mini-protocol works, inboxes are the same"):
+
+        def startNode(peerId: PeerId, others: Set[PeerId])(using
+            ox: Ox
+        ): (
+            DBWriterActor & DBReader,
+            LocalReceiver,
+            ActorRef[LocalTransmitterActor],
+            ActorRef[InboxActor]
+        ) =
+            val db = InMemoryDBActor()
+            val dbWriteOnly = OnlyWriteDbActor(db)
+            val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
+            val transmitter: ActorRef[TransmitterActor] =
+                Actor.create(LocalTransmitterActor(peerId))
+            val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
+              timeout = WatchdogTimeoutSeconds(3)
+            )
+            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
+              timeout = WatchdogTimeoutSeconds(10)
+            )
+
+            (
+              db,
+              LocalReceiver(outbox, inbox),
+              transmitter.asInstanceOf[ActorRef[LocalTransmitterActor]],
+              inbox
+            )
+
+        supervised {
+
+            // Start nodes
+            val aliceId = PeerId("Alice")
+            val bobId = PeerId("Bob")
+            val carolId = PeerId("Carol")
+
+            val (dbAlice, receiverAlice, transmitterAlice, inboxAlice) =
+                startNode(aliceId, Set(bobId, carolId))
+            val (dbBob, receiverBob, transmitterBob, inboxBob) =
+                startNode(bobId, Set(aliceId, carolId))
+            val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
+                startNode(carolId, Set(aliceId, bobId))
+
+            // Connect nodes to each other
+            transmitterAlice.tell(_.connect(bobId, receiverBob))
+            transmitterAlice.tell(_.connect(carolId, receiverCarol))
+
+            transmitterBob.tell(_.connect(aliceId, receiverAlice))
+            transmitterBob.tell(_.connect(carolId, receiverCarol))
+
+            transmitterCarol.tell(_.connect(aliceId, receiverAlice))
+            transmitterCarol.tell(_.connect(bobId, receiverBob))
+
+            inboxAlice.tell(_.start())
+            inboxBob.tell(_.start())
+            inboxCarol.tell(_.start())
+
+            sleep(10.seconds)
+
+            assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
+
+            assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
+            assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
+            assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
+
+            // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
+        }
+
 //    test("Mailbox initialization (clean slate)"):
 //        supervised {
 //            val db: ActorRef[DBWriterActor] = Actor.create(InMemoryDBWriterActor())
@@ -83,7 +156,23 @@ import scala.collection.mutable
 //            assertEquals(deliverer.ask(_.currentMatchIndex), MatchIndex(outMsgId3.toLong))
 //
 
-class InMemoryDBWriterActor extends DBWriterActor, DBReader:
+/** Use it for tests that MUST never READ from the database (though can write).
+  */
+class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, DBReader {
+    lazy val noRead = throw RuntimeException("This test should not READ from the database!")
+
+    override def persistOutgoingMessage(msg: Req | Ack): MsgId =
+        inMemoryDBActor.persistOutgoingMessage(msg)
+
+    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = noRead
+
+    override def persistIncomingMessage(peerId: PeerId, msg: Msg): Unit =
+        inMemoryDBActor.persistIncomingMessage(peerId, msg)
+
+    override def readIncomingMessages(peer: PeerId): Seq[Msg] = noRead
+}
+
+class InMemoryDBActor extends DBWriterActor, DBReader:
 
     private val log = Logger(getClass)
 
@@ -123,6 +212,9 @@ class InMemoryDBWriterActor extends DBWriterActor, DBReader:
         }: Unit
     }
 
+    override def readIncomingMessages(peer: PeerId): Seq[Msg] =
+        inboxes.get(peer).map(_.toSeq).getOrElse(Seq.empty)
+
 /** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It
   * maintains a counter and drops all incoming/outgoing messages that arrive modulo `n` (default 5,
   * i.e. ignoring every fifth message). NOTE: This will result in log.warn messages with failed RPC
@@ -139,7 +231,7 @@ class DropModNInboxFixture(
 
     // N.B.: InboxActor.create should create an ActorWithTimeout
     val inboxActor: ActorRef[InboxActor] =
-        ActorWatchdog.create(InboxActor(dbWriter, transmitterActor))(using
+        ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???))(using
           ox,
           sc,
           WatchdogTimeoutSeconds.apply(5)

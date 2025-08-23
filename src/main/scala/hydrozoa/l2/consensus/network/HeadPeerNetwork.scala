@@ -55,6 +55,14 @@ sealed trait Req extends Msg:
 
 sealed trait Ack extends Msg
 
+case class Heartbeat() extends Ack
+
+given JsonValueCodec[Heartbeat] =
+    JsonCodecMaker.make
+
+given Schema[Heartbeat] =
+    Schema.derived[Heartbeat]
+
 /** ------------------------------------------------------------------------------------------
   * ReqVerKey
   * ------------------------------------------------------------------------------------------

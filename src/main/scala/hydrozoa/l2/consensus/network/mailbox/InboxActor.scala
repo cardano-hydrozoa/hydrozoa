@@ -1,5 +1,7 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import com.typesafe.scalalogging.Logger
+import hydrozoa.l2.consensus.network.Heartbeat
 import hydrozoa.l2.consensus.network.mailbox.MsgBatch.MsgBatch
 import hydrozoa.node.db.DBWriterActor
 import ox.*
@@ -14,22 +16,38 @@ import scala.concurrent.duration.DurationInt
   * [[OutboxActor]] to make them send a new batch of messages, either in response to successfully
   * processing previously received messages or according to a timeout.
   *
-  * NOTE: You should NOT call Actor.create on this directly! Use the [[create]] method from the
-  * companion object
   *   - Comment (Peter, 2025-08-22): Unsure if this should be private?
   */
 private class InboxActor(
     val dbWriter: ActorRef[DBWriterActor],
-    val transmitter: ActorRef[TransmitterActor]
-)  extends Watchdog :
-    val matchIndex: MatchIndex = ???
+    val transmitter: ActorRef[TransmitterActor],
+    val ownPeerId: PeerId,
+    val others: Set[PeerId]
+) extends Watchdog:
+
+    private val log = Logger(getClass)
 
     // N.B.: see InMemoryDbMemoryActor
-    @unused
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = ???
 
-    // TODO: in the constructor we need to set up a timer that will check [[breakSilenceTimeout]]
-    //   for _every_ peer separately.
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg]] = mutable.Map.empty
+
+    private val headPeers: mutable.Set[PeerId] = mutable.Set.empty
+    private val pendingHeartbeats: mutable.Set[PeerId] = mutable.Set.empty
+
+    /** It's more convenient to have a separate method so we can make connections first and then
+      * start.
+      *
+      * The inbox starts with a `pendingHeartbeats` set that includes all peer IDs.
+      */
+    def start(): Unit =
+        // Initialization code
+        others.foreach(id =>
+            inboxes.put(id, mutable.Buffer.empty): Unit
+            headPeers.addAll(others)
+
+            pendingHeartbeats.addAll(others)
+        )
+        wakeUp()
 
     /** In the case of not seeing any incoming messages from a peer, the [[InboxActor]] should
       * actively confirm its [[matchIndex]] to trigger the next batch. This value determines
@@ -44,45 +62,41 @@ private class InboxActor(
       */
     def appendEntries(from: PeerId, batch: MsgBatch): Unit =
 
+        log.debug(s"Got a batch from $from: $batch");
+
         // Persist incoming messages to DB
         batch.foreach(inMsg => dbWriter.tell(_.persistIncomingMessage(from, inMsg)): Unit)
 
-//        // Persist messages in memory of Inbox Actor
-//        batch.foreach(msg => this.inbox.append(msg))
+        // Persist messages in memory of Inbox Actor
+        batch.foreach(msg => this.inboxes(from).append(msg))
+
+        // - When an inbox receives a heartbeat from a peer, it marks it
+        // by removing that peer ID from `pendingHeartbeats`.
+        batch.find(_ == Heartbeat()).foreach(_ => pendingHeartbeats.remove(from))
 
         // Calculate updated match index
         val newMatchIndex: MatchIndex =
             batch.newMatchIndex match {
                 // Received empty list of messages, return the current match index.
-                case None        => this.matchIndex
+                case None => inboxes.get(from).map(_.last.id.toMatchIndex).getOrElse(MatchIndex(0))
                 case Some(index) => index
             }
 
         transmitter.tell(_.confirmMatchIndex(from, newMatchIndex))
 
-    /** Get the current match index. Equivalent to appendEntries(List.empty)
-      *
-      * TODO: remove?
+    /** When an inbox receives a check-heartbeat (a watchdog signal, internally):
+      *   - For each peer ID in pendingHeartbeats, it sends out its current match index with that
+      *     peer to prompt the peer to send the next batch.
+      *   - Then it resets pendingHeartbeats to include all peer IDs for the next watchdog cycle.
       */
-    final def getMatchIndex(from: PeerId): Unit = appendEntries(from, MsgBatch.empty)
+    override def wakeUp(): Unit = {
+        // TODO: separate types for receiver and sender
+        pendingHeartbeats.foreach(peer =>
+            // Should always exist
+            val matchIndex =
+                inboxes(peer).lastOption.map(_.id.toMatchIndex).getOrElse(MatchIndex(0))
+            transmitter.tell(_.confirmMatchIndex(peer, matchIndex))
+        )
+        pendingHeartbeats.addAll(headPeers)
+    }
 
-    /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions are not handled.
-     */
-    override def wakeUp(): Unit = ???
-
-///**
-// *
-// */
-//object ActorWatchdog:
-//    /** Should spawn an actor that shoots off heartbeats with the match index at a periodic interval when no messages
-//     * have been received.
-//     *
-//     * @param dbWriter
-//     * @param transmitter
-//     * @return
-//     */
-//    def create(peerId: PeerId, dbWriter: ActorRef[DBWriterActor], transmitter: ActorRef[TransmitterActor]): ActorRef[ActorWithWatchdog] =
-//        ActorWithTimeout[ActorWithWatchdog, Unit](timeout = 5.second,
-//            action = (inbox => inbox.transmitter.tell(_.confirmMatchIndex(peerId, inbox.matchIndex))))
-//            .create(ActorWithWatchdog(peerId, dbWriter, transmitter))
-//

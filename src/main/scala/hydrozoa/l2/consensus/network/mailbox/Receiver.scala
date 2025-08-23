@@ -13,3 +13,6 @@ abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef
 
     final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex): Unit =
         outboxActor.tell(_.confirmMatchIndex(from, matchIndex))
+
+final class LocalReceiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor])
+    extends Receiver(outboxActor, inboxActor)
