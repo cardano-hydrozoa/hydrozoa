@@ -1,6 +1,6 @@
 package hydrozoa.node.db
 
-import hydrozoa.l2.consensus.network.mailbox.{MailboxMsg, MsgBatch, MsgId, PeerId}
+import hydrozoa.l2.consensus.network.mailbox.{MailboxMsg, Batch, MsgId, PeerId}
 
 /** Reading from the database. Can be used from many threads simultaneously, hence is not required
   * to be an actor, every actor can create and use an instance locally.
@@ -13,7 +13,7 @@ trait DBReader {
       * @return
       *   a list of messages and their IDs, in order of increasing message ID
       */
-    def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch
+    def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): Batch
 
     def readIncomingMessages(peer: PeerId): Seq[MailboxMsg]
 

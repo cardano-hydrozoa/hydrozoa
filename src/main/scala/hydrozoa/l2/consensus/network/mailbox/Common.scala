@@ -28,30 +28,30 @@ given msgCodec: JsonValueCodec[MailboxMsg] =
 given msgSchema: Schema[MailboxMsg] =
     Schema.binary[MailboxMsg]
 
-object MsgBatch:
+object Batch:
     /** Opaque newtype around `List[Msg]`. Invariants:
       *   - The messages in the batch must be in sorted order of MsgId, strictly sequential (no
       *     gaps).
       */
-    opaque type MsgBatch = List[MailboxMsg]
+    opaque type Batch = List[MailboxMsg]
 
-    given msgBatchCodec: JsonValueCodec[MsgBatch] =
+    given msgBatchCodec: JsonValueCodec[Batch] =
         JsonCodecMaker.make
 
-    given msgBatchSchema: Schema[MsgBatch] =
-        Schema.binary[MsgBatch]
+    given msgBatchSchema: Schema[Batch] =
+        Schema.binary[Batch]
 
-    given Conversion[MsgBatch, List[MailboxMsg]] = identity
+    given Conversion[Batch, List[MailboxMsg]] = identity
 
-    def empty: MsgBatch = List.empty
+    def empty: Batch = List.empty
 
-    extension (batch: MsgBatch)
+    extension (batch: Batch)
         /** Returns none on an empty batch, otherwise returns the highest MsgId of the batch
           * @return
           */
         def newMatchIndex: Option[MatchIndex] = {
             // N.B.: we only know this works if we keep the invariant!
-            batch.lastOption.map(_.id.toLong)
+            batch.lastOption.map(last => MatchIndex(last.id.toLong))
         }
 
     /** Create a batch from a list of messages. Will return None if the list passed contains gaps or
@@ -59,11 +59,11 @@ object MsgBatch:
       * @param list
       * @return
       */
-    def fromList(list: List[MailboxMsg]): Option[MsgBatch] =
+    def fromList(list: List[MailboxMsg]): Option[Batch] =
         // TODO add checks
         Some(list)
 
-type MsgBatch = MsgBatch.MsgBatch
+type Batch = Batch.Batch
 
 object MsgId:
     // Surrogate primary key for outgoing messages, starts with 1.
@@ -104,3 +104,20 @@ object MatchIndex:
         def toLong: Long = self
         def isZero: Boolean = self == 0
     }
+
+// TODO: opaque types?
+type BatchMsg = (PeerId, Batch)
+
+given batchMsgCodec: JsonValueCodec[BatchMsg] =
+    JsonCodecMaker.make
+
+given batchMsgSchema: Schema[BatchMsg] =
+    Schema.binary[BatchMsg]
+
+type MatchIndexMsg = (PeerId, MatchIndex)
+
+given matchIndexMasgCodec: JsonValueCodec[MatchIndexMsg] =
+    JsonCodecMaker.make
+
+given matchIndexMsgSchema: Schema[MatchIndexMsg] =
+    Schema.binary[MatchIndexMsg]

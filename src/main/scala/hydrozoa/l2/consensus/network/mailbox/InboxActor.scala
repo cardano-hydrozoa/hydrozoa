@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.Heartbeat
-import hydrozoa.l2.consensus.network.mailbox.MsgBatch.MsgBatch
+import hydrozoa.l2.consensus.network.mailbox.Batch.Batch
 import hydrozoa.node.db.DBWriterActor
 import ox.*
 import ox.channels.ActorRef
@@ -44,7 +44,6 @@ private class InboxActor(
         others.foreach(id =>
             inboxes.put(id, mutable.Buffer.empty): Unit
             headPeers.addAll(others)
-
             pendingHeartbeats.addAll(others)
         )
         wakeUp()
@@ -60,7 +59,7 @@ private class InboxActor(
       * @param batch
       *   the batch, may be empty
       */
-    def appendEntries(from: PeerId, batch: MsgBatch): Unit =
+    def appendEntries(from: PeerId, batch: Batch): Unit =
 
         log.debug(s"Got a batch from $from: $batch");
 
@@ -90,6 +89,7 @@ private class InboxActor(
       *   - Then it resets pendingHeartbeats to include all peer IDs for the next watchdog cycle.
       */
     override def wakeUp(): Unit = {
+        log.info("inbox wakeUp")
         // TODO: separate types for receiver and sender
         pendingHeartbeats.foreach(peer =>
             // Should always exist

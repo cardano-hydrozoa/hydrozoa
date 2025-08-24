@@ -3,7 +3,6 @@ package hydrozoa.l2.consensus.network.mailbox
 import com.github.plokhotnyuk.jsoniter_scala.core.{readFromString, writeToString}
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
-import hydrozoa.l2.consensus.network.mailbox.MsgBatch.msgBatchSchema
 import ox.*
 import ox.channels.*
 import ox.flow.Flow
@@ -11,7 +10,6 @@ import sttp.capabilities.WebSockets
 import sttp.shared.Identity
 import sttp.tapir.*
 import sttp.tapir.server.ServerEndpoint.Full
-import sttp.tapir.server.netty.sync.OxStreams.Pipe
 import sttp.tapir.server.netty.sync.{NettySyncServer, OxStreams}
 import sttp.ws.WebSocketFrame
 
@@ -22,11 +20,11 @@ import scala.concurrent.duration.DurationInt
   */
 abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor]):
 
-    final def handleAppendEntries(from: PeerId, batch: MsgBatch): Unit =
-        inboxActor.tell(_.appendEntries(from, batch))
+    final def handleAppendEntries(batchMsg: BatchMsg): Unit =
+        inboxActor.tell(_.appendEntries(batchMsg._1, batchMsg._2))
 
-    final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex): Unit =
-        outboxActor.tell(_.confirmMatchIndex(from, matchIndex))
+    final def handleConfirmMatchIndex(matchIndexMsg: MatchIndexMsg): Unit =
+        outboxActor.tell(_.confirmMatchIndex(matchIndexMsg._1, matchIndexMsg._2))
 
 /** A short-circuit receiver.
   *
@@ -36,7 +34,57 @@ abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef
 final class LocalReceiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor])
     extends Receiver(outboxActor, inboxActor)
 
-/** This reveiver starts Netty server that serves `ws://0.0.0.0:<port>/ws` endpoint.
+// TODO: move away?
+given batchMsgWSFCodec: Codec[WebSocketFrame, BatchMsg, CodecFormat.Json] =
+    new Codec[WebSocketFrame, BatchMsg, CodecFormat.Json] {
+
+        override def decode(wsf: WebSocketFrame): DecodeResult[BatchMsg] =
+            wsf match
+                case text: WebSocketFrame.Text =>
+                    val batch: BatchMsg = readFromString(text.payload)
+                    DecodeResult.Value.apply(batch)
+                case _ =>
+                    DecodeResult.Error(
+                      "<string representation is not available>",
+                      new RuntimeException("Unsupported web socket frame type")
+                    )
+
+        def encode(msgBatch: BatchMsg): WebSocketFrame =
+            writeToString(msgBatch) |> WebSocketFrame.text
+
+        override def rawDecode(l: WebSocketFrame): DecodeResult[BatchMsg] = ???
+
+        override def schema: Schema[BatchMsg] = batchMsgSchema
+
+        override def format: CodecFormat.Json = CodecFormat.Json()
+    }
+
+// TODO: move away?
+given matchIndexMsgWSFCodec: Codec[WebSocketFrame, MatchIndexMsg, CodecFormat.Json] =
+    new Codec[WebSocketFrame, MatchIndexMsg, CodecFormat.Json] {
+
+        override def decode(wsf: WebSocketFrame): DecodeResult[MatchIndexMsg] =
+            wsf match
+                case text: WebSocketFrame.Text =>
+                    val matchIndexMsg: MatchIndexMsg = readFromString(text.payload)
+                    DecodeResult.Value.apply(matchIndexMsg)
+                case _ =>
+                    DecodeResult.Error(
+                      "<string representation is not available>",
+                      new RuntimeException("Unsupported web socket frame type")
+                    )
+
+        def encode(msgBatch: MatchIndexMsg): WebSocketFrame =
+            writeToString(msgBatch) |> WebSocketFrame.text
+
+        override def rawDecode(l: WebSocketFrame): DecodeResult[MatchIndexMsg] = ???
+
+        override def schema: Schema[MatchIndexMsg] = matchIndexMsgSchema
+
+        override def format: CodecFormat.Json = CodecFormat.Json()
+    }
+
+/** This receiver starts Netty server that serves `ws://0.0.0.0:<port>/ws` endpoint.
   *
   * @param outboxActor
   * @param inboxActor
@@ -52,32 +100,41 @@ class WSReceiver(
 
     private val log = Logger(getClass)
 
-    given msgBatchWSFCodec: Codec[WebSocketFrame, MsgBatch, CodecFormat.Json] =
-        new Codec[WebSocketFrame, MsgBatch, CodecFormat.Json] {
+    // The WebSocket server endpoint type and definition
+    type FullWs = Full[
+      Unit, // _SECURITY_INPUT
+      Unit, // _PRINCIPAL
+      Unit, // _INPUT
+      Unit, // _ERROR_OUTPUT
+      Flow[BatchMsg] => Flow[Void], // _OUTPUT
+      OxStreams & WebSockets, // R
+      Identity // F
+    ]
 
-            override def decode(wsf: WebSocketFrame): DecodeResult[MsgBatch] =
-                wsf match
-                    case text: WebSocketFrame.Text =>
-                        val batch: MsgBatch = readFromString(text.payload)
-                        DecodeResult.Value.apply(batch)
-                    case _ =>
-                        DecodeResult.Error(
-                          "<string representation is not available>",
-                          new RuntimeException("Unsupported web socket frame type")
-                        )
+    val wsInboxEndpoint: FullWs =
+        endpoint.get
+            .in("ws")
+            .out(
+              // TODO: what should we use in lieu of MsgBatch for responses? We don't want responses at all...
+              webSocketBody[BatchMsg, CodecFormat.Json, Void, CodecFormat.Json](OxStreams)
+                  .concatenateFragmentedFrames(false)
+                  .ignorePong(true)
+                  .autoPongOnPing(true)
+                  .decodeCloseRequests(false)
+                  .decodeCloseResponses(false)
+                  .autoPing(Some((10.seconds, WebSocketFrame.Ping("ping-content".getBytes))))
+            )
+            .handleSuccess(_ => {
+                log.info("new ws channel established")
+                in =>
+                    in.tap(batchMsg => inboxActor.tell(_.appendEntries(batchMsg._1, batchMsg._2)))
+                        .drain()
+            })
 
-            def encode(msgBatch: MsgBatch): WebSocketFrame =
-                writeToString(msgBatch) |> WebSocketFrame.text
-
-            override def rawDecode(l: WebSocketFrame): DecodeResult[MsgBatch] = ???
-
-            override def schema: Schema[MsgBatch] = msgBatchSchema
-
-            override def format: CodecFormat.Json = CodecFormat.Json()
-        }
-
+    // TODO: move away?
     given voidSchema: Schema[Void] = Schema.binary[Void]
 
+    // TODO: move away?
     given voidWSFCodec: Codec[WebSocketFrame, Void, CodecFormat.Json] =
         new Codec[WebSocketFrame, Void, CodecFormat.Json] {
 
@@ -92,45 +149,11 @@ class WSReceiver(
             override def format: CodecFormat.Json = ???
         }
 
-    // The WebSocket server endpoint type and definition
-    type FullWs = Full[
-      Unit, // _SECURITY_INPUT
-      Unit, // _PRINCIPAL
-      Unit, // _INPUT
-      Unit, // _ERROR_OUTPUT
-      Flow[MsgBatch] => Flow[Void], // _OUTPUT
-      OxStreams & WebSockets, // R
-      Identity // F
-    ]
-
-    def wsInboxEndpoint(): FullWs =
-        endpoint.get
-            .in("ws")
-            .out(
-              // TODO: what should we use in lieu of MsgBatch for responses? We don't want responses at all...
-              webSocketBody[MsgBatch, CodecFormat.Json, Void, CodecFormat.Json](OxStreams)
-                  .concatenateFragmentedFrames(false)
-                  .ignorePong(true)
-                  .autoPongOnPing(true)
-                  .decodeCloseRequests(false)
-                  .decodeCloseResponses(false)
-                  .autoPing(Some((10.seconds, WebSocketFrame.Ping("ping-content".getBytes))))
-            )
-            .handleSuccess(_ => mkPipe())
-
-    // This is called for every new incoming connection
-    def mkPipe(): Pipe[MsgBatch, Void] = {
-        log.info("mkPipe")
-        in =>
-            in.tap(batch => inboxActor.tell(_.appendEntries(PeerId("Alice"), batch)))
-                .drain()
-    }
-
     // Run the server
     val _ = useInScope(
       NettySyncServer()
           .host("0.0.0.0")
           .port(port)
-          .addEndpoint(wsInboxEndpoint())
+          .addEndpoint(wsInboxEndpoint)
           .start()
     )(_.stop())

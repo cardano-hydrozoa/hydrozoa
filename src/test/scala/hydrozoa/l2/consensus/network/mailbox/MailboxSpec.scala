@@ -7,6 +7,7 @@ import hydrozoa.node.db.{DBReader, DBWriterActor}
 import munit.ScalaCheckSuite
 import ox.channels.{Actor, ActorRef, BufferCapacity}
 import ox.{Ox, sleep, supervised}
+import sttp.client4.UriContext
 
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
@@ -25,7 +26,7 @@ import scala.concurrent.duration.DurationInt
 
 class MailboxSpec extends ScalaCheckSuite:
 
-    test("Heartbeat mini-protocol works, inboxes are the same"):
+    test("Heartbeat mini-protocol works with local transport"):
 
         def startNode(peerId: PeerId, others: Set[PeerId])(using
             ox: Ox
@@ -95,33 +96,33 @@ class MailboxSpec extends ScalaCheckSuite:
             // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
         }
 
-    test("WS server starts"):
+    test("Heartbeat mini-protocol works using WS transport"):
 
         def startNode(peerId: PeerId, others: Set[PeerId], port: Int)(using
-                                                           ox: Ox
+            ox: Ox
         ): (
             DBWriterActor & DBReader,
-                WSReceiver,
-                ActorRef[LocalTransmitterActor],
-                ActorRef[InboxActor]
-            ) =
+            WSReceiver,
+            ActorRef[WSTransmitterActor],
+            ActorRef[InboxActor]
+        ) =
             val db = InMemoryDBActor()
             val dbWriteOnly = OnlyWriteDbActor(db)
             val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
             val transmitter: ActorRef[TransmitterActor] =
-                Actor.create(LocalTransmitterActor(peerId))
+                Actor.create(WSTransmitterActor())
             val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
-                timeout = WatchdogTimeoutSeconds(3)
+              timeout = WatchdogTimeoutSeconds(3)
             )
             val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
-                timeout = WatchdogTimeoutSeconds(10)
+              timeout = WatchdogTimeoutSeconds(10)
             )
 
             (
-                db,
-                WSReceiver(outbox, inbox, port),
-                transmitter.asInstanceOf[ActorRef[LocalTransmitterActor]],
-                inbox
+              db,
+              WSReceiver(outbox, inbox, port),
+              transmitter.asInstanceOf[ActorRef[WSTransmitterActor]],
+              inbox
             )
 
         supervised {
@@ -138,34 +139,38 @@ class MailboxSpec extends ScalaCheckSuite:
             val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
                 startNode(carolId, Set(aliceId, bobId), 4939)
 
-//            // Connect nodes to each other
-//            transmitterAlice.tell(_.connect(bobId, receiverBob))
-//            transmitterAlice.tell(_.connect(carolId, receiverCarol))
-//
-//            transmitterBob.tell(_.connect(aliceId, receiverAlice))
-//            transmitterBob.tell(_.connect(carolId, receiverCarol))
-//
-//            transmitterCarol.tell(_.connect(aliceId, receiverAlice))
-//            transmitterCarol.tell(_.connect(bobId, receiverBob))
-//
-//            inboxAlice.tell(_.start())
-//            inboxBob.tell(_.start())
-//            inboxCarol.tell(_.start())
+            val uriAlice = uri"ws://localhost:4937/ws"
+            val uriBob = uri"ws://localhost:4938/ws"
+            val uriCarol = uri"ws://localhost:4939/ws"
+
+            // Connect nodes to each other
+            transmitterAlice.tell(_.connect(bobId, uriBob))
+            transmitterAlice.tell(_.connect(carolId, uriCarol))
+
+            transmitterBob.tell(_.connect(aliceId, uriAlice))
+            transmitterBob.tell(_.connect(carolId, uriCarol))
+
+            transmitterCarol.tell(_.connect(aliceId, uriAlice))
+            transmitterCarol.tell(_.connect(bobId, uriBob))
+
+            sleep(2.seconds)
+
+            inboxAlice.tell(_.start())
+            inboxBob.tell(_.start())
+            inboxCarol.tell(_.start())
 
             sleep(600.seconds)
 
-//            assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
-//            assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
-//            assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
-//
-//            assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
-//            assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
-//            assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
+            assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
+
+            assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
+            assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
+            assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
 
             // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
         }
-
-
 
 //    test("Mailbox initialization (clean slate)"):
 //        supervised {
@@ -236,7 +241,7 @@ class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, 
     override def persistOutgoingMessage(msg: Req | Ack): MsgId =
         inMemoryDBActor.persistOutgoingMessage(msg)
 
-    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = noRead
+    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): Batch = noRead
 
     override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg): Unit =
         inMemoryDBActor.persistIncomingMessage(peerId, msg)
@@ -258,7 +263,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
         outMsgId
 
-    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch = ???
+    override def readOutgoingMessages(firstMessage: MsgId, maxLastMsgId: MsgId): Batch = ???
 //    override def getOutgoingMessages(startWithIncluding: MsgId): List[Msg] = {
 //        val msgIdLong = startWithIncluding.toLong
 //        val ret = outbox
@@ -313,7 +318,7 @@ class DropModNInboxFixture(
 
 //    override def id: String = peerId
 
-    def appendEntries(from: PeerId, batch: MsgBatch): Unit = {
+    def appendEntries(from: PeerId, batch: Batch): Unit = {
         if counter.incrementAndGet() % n == 0
         then log.info(s"appendEntries: ignoring $batch")
         else

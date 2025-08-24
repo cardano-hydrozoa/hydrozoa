@@ -117,7 +117,7 @@ class OutboxActor(
       * @return
       *   possibly empty batch
       */
-    private def mkBatch(matchIndex: MatchIndex): MsgBatch =
+    private def mkBatch(matchIndex: MatchIndex): Batch =
 
         // TODO: if matchIndex == highestOwnOutMsgId (queue.lastOption) return List.empty
 
@@ -129,7 +129,7 @@ class OutboxActor(
             case None =>
                 // This prevents from a db trip if `matchIndex` is zero
                 if !matchIndex.isZero then dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId)
-                else MsgBatch.empty
+                else Batch.empty
             case Some(queueHead) =>
                 if queueHead.id.toLong > firstMsgId.toLong then {
                     // Reading up to the queue's head or till the end of the batch
@@ -146,7 +146,7 @@ class OutboxActor(
                           firstMsgIdFromQueue.toLong + maxEntriesPerBatch - dbPart.length
                         )
                         Try(
-                          MsgBatch
+                          Batch
                               .fromList(
                                 dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)
                               )
@@ -174,15 +174,15 @@ class OutboxActor(
       *   possibly empty list of messages
       */
     // TODO: use MsgId + Int/Long
-    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): MsgBatch =
+    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): Batch =
         val n = maxLastMsgId.toLong - firstMessage.toLong
         queue.headOption match {
-            case None => MsgBatch.empty
+            case None => Batch.empty
             case Some(head) =>
                 val startOffset = firstMessage.toLong - head.id.toLong
                 val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt)
                 // TODO: remove option
-                MsgBatch.fromList(slice.toList).get
+                Batch.fromList(slice.toList).get
         }
 
     /** Unconditionally triggers a heartbeat message to be broadcasted to all peers.
