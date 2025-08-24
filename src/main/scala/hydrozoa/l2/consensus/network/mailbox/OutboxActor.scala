@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.DatabaseReadError
+import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.{DatabaseReadError, PeerNotFoundInMatchIndexMap}
 import hydrozoa.l2.consensus.network.{Ack, Heartbeat, Req}
 import hydrozoa.node.db.*
 import ox.channels.ActorRef
@@ -42,6 +42,11 @@ class OutboxActor(
     private val queue: mutable.Buffer[Msg[Outbox]] = mutable.Buffer.empty
 
     private val matchIndices: mutable.Map[PeerId, MatchIndex[Outbox]] = mutable.Map.empty
+    /** Return the match index for a given peer */
+    def matchIndex(peer : PeerId): Either[OutboxActorError, MatchIndex[Outbox]] = matchIndices.get(peer) match {
+      case None => Left(PeerNotFoundInMatchIndexMap)
+      case Some(index) => Right(index)  
+    }
 
     // TODO: When a peer is caught-up, add him to this set.
     //  When we receive a new outgoing message, we'll broadcast it to all peers in the set and then empty it.
@@ -237,4 +242,8 @@ enum OutboxActorError extends Throwable:
     case QueueMalformed
     /** Returned when the wakeUp batch is empty (should contain at least a heartbeat message) */
     case WakeupBatchEmpty
+    /** Returned when the peer's is not found in the match index map for the outbox. Note that this is different from 
+     * a match index of 0, which indicates that the outbox is _aware of the peer's existence_, but has not yet established
+     * a match index. */
+    case PeerNotFoundInMatchIndexMap
 

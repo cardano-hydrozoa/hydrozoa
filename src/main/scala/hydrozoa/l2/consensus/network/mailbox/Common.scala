@@ -101,8 +101,16 @@ object MatchIndex:
 
 
 extension [T](actor: ActorRef[T])
+    // Turn a `tell` that returns an Either into a throwing tell
     def tellThrow[A](f: T => Either[Throwable, A]): Unit =
         actor.tell(t => f(t) match {
             case Left(e) => throw RuntimeException(e)
             case Right(_) => ()
         })
+
+    // Turn an `ask` that returns an Either into a throwing ask
+    def askThrow[A](f: T => Either[Throwable, A]): A =
+      actor.ask(t => f(t) match {
+        case Left(e) => throw RuntimeException(e)
+        case Right(res) => res
+      })
