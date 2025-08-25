@@ -16,7 +16,7 @@ trait DBReader {
     def readOutgoingMessages(firstMessage: MsgId[Outbox], maxLastMsgId: MsgId[Outbox]): Either[DbReadOutgoingError, MsgBatch[Outbox]]
 
     // Why Seq[Msg] and not MsgBatch?
-    def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]]
+    def readIncomingMessages(peer: PeerId): Seq[MailboxMsg[Inbox]]
 
 }
 

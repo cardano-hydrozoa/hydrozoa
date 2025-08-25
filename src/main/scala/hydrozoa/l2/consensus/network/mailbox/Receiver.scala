@@ -14,7 +14,7 @@ abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef
 
     /** An incoming request from a peer, indicating the highest message THEY have processed */
     final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex[Outbox]): Unit =
-        outboxActor.tellDiscard(_.confirmMatchIndex(from, matchIndex))
+        outboxActor.tell(_.confirmMatchIndex(from, matchIndex) : Unit)
 
 final class LocalReceiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor])
     extends Receiver(outboxActor, inboxActor)

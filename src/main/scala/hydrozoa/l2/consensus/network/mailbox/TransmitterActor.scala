@@ -50,7 +50,7 @@ final class LocalTransmitterActor(myself: PeerId) extends TransmitterActor:
     override def appendEntries(to: PeerId, batch: MsgBatch[Outbox]): Either[LocalTransmitterError, Unit] = {
 
         // The batch we send is OUR outbox, but must be received at the PEERS inbox
-        val inBatch = MsgBatch.fromList[Inbox](batch.toList.map(msg => Msg[Inbox](MsgId[Inbox](msg.id.toLong), msg.content))).get
+        val inBatch = MsgBatch.fromList[Inbox](batch.toList.map(msg => MailboxMsg[Inbox](MsgId[Inbox](msg.id.toLong), msg.content))).get
         peers.get(to) match {
             case None => {
                 log.error(s"transmission failed: appendEntries(${to}, ${batch})")

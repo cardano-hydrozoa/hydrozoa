@@ -166,7 +166,7 @@ enum AnyMsg:
         case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case _                               => None
 
-    def asMsg: Msg = this match
+    def asMsg: ProtocolMsg = this match
         case ReqVerKeyMsg(content, _)      => content
         case AckVerKeyMsg(content, _)      => content
         case ReqInitMsg(content, _)        => content

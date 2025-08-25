@@ -1,9 +1,12 @@
 package hydrozoa.l2.consensus.network.mailbox
 
-import hydrozoa.l2.consensus.network.{Ack, Req}
+import hydrozoa.l2.consensus.network.ProtocolMsg
 import ox.channels.ActorRef
 
-import scala.util.Try
+// Actor message: What Ox does with _.tell, _.ask.
+// Protocol Message: Broadcast messages from miniprotocol actors to their counterparts at other peers
+// Mailbox Messages: messages sent from an outbox to inbox or vice versa
+// Client messages: when a peer communicates with a node over HTTP
 
 // TODO: find a better place?
 opaque type PeerId = String
@@ -27,16 +30,16 @@ object Heartbeat:
 
 /** Requests or acknowledgements tagged with a sequence ID
   */
-case class Msg[M <: Mailbox](id: MsgId[M], content: Req | Ack)
+case class MailboxMsg[M <: Mailbox](id: MsgId[M], content: ProtocolMsg)
 
 object MsgBatch:
     /** Opaque newtype around `List[Msg]`. Invariants:
       *   - The messages in the batch must be in sorted order of MsgId, strictly sequential (no
       *     gaps).
       */
-    opaque type MsgBatch[M <: Mailbox] = List[Msg[M]]
+    opaque type MsgBatch[M <: Mailbox] = List[MailboxMsg[M]]
 
-    given [M <: Mailbox]: Conversion[MsgBatch[M], List[Msg[M]]] = identity
+    given [M <: Mailbox]: Conversion[MsgBatch[M], List[MailboxMsg[M]]] = identity
 
     def empty[M <: Mailbox]: MsgBatch[M] = List.empty
 
@@ -54,7 +57,7 @@ object MsgBatch:
       * @param list
       * @return
       */
-    def fromList[M <: Mailbox](list: List[Msg[M]]): Option[MsgBatch[M]] =
+    def fromList[M <: Mailbox](list: List[MailboxMsg[M]]): Option[MsgBatch[M]] =
         // TODO add checks
         Some(list)
 
@@ -108,19 +111,7 @@ object MatchIndex:
         def isZero: Boolean = self == 0
     }
 
-
 extension [T](actor: ActorRef[T])
-    /** Ignore exceptions from a tell */
-    def tellSwallow(f : T => Unit) : Unit = {
-      val _ = Try(actor.tell(f))
-      ()
-      }
-
-    /** Cast an Either[Throwable, A] to unit. This method primarily exists so that we can `find usages` and understand
-     * where we are discarding Either-based errors */
-    def tellDiscard[A](f: T => Either[Throwable, A]) : Unit = 
-       actor.tell(f(_) : Unit)
-    
     /** Turn an `ask` that returns an Either into a throwing ask */
     def askThrow[A](f: T => Either[Throwable, A]): A =
       actor.ask(t => f(t) match {

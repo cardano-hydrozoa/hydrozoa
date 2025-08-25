@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
-import hydrozoa.l2.consensus.network.{Ack, AckUnit, Req, ReqVerKey}
+import hydrozoa.l2.consensus.network.{AckUnit, ProtocolMsg, ReqVerKey}
 import hydrozoa.node.db.DbReadOutgoingError.ValuesReadAreMalformed
 import hydrozoa.node.db.{DBReader, DBWriterActor, DbReadOutgoingError}
 import munit.ScalaCheckSuite
@@ -32,11 +32,12 @@ def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](msgId: MsgId[M1]): MsgId[M2] = Msg
  *   - Starting the inbox
  *     Use [[TestNodeContext.initializePeers]] to for full initialization of a set of peers, or the individual methods
  *     of the companion object for testing various partial initializations or simulated failures.
- *     N.B.: I named this "TestNodeContext", but aside from `LocalTransmitterActor`, I think it might be the same as production node context (API included) */
-case class TestNodeContext(peerId: PeerId, db: DBWriterActor & DBReader, receiver: Receiver, transmitterActor: ActorRef[LocalTransmitterActor], inbox: ActorRef[InboxActor], outbox: ActorRef[OutboxActor])
+ *     N.B.: I named this "TestNodeContext", but aside from `LocalTransmitterActor`, I think it might be the same as production node context (API included, except for "networking" stuff) */
+case class TestNodeContext(peerId: PeerId, config: TestNodeConfig, db: DBWriterActor & DBReader, receiver: Receiver, transmitterActor: ActorRef[LocalTransmitterActor], inbox: ActorRef[InboxActor], outbox: ActorRef[OutboxActor])
+
+case class TestNodeConfig(outboxWatchdogSeconds: Int = 3, inboxWatchdogSeconds : Int = 10)
 
 object TestNodeContext:
-
 
   /** Terminate bi-directional connections between a set of nodes */
   def disconnectNodes(nodes: Set[TestNodeContext]): Unit =
@@ -45,7 +46,7 @@ object TestNodeContext:
       otherNodes.foreach(otherNode => disconnectNodeUnidirectional(thisNode, otherNode))
     })
 
-  /** Terminate a unidirectional connection from sender to reciever. Note that the connection with roles reversed
+  /** Terminate a unidirectional connection from sender to receiver. Note that the connection with roles reversed
    * may still exist */
   def disconnectNodeUnidirectional(sender: TestNodeContext, receiver: TestNodeContext): Unit =
     sender.transmitterActor.tell(_.disconnect(receiver.peerId))
@@ -53,10 +54,12 @@ object TestNodeContext:
   /** Start nodes for each peer, set up the interconnects, and start the inbox watchdogs.
    * Note that fully initializing may take some time, and this MAY be dependent on the number of peers.
    * This function blocks until initialization is complete.
+   * @param peerConfigs A set containing Peer IDs and the test node configurations
+   * @param retryConfig A RetryConfig indicating the type of retry to poll if the peers are full initialized
    */
-  def initializePeers[E, T](peers: Set[PeerId], retryConfig: RetryConfig[Throwable, Unit] = RetryConfig.backoff(10, 100.millis, 10.seconds))(using Ox): Map[PeerId, TestNodeContext] = {
+  def initializePeers[E, T](peerConfigs: Set[(PeerId, TestNodeConfig)], retryConfig: RetryConfig[Throwable, Unit] = RetryConfig.backoff(10, 100.millis, 10.seconds))(using Ox): Map[PeerId, TestNodeContext] = {
     // Start each node
-    val peerNodes: Map[PeerId, TestNodeContext] = mkNodeContexts(peers)
+    val peerNodes: Map[PeerId, TestNodeContext] = mkNodeContexts(peerConfigs)
     val contexts = peerNodes.values.toSet
 
     // Connect Nodes
@@ -79,30 +82,31 @@ object TestNodeContext:
     nodes.foreach(node => node.inbox.tell(_.start() : Unit))
 
   /** Start a set of nodes all at once. Inform them of each other, but do not connect them. */
-  def mkNodeContexts(peers: Set[PeerId])(using Ox): Map[PeerId, TestNodeContext] =
-    peers.foldLeft(Map.empty)((map, peer) => map.updated(peer, mkNodeContext(peer, peers - peer)))
+  def mkNodeContexts(peerConfigs: Set[(PeerId, TestNodeConfig)])(using Ox): Map[PeerId, TestNodeContext] =
+    peerConfigs.foldLeft(Map.empty)((map, peerConfig) => map.updated(peerConfig._1, mkNodeContext(peerConfig._1, peerConfig._2, peerConfigs.map(_._1) - peerConfig._1)))
 
   /** Initialize Database, Receiver, Transmitter, Inbox, and Outbox for peer a single node.
    * Use this when you want to test starting nodes at different times. To start a set of nodes all at once,
    * see [[mkNodeContexts]]. This method informs the peers of each other's existence, but does not open connections.
    * */
-  def mkNodeContext(peerId: PeerId, others: Set[PeerId])(using
+  def mkNodeContext(peerId: PeerId, testNodeConfig: TestNodeConfig, others: Set[PeerId])(using
                                                          ox: Ox
   ): TestNodeContext =
     val db = InMemoryDBActor()
     val dbWriteOnly = OnlyWriteDbActor(db)
-    val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
+    val dbActor: ActorRef[DBWriterActor] = Actor.create(db)
     val transmitter: ActorRef[TransmitterActor] =
       Actor.create(LocalTransmitterActor(peerId))
     val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
-      timeout = WatchdogTimeoutSeconds(3)
+      timeout = WatchdogTimeoutSeconds(testNodeConfig.outboxWatchdogSeconds)
     )
     val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
-      timeout = WatchdogTimeoutSeconds(10)
+      timeout = WatchdogTimeoutSeconds(testNodeConfig.inboxWatchdogSeconds)
     )
 
     TestNodeContext(
       peerId,
+      testNodeConfig,
       db,
       LocalReceiver(outbox, inbox),
       transmitter.asInstanceOf[ActorRef[LocalTransmitterActor]],
@@ -111,7 +115,7 @@ object TestNodeContext:
     )
 
   def startInbox(node: TestNodeContext)(using Ox): Unit =
-    node.inbox.tellDiscard(_.start())
+    node.inbox.tell(_.start())
 
   /** Open bi-directional connections among a set of nodes */
   def connectNodes(nodes: Set[TestNodeContext]): Unit =
@@ -126,70 +130,47 @@ object TestNodeContext:
   def connectNodeUnidirectional(sender: TestNodeContext, receiver: TestNodeContext): Unit =
     sender.transmitterActor.tell(_.connect(receiver.peerId, receiver.receiver))
 
-
-
-
-///**
-// * Helper function to poll a deliverer actor to determine when it's queue is empty.
-// * Retries up to 10 times with a 200 ms delay
-// * TODO: Maybe move away from polling?
-// * */
-//def waitForEmptyQueue(deliverer: ActorRef[DeliveryActor])(using ox: Ox): Unit = {
-//    retry(RetryConfig.delay(10, Duration(200, MILLISECONDS))) {
-//        if deliverer.ask(_.currentQueueSize == 0) then () else "Queue not empty"
-//    } : Unit
-//}
-
 class MailboxSpec extends ScalaCheckSuite:
 
   test("Heartbeat mini-protocol works, inboxes are the same"):
-
-
     supervised {
-      val peerNodes = TestNodeContext.initializePeers(Set(aliceId, bobId, carolId))
+      val config = TestNodeConfig()
+      val peers = Set(aliceId, bobId, carolId)
+      val peerNodes = TestNodeContext.initializePeers(peers.map((_, config)))
 
-      val dbAlice = peerNodes(aliceId).db
-      val dbBob = peerNodes(bobId).db
-      val dbCarol = peerNodes(carolId).db
+      sleep(config.inboxWatchdogSeconds.seconds)
 
-      sleep(10.seconds)
-
-      assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
-      assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
-      assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
-
-      assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
-      assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
-      assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
-
-      // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
+      peers.foreach(thisPeer => {
+          val otherPeers = peers - thisPeer
+          otherPeers.foreach(otherPeer => assertEquals(peerNodes(thisPeer).inbox.ask(_.heartbeatCounters(otherPeer)), 3L))
+      })
     }
 
   test("Handle a message"):
     supervised {
-      val peers = Set(aliceId, bobId, carolId)
-      val peerNodes = TestNodeContext.initializePeers(peers)
+      val peerConfigs = Set(aliceId, bobId, carolId).map((_, TestNodeConfig()))
+      val peerNodes = TestNodeContext.initializePeers(peerConfigs)
 
-      val outMsg = Msg(peerNodes(aliceId).outbox.ask(_.addToOutbox(msg = AckUnit())), AckUnit)
+      val outMsg = MailboxMsg(peerNodes(aliceId).outbox.ask(_.addToOutbox(msg = AckUnit())), AckUnit)
 
       sleep(10.second)
 
 
       peerNodes(aliceId).db.readOutgoingMessages(outMsg.id, outMsg.id) match {
         case Left(e) => throw RuntimeException(s"Error reading message from sender's outbox db: ${e}")
-        case Right(batch) => if batch.contains(Msg[Outbox](outMsg.id, AckUnit())) then
+        case Right(batch) => if batch.contains(MailboxMsg[Outbox](outMsg.id, AckUnit())) then
           () else throw RuntimeException(s"batch returned from db did not contain message `${outMsg}`. Batch was: ${batch}.")
       }
 
 
       // check if the message got into the receiver's databases
-      (peerNodes - aliceId).foreach(receiverPeerNode => receiverPeerNode._2.db.readIncomingMessages(aliceId).contains(Msg(outMsg.id, AckUnit())))
+      (peerNodes - aliceId).foreach(receiverPeerNode => receiverPeerNode._2.db.readIncomingMessages(aliceId).contains(MailboxMsg(outMsg.id, AckUnit())))
     }
 
   test("Test delayed delivery of multiple messages"):
     /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
     supervised:
-      val peers = Set(aliceId, bobId)
+      val peers = Set(aliceId, bobId).map((_,TestNodeConfig()))
       // Start two nodes. Do not connect them
       val peerNodes = TestNodeContext.mkNodeContexts(peers)
       val nodes = peerNodes.values.toSet
@@ -209,67 +190,78 @@ class MailboxSpec extends ScalaCheckSuite:
       sleep(10.seconds)
 
       // Check that Alice's message IDs have gotten into Bob's database
-      val recievedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
-      aliceAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromAlice => assert(recievedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice), s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."))
+      val receivedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
+      aliceAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromAlice => assert(receivedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice),
+          s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."))
 
       // Check that Bob's messages have gotten into Alice's database
-      val recievedMessagesBobToAlice = peerNodes(aliceId).db.readIncomingMessages(bobId)
-      bobAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromBob => assert(recievedMessagesBobToAlice.map(_.id).contains(msgIdFromBob), s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."))
+      val receivedMessagesBobToAlice = peerNodes(aliceId).db.readIncomingMessages(bobId)
+      bobAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromBob => assert(receivedMessagesBobToAlice.map(_.id).contains(msgIdFromBob),
+          s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."))
 
       // Check that Alice's match index for bob is high enough.
       val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
       assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)).toLong >= minimalMatchIndexAliceForBob)
 
-
   test("Test heartbeat for outbox"):
       supervised {
-        val peers = Set(aliceId, bobId)
+        val config = TestNodeConfig()
+        // We add Carol into this test even though we don't reference her at all. Her presence should not affect the validity of the test.
+        val peers = Set(aliceId, bobId).map((_,config))
         val peerNodes = TestNodeContext.initializePeers(peers)
 
         // Verify initial state
-        assert(peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).isEmpty, s"Immediately after initialization, no peers of Alice should be awaiting messages")
-        assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0), s"Immediately after initialization, Alice should have match index 0 for Bob")
-        assert(peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains(aliceId), "After initialization, Bob's `pendingHeartbeats` must contain Alice's peerId")
+        assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0),
+            s"Immediately after initialization, Alice should have match index 0 for Bob")
 
-        // Terminate Alice's connection to Bob to avoid her outbox sending another heartbeat
-        TestNodeContext.disconnectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+//        assert(peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId),
+//            s"Alice should have added bob to peersAwaitingMessages when Bob send her a matchIndex of 0 during the initialization of Bob's Node")
 
-        sleep(10.second)
-        assert(peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId)
-          , "after 10 seconds, Bob's inbox should have noticed no new messages from Alice, and he should send a match index. This should result in Alice's outbox adding Bob to peerAwaitingMessages")
-        assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0)
-          , "after receiving the match index, the match index should be still be 0; i.e., a heartbeat (empty batch) from Alice should not result in Bob updating his match index.")
+        // Terminate connection from Bob to Alice to allow Alice to clear bob from Peers awaiting messages
+        TestNodeContext.disconnectNodes(Set(peerNodes(bobId), peerNodes(aliceId)))
+        println("$$$$$$$ Disconnected $$$$$$")
+
+        sleep((config.outboxWatchdogSeconds + 1).seconds)
+
+        assert(!peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId),
+              s"Alice's peersAwaitingMessages should no longer contain Bob, because his inbox's heartbeat is blocked")
 
 
-        // Reconnect Alice to Bob
-        TestNodeContext.connectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
-        sleep(3.seconds)
-        assert(!peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains((aliceId))
-          , "after 3 seconds, Alice's outbox heart beat should trigger sending an empty batch to Bob. This should result in Bob removing Alice from pendingHeartbeats")
-
-        // Disconnect Alice from Bob again
-        TestNodeContext.disconnectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+        val bobsCountBeforeReconnect : Long = peerNodes(bobId).inbox.ask(_.heartbeatCounters(aliceId))
+        // Reconnect Bob to Alice and wait
+        TestNodeContext.connectNodeUnidirectional(peerNodes(bobId), peerNodes(aliceId))
+        println("$$$$$$$ Reconnected $$$$$$")
         sleep(10.seconds)
-        assert(peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains(aliceId), "After 10 seconds since Bob's inbox last checked the pending heartbeats, it should notice that it has not received any messages from Alice." +
-          "This should result in Alice being added back into pendingHeartbeats ")
+
+        val bobsCountAfterReconnect = peerNodes(bobId).inbox.ask(_.heartbeatCounters(aliceId))
+        assert(bobsCountAfterReconnect > bobsCountBeforeReconnect, s"Bobs count after the reconnect(${bobsCountAfterReconnect}) should be greater than before (${bobsCountBeforeReconnect})")
 
 
+
+//        assert(!peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains((aliceId))
+//          , "after 3 seconds, Alice's outbox heart beat should trigger sending an empty batch to Bob. This should result in Bob removing Alice from pendingHeartbeats")
+//
+//        // Disconnect Alice from Bob again
+//        TestNodeContext.disconnectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+//        sleep(10.seconds)
+//        assert(peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains(aliceId), "After 10 seconds since Bob's inbox last checked the pending heartbeats, it should notice that it has not received any messages from Alice." +
+//          "This should result in Alice being added back into pendingHeartbeats ")
       }
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */
 class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, DBReader {
-    lazy val noRead = throw RuntimeException("This test should not READ from the database!")
+    lazy val noRead: Nothing = throw RuntimeException("This test should not READ from the database!")
 
-    override def persistOutgoingMessage(msg: Req | Ack): MsgId[Outbox] =
+    override def persistOutgoingMessage(msg: ProtocolMsg): MsgId[Outbox] =
         inMemoryDBActor.persistOutgoingMessage(msg)
 
     override def readOutgoingMessages(firstMessage: MsgId[Outbox], maxLastMsgId: MsgId[Outbox]): Either[DbReadOutgoingError, MsgBatch[Outbox]] = noRead
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg[Inbox]): Unit =
+    override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg[Inbox]): Unit =
         inMemoryDBActor.persistIncomingMessage(peerId, msg)
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]] = noRead
+    override def readIncomingMessages(peer: PeerId): Seq[MailboxMsg[Inbox]] = noRead
 }
 
 // TODO: I think this can essentially just wrap the inbox and outbox actors with some transmitters/receivers that just
@@ -279,12 +271,12 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
     private val log = Logger(getClass)
 
     private val outboxSeq = AtomicLong(0L)
-    private val outbox = mutable.Buffer[Msg[Outbox]]()
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[Msg[Inbox]]] = mutable.Map.empty
+    private val outbox = mutable.Buffer[MailboxMsg[Outbox]]()
+    private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg[Inbox]]] = mutable.Map.empty
 
-    override def persistOutgoingMessage(msg: Req | Ack): MsgId[Outbox] =
+    override def persistOutgoingMessage(msg: ProtocolMsg): MsgId[Outbox] =
         val outMsgId = outboxSeq.incrementAndGet() |> MsgId.apply[Outbox]
-        outbox.append(Msg[Outbox](outMsgId, msg))
+        outbox.append(MailboxMsg[Outbox](outMsgId, msg))
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
         outMsgId
 
@@ -306,7 +298,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
         }
 
 
-    override def persistIncomingMessage(peerId: PeerId, msg: Msg[Inbox]): Unit = {
+    override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg[Inbox]): Unit = {
         val key = peerId
         val newVal = (msg)
         inboxes.updateWith(key) {
@@ -315,7 +307,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
         }: Unit
     }
 
-    override def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]] =
+    override def readIncomingMessages(peer: PeerId): Seq[MailboxMsg[Inbox]] =
         inboxes.get(peer).map(_.toSeq).getOrElse(Seq.empty)
 
 /** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It

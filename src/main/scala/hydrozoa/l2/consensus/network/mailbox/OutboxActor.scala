@@ -2,8 +2,8 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
+import hydrozoa.l2.consensus.network.ProtocolMsg
 import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.DatabaseReadError
-import hydrozoa.l2.consensus.network.{Ack, Req}
 import hydrozoa.node.db.*
 import ox.channels.ActorRef
 
@@ -33,14 +33,15 @@ class OutboxActor(
     // ---------------------------------------------  Volatile state
     // The common delivery queue
     // TODO: This queue SHOULD be a data structure that obeys the following properties:
-    // - The entiries in the queue must be strictly monotonically increasing and in sequential order
+    // - The entries in the queue must be strictly monotonically increasing and in sequential order
     // - Efficient slicing
     // - Efficient append
     // - Efficient dropping (from memory) of a "head slice"
     // (If we can obey the invariant, we can have an API that returns `MsgBatch`s directly rather than returning
     // List[Msg] and needing to call MsgBatch.fromList)
-    private val queue: mutable.Buffer[Msg[Outbox]] = mutable.Buffer.empty
+    private val queue: mutable.Buffer[MailboxMsg[Outbox]] = mutable.Buffer.empty
 
+    // TODO combine with peersAwaitingMessages into a OutboxPeerData(?)
     private val matchIndices: mutable.Map[PeerId, MatchIndex[Outbox]] = mutable.Map.empty
 
     /** Return the match index for a given peer */
@@ -49,7 +50,13 @@ class OutboxActor(
       case Some(index) => index
     }
 
-
+    /**
+     * - A peer is added to this set when `matchIndex` is _received_ from the peer, but there are no new messages to send.
+     * - A peer is removed when any the outbox tells the transmitter to send any messages to that peer. Note that
+     *   this doesn't ensure delivery. A peer can be removed from this in two ways:
+     *   - When a non-empty batch is sent to the transmitter for that peer
+     *   - A empty batch is told to the transmitter in response to a tell from the Outbox Watchdog
+     */
     //  When we receive a new outgoing message, we'll broadcast it to all peers in the set and then empty it.
     //  This avoids endless ping-ponging of addEntries/confirmMatchIndex with caught-up peers.
     val peersAwaitingMessages: mutable.Set[PeerId] = mutable.Set.empty
@@ -89,7 +96,8 @@ class OutboxActor(
             // Send the batch or add to the set of awaiting peers
             _ = if (batch.nonEmpty) {
               // NOTE: swallows errors. If the transmitter can't send, the outbox doesn't care.
-              transmitter.tellDiscard(_.appendEntries(peer, batch))
+              transmitter.tell(_.appendEntries(peer, batch) : Unit)
+              peersAwaitingMessages.remove(peer)
             } else {
                 peersAwaitingMessages.add(peer)
             }
@@ -157,7 +165,7 @@ class OutboxActor(
                                             dbPart ++ queuePart
                                         ) match
                                         case Some(b) => Right(b)
-                                        case None => Left(OutboxActorError.DbPartAndQueueNotCoherent)
+                                        case None => Left(OutboxActorError.DbPartAndQueueNotCoherent(dbPart, queuePart))
                                     case Left(err) => Left(err)
                                 }
 
@@ -169,7 +177,6 @@ class OutboxActor(
                 else {
                     // No need to read from the db
                     readFromQueue(firstMsgId, maxLastMsgId)
-
                 }
                 }
 
@@ -190,16 +197,19 @@ class OutboxActor(
             case None => Right(MsgBatch.empty)
             case Some(head) =>
                 val startOffset = firstMessage.toLong - head.id.toLong
-                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt)
-                MsgBatch.fromList[Outbox](slice.toList) match
-                    case None => Left(OutboxActorError.QueueMalformed)
+                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt).toList
+                MsgBatch.fromList[Outbox](slice) match
+                    case None => Left(OutboxActorError.QueueMalformed(slice))
                     case Some(batch) => Right(batch)
         }
 
   /** Unconditionally triggers a heartbeat message to be broadcasted to all peers that are awaiting messages.
      */
-    override def wakeUp(): Either[OutboxActorError, Unit] = {
-      Right(peersAwaitingMessages.foreach(peer => transmitter.tellDiscard(_.appendEntries(peer, MsgBatch.empty[Outbox]))))
+    override def wakeUp(): Unit = {
+      peersAwaitingMessages.foreach(peer => {
+          transmitter.tell(_.appendEntries(peer, MsgBatch.empty[Outbox]) : Unit)
+      })
+      peersAwaitingMessages.clear()
     }
 
     /** Persist and enqueue an outgoing message for delivering.
@@ -209,14 +219,14 @@ class OutboxActor(
       * @return
       *   the id of the persisted message
       */
-    def addToOutbox(msg: Req | Ack): MsgId[Outbox] = {
+    def addToOutbox(msg: ProtocolMsg): MsgId[Outbox] = {
       msg match {
         case _ =>
           log.info(s"Adding to outbox: $msg")
           // 1. Persist a message (not to lose them in case of a crash)
           val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
           // 2. Append to the end of the delivery queue
-          queue.append(Msg(msgId, msg))
+          queue.append(MailboxMsg(msgId, msg))
           // TODO: remove? 3. Return the msg ID
           msgId
       }
@@ -225,13 +235,6 @@ class OutboxActor(
 enum OutboxActorError extends Throwable:
     case DatabaseReadError(e: DbReadOutgoingError)
     /** Returned during recovery if the dbPart and the queuePart, taken together, don't obey the invariants of a MsgBatch */
-    case DbPartAndQueueNotCoherent
+    case DbPartAndQueueNotCoherent(dbPart : MsgBatch[Outbox], queuePart: MsgBatch[Outbox])
     /** Returned when the queue part, taken in isolation, doesn't obey the invariants of a MsgBatch */
-    case QueueMalformed
-    /** Returned when the wakeUp batch is empty (should contain at least a heartbeat message) */
-    case WakeupBatchEmpty
-  /** Returned when the peer's is not found in the match index map for the outbox. Note that this is different from
-     * a match index of 0, which indicates that the outbox is _aware of the peer's existence_, but has not yet established
-   * a match index. */
-  case PeerNotFoundInMatchIndexMap
-
+    case QueueMalformed(msgs: List[MailboxMsg[Outbox]])

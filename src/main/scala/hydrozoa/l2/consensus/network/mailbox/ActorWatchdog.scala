@@ -21,9 +21,10 @@ extension (self: WatchdogTimeoutSeconds) {
 /** An interface that actors with a watchdog timer should provide.
   */
 trait Watchdog:
-    /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions are not handled.
+    /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions must be handled by the
+     * wrapped actor
       */
-    def wakeUp(): Either[Throwable, Unit]
+    def wakeUp(): Unit
 
 object ActorWatchdog:
     /** Creates a new actor and watchdog thread that wakes it up every [[WatchdogTimeoutSeconds]] in
@@ -38,7 +39,7 @@ object ActorWatchdog:
         forkDiscard {
             forever {
                 sleep(timeout.toInt.seconds)
-                ref.tellDiscard(_.wakeUp())
+                ref.tell(_.wakeUp())
             }
         }
         ref
