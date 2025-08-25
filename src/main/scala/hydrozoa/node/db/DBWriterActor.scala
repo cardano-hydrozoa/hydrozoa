@@ -23,5 +23,5 @@ trait DBWriterActor {
       * @param msg
       * @return
       */
-    def persistIncomingMessage(peer : PeerId, msg: MailboxMsg): Unit
+    def persistIncomingMessage(peer: PeerId, msg: MailboxMsg): Unit
 }

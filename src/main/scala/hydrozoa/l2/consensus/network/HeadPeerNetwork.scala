@@ -64,7 +64,7 @@ given Schema[Req] = Schema.derived[Req]
 given ackCodec: JsonValueCodec[Ack] = JsonCodecMaker.make
 given Schema[Ack] = Schema.derived[Ack]
 
-case class Heartbeat() extends Ack
+case class Heartbeat(foo: String = "bar") extends Ack
 
 given JsonValueCodec[Heartbeat] = JsonCodecMaker.make
 
@@ -211,7 +211,7 @@ given addressBechL2Schema: Schema[AddressL2] =
   * ------------------------------------------------------------------------------------------
   */
 
-private case class AckUnit() extends Ack
+case class AckUnit() extends Ack
 
 object AckUnit extends AckUnit
 

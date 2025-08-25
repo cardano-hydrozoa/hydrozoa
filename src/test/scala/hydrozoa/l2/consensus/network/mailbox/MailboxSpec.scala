@@ -7,8 +7,8 @@ import hydrozoa.node.db.{DBReader, DBWriterActor}
 import munit.ScalaCheckSuite
 import ox.channels.{Actor, ActorRef, BufferCapacity}
 import ox.{Ox, sleep, supervised}
-import sttp.client4.UriContext
 
+import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -28,7 +28,7 @@ class MailboxSpec extends ScalaCheckSuite:
 
     test("Heartbeat mini-protocol works with local transport"):
 
-        def startNode(peerId: PeerId, others: Set[PeerId])(using
+        def startNode(myself: PeerId, others: Set[PeerId])(using
             ox: Ox
         ): (
             DBWriterActor & DBReader,
@@ -40,11 +40,11 @@ class MailboxSpec extends ScalaCheckSuite:
             val dbWriteOnly = OnlyWriteDbActor(db)
             val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
             val transmitter: ActorRef[TransmitterActor] =
-                Actor.create(LocalTransmitterActor(peerId))
+                Actor.create(LocalTransmitterActor(myself))
             val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
               timeout = WatchdogTimeoutSeconds(3)
             )
-            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
+            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others))(using
               timeout = WatchdogTimeoutSeconds(10)
             )
 
@@ -98,7 +98,7 @@ class MailboxSpec extends ScalaCheckSuite:
 
     test("Heartbeat mini-protocol works using WS transport"):
 
-        def startNode(peerId: PeerId, others: Set[PeerId], port: Int)(using
+        def startNode(myself: PeerId, others: Set[PeerId], port: Int)(using
             ox: Ox
         ): (
             DBWriterActor & DBReader,
@@ -110,11 +110,11 @@ class MailboxSpec extends ScalaCheckSuite:
             val dbWriteOnly = OnlyWriteDbActor(db)
             val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
             val transmitter: ActorRef[TransmitterActor] =
-                Actor.create(WSTransmitterActor())
+                WSTransmitterActor.create(myself)
             val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
               timeout = WatchdogTimeoutSeconds(3)
             )
-            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
+            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others))(using
               timeout = WatchdogTimeoutSeconds(10)
             )
 
@@ -139,9 +139,9 @@ class MailboxSpec extends ScalaCheckSuite:
             val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
                 startNode(carolId, Set(aliceId, bobId), 4939)
 
-            val uriAlice = uri"ws://localhost:4937/ws"
-            val uriBob = uri"ws://localhost:4938/ws"
-            val uriCarol = uri"ws://localhost:4939/ws"
+            val uriAlice = URI("ws://localhost:4937/ws")
+            val uriBob = URI("ws://localhost:4938/ws")
+            val uriCarol = URI("ws://localhost:4939/ws")
 
             // Connect nodes to each other
             transmitterAlice.tell(_.connect(bobId, uriBob))

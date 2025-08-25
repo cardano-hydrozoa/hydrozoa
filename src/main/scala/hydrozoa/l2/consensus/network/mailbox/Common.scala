@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
-import hydrozoa.l2.consensus.network.{Msg, given}
+import hydrozoa.l2.consensus.network.{*, given}
 import sttp.tapir.Schema
 
 // TODO: find a better place?
@@ -18,9 +18,58 @@ object PeerId:
 //opaque type OutMsg = Msg
 //case class InMsg(msg : Msg, from: PeerId)
 
+enum AnyMsg:
+    case ReqVerKeyMsg(content: ReqVerKey)
+    case AckVerKeyMsg(content: AckVerKey)
+    case ReqInitMsg(content: ReqInit)
+    case AckInitMsg(content: AckInit)
+    case ReqRefundLaterMsg(content: ReqRefundLater)
+    case AckRefundLaterMsg(content: AckRefundLater)
+    case ReqEventL2Msg(content: ReqEventL2)
+    case AckUnitMsg
+    case ReqMinorMsg(content: ReqMinor)
+    case AckMinorMsg(content: AckMinor)
+    case ReqMajorMsg(content: ReqMajor)
+    case AckMajorMsg(content: AckMajor)
+    case AckMajor2Msg(content: AckMajor2)
+    case ReqFinalMsg(content: ReqFinal)
+    case AckFinalMsg(content: AckFinal)
+    case AckFinal2Msg(content: AckFinal2)
+    case ReqDeinitMsg(content: ReqDeinit)
+    case AckDeinitMsg(content: AckDeinit)
+    case AckHearbeatMsg(content: Heartbeat)
+
+object AnyMsg:
+    def apply(msg: Req | Ack): AnyMsg = msg match
+        case content: ReqVerKey      => ReqVerKeyMsg(content)
+        case content: ReqInit        => ReqInitMsg(content)
+        case content: ReqRefundLater => ReqRefundLaterMsg(content)
+        case content: ReqEventL2     => ReqEventL2Msg(content)
+        case content: ReqMinor       => ReqMinorMsg(content)
+        case content: ReqMajor       => ReqMajorMsg(content)
+        case content: ReqFinal       => ReqFinalMsg(content)
+        case content: ReqDeinit      => ReqDeinitMsg(content)
+        case content: AckVerKey      => AckVerKeyMsg(content)
+        case content: AckInit        => AckInitMsg(content)
+        case content: AckRefundLater => AckRefundLaterMsg(content)
+        case _: AckUnit              => AckUnitMsg
+        case content: AckMinor       => AckMinorMsg(content)
+        case content: AckMajor       => AckMajorMsg(content)
+        case content: AckMajor2      => AckMajor2Msg(content)
+        case content: AckFinal       => AckFinalMsg(content)
+        case content: AckFinal2      => AckFinal2Msg(content)
+        case content: AckDeinit      => AckDeinitMsg(content)
+        case heartbeat: Heartbeat    => AckHearbeatMsg(heartbeat)
+
+given anyMsgCodec: JsonValueCodec[AnyMsg] =
+    JsonCodecMaker.make
+
+given anyMsgSchema: Schema[AnyMsg] =
+    Schema.binary[AnyMsg]
+
 /** Requests or acknowledgements tagged with a sequence ID
   */
-case class MailboxMsg(id: MsgId, content: Msg)
+case class MailboxMsg(id: MsgId, content: AnyMsg)
 
 given msgCodec: JsonValueCodec[MailboxMsg] =
     JsonCodecMaker.make
@@ -121,3 +170,13 @@ given matchIndexMasgCodec: JsonValueCodec[MatchIndexMsg] =
 
 given matchIndexMsgSchema: Schema[MatchIndexMsg] =
     Schema.binary[MatchIndexMsg]
+
+enum BatchMsgOrMatchIndexMsg:
+    case CaseBatchMsg(batchMsg: BatchMsg)
+    case CaseMatchIndexMsg(matchIndexMsg: MatchIndexMsg)
+
+given batchMsgOrMatchIndexMsgCodec: JsonValueCodec[BatchMsgOrMatchIndexMsg] =
+    JsonCodecMaker.make
+
+given batchMsgOrMatchIndexMsgSchema: Schema[BatchMsgOrMatchIndexMsg] =
+    Schema.binary[BatchMsgOrMatchIndexMsg]

@@ -64,7 +64,7 @@ class OutboxActor(
         // 1. Persist a message (not to lose them in case of a crash)
         val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
         // 2. Append to the end of the delivery queue
-        queue.append(MailboxMsg(msgId, msg))
+        queue.append(MailboxMsg(msgId, AnyMsg.apply(msg)))
         // TODO: remove? 3. Return the msg ID
         msgId
     }

@@ -1,19 +1,24 @@
 package hydrozoa.l2.consensus.network.mailbox
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{readFromString, writeToString}
+import com.github.plokhotnyuk.jsoniter_scala.core.readFromString
 import com.typesafe.scalalogging.Logger
-import hydrozoa.infra.Piper
+import hydrozoa.l2.consensus.network.mailbox.BatchMsgOrMatchIndexMsg.{
+    CaseBatchMsg,
+    CaseMatchIndexMsg
+}
+import io.netty.bootstrap.ServerBootstrap
+import io.netty.channel.*
+import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.SocketChannel
+import io.netty.channel.socket.nio.NioServerSocketChannel
+import io.netty.handler.codec.http.*
+import io.netty.handler.codec.http.websocketx.*
+import io.netty.handler.stream.ChunkedWriteHandler
 import ox.*
 import ox.channels.*
-import ox.flow.Flow
-import sttp.capabilities.WebSockets
-import sttp.shared.Identity
-import sttp.tapir.*
-import sttp.tapir.server.ServerEndpoint.Full
-import sttp.tapir.server.netty.sync.{NettySyncServer, OxStreams}
-import sttp.ws.WebSocketFrame
+import ox.scheduling.{RepeatConfig, repeat}
 
-import scala.concurrent.duration.DurationInt
+import scala.util.Try
 
 /** Likely, not an actor but something else that physically receives messages from multiple
   * [[TransmitterActor]]s and passes them to the [[InboxActor]] or [[OutboxActor]].
@@ -34,56 +39,6 @@ abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef
 final class LocalReceiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor])
     extends Receiver(outboxActor, inboxActor)
 
-// TODO: move away?
-given batchMsgWSFCodec: Codec[WebSocketFrame, BatchMsg, CodecFormat.Json] =
-    new Codec[WebSocketFrame, BatchMsg, CodecFormat.Json] {
-
-        override def decode(wsf: WebSocketFrame): DecodeResult[BatchMsg] =
-            wsf match
-                case text: WebSocketFrame.Text =>
-                    val batch: BatchMsg = readFromString(text.payload)
-                    DecodeResult.Value.apply(batch)
-                case _ =>
-                    DecodeResult.Error(
-                      "<string representation is not available>",
-                      new RuntimeException("Unsupported web socket frame type")
-                    )
-
-        def encode(msgBatch: BatchMsg): WebSocketFrame =
-            writeToString(msgBatch) |> WebSocketFrame.text
-
-        override def rawDecode(l: WebSocketFrame): DecodeResult[BatchMsg] = ???
-
-        override def schema: Schema[BatchMsg] = batchMsgSchema
-
-        override def format: CodecFormat.Json = CodecFormat.Json()
-    }
-
-// TODO: move away?
-given matchIndexMsgWSFCodec: Codec[WebSocketFrame, MatchIndexMsg, CodecFormat.Json] =
-    new Codec[WebSocketFrame, MatchIndexMsg, CodecFormat.Json] {
-
-        override def decode(wsf: WebSocketFrame): DecodeResult[MatchIndexMsg] =
-            wsf match
-                case text: WebSocketFrame.Text =>
-                    val matchIndexMsg: MatchIndexMsg = readFromString(text.payload)
-                    DecodeResult.Value.apply(matchIndexMsg)
-                case _ =>
-                    DecodeResult.Error(
-                      "<string representation is not available>",
-                      new RuntimeException("Unsupported web socket frame type")
-                    )
-
-        def encode(msgBatch: MatchIndexMsg): WebSocketFrame =
-            writeToString(msgBatch) |> WebSocketFrame.text
-
-        override def rawDecode(l: WebSocketFrame): DecodeResult[MatchIndexMsg] = ???
-
-        override def schema: Schema[MatchIndexMsg] = matchIndexMsgSchema
-
-        override def format: CodecFormat.Json = CodecFormat.Json()
-    }
-
 /** This receiver starts Netty server that serves `ws://0.0.0.0:<port>/ws` endpoint.
   *
   * @param outboxActor
@@ -100,60 +55,61 @@ class WSReceiver(
 
     private val log = Logger(getClass)
 
-    // The WebSocket server endpoint type and definition
-    type FullWs = Full[
-      Unit, // _SECURITY_INPUT
-      Unit, // _PRINCIPAL
-      Unit, // _INPUT
-      Unit, // _ERROR_OUTPUT
-      Flow[BatchMsg] => Flow[Void], // _OUTPUT
-      OxStreams & WebSockets, // R
-      Identity // F
-    ]
+    val bossGroup = NioEventLoopGroup()
+    val workerGroup = NioEventLoopGroup()
+//    val bossGroup = NioIoHandler.newFactory()
+//    val workerGroup = NioIoHandler.newFactory()
 
-    val wsInboxEndpoint: FullWs =
-        endpoint.get
-            .in("ws")
-            .out(
-              // TODO: what should we use in lieu of MsgBatch for responses? We don't want responses at all...
-              webSocketBody[BatchMsg, CodecFormat.Json, Void, CodecFormat.Json](OxStreams)
-                  .concatenateFragmentedFrames(false)
-                  .ignorePong(true)
-                  .autoPongOnPing(true)
-                  .decodeCloseRequests(false)
-                  .decodeCloseResponses(false)
-                  .autoPing(Some((10.seconds, WebSocketFrame.Ping("ping-content".getBytes))))
-            )
-            .handleSuccess(_ => {
-                log.info("new ws channel established")
-                in =>
-                    in.tap(batchMsg => inboxActor.tell(_.appendEntries(batchMsg._1, batchMsg._2)))
-                        .drain()
-            })
+    case class WebSocketFrameHandler() extends SimpleChannelInboundHandler[WebSocketFrame]:
+        override def channelRead0(ctx: ChannelHandlerContext, frame: WebSocketFrame): Unit =
+            frame match
+                case textFrame: TextWebSocketFrame =>
+                    val text = textFrame.text()
+                    log.debug(s"Received: $text")
+                    Try(readFromString(text)(using batchMsgOrMatchIndexMsgCodec)).toEither match {
+                        case Right(matchIndexMsg) =>
+                            matchIndexMsg match {
+                                case CaseBatchMsg(batchMsg) => handleAppendEntries(batchMsg)
+                                case CaseMatchIndexMsg(matchIndexMsg) =>
+                                    handleConfirmMatchIndex(matchIndexMsg)
+                            }
+                        case Left(ex) =>
+                            log.error(s"Failed to parse incoming message: ${ex.getMessage}")
+                    }
+                case _: CloseWebSocketFrame =>
+                    log.warn("Received close frame")
+                    ctx.close(): Unit
+                case _ =>
+                    log.warn("Received unknown frame")
+                    ()
 
-    // TODO: move away?
-    given voidSchema: Schema[Void] = Schema.binary[Void]
-
-    // TODO: move away?
-    given voidWSFCodec: Codec[WebSocketFrame, Void, CodecFormat.Json] =
-        new Codec[WebSocketFrame, Void, CodecFormat.Json] {
-
-            override def decode(wsf: WebSocketFrame): DecodeResult[Void] = ???
-
-            def encode(msgBatch: Void): WebSocketFrame = ???
-
-            override def rawDecode(l: WebSocketFrame): DecodeResult[Void] = ???
-
-            override def schema: Schema[Void] = voidSchema
-
-            override def format: CodecFormat.Json = ???
-        }
-
-    // Run the server
-    val _ = useInScope(
-      NettySyncServer()
-          .host("0.0.0.0")
-          .port(port)
-          .addEndpoint(wsInboxEndpoint)
-          .start()
-    )(_.stop())
+    forkDiscard(
+      repeat(RepeatConfig.immediateForever()) {
+          log.info(s"Starting server at ws://localhost:$port/ws")
+          try
+              val bootstrap = ServerBootstrap()
+                  // TODO: do we need two groups?
+                  .group(bossGroup, workerGroup)
+                  .channel(classOf[NioServerSocketChannel])
+                  .childHandler(
+                    new ChannelInitializer[SocketChannel]():
+                        override def initChannel(ch: SocketChannel): Unit =
+                            val pipeline = ch.pipeline()
+                            pipeline.addLast(HttpServerCodec())
+                            pipeline.addLast(HttpObjectAggregator(65536))
+                            pipeline.addLast(ChunkedWriteHandler())
+                            pipeline.addLast(new WebSocketServerProtocolHandler("/ws"))
+                            pipeline.addLast(WebSocketFrameHandler())
+                            ()
+                  )
+              val channel = bootstrap.bind(port).sync().channel()
+              log.info(s"WebSocket server started at ws://localhost:$port/ws")
+              channel.closeFuture().sync()
+              ()
+          finally
+              // TODO: do we need to wait these futures to be completed?
+              bossGroup.shutdownGracefully()
+              workerGroup.shutdownGracefully()
+              ()
+      }
+    )

@@ -99,4 +99,3 @@ private class InboxActor(
         )
         pendingHeartbeats.addAll(headPeers)
     }
-
