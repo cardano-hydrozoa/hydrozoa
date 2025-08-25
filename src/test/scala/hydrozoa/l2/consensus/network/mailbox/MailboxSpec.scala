@@ -25,7 +25,14 @@ def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](msgId: MsgId[M1]): MsgId[M2] = Msg
 
 
 /** The composite set of information needed to work with a node within this test suite.
- * Created via [[startNode]] and cross-connected via [[connectPeers]] */
+ * Functions are exposed to work with a single peer's node, or a set of peers/nodes all at once.
+ * Full initialization of a set of peers requires:
+ *   - first making the node contexts
+ *   - Setting up bi-directional interconnects between all peers
+ *   - Starting the inbox
+ *     Use [[TestNodeContext.initializePeers]] to for full initialization of a set of peers, or the individual methods
+ *     of the companion object for testing various partial initializations or simulated failures.
+ *     N.B.: I named this "TestNodeContext", but aside from `LocalTransmitterActor`, I think it might be the same as production node context (API included) */
 case class TestNodeContext(peerId: PeerId, db: DBWriterActor & DBReader, receiver: Receiver, transmitterActor: ActorRef[LocalTransmitterActor], inbox: ActorRef[InboxActor], outbox: ActorRef[OutboxActor])
 
 object TestNodeContext:
@@ -46,15 +53,16 @@ object TestNodeContext:
    * Note that fully initializing may take some time, and this MAY be dependent on the number of peers.
    * This function blocks until initialization is complete.
    */
-  def startNodesAndConnectPeers[E, T](peers: Set[PeerId], retryConfig: RetryConfig[Throwable, Unit] = RetryConfig.backoff(10, 100.millis, 10.seconds))(using Ox): Map[PeerId, TestNodeContext] = {
+  def initializePeers[E, T](peers: Set[PeerId], retryConfig: RetryConfig[Throwable, Unit] = RetryConfig.backoff(10, 100.millis, 10.seconds))(using Ox): Map[PeerId, TestNodeContext] = {
     // Start each node
-    val peerNodes: Map[PeerId, TestNodeContext] = startNodes(peers)
+    val peerNodes: Map[PeerId, TestNodeContext] = mkNodeContexts(peers)
+    val contexts = peerNodes.values.toSet
 
     // Connect Nodes
-    connectNodes(peerNodes.values.toSet)
+    connectNodes(contexts)
 
     // Start inboxes
-    peerNodes.foreach(peerNode => peerNode._2.inbox.tellThrow(_.start()))
+    startInboxes(contexts)
 
     val totalPeers: Int = peerNodes.size
 
@@ -66,16 +74,19 @@ object TestNodeContext:
     peerNodes
   }
 
+  def startInboxes(nodes: Set[TestNodeContext]): Unit =
+    nodes.foreach(node => node.inbox.tellThrow(_.start()))
+
   /** Start a set of nodes all at once. Inform them of each other, but do not connect them. */
-  def startNodes(peers: Set[PeerId])(using Ox): Map[PeerId, TestNodeContext] =
-    peers.foldLeft(Map.empty)((map, peer) => map.updated(peer, startNode(peer, peers - peer)))
+  def mkNodeContexts(peers: Set[PeerId])(using Ox): Map[PeerId, TestNodeContext] =
+    peers.foldLeft(Map.empty)((map, peer) => map.updated(peer, mkNodeContext(peer, peers - peer)))
 
   /** Initialize Database, Receiver, Transmitter, Inbox, and Outbox for peer a single node.
    * Use this when you want to test starting nodes at different times. To start a set of nodes all at once,
-   * see [[startNodes]]. This method informs the peers of each other's existence, but does not open connections.
+   * see [[mkNodeContexts]]. This method informs the peers of each other's existence, but does not open connections.
    * */
-  def startNode(peerId: PeerId, others: Set[PeerId])(using
-                                                          ox: Ox
+  def mkNodeContext(peerId: PeerId, others: Set[PeerId])(using
+                                                         ox: Ox
   ): TestNodeContext =
     val db = InMemoryDBActor()
     val dbWriteOnly = OnlyWriteDbActor(db)
@@ -97,6 +108,9 @@ object TestNodeContext:
       inbox,
       outbox
     )
+
+  def startInbox(node: TestNodeContext)(using Ox): Unit =
+    node.inbox.tellThrow(_.start())
 
   /** Open bi-directional connections among a set of nodes */
   def connectNodes(nodes: Set[TestNodeContext]): Unit =
@@ -131,7 +145,7 @@ class MailboxSpec extends ScalaCheckSuite:
 
 
     supervised {
-      val peerNodes = TestNodeContext.startNodesAndConnectPeers(Set(aliceId, bobId, carolId))
+      val peerNodes = TestNodeContext.initializePeers(Set(aliceId, bobId, carolId))
 
       val dbAlice = peerNodes(aliceId).db
       val dbBob = peerNodes(bobId).db
@@ -153,7 +167,7 @@ class MailboxSpec extends ScalaCheckSuite:
   test("Handle a message"):
     supervised {
       val peers = Set(aliceId, bobId, carolId)
-      val peerNodes = TestNodeContext.startNodesAndConnectPeers(peers)
+      val peerNodes = TestNodeContext.initializePeers(peers)
 
       val outMsg = Msg(peerNodes(aliceId).outbox.ask(_.addToOutbox(msg = AckUnit())), AckUnit)
 
@@ -172,37 +186,38 @@ class MailboxSpec extends ScalaCheckSuite:
     }
 
   test("Test delayed delivery of multiple messages"):
-      /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
-      supervised:
-        val peers = Set(aliceId, bobId)
-        // Start two nodes. Do not connect them
-        val nodes = TestNodeContext.startNodes(peers)
+    /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
+    supervised:
+      val peers = Set(aliceId, bobId)
+      // Start two nodes. Do not connect them
+      val peerNodes = TestNodeContext.mkNodeContexts(peers)
+      val nodes = peerNodes.values.toSet
 
-        // Add 10 messages to alice's outbox
-        val aliceAckMsgIds = (0 until 10).map(_ => nodes(aliceId).outbox.ask(_.addToOutbox(AckUnit())))
+      // Add 10 messages to alice's outbox
+      val aliceAckMsgIds = (0 until 10).map(_ => peerNodes(aliceId).outbox.ask(_.addToOutbox(AckUnit())))
 
-        // add 20 messages to Bob's outbox
-        val bobAckMsgIds = (0 until 20).map(_ => nodes(bobId).outbox.ask(_.addToOutbox(ReqVerKey())))
+      // add 20 messages to Bob's outbox
+      val bobAckMsgIds = (0 until 20).map(_ => peerNodes(bobId).outbox.ask(_.addToOutbox(ReqVerKey())))
 
-        // Open bi-directional connections between the nodes
-        TestNodeContext.connectNodes(nodes.values.toSet)
+      // Open bi-directional connections between the nodes
+      TestNodeContext.connectNodes(nodes)
 
-        sleep(10.seconds)
+      // Start inboxes on all nodes
+      TestNodeContext.startInboxes(nodes)
 
-        // Check that Alice's message IDs have gotten into Bob's database
-        val recievedMessagesAliceToBob  = nodes(bobId).db.readIncomingMessages(aliceId)
-        aliceAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromAlice => assert(recievedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice), s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."))
+      sleep(10.seconds)
 
-        // Check that Bob's messages have gotten into Alice's database
-        val recievedMessagesBobToAlice = nodes(aliceId).db.readIncomingMessages(bobId)
-        bobAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromBob => assert(recievedMessagesBobToAlice.map(_.id).contains(msgIdFromBob), s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."))
+      // Check that Alice's message IDs have gotten into Bob's database
+      val recievedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
+      aliceAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromAlice => assert(recievedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice), s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."))
 
-        // Check that Alice's match index for bob is high enough.
-        val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
-        assert(nodes(aliceId).outbox.askThrow(_.matchIndex(bobId)).toLong >= minimalMatchIndexAliceForBob)
+      // Check that Bob's messages have gotten into Alice's database
+      val recievedMessagesBobToAlice = peerNodes(aliceId).db.readIncomingMessages(bobId)
+      bobAckMsgIds.map(swapMailbox[Outbox, Inbox]).foreach(msgIdFromBob => assert(recievedMessagesBobToAlice.map(_.id).contains(msgIdFromBob), s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."))
 
-// connect the peers
-
+      // Check that Alice's match index for bob is high enough.
+      val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
+      assert(peerNodes(aliceId).outbox.askThrow(_.matchIndex(bobId)).toLong >= minimalMatchIndexAliceForBob)
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */
@@ -265,38 +280,37 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
 
     override def readIncomingMessages(peer: PeerId): Seq[Msg[Inbox]] =
         inboxes.get(peer).map(_.toSeq).getOrElse(Seq.empty)
-//
-///** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It
-//  * maintains a counter and drops all incoming/outgoing messages that arrive modulo `n` (default 5,
-//  * i.e. ignoring every fifth message). NOTE: This will result in log.warn messages with failed RPC
-//  * calls.
-//  *
-//  * @param n
-//  * @param peerId
-// * @param otherPeers
-//  */
-//class DropModNNodeContext (
-//    n: Int = 5,
-//    peerId: PeerId,
-//    otherPeers: Set[PeerId]
-//)(using ox: Ox, sc: BufferCapacity):
-//
-//    // N.B.: InboxActor.create should create an ActorWithTimeout
-//    val inboxActor: ActorRef[InboxActor] =
-//        ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???))(using
-//          ox,
-//          sc,
-//          WatchdogTimeoutSeconds.apply(5)
-//        )
-//    val counter = AtomicLong(0L)
-//    private val log = Logger(getClass)
-//
-////    override def id: String = peerId
-//
-//    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit = {
-//        if counter.incrementAndGet() % n == 0
-//        then log.info(s"appendEntries: ignoring $batch")
-//        else
-//            log.info(s"appendEntries: appending $batch")
-//            inboxActor.tell(_.appendEntries(from, batch))
-//    }
+
+/** A test fixture capable of receiving messages from a (counterparty) outbox and responding. It
+ * maintains a counter and drops all incoming/outgoing messages that arrive modulo `n` (default 5,
+ * i.e. ignoring every fifth message). NOTE: This will result in log.warn messages with failed RPC
+ * calls.
+ *
+ * @param n
+ * @param peerId
+ */
+class DropModNInboxFixture(
+                            n: Int = 5,
+                            dbWriter: ActorRef[DBWriterActor],
+                            transmitterActor: ActorRef[TransmitterActor]
+                          )(using ox: Ox, sc: BufferCapacity):
+
+  // N.B.: InboxActor.create should create an ActorWithTimeout
+  val inboxActor: ActorRef[InboxActor] =
+    ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???))(using
+      ox,
+      sc,
+      WatchdogTimeoutSeconds.apply(5)
+    )
+  val counter = AtomicLong(0L)
+  private val log = Logger(getClass)
+
+  //    override def id: String = peerId
+
+  def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit = {
+    if counter.incrementAndGet() % n == 0
+    then log.info(s"appendEntries: ignoring $batch")
+    else
+      log.info(s"appendEntries: appending $batch")
+      inboxActor.tell(_.appendEntries(from, batch))
+  }
