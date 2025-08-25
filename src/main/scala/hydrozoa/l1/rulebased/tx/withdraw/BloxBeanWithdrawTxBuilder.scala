@@ -23,6 +23,7 @@ import java.math.BigInteger
 import scala.collection.mutable
 import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions
+import scala.util.{Failure, Success, Try}
 
 class BloxBeanWithdrawTxBuilder(
     backendService: BackendService,
@@ -87,8 +88,8 @@ class BloxBeanWithdrawTxBuilder(
                     nodeAddress = r.nodeAccount.enterpriseAddress()
                     txSigner = SignerProviders.signerFrom(r.nodeAccount)
 
-                    tx: Transaction <- try
-                      Right(builder
+                    tx: Transaction <- Try(
+                      builder
                           .apply(txPartial)
                           // TODO: this should be LEQ than what an unresolved treasury datum contains
                           // see MajorBlockConfirmationActor.scala:210
@@ -103,9 +104,16 @@ class BloxBeanWithdrawTxBuilder(
                               outputs.addAll(withdrawals.asJava): Unit
                           )
                           .buildAndSign()
-                      ) catch
-                            case (e: TxBuildException) =>
-                                Left(s"buildWithdrawTx failed during transaction building. Original error: ${e.getCause}")
+                    ) match
+                        case Success(tx) => Right(tx)
+                        case Failure(e: TxBuildException) =>
+                            Left(
+                              s"buildWithdrawTx failed during transaction building. Original error: ${e.getCause}"
+                            )
+                        case Failure(e) =>
+                            Left(
+                              s"buildWithdrawTx failed during transaction building with an unknown error"
+                            )
                 yield (TxL1(tx.serialize))
 
             case _ => Left("Ref scripts are not set")
