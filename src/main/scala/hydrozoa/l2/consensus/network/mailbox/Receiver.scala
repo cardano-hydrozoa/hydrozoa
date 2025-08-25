@@ -1,6 +1,6 @@
 package hydrozoa.l2.consensus.network.mailbox
 
-import hydrozoa.l2.consensus.network.mailbox.{MsgBatch, tellThrow}
+import hydrozoa.l2.consensus.network.mailbox.{MsgBatch}
 import ox.channels.ActorRef
 
 /** Likely, not an actor but something else that physically receives messages from multiple remote
@@ -14,7 +14,7 @@ abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef
 
     /** An incoming request from a peer, indicating the highest message THEY have processed */
     final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex[Outbox]): Unit =
-        outboxActor.tellThrow(_.confirmMatchIndex(from, matchIndex))
+        outboxActor.tellDiscard(_.confirmMatchIndex(from, matchIndex))
 
 final class LocalReceiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor])
     extends Receiver(outboxActor, inboxActor)

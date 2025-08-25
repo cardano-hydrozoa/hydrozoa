@@ -37,6 +37,7 @@ case class TestNodeContext(peerId: PeerId, db: DBWriterActor & DBReader, receive
 
 object TestNodeContext:
 
+
   /** Terminate bi-directional connections between a set of nodes */
   def disconnectNodes(nodes: Set[TestNodeContext]): Unit =
     nodes.foreach(thisNode => {
@@ -75,7 +76,7 @@ object TestNodeContext:
   }
 
   def startInboxes(nodes: Set[TestNodeContext]): Unit =
-    nodes.foreach(node => node.inbox.tellThrow(_.start()))
+    nodes.foreach(node => node.inbox.tell(_.start() : Unit))
 
   /** Start a set of nodes all at once. Inform them of each other, but do not connect them. */
   def mkNodeContexts(peers: Set[PeerId])(using Ox): Map[PeerId, TestNodeContext] =
@@ -110,7 +111,7 @@ object TestNodeContext:
     )
 
   def startInbox(node: TestNodeContext)(using Ox): Unit =
-    node.inbox.tellThrow(_.start())
+    node.inbox.tellDiscard(_.start())
 
   /** Open bi-directional connections among a set of nodes */
   def connectNodes(nodes: Set[TestNodeContext]): Unit =
@@ -217,7 +218,43 @@ class MailboxSpec extends ScalaCheckSuite:
 
       // Check that Alice's match index for bob is high enough.
       val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
-      assert(peerNodes(aliceId).outbox.askThrow(_.matchIndex(bobId)).toLong >= minimalMatchIndexAliceForBob)
+      assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)).toLong >= minimalMatchIndexAliceForBob)
+
+
+  test("Test heartbeat for outbox"):
+      supervised {
+        val peers = Set(aliceId, bobId)
+        val peerNodes = TestNodeContext.initializePeers(peers)
+
+        // Verify initial state
+        assert(peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).isEmpty, s"Immediately after initialization, no peers of Alice should be awaiting messages")
+        assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0), s"Immediately after initialization, Alice should have match index 0 for Bob")
+        assert(peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains(aliceId), "After initialization, Bob's `pendingHeartbeats` must contain Alice's peerId")
+
+        // Terminate Alice's connection to Bob to avoid her outbox sending another heartbeat
+        TestNodeContext.disconnectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+
+        sleep(10.second)
+        assert(peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId)
+          , "after 10 seconds, Bob's inbox should have noticed no new messages from Alice, and he should send a match index. This should result in Alice's outbox adding Bob to peerAwaitingMessages")
+        assert(peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0)
+          , "after receiving the match index, the match index should be still be 0; i.e., a heartbeat (empty batch) from Alice should not result in Bob updating his match index.")
+
+
+        // Reconnect Alice to Bob
+        TestNodeContext.connectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+        sleep(3.seconds)
+        assert(!peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains((aliceId))
+          , "after 3 seconds, Alice's outbox heart beat should trigger sending an empty batch to Bob. This should result in Bob removing Alice from pendingHeartbeats")
+
+        // Disconnect Alice from Bob again
+        TestNodeContext.disconnectNodeUnidirectional(peerNodes(aliceId), peerNodes(bobId))
+        sleep(10.seconds)
+        assert(peerNodes(bobId).inbox.ask(_.pendingHeartbeats).contains(aliceId), "After 10 seconds since Bob's inbox last checked the pending heartbeats, it should notice that it has not received any messages from Alice." +
+          "This should result in Alice being added back into pendingHeartbeats ")
+
+
+      }
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */

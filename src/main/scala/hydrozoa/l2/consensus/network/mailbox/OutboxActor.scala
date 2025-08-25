@@ -2,11 +2,8 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.{
-    DatabaseReadError,
-    PeerNotFoundInMatchIndexMap
-}
-import hydrozoa.l2.consensus.network.{Ack, Heartbeat, Req}
+import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.DatabaseReadError
+import hydrozoa.l2.consensus.network.{Ack, Req}
 import hydrozoa.node.db.*
 import ox.channels.ActorRef
 
@@ -31,7 +28,7 @@ class OutboxActor(
     private val dbReader: DBReader,
     private val dbWriter: ActorRef[DBWriterActor],
     private val transmitter: ActorRef[TransmitterActor]
-                 ) extends Watchdog[OutboxActorError]:
+                 ) extends Watchdog:
 
     // ---------------------------------------------  Volatile state
     // The common delivery queue
@@ -47,12 +44,12 @@ class OutboxActor(
     private val matchIndices: mutable.Map[PeerId, MatchIndex[Outbox]] = mutable.Map.empty
 
     /** Return the match index for a given peer */
-    def matchIndex(peer: PeerId): Either[OutboxActorError, MatchIndex[Outbox]] = matchIndices.get(peer) match {
-      case None => Left(PeerNotFoundInMatchIndexMap)
-      case Some(index) => Right(index)
+    def matchIndex(peer: PeerId): MatchIndex[Outbox] = matchIndices.get(peer) match {
+      case None => MatchIndex(0) // QUESTION: Is this correct?
+      case Some(index) => index
     }
 
-    // TODO: When a peer is caught-up, add him to this set.
+
     //  When we receive a new outgoing message, we'll broadcast it to all peers in the set and then empty it.
     //  This avoids endless ping-ponging of addEntries/confirmMatchIndex with caught-up peers.
     val peersAwaitingMessages: mutable.Set[PeerId] = mutable.Set.empty
@@ -91,7 +88,8 @@ class OutboxActor(
 
             // Send the batch or add to the set of awaiting peers
             _ = if (batch.nonEmpty) {
-                transmitter.tell(_.appendEntries(peer, batch))
+              // NOTE: swallows errors. If the transmitter can't send, the outbox doesn't care.
+              transmitter.tellDiscard(_.appendEntries(peer, batch))
             } else {
                 peersAwaitingMessages.add(peer)
             }
@@ -198,27 +196,10 @@ class OutboxActor(
                     case Some(batch) => Right(batch)
         }
 
-    /** Unconditionally triggers a heartbeat message to be broadcasted to all peers.
+  /** Unconditionally triggers a heartbeat message to be broadcasted to all peers that are awaiting messages.
      */
     override def wakeUp(): Either[OutboxActorError, Unit] = {
-        if matchIndices.nonEmpty then
-            val _ = addToOutbox(Heartbeat())
-            // TODO: Initially this map is empty, so we need to wait till the first `matchIndex`
-            //      pops up from a peer or add them proactively.
-            // TODO: Improve error reporting to indicate _which_ peer(s) had an invalid batch.
-            // TODO: This should be in a Validation traversable, but I cant get `cats` to work
-            val results: List[Either[OutboxActorError, Unit]] = matchIndices.map((peer, index) =>
-                mkBatch(index) match {
-                    case Left(err) => Left(err)
-                    case Right(batch) if batch.isEmpty => Left(OutboxActorError.WakeupBatchEmpty)
-                    case Right(batch) => Right(transmitter.tell(_.appendEntries(peer, batch))
-                    )
-                }
-            ).toList
-            results.sequence match
-                case Left(e) => Left(e)
-                case Right(_) => Right(())
-        else Right(())
+      Right(peersAwaitingMessages.foreach(peer => transmitter.tellDiscard(_.appendEntries(peer, MsgBatch.empty[Outbox]))))
     }
 
     /** Persist and enqueue an outgoing message for delivering.
@@ -229,13 +210,16 @@ class OutboxActor(
       *   the id of the persisted message
       */
     def addToOutbox(msg: Req | Ack): MsgId[Outbox] = {
-        log.info(s"Adding to outbox: $msg")
-        // 1. Persist a message (not to lose them in case of a crash)
-        val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
-        // 2. Append to the end of the delivery queue
-        queue.append(Msg(msgId, msg))
-        // TODO: remove? 3. Return the msg ID
-        msgId
+      msg match {
+        case _ =>
+          log.info(s"Adding to outbox: $msg")
+          // 1. Persist a message (not to lose them in case of a crash)
+          val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
+          // 2. Append to the end of the delivery queue
+          queue.append(Msg(msgId, msg))
+          // TODO: remove? 3. Return the msg ID
+          msgId
+      }
     }
 
 enum OutboxActorError extends Throwable:

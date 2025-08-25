@@ -3,6 +3,8 @@ package hydrozoa.l2.consensus.network.mailbox
 import hydrozoa.l2.consensus.network.{Ack, Req}
 import ox.channels.ActorRef
 
+import scala.util.Try
+
 // TODO: find a better place?
 opaque type PeerId = String
 
@@ -11,6 +13,13 @@ object PeerId:
     extension (self: PeerId) {
         def asString: String = self
     }
+
+object Heartbeat:
+    /** Heartbeats are psuedo-messages that can be put in the outbox only. They do not have sequence numbers.
+     * When processed, they trigger the outbox to send an empty message batch to all peers that are awaiting messages
+    */
+    opaque type Heartbeat = Unit
+    def apply(): Heartbeat = ()
 
 // Do we want this?
 //opaque type OutMsg = Msg
@@ -101,14 +110,18 @@ object MatchIndex:
 
 
 extension [T](actor: ActorRef[T])
-    // Turn a `tell` that returns an Either into a throwing tell
-    def tellThrow[A](f: T => Either[Throwable, A]): Unit =
-        actor.tell(t => f(t) match {
-            case Left(e) => throw RuntimeException(e)
-            case Right(_) => ()
-        })
+    /** Ignore exceptions from a tell */
+    def tellSwallow(f : T => Unit) : Unit = {
+      val _ = Try(actor.tell(f))
+      ()
+      }
 
-    // Turn an `ask` that returns an Either into a throwing ask
+    /** Cast an Either[Throwable, A] to unit. This method primarily exists so that we can `find usages` and understand
+     * where we are discarding Either-based errors */
+    def tellDiscard[A](f: T => Either[Throwable, A]) : Unit = 
+       actor.tell(f(_) : Unit)
+    
+    /** Turn an `ask` that returns an Either into a throwing ask */
     def askThrow[A](f: T => Either[Throwable, A]): A =
       actor.ask(t => f(t) match {
         case Left(e) => throw RuntimeException(e)

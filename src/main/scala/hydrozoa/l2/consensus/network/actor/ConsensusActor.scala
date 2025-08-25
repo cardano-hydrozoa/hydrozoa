@@ -147,7 +147,6 @@ class ConsensusActorFactory(
                 val actor = mkDeinitActor(dropMyself)
                 val mbAck = actor.deliver(ack)
                 Some(actor) -> mbAck
-            case _: Heartbeat => ???
 
     private def mkVerificationKeyActor(dropMyself: () => Unit) =
         new VerificationKeyActor(stateActor, walletActor, dropMyself)

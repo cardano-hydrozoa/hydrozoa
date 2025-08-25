@@ -10,10 +10,10 @@ class ActorWatchdogSpec extends ScalaCheckSuite:
 
     test("Watchdog works"):
 
-        class WatchdogCounter extends Watchdog[Unit]:
+        class WatchdogCounter extends Watchdog:
             var counter = 0L
 
-            override def wakeUp(): Either[Unit, Unit] = Right(counter += 1)
+            override def wakeUp(): Either[Throwable, Unit] = Right(counter += 1)
 
         supervised {
             given timer: WatchdogTimeoutSeconds = WatchdogTimeoutSeconds(1)
