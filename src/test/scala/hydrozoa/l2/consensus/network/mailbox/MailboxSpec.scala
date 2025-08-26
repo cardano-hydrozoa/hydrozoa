@@ -2,13 +2,20 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
-import hydrozoa.l2.consensus.network.{AckUnit, ProtocolMsg, ReqVerKey}
+import hydrozoa.infra.transitionary.{emptyContext, emptyState}
+import hydrozoa.l2.consensus.network.{AckUnit, ProtocolMsg, ReqEventL2, ReqVerKey}
+import hydrozoa.l2.ledger.generators.genL2EventGenesisFromPeer
+import hydrozoa.l2.ledger.{HydrozoaL2Mutator, L2EventGenesis}
+import hydrozoa.node.TestPeer.Alice
 import hydrozoa.node.db.DbReadOutgoingError.ValuesReadAreMalformed
 import hydrozoa.node.db.{DBReader, DBWriterActor, DbReadOutgoingError}
+import hydrozoa.node.l2EventWithdrawalFromInputsAndPeer
 import munit.ScalaCheckSuite
+import org.scalacheck.Prop.{forAll, propBoolean}
+import org.scalacheck.Test as ScalaCheckTest
 import ox.channels.{Actor, ActorRef, BufferCapacity}
 import ox.logback.InheritableMDC
-import ox.resilience.{RetryConfig, retry}
+import ox.resilience.{RetryConfig, retry, retryEither}
 import ox.{Ox, sleep, supervised}
 
 import java.net.URI
@@ -24,6 +31,8 @@ val carolId = PeerId("Carol")
   * to Bob, she sees it as a MsgBatch[Outbox], but he sees it as a MsgBatch[Inbox
   */
 def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](msgId: MsgId[M1]): MsgId[M2] = MsgId[M2](msgId.toLong)
+def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](mm: MailboxMsg[M1]): MailboxMsg[M2] = MailboxMsg[M2](swapMailbox(mm.id), mm.content)
+
 
 /** The composite set of information needed to work with a node within this test suite. Functions
   * are exposed to work with a single peer's node, or a set of peers/nodes all at once. Full
@@ -169,6 +178,13 @@ object TestNodeContext:
     }
 
 class MailboxSpec extends ScalaCheckSuite:
+    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
+      /* NOTE: This is very low for sufficient test coverage, but we're keeping it low for now because
+       most of these tests contain race conditions. We'll often need to poll things like databases to wait for
+       messages to appear, which will slow down the tests
+       */
+      ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
+    }
 
     override def beforeEach(context: BeforeEach): Unit =
         InheritableMDC.init
@@ -402,6 +418,74 @@ class MailboxSpec extends ScalaCheckSuite:
 
             // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
         }
+
+    property("Random Single Withdrawal Event")(
+          forAll(genL2EventGenesisFromPeer(Alice)) {
+
+            (event: L2EventGenesis) =>
+              supervised:
+                // General setup. Note that this is unique /per test/, so is not suitable if node initialization
+                // takes a non-trivial amount of time (e.g., establishing websocket connections)
+                val config = TestNodeConfig()
+                val peers = Set(aliceId, bobId).map((_, config))
+                val peerNodes = TestNodeContext.initializePeers(peers)
+                // config for polling message state. Note that:
+                // - If we give up too quickly, the test will be flaky due to race conditions
+                // - Polling issues blocking calls to actor, meaning that polling too frequently will flood their
+                //   mailbox and prevent them from processing the message you are waiting for.
+                // - Polling occurs in the hot-loop of the test. Since this is a property test, it will slow down
+                //   _each_ test case run. A 1 second slow down for 60 test cases will increase running time by 1 minute.
+                val retryConfig : RetryConfig[String, Unit] = RetryConfig.backoff(maxRetries = 100, initialDelay = 10.millis, maxDelay = 200.millis)
+
+                val res =
+                  for
+                    // Generate initial state and withdrawal event
+                    state <- HydrozoaL2Mutator(emptyContext, emptyState, event)
+                    l2Event = l2EventWithdrawalFromInputsAndPeer(state.utxo.keySet, Alice)
+                    req = ReqEventL2(l2Event)
+
+                    // Verify test preconditions hold (initial match index == 0)
+                    _ <- if peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0)
+                        then Right(())
+                        else Left("Alice's match index for Bob is not 0")
+
+                    // Send l2 withdrawal to outbox
+                    msgId = peerNodes(aliceId).outbox.ask(_.addToOutbox(req))
+
+                    mailboxMsg = MailboxMsg[Outbox](msgId, req)
+
+                    ///// Observe message
+                    // In Alice's outgoing db. Note that the should not be a race condition here, because
+                    // the persistence must happen before the call to (_.ask(_.addToOutbox(req)) completes
+                    aliceDb <- peerNodes(aliceId).db.readOutgoingMessages(msgId, msgId)
+                    _ <- if (aliceDb.contains(mailboxMsg)) {
+                      Right(())
+                    } else {
+                      Left(s"Error reading Alice's database. msg id ${msgId} not found!")
+                    }
+
+                    // In Bob's DB. Note there is a race condition here, so we retry until successful.
+                    _ <- retryEither(retryConfig) {
+                               if !peerNodes(bobId).db.readIncomingMessages(aliceId).contains(swapMailbox(mailboxMsg))
+                               then Left(s"Message was not found (persisted) in Bob's db! The Message was: \n ${mailboxMsg}")
+                               else Right(()) }
+
+                    // Check that Alice has successfully received Bob's updated match ID
+                    _ <- retryEither(retryConfig) {
+                              val expectedMatchIndex: MatchIndex[Outbox] = MatchIndex(msgId.toLong)
+                              val actualMatchIndex: MatchIndex[Outbox] = peerNodes(aliceId).outbox.ask(_.matchIndex(bobId))
+                              if !(expectedMatchIndex == actualMatchIndex)
+                              then Left(s"Alice's matchIndex for Bob should be ${expectedMatchIndex}, but it is ${actualMatchIndex}")
+                              else Right(())
+                    }
+                  yield Right(())
+
+                res match {
+                  case Left(e) => false :| s"Test failed. Error: ${e}"
+                  case Right(_) => true :| s"Test succeeded"
+                }
+          })
+
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */
