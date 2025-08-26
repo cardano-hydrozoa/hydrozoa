@@ -14,7 +14,7 @@ import ox.{Ox, sleep, supervised}
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 val aliceId = PeerId("Alice")
 val bobId = PeerId("Bob")
@@ -46,7 +46,9 @@ case class TestNodeContext(
     outbox: ActorRef[OutboxActor]
 )
 
-case class TestNodeConfig(outboxWatchdogSeconds: Int = 3, inboxWatchdogSeconds: Int = 10)
+// NOTE: the real-world default for timeouts are currently 3 seconds and 10 seconds, but these can likely be reduced
+// substantially without the tests failing due to races.
+case class TestNodeConfig(outboxWatchdogTimeout: FiniteDuration = 3.seconds, inboxWatchdogTimeout: FiniteDuration = 10.seconds)
 
 object TestNodeContext:
 
@@ -131,10 +133,10 @@ object TestNodeContext:
         val transmitter: ActorRef[TransmitterActor] =
             Actor.create(LocalTransmitterActor(peerId))
         val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter, peerId))(
-          using timeout = WatchdogTimeoutSeconds(testNodeConfig.outboxWatchdogSeconds)
+          using timeout = WatchdogTimeout(testNodeConfig.outboxWatchdogTimeout)
         )
         val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others))(using
-          timeout = WatchdogTimeoutSeconds(testNodeConfig.inboxWatchdogSeconds)
+          timeout = WatchdogTimeout(testNodeConfig.inboxWatchdogTimeout)
         )
 
         TestNodeContext(
@@ -177,7 +179,7 @@ class MailboxSpec extends ScalaCheckSuite:
             val peers = Set(aliceId, bobId, carolId)
             val peerNodes = TestNodeContext.initializePeers(peers.map((_, config)))
 
-            sleep(config.inboxWatchdogSeconds.seconds)
+            sleep(config.inboxWatchdogTimeout)
 
             peers.foreach(thisPeer => {
                 val otherPeers = peers - thisPeer
@@ -189,13 +191,14 @@ class MailboxSpec extends ScalaCheckSuite:
 
     test("Handle a message"):
         supervised {
-            val peerConfigs = Set(aliceId, bobId, carolId).map((_, TestNodeConfig()))
+          val config = TestNodeConfig()
+          val peerConfigs = Set(aliceId, bobId, carolId).map((_, config))
             val peerNodes = TestNodeContext.initializePeers(peerConfigs)
 
             val outMsg =
                 MailboxMsg(peerNodes(aliceId).outbox.ask(_.addToOutbox(msg = AckUnit())), AckUnit)
 
-            sleep(10.second)
+          sleep(config.inboxWatchdogTimeout)
 
             peerNodes(aliceId).db.readOutgoingMessages(outMsg.id, outMsg.id) match {
                 case Left(e) =>
@@ -219,7 +222,8 @@ class MailboxSpec extends ScalaCheckSuite:
     test("Test delayed delivery of multiple messages"):
         /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
         supervised:
-            val peers = Set(aliceId, bobId).map((_, TestNodeConfig()))
+          val config = TestNodeConfig()
+          val peers = Set(aliceId, bobId).map((_, config))
             // Start two nodes. Do not connect them
             val peerNodes = TestNodeContext.mkNodeContexts(peers)
             val nodes = peerNodes.values.toSet
@@ -238,7 +242,7 @@ class MailboxSpec extends ScalaCheckSuite:
             // Start inboxes on all nodes
             TestNodeContext.startInboxes(nodes)
 
-            sleep(10.seconds)
+          sleep(config.inboxWatchdogTimeout)
 
             // Check that Alice's message IDs have gotten into Bob's database
             val receivedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
@@ -276,7 +280,7 @@ class MailboxSpec extends ScalaCheckSuite:
             supervised {
                 val config = TestNodeConfig()
                 // We add Carol into this test even though we don't reference her at all. Her presence should not affect the validity of the test.
-                val peers = Set(aliceId, bobId).map((_, config))
+                val peers = Set(aliceId, bobId, carolId).map((_, config))
                 val peerNodes = TestNodeContext.initializePeers(peers)
 
                 // Verify initial state
@@ -287,13 +291,13 @@ class MailboxSpec extends ScalaCheckSuite:
 
                 assert(
                   peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId),
-                  s"Alice should have added bob to peersAwaitingMessages when Bob send her a matchIndex of 0 during the initialization of Bob's Node"
+                  s"Alice should have added bob to peersAwaitingMessages when Bob sent her a matchIndex of 0 during the initialization of Bob's Node"
                 )
 
                 // Terminate connection from Bob to Alice to allow Alice to clear bob from Peers awaiting messages
                 TestNodeContext.disconnectNodeUnidirectional(peerNodes(bobId), peerNodes(aliceId))
 
-                sleep((config.outboxWatchdogSeconds + 1).seconds)
+                sleep(config.outboxWatchdogTimeout + 1.seconds)
 
                 assert(
                   !peerNodes(aliceId).outbox.ask(_.peersAwaitingMessages).contains(bobId),
@@ -311,7 +315,7 @@ class MailboxSpec extends ScalaCheckSuite:
                 // - then the next inbox timeout (10s)
                 // - outbox timeout, since we don't send heartbeats immediately
                 // - an additional second for good measure
-                sleep((2 * config.inboxWatchdogSeconds + config.outboxWatchdogSeconds + 1).seconds)
+                sleep(config.inboxWatchdogTimeout * 2D + config.outboxWatchdogTimeout + 1.seconds)
 
                 val bobsCountAfterReconnect =
                     peerNodes(bobId).inbox.ask(_.heartbeatCounters(aliceId))
@@ -339,10 +343,10 @@ class MailboxSpec extends ScalaCheckSuite:
                 WSTransmitterActor.create(myself)
             val outbox =
                 ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter, myself))(using
-                  timeout = WatchdogTimeoutSeconds(3)
+                  timeout = WatchdogTimeout(3.seconds)
                 )
             val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others))(using
-              timeout = WatchdogTimeoutSeconds(10)
+              timeout = WatchdogTimeout(10.seconds)
             )
 
             (
@@ -490,7 +494,7 @@ class DropModNInboxFixture(
         ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???))(using
           ox,
           sc,
-          WatchdogTimeoutSeconds.apply(5)
+          WatchdogTimeout.apply(5.seconds)
         )
     val counter = AtomicLong(0L)
     private val log = Logger(getClass)

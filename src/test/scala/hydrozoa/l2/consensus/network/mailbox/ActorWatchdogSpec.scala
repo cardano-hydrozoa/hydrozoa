@@ -16,7 +16,7 @@ class ActorWatchdogSpec extends ScalaCheckSuite:
             override def wakeUp(): Unit = counter += 1
 
         supervised {
-            given timer: WatchdogTimeoutSeconds = WatchdogTimeoutSeconds(1)
+            given timer: WatchdogTimeout = WatchdogTimeout(1.seconds)
             val actor: ActorRef[WatchdogCounter] = ActorWatchdog.create(WatchdogCounter())
 
             sleep(2500.millis)
