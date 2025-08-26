@@ -21,7 +21,8 @@ trait TransmitterActor:
       *   the recipient node
       * @param batch
       *   the messages may be empty
-     *  @return Must return a Left-throwable if transmission is unsuccessful; otherwise unit.
+      * @return
+      *   Must return a Left-throwable if transmission is unsuccessful; otherwise unit.
       */
     def appendEntries(to: PeerId, batch: MsgBatch[Outbox]): Either[Throwable, Unit]
 
@@ -34,7 +35,8 @@ trait TransmitterActor:
       *   the recipient node
       * @param matchIndex
       *   the current matchIndex for [[to]] peer in the local [[InboxActor]]
-     *  @return Must return a Left-throwable if transmission is unsuccessful; otherwise unit.
+      * @return
+      *   Must return a Left-throwable if transmission is unsuccessful; otherwise unit.
       */
     def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex[Inbox]): Either[Throwable, Unit]
 
@@ -47,37 +49,53 @@ final class LocalTransmitterActor(myself: PeerId) extends TransmitterActor:
     val peers: mutable.Map[PeerId, Receiver] = mutable.Map.empty
 
     /** Replicate messages in out outbox to the peer's inbox */
-    override def appendEntries(to: PeerId, batch: MsgBatch[Outbox]): Either[LocalTransmitterError, Unit] = {
+    override def appendEntries(
+        to: PeerId,
+        batch: MsgBatch[Outbox]
+    ): Either[LocalTransmitterError, Unit] = {
 
         // The batch we send is OUR outbox, but must be received at the PEERS inbox
-        val inBatch = MsgBatch.fromList[Inbox](batch.toList.map(msg => MailboxMsg[Inbox](MsgId[Inbox](msg.id.toLong), msg.content))).get
+        val inBatch = MsgBatch
+            .fromList[Inbox](
+              batch.toList.map(msg => MailboxMsg[Inbox](MsgId[Inbox](msg.id.toLong), msg.content))
+            )
+            .get
         peers.get(to) match {
             case None => {
-                log.error(s"transmission failed: appendEntries(${to}, ${batch})")
+                log.error(
+                  s"[${myself.asString}] transmission failed: appendEntries(${to}, ${batch})"
+                )
                 Left(LocalTransmitterError.PeerNotFound)
             }
             case Some(peer) => {
                 peer.handleAppendEntries(myself, inBatch)
-                log.debug(s"appendEntries to: $to, batch: $batch")
+                log.debug(s"[${myself.asString}] appendEntries to: $to, batch: $batch")
                 Right(())
             }
         }
     }
 
     /** Confirm to the peer the highest message id that WE have processed from the peer */
-    override def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex[Inbox]): Either[LocalTransmitterError, Unit] =
-        
+    override def confirmMatchIndex(
+        to: PeerId,
+        matchIndex: MatchIndex[Inbox]
+    ): Either[LocalTransmitterError, Unit] =
+
         // The index we send is the highest index WE have processed for the remote peer. This is reflected in THEIR
         // outbox.
         val outIndex = MatchIndex[Outbox](matchIndex.toLong)
         peers.get(to) match {
             case None => {
-                log.error(s"transmission failed for confirmMatchIndex(${to}, ${matchIndex})")
+                log.error(
+                  s"[${myself.asString}] transmission failed for confirmMatchIndex(${to}, ${matchIndex})"
+                )
                 Left(LocalTransmitterError.PeerNotFound)
             }
             case Some(peer) => {
                 peer.handleConfirmMatchIndex(myself, outIndex)
-                log.debug(s"confirmMatchIndex to: $to, matchIndex: $matchIndex")
+                log.debug(
+                  s"[${myself.asString}] confirmMatchIndex to: $to, matchIndex: $matchIndex"
+                )
                 Right(())
             }
         }
