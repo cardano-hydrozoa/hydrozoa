@@ -2,6 +2,8 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
+import hydrozoa.l2.consensus.network.ReqEventL2
+import hydrozoa.l2.consensus.network.actor.BlockActor
 import hydrozoa.l2.consensus.network.mailbox.Batch.Batch
 import hydrozoa.node.db.DBWriterActor
 import ox.*
@@ -22,7 +24,8 @@ private class InboxActor(
     val dbWriter: ActorRef[DBWriterActor],
     val transmitter: ActorRef[TransmitterActor],
     val ownPeerId: PeerId,
-    val others: Set[PeerId]
+    val others: Set[PeerId],
+    val blockActor: ActorRef[BlockActor]
 ) extends Watchdog:
 
     private val log = Logger(getClass)
@@ -43,6 +46,12 @@ private class InboxActor(
     // N.B.: see InMemoryDbMemoryActor
     // TODO: Refactor all peer data into a single map
     private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg[Inbox]]] = mutable.Map.empty
+    
+    /** Message dispatch (sending to downstream actors) for all incoming mailbox messages */
+    private def dispatchMessages(msg : MailboxMsg[Inbox]): Unit = msg.content match {
+      case m : ReqEventL2 => blockActor.tell(_.appendToMempool(m.eventL2))
+      case _ => ()  
+    }
 
     /** It's more convenient to have a separate method so we can make connections first and then
       * start.
@@ -115,6 +124,9 @@ private class InboxActor(
 
         // Persist messages in memory of Inbox Actor
         batch.foreach(msg => this.inboxes(from).append(msg))
+        
+        // Send messages to downstream actors for processing
+        batch.foreach(msg => dispatchMessages(msg))
 
         // - When an inbox receives a batch from a peer, it marks it
         // by removing that peer ID from `pendingHeartbeats`.
@@ -163,3 +175,4 @@ private class InboxActor(
 
 enum InboxActorError extends Throwable:
     case MatchIndexForPeerNotFound
+

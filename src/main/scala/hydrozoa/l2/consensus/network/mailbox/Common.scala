@@ -28,10 +28,6 @@ object Heartbeat:
     opaque type Heartbeat = Unit
     def apply(): Heartbeat = ()
 
-// Do we want this?
-//opaque type OutMsg = Msg
-//case class InMsg(msg : Msg, from: PeerId)
-
 enum AnyMsg:
     case ReqVerKeyMsg(content: ReqVerKey)
     case AckVerKeyMsg(content: AckVerKey)
