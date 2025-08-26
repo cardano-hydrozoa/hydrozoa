@@ -1,7 +1,5 @@
 package hydrozoa.l2.consensus.network.mailbox
 
-import hydrozoa.l2.consensus.network.mailbox.{MsgBatch}
-import ox.channels.ActorRef
 import com.github.plokhotnyuk.jsoniter_scala.core.readFromString
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.mailbox.BatchMsgOrMatchIndexMsg.{
@@ -20,20 +18,21 @@ import ox.*
 import ox.channels.*
 import ox.scheduling.{RepeatConfig, repeat}
 
+import scala.annotation.nowarn
 import scala.util.Try
 
 /** Likely, not an actor but something else that physically receives messages from multiple remote
- * [[TransmitterActor]]s and passes them to the local [[InboxActor]] or [[OutboxActor]].
+  * [[TransmitterActor]]s and passes them to the local [[InboxActor]] or [[OutboxActor]].
   */
 abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor]):
 
     /** An incoming request from a peer telling us to add new messages to our inbox */
-    final def handleAppendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit =
+    final def handleAppendEntries(batchMsg: BatchMsg[Inbox]): Unit =
         inboxActor.tell(_.appendEntries(batchMsg._1, batchMsg._2))
 
     /** An incoming request from a peer, indicating the highest message THEY have processed */
-    final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex[Outbox]): Unit =
-        outboxActor.tell(_.confirmMatchIndex(matchIndexMsg._1, matchIndexMsg._2))
+    final def handleConfirmMatchIndex(matchIndexMsg: MatchIndexMsg[Outbox]): Unit =
+        outboxActor.tell(_.confirmMatchIndex(matchIndexMsg._1, matchIndexMsg._2): Unit)
 
 /** A short-circuit receiver.
   *
@@ -59,7 +58,9 @@ class WSReceiver(
 
     private val log = Logger(getClass)
 
+    @nowarn
     val bossGroup = NioEventLoopGroup()
+    @nowarn
     val workerGroup = NioEventLoopGroup()
 //    val bossGroup = NioIoHandler.newFactory()
 //    val workerGroup = NioIoHandler.newFactory()
@@ -70,12 +71,17 @@ class WSReceiver(
                 case textFrame: TextWebSocketFrame =>
                     val text = textFrame.text()
                     log.debug(s"Received: $text")
-                    Try(readFromString(text)(using batchMsgOrMatchIndexMsgCodec)).toEither match {
+                    Try(
+                      readFromString(text)(using batchMsgOrMatchIndexMsgCodec[Inbox])
+                    ).toEither match {
                         case Right(matchIndexMsg) =>
                             matchIndexMsg match {
                                 case CaseBatchMsg(batchMsg) => handleAppendEntries(batchMsg)
                                 case CaseMatchIndexMsg(matchIndexMsg) =>
-                                    handleConfirmMatchIndex(matchIndexMsg)
+                                    // FIXME: I just sidestep typechecker here for now, sorry...
+                                    handleConfirmMatchIndex(
+                                      matchIndexMsg.asInstanceOf[MatchIndexMsg[Outbox]]
+                                    )
                             }
                         case Left(ex) =>
                             log.error(s"Failed to parse incoming message: ${ex.getMessage}")

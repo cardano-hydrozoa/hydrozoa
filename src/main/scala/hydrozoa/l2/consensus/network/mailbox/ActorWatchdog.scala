@@ -21,8 +21,8 @@ extension (self: WatchdogTimeoutSeconds) {
 /** An interface that actors with a watchdog timer should provide.
   */
 trait Watchdog:
-    /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions must be handled by the
-     * wrapped actor
+    /** Called with `tell` every [[WatchdogTimeoutSeconds]] in scope, exceptions must be handled by
+      * the wrapped actor
       */
     def wakeUp(): Unit
 

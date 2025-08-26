@@ -36,10 +36,10 @@ private class InboxActor(
     private val matchIndices: mutable.Map[PeerId, MatchIndex[Inbox]] =
         mutable.Map.from(this.others.map(peer => (peer, MatchIndex[Inbox](0))))
 
-    private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg]] = mutable.Map.empty
-
     private val headPeers: mutable.Set[PeerId] = mutable.Set.empty
+
     val pendingHeartbeats: mutable.Set[PeerId] = mutable.Set.from(others)
+
     // N.B.: see InMemoryDbMemoryActor
     // TODO: Refactor all peer data into a single map
     private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg[Inbox]]] = mutable.Map.empty
@@ -94,7 +94,7 @@ private class InboxActor(
       * @param batch
       *   the batch, may be empty
       */
-    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit =
+    def appendEntries(from: PeerId, batch: Batch[Inbox]): Unit =
         if batch.isEmpty then
             this.heartbeatCounters.updateWith(from)({
                 case None =>

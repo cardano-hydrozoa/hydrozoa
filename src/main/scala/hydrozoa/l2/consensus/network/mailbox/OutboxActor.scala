@@ -137,7 +137,7 @@ class OutboxActor(
       */
     private def mkBatch(
         matchIndex: MatchIndex[Outbox]
-    ): Either[OutboxActorError, MsgBatch[Outbox]] =
+    ): Either[OutboxActorError, Batch[Outbox]] =
 
         // TODO: if matchIndex == highestOwnOutMsgId (queue.lastOption) return List.empty
 
@@ -155,7 +155,7 @@ class OutboxActor(
                         case Left(err)       => Left(DatabaseReadError(err))
                         case Right(msgBatch) => Right(msgBatch)
                     }
-                else Right(MsgBatch.empty)
+                else Right(Batch.empty)
 
             // Non-empty queue; read from the DB if needed or pull directly from the queue
             case Some(queueHead) =>
@@ -176,7 +176,7 @@ class OutboxActor(
                                 )
                                 readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue) match {
                                     case Right(queuePart) =>
-                                        MsgBatch
+                                        Batch
                                             .fromList[Outbox](
                                               dbPart ++ queuePart
                                             ) match
@@ -214,14 +214,14 @@ class OutboxActor(
     private def readFromQueue(
         firstMessage: MsgId[Outbox],
         maxLastMsgId: MsgId[Outbox]
-    ): Either[OutboxActorError, MsgBatch[Outbox]] =
+    ): Either[OutboxActorError, Batch[Outbox]] =
         val n = maxLastMsgId.toLong - firstMessage.toLong
         queue.headOption match {
-            case None => Right(MsgBatch.empty)
+            case None => Right(Batch.empty)
             case Some(head) =>
                 val startOffset = firstMessage.toLong - head.id.toLong
                 val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt).toList
-                MsgBatch.fromList[Outbox](slice) match
+                Batch.fromList[Outbox](slice) match
                     case None        => Left(OutboxActorError.QueueMalformed(slice))
                     case Some(batch) => Right(batch)
         }
@@ -234,9 +234,9 @@ class OutboxActor(
           s"[${ownPeer.asString}] Sending heartbeat/batch to all awaiting peers: $peersAwaitingMessages"
         )
         peersAwaitingMessages.foreach(peer => {
-            transmitter.tell(_.appendEntries(peer, MsgBatch.empty[Outbox]): Unit)
+            transmitter.tell(_.appendEntries(peer, Batch.empty[Outbox]): Unit)
         })
-        peersAwaitingMessages   .clear()
+        peersAwaitingMessages.clear()
     }
 
     /** Persist and enqueue an outgoing message for delivering.
@@ -265,7 +265,7 @@ enum OutboxActorError extends Throwable:
     /** Returned during recovery if the dbPart and the queuePart, taken together, don't obey the
       * invariants of a MsgBatch
       */
-    case DbPartAndQueueNotCoherent(dbPart: MsgBatch[Outbox], queuePart: MsgBatch[Outbox])
+    case DbPartAndQueueNotCoherent(dbPart: Batch[Outbox], queuePart: Batch[Outbox])
 
     /** Returned when the queue part, taken in isolation, doesn't obey the invariants of a MsgBatch
       */

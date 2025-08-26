@@ -56,20 +56,14 @@ sealed trait Req extends ProtocolMsg:
 
 sealed trait Ack extends ProtocolMsg
 
-given msgCodec: JsonValueCodec[Msg] = JsonCodecMaker.make
-given Schema[Msg] = Schema.derived[Msg]
+given msgCodec: JsonValueCodec[ProtocolMsg] = JsonCodecMaker.make
+given Schema[ProtocolMsg] = Schema.derived[ProtocolMsg]
 
 given reqCodec: JsonValueCodec[Req] = JsonCodecMaker.make
 given Schema[Req] = Schema.derived[Req]
 
 given ackCodec: JsonValueCodec[Ack] = JsonCodecMaker.make
 given Schema[Ack] = Schema.derived[Ack]
-
-case class Heartbeat(foo: String = "bar") extends Ack
-
-given JsonValueCodec[Heartbeat] = JsonCodecMaker.make
-
-given Schema[Heartbeat] = Schema.derived[Heartbeat]
 
 /** ------------------------------------------------------------------------------------------
   * ReqVerKey

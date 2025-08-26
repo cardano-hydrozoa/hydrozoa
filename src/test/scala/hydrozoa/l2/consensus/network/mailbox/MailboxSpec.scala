@@ -322,81 +322,83 @@ class MailboxSpec extends ScalaCheckSuite:
             }
         }
 
-test("Heartbeat mini-protocol works using WS transport"):
+    test("Heartbeat mini-protocol works using WS transport"):
 
-    def startNode(myself: PeerId, others: Set[PeerId], port: Int)(using
-                                                                  ox: Ox
-    ): (
-        DBWriterActor & DBReader,
+        def startNode(myself: PeerId, others: Set[PeerId], port: Int)(using
+            ox: Ox
+        ): (
+            DBWriterActor & DBReader,
             WSReceiver,
             ActorRef[WSTransmitterActor],
             ActorRef[InboxActor]
         ) =
-        val db = InMemoryDBActor()
-        val dbWriteOnly = OnlyWriteDbActor(db)
-        val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
-        val transmitter: ActorRef[TransmitterActor] =
-            WSTransmitterActor.create(myself)
-        val outbox = ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter))(using
-            timeout = WatchdogTimeoutSeconds(3)
-        )
-        val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others))(using
-            timeout = WatchdogTimeoutSeconds(10)
-        )
+            val db = InMemoryDBActor()
+            val dbWriteOnly = OnlyWriteDbActor(db)
+            val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
+            val transmitter: ActorRef[TransmitterActor] =
+                WSTransmitterActor.create(myself)
+            val outbox =
+                ActorWatchdog.create(OutboxActor(dbWriteOnly, dbActor, transmitter, myself))(using
+                  timeout = WatchdogTimeoutSeconds(3)
+                )
+            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others))(using
+              timeout = WatchdogTimeoutSeconds(10)
+            )
 
-        (
-            db,
-            WSReceiver(outbox, inbox, port),
-            transmitter.asInstanceOf[ActorRef[WSTransmitterActor]],
-            inbox
-        )
+            (
+              db,
+              WSReceiver(outbox, inbox, port),
+              transmitter.asInstanceOf[ActorRef[WSTransmitterActor]],
+              inbox
+            )
 
-    supervised {
+        supervised {
 
-        // Start nodes
-        val aliceId = PeerId("Alice")
-        val bobId = PeerId("Bob")
-        val carolId = PeerId("Carol")
+            // Start nodes
+            val aliceId = PeerId("Alice")
+            val bobId = PeerId("Bob")
+            val carolId = PeerId("Carol")
 
-        val (dbAlice, receiverAlice, transmitterAlice, inboxAlice) =
-            startNode(aliceId, Set(bobId, carolId), 4937)
-        val (dbBob, receiverBob, transmitterBob, inboxBob) =
-            startNode(bobId, Set(aliceId, carolId), 4938)
-        val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
-            startNode(carolId, Set(aliceId, bobId), 4939)
+            val (dbAlice, receiverAlice, transmitterAlice, inboxAlice) =
+                startNode(aliceId, Set(bobId, carolId), 4937)
+            val (dbBob, receiverBob, transmitterBob, inboxBob) =
+                startNode(bobId, Set(aliceId, carolId), 4938)
+            val (dbCarol, receiverCarol, transmitterCarol, inboxCarol) =
+                startNode(carolId, Set(aliceId, bobId), 4939)
 
-        val uriAlice = URI("ws://localhost:4937/ws")
-        val uriBob = URI("ws://localhost:4938/ws")
-        val uriCarol = URI("ws://localhost:4939/ws")
+            val uriAlice = URI("ws://localhost:4937/ws")
+            val uriBob = URI("ws://localhost:4938/ws")
+            val uriCarol = URI("ws://localhost:4939/ws")
 
-        // Connect nodes to each other
-        transmitterAlice.tell(_.connect(bobId, uriBob))
-        transmitterAlice.tell(_.connect(carolId, uriCarol))
+            // Connect nodes to each other
+            transmitterAlice.tell(_.connect(bobId, uriBob))
+            transmitterAlice.tell(_.connect(carolId, uriCarol))
 
-        transmitterBob.tell(_.connect(aliceId, uriAlice))
-        transmitterBob.tell(_.connect(carolId, uriCarol))
+            transmitterBob.tell(_.connect(aliceId, uriAlice))
+            transmitterBob.tell(_.connect(carolId, uriCarol))
 
-        transmitterCarol.tell(_.connect(aliceId, uriAlice))
-        transmitterCarol.tell(_.connect(bobId, uriBob))
+            transmitterCarol.tell(_.connect(aliceId, uriAlice))
+            transmitterCarol.tell(_.connect(bobId, uriBob))
 
-        sleep(2.seconds)
+            sleep(2.seconds)
 
-        inboxAlice.tell(_.start())
-        inboxBob.tell(_.start())
-        inboxCarol.tell(_.start())
+            inboxAlice.tell(_.start())
+            inboxBob.tell(_.start())
+            inboxCarol.tell(_.start())
 
-        sleep(600.seconds)
+            sleep(600.seconds)
 
-        assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
-        assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
-        assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
+            assertEquals(dbBob.readIncomingMessages(aliceId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(bobId).length, 3)
+            assertEquals(dbAlice.readIncomingMessages(carolId).length, 3)
 
-        assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
-        assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
-        assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
+            assertEquals(dbBob.readIncomingMessages(aliceId), dbCarol.readIncomingMessages(aliceId))
+            assertEquals(dbAlice.readIncomingMessages(bobId), dbCarol.readIncomingMessages(bobId))
+            assertEquals(dbAlice.readIncomingMessages(carolId), dbBob.readIncomingMessages(carolId))
 
-        // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
-    }
+            // + implicitly by using [[OnlyWriteDbActor]] - no read from the db during execution
+        }
+
 /** Use it for tests that MUST never READ from the database (though can write).
   */
 class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, DBReader {
@@ -410,7 +412,7 @@ class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, 
     override def readOutgoingMessages(
         firstMessage: MsgId[Outbox],
         maxLastMsgId: MsgId[Outbox]
-    ): Either[DbReadOutgoingError, MsgBatch[Outbox]] = noRead
+    ): Either[DbReadOutgoingError, Batch[Outbox]] = noRead
 
     override def persistIncomingMessage(peerId: PeerId, msg: MailboxMsg[Inbox]): Unit =
         inMemoryDBActor.persistIncomingMessage(peerId, msg)
@@ -437,7 +439,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
     override def readOutgoingMessages(
         firstMessage: MsgId[Outbox],
         maxLastMsgId: MsgId[Outbox]
-    ): Either[DbReadOutgoingError, MsgBatch[Outbox]] =
+    ): Either[DbReadOutgoingError, Batch[Outbox]] =
         outbox.lastOption match {
             case _ if maxLastMsgId.toLong < firstMessage.toLong =>
                 Left(DbReadOutgoingError.MaxIdLessThanFirstID)
@@ -450,7 +452,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
                 log.debug(
                   s"getOutgoingMessages: found ${msgs.size} entries starting with msgId=$firstMessage"
                 )
-                MsgBatch.fromList(msgs.toList) match {
+                Batch.fromList(msgs.toList) match {
                     case None          => Left(ValuesReadAreMalformed)
                     case (Some(batch)) => Right(batch)
                 }
@@ -495,7 +497,7 @@ class DropModNInboxFixture(
 
     //    override def id: String = peerId
 
-    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit = {
+    def appendEntries(from: PeerId, batch: Batch[Inbox]): Unit = {
         if counter.incrementAndGet() % n == 0
         then log.info(s"appendEntries: ignoring $batch")
         else

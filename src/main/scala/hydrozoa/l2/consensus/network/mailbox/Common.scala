@@ -2,10 +2,9 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
-import hydrozoa.l2.consensus.network.{*, given}
-import sttp.tapir.Schema
-import hydrozoa.l2.consensus.network.ProtocolMsg
+import hydrozoa.l2.consensus.network.{ProtocolMsg, *, given}
 import ox.channels.ActorRef
+import sttp.tapir.Schema
 
 // Actor message: What Ox does with _.tell, _.ask.
 // Protocol Message: Broadcast messages from miniprotocol actors to their counterparts at other peers
@@ -22,9 +21,10 @@ object PeerId:
     }
 
 object Heartbeat:
-    /** Heartbeats are psuedo-messages that can be put in the outbox only. They do not have sequence numbers.
-     * When processed, they trigger the outbox to send an empty message batch to all peers that are awaiting messages
-    */
+    /** Heartbeats are psuedo-messages that can be put in the outbox only. They do not have sequence
+      * numbers. When processed, they trigger the outbox to send an empty message batch to all peers
+      * that are awaiting messages
+      */
     opaque type Heartbeat = Unit
     def apply(): Heartbeat = ()
 
@@ -51,7 +51,6 @@ enum AnyMsg:
     case AckFinal2Msg(content: AckFinal2)
     case ReqDeinitMsg(content: ReqDeinit)
     case AckDeinitMsg(content: AckDeinit)
-    case AckHearbeatMsg(content: Heartbeat)
 
 object AnyMsg:
     def apply(msg: Req | Ack): AnyMsg = msg match
@@ -73,7 +72,6 @@ object AnyMsg:
         case content: AckFinal       => AckFinalMsg(content)
         case content: AckFinal2      => AckFinal2Msg(content)
         case content: AckDeinit      => AckDeinitMsg(content)
-        case heartbeat: Heartbeat    => AckHearbeatMsg(heartbeat)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make
@@ -85,30 +83,30 @@ given anyMsgSchema: Schema[AnyMsg] =
   */
 case class MailboxMsg[M <: Mailbox](id: MsgId[M], content: ProtocolMsg)
 
-given msgCodec: JsonValueCodec[MailboxMsg] =
+given msgCodec[M <: Mailbox]: JsonValueCodec[MailboxMsg[M]] =
     JsonCodecMaker.make
 
-given msgSchema: Schema[MailboxMsg] =
-    Schema.binary[MailboxMsg]
+given msgSchema[M <: Mailbox]: Schema[MailboxMsg[M]] =
+    Schema.binary[MailboxMsg[M]]
 
 object Batch:
     /** Opaque newtype around `List[Msg]`. Invariants:
       *   - The messages in the batch must be in sorted order of MsgId, strictly sequential (no
       *     gaps).
       */
-    opaque type MsgBatch[M <: Mailbox] = List[MailboxMsg[M]]
+    opaque type Batch[M <: Mailbox] = List[MailboxMsg[M]]
 
-    given msgBatchCodec: JsonValueCodec[MsgBatch] =
+    given msgBatchCodec[M <: Mailbox]: JsonValueCodec[Batch[M]] =
         JsonCodecMaker.make
 
-    given msgBatchSchema: Schema[MsgBatch] =
-        Schema.binary[Batch]
+    given msgBatchSchema[M <: Mailbox]: Schema[Batch[M]] =
+        Schema.binary[Batch[M]]
 
-    given [M <: Mailbox]: Conversion[MsgBatch[M], List[MailboxMsg[M]]] = identity
+    given [M <: Mailbox]: Conversion[Batch[M], List[MailboxMsg[M]]] = identity
 
-    def empty[M <: Mailbox]: MsgBatch[M] = List.empty
+    def empty[M <: Mailbox]: Batch[M] = List.empty
 
-    extension [M <: Mailbox](batch: MsgBatch[M])
+    extension [M <: Mailbox](batch: Batch[M])
         /** Returns none on an empty batch, otherwise returns the highest MsgId of the batch
           * @return
           */
@@ -122,19 +120,19 @@ object Batch:
       * @param list
       * @return
       */
-    def fromList[M <: Mailbox](list: List[MailboxMsg[M]]): Option[MsgBatch[M]] =
+    def fromList[M <: Mailbox](list: List[MailboxMsg[M]]): Option[Batch[M]] =
         // TODO add checks
         Some(list)
 
-type MsgBatch[M <: Mailbox] = MsgBatch.MsgBatch[M]
+type Batch[M <: Mailbox] = Batch.Batch[M]
 
 object MsgId:
     // Surrogate primary key for outgoing messages, starts with 1.
     opaque type MsgId[M <: Mailbox] = Long
 
-    given msgIdCodec: JsonValueCodec[MsgId.MsgId] = JsonCodecMaker.make
+    given msgIdCodec[M <: Mailbox]: JsonValueCodec[MsgId.MsgId[M]] = JsonCodecMaker.make
 
-    given msgIdSchema: Schema[MsgId.MsgId] = Schema.binary[MsgId.MsgId]
+    given msgIdSchema[M <: Mailbox]: Schema[MsgId.MsgId[M]] = Schema.binary[MsgId.MsgId[M]]
 
     def apply[M <: Mailbox](n: Long): MsgId[M] = {
         assert(n > 0, "MsgIds must be positive")
@@ -149,7 +147,6 @@ object MsgId:
 
 type MsgId[M <: Mailbox] = MsgId.MsgId[M]
 
-
 sealed trait Mailbox derives CanEqual
 
 sealed trait Inbox extends Mailbox derives CanEqual
@@ -159,11 +156,12 @@ sealed trait Outbox extends Mailbox derives CanEqual
 /** Matching index for a remote peer i.e., the position in the outbox that is confirmed by a
   * recipient. It is a non-negative Long under the hood. A MatchIndex of 0 indicates that the remote
   * peer has not told us about their match index yet.
- *
- * We maintain two types of match indicies:
- * - "Inbox" match indicies refer to the highest message id from a remote peer that _we_ have processed
- * - "Outbox" match indicies refer to the highest message id that we have received confirmation from a peer that _they_
- * have processed
+  *
+  * We maintain two types of match indicies:
+  *   - "Inbox" match indicies refer to the highest message id from a remote peer that _we_ have
+  *     processed
+  *   - "Outbox" match indicies refer to the highest message id that we have received confirmation
+  *     from a peer that _they_ have processed
   */
 opaque type MatchIndex[Mailbox] = Long
 
@@ -184,34 +182,36 @@ object MatchIndex:
 extension [T](actor: ActorRef[T])
     /** Turn an `ask` that returns an Either into a throwing ask */
     def askThrow[A](f: T => Either[Throwable, A]): A =
-      actor.ask(t => f(t) match {
-        case Left(e) => throw RuntimeException(e)
-        case Right(res) => res
-      })
+        actor.ask(t =>
+            f(t) match {
+                case Left(e)    => throw RuntimeException(e)
+                case Right(res) => res
+            }
+        )
 
 // TODO: opaque types?
-type BatchMsg = (PeerId, Batch)
+type BatchMsg[M <: Mailbox] = (PeerId, Batch[M])
 
-given batchMsgCodec: JsonValueCodec[BatchMsg] =
+given batchMsgCodec[M <: Mailbox]: JsonValueCodec[BatchMsg[M]] =
     JsonCodecMaker.make
 
-given batchMsgSchema: Schema[BatchMsg] =
-    Schema.binary[BatchMsg]
+given batchMsgSchema[M <: Mailbox]: Schema[BatchMsg[M]] =
+    Schema.binary[BatchMsg[M]]
 
-type MatchIndexMsg = (PeerId, MatchIndex)
+type MatchIndexMsg[M <: Mailbox] = (PeerId, MatchIndex[M])
 
-given matchIndexMasgCodec: JsonValueCodec[MatchIndexMsg] =
+given matchIndexMasgCodec[M <: Mailbox]: JsonValueCodec[MatchIndexMsg[M]] =
     JsonCodecMaker.make
 
-given matchIndexMsgSchema: Schema[MatchIndexMsg] =
-    Schema.binary[MatchIndexMsg]
+given matchIndexMsgSchema[M <: Mailbox]: Schema[MatchIndexMsg[M]] =
+    Schema.binary[MatchIndexMsg[M]]
 
-enum BatchMsgOrMatchIndexMsg:
-    case CaseBatchMsg(batchMsg: BatchMsg)
-    case CaseMatchIndexMsg(matchIndexMsg: MatchIndexMsg)
+enum BatchMsgOrMatchIndexMsg[M <: Mailbox]:
+    case CaseBatchMsg(batchMsg: BatchMsg[M])
+    case CaseMatchIndexMsg(matchIndexMsg: MatchIndexMsg[M])
 
-given batchMsgOrMatchIndexMsgCodec: JsonValueCodec[BatchMsgOrMatchIndexMsg] =
+given batchMsgOrMatchIndexMsgCodec[M <: Mailbox]: JsonValueCodec[BatchMsgOrMatchIndexMsg[M]] =
     JsonCodecMaker.make
 
-given batchMsgOrMatchIndexMsgSchema: Schema[BatchMsgOrMatchIndexMsg] =
-    Schema.binary[BatchMsgOrMatchIndexMsg]
+given batchMsgOrMatchIndexMsgSchema[M <: Mailbox]: Schema[BatchMsgOrMatchIndexMsg[M]] =
+    Schema.binary[BatchMsgOrMatchIndexMsg[M]]

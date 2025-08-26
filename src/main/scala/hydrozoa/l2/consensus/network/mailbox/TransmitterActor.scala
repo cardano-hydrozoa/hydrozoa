@@ -19,6 +19,7 @@ import ox.*
 import ox.channels.{Actor, ActorRef}
 
 import java.net.URI
+import scala.annotation.nowarn
 import scala.collection.mutable
 import scala.concurrent.duration.*
 
@@ -42,7 +43,7 @@ trait TransmitterActor:
       * @return
       *   Must return a Left-throwable if transmission is unsuccessful; otherwise unit.
       */
-    def appendEntries(to: PeerId, batch: MsgBatch[Outbox]): Either[Throwable, Unit]
+    def appendEntries(to: PeerId, batch: Batch[Outbox]): Either[Throwable, Unit]
 
     /** Called by node's [[InboxActor]] when it wants to confirm [[matchIndex]] for [[to]] peer.
       *
@@ -69,11 +70,11 @@ final class LocalTransmitterActor(myself: PeerId) extends TransmitterActor:
     /** Replicate messages in out outbox to the peer's inbox */
     override def appendEntries(
         to: PeerId,
-        batch: MsgBatch[Outbox]
+        batch: Batch[Outbox]
     ): Either[LocalTransmitterError, Unit] = {
 
         // The batch we send is OUR outbox, but must be received at the PEERS inbox
-        val inBatch = MsgBatch
+        val inBatch = Batch
             .fromList[Inbox](
               batch.toList.map(msg => MailboxMsg[Inbox](MsgId[Inbox](msg.id.toLong), msg.content))
             )
@@ -120,7 +121,7 @@ final class LocalTransmitterActor(myself: PeerId) extends TransmitterActor:
 
     def connect(to: PeerId, receiver: Receiver): Unit = peers.put(to, receiver): Unit
 
-    // def disconnect(to: PeerId): Unit = peers.remove(to): Unit
+    def disconnect(to: PeerId): Unit = peers.remove(to): Unit
 
 /** TODO: pass all peers in the constructor
   *
@@ -131,12 +132,13 @@ class WSTransmitterActor(myself: PeerId)(using ox: Ox) extends TransmitterActor:
 
     private val log = Logger(getClass)
 
+    @nowarn
     private val group = NioEventLoopGroup()
     private val channels: mutable.Map[PeerId, Channel] = mutable.Map.empty
 
     private var self: ActorRef[WSTransmitterActor] = _
 
-    override def appendEntries(to: PeerId, batch: Batch): Unit =
+    override def appendEntries(to: PeerId, batch: Batch[Outbox]): Either[Throwable, Unit] = {
         channels.get(to) match {
             case Some(channel) if channel.isActive =>
                 val msg = CaseBatchMsg(myself, batch)
@@ -145,8 +147,13 @@ class WSTransmitterActor(myself: PeerId)(using ox: Ox) extends TransmitterActor:
             case _ =>
                 log.warn(s"Trying to send a batch to $to, but channel is not active, skipping.")
         }
+        Right(())
+    }
 
-    override def confirmMatchIndex(to: PeerId, matchIndex: MatchIndex): Unit =
+    override def confirmMatchIndex(
+        to: PeerId,
+        matchIndex: MatchIndex[Inbox]
+    ): Either[Throwable, Unit] = {
         channels.get(to) match {
             case Some(channel) if channel.isActive =>
                 val msg = CaseMatchIndexMsg(myself, matchIndex)
@@ -157,6 +164,8 @@ class WSTransmitterActor(myself: PeerId)(using ox: Ox) extends TransmitterActor:
                   s"Trying to send a match index to $to, but channel is not active, skipping."
                 )
         }
+        Right(())
+    }
 
     /** Connect to another server.
       *
