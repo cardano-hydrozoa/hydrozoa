@@ -2,7 +2,7 @@ package hydrozoa.l2.consensus.network.mailbox
 
 import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.mailbox.MsgBatch.MsgBatch
+import hydrozoa.l2.consensus.network.mailbox.Batch.Batch
 import hydrozoa.node.db.DBWriterActor
 import ox.*
 import ox.channels.ActorRef
@@ -37,7 +37,9 @@ private class InboxActor(
         mutable.Map.from(this.others.map(peer => (peer, MatchIndex[Inbox](0))))
 
     private val headPeers: mutable.Set[PeerId] = mutable.Set.empty
+
     val pendingHeartbeats: mutable.Set[PeerId] = mutable.Set.from(others)
+
     // N.B.: see InMemoryDbMemoryActor
     // TODO: Refactor all peer data into a single map
     private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg[Inbox]]] = mutable.Map.empty
@@ -52,7 +54,6 @@ private class InboxActor(
         others.foreach(id =>
             inboxes.put(id, mutable.Buffer.empty): Unit
             headPeers.addAll(others)
-
             pendingHeartbeats.addAll(others)
         )
         wakeUp()
@@ -93,7 +94,7 @@ private class InboxActor(
       * @param batch
       *   the batch, may be empty
       */
-    def appendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit =
+    def appendEntries(from: PeerId, batch: Batch[Inbox]): Unit =
         if batch.isEmpty then
             this.heartbeatCounters.updateWith(from)({
                 case None =>
@@ -136,11 +137,21 @@ private class InboxActor(
 
         transmitter.tell(_.confirmMatchIndex(from, newMatchIndex): Unit)
 
-    /** Send a new MatchIndex[Inbox] to a remove peer.
-      *
-      * @param peer
-      * @param matchIndex
-      */
+//    /** Send a new MatchIndex[Inbox] to a remove peer.
+//      *
+//      * @param peer
+//      * @param matchIndex
+//      */
+//    override def wakeUp(): Unit = {
+//        log.info("inbox wakeUp")
+//        // TODO: separate types for receiver and sender
+//        pendingHeartbeats.foreach(peer =>
+//            // Should always exist
+//            val matchIndex =
+//                inboxes(peer).lastOption.map(_.id.toMatchIndex).getOrElse(MatchIndex(0))
+//            transmitter.tell(_.confirmMatchIndex(peer, matchIndex))
+//        )
+//        pendingHeartbeats.addAll(headPeers)
     def confirmMatchIndex(peer: PeerId): Either[InboxActorError, Unit] = {
         this.matchIndices.get(peer) match {
             case None => Left(InboxActorError.MatchIndexForPeerNotFound)
