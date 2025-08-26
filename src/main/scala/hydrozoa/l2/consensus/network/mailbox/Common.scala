@@ -4,6 +4,13 @@ import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.l2.consensus.network.{*, given}
 import sttp.tapir.Schema
+import hydrozoa.l2.consensus.network.ProtocolMsg
+import ox.channels.ActorRef
+
+// Actor message: What Ox does with _.tell, _.ask.
+// Protocol Message: Broadcast messages from miniprotocol actors to their counterparts at other peers
+// Mailbox Messages: messages sent from an outbox to inbox or vice versa
+// Client messages: when a peer communicates with a node over HTTP
 
 // TODO: find a better place?
 opaque type PeerId = String
@@ -13,6 +20,13 @@ object PeerId:
     extension (self: PeerId) {
         def asString: String = self
     }
+
+object Heartbeat:
+    /** Heartbeats are psuedo-messages that can be put in the outbox only. They do not have sequence numbers.
+     * When processed, they trigger the outbox to send an empty message batch to all peers that are awaiting messages
+    */
+    opaque type Heartbeat = Unit
+    def apply(): Heartbeat = ()
 
 // Do we want this?
 //opaque type OutMsg = Msg
@@ -69,7 +83,7 @@ given anyMsgSchema: Schema[AnyMsg] =
 
 /** Requests or acknowledgements tagged with a sequence ID
   */
-case class MailboxMsg(id: MsgId, content: AnyMsg)
+case class MailboxMsg[M <: Mailbox](id: MsgId[M], content: ProtocolMsg)
 
 given msgCodec: JsonValueCodec[MailboxMsg] =
     JsonCodecMaker.make
@@ -82,23 +96,23 @@ object Batch:
       *   - The messages in the batch must be in sorted order of MsgId, strictly sequential (no
       *     gaps).
       */
-    opaque type Batch = List[MailboxMsg]
+    opaque type MsgBatch[M <: Mailbox] = List[MailboxMsg[M]]
 
-    given msgBatchCodec: JsonValueCodec[Batch] =
+    given msgBatchCodec: JsonValueCodec[MsgBatch] =
         JsonCodecMaker.make
 
-    given msgBatchSchema: Schema[Batch] =
+    given msgBatchSchema: Schema[MsgBatch] =
         Schema.binary[Batch]
 
-    given Conversion[Batch, List[MailboxMsg]] = identity
+    given [M <: Mailbox]: Conversion[MsgBatch[M], List[MailboxMsg[M]]] = identity
 
-    def empty: Batch = List.empty
+    def empty[M <: Mailbox]: MsgBatch[M] = List.empty
 
-    extension (batch: Batch)
+    extension [M <: Mailbox](batch: MsgBatch[M])
         /** Returns none on an empty batch, otherwise returns the highest MsgId of the batch
           * @return
           */
-        def newMatchIndex: Option[MatchIndex] = {
+        def newMatchIndex: Option[MatchIndex[M]] = {
             // N.B.: we only know this works if we keep the invariant!
             batch.lastOption.map(last => MatchIndex(last.id.toLong))
         }
@@ -108,51 +122,72 @@ object Batch:
       * @param list
       * @return
       */
-    def fromList(list: List[MailboxMsg]): Option[Batch] =
+    def fromList[M <: Mailbox](list: List[MailboxMsg[M]]): Option[MsgBatch[M]] =
         // TODO add checks
         Some(list)
 
-type Batch = Batch.Batch
+type MsgBatch[M <: Mailbox] = MsgBatch.MsgBatch[M]
 
 object MsgId:
     // Surrogate primary key for outgoing messages, starts with 1.
-    opaque type MsgId = Long
+    opaque type MsgId[M <: Mailbox] = Long
 
     given msgIdCodec: JsonValueCodec[MsgId.MsgId] = JsonCodecMaker.make
 
     given msgIdSchema: Schema[MsgId.MsgId] = Schema.binary[MsgId.MsgId]
 
-    def apply(n: Long): MsgId = {
+    def apply[M <: Mailbox](n: Long): MsgId[M] = {
         assert(n > 0, "MsgIds must be positive")
         n
     }
 
-    extension (self: MsgId) {
-        def nextMsgId: MsgId = self.toLong + 1
-        def toMatchIndex: MatchIndex = self
+    extension [M <: Mailbox](self: MsgId[M]) {
+        def nextMsgId: MsgId[M] = self.toLong + 1
+        def toMatchIndex: MatchIndex[M] = self
         def toLong: Long = self
     }
 
-type MsgId = MsgId.MsgId
+type MsgId[M <: Mailbox] = MsgId.MsgId[M]
+
+
+sealed trait Mailbox derives CanEqual
+
+sealed trait Inbox extends Mailbox derives CanEqual
+
+sealed trait Outbox extends Mailbox derives CanEqual
 
 /** Matching index for a remote peer i.e., the position in the outbox that is confirmed by a
   * recipient. It is a non-negative Long under the hood. A MatchIndex of 0 indicates that the remote
   * peer has not told us about their match index yet.
+ *
+ * We maintain two types of match indicies:
+ * - "Inbox" match indicies refer to the highest message id from a remote peer that _we_ have processed
+ * - "Outbox" match indicies refer to the highest message id that we have received confirmation from a peer that _they_
+ * have processed
   */
-opaque type MatchIndex = Long
+opaque type MatchIndex[Mailbox] = Long
 
 object MatchIndex:
-    def apply(n: Long): MatchIndex = {
+    def apply[M <: Mailbox](n: Long): MatchIndex[M] = {
         assert(n >= 0, "Match Indicies must be non-negative")
         n
     }
 
-    extension (self: MatchIndex) {
-        def nextMsgId: MsgId = MsgId(self.toLong + 1)
-        def toMsgId: Option[MsgId] = if self.isZero then None else Some(MsgId(self.toLong))
+    extension [M <: Mailbox](self: MatchIndex[M]) {
+        def nextMsgId: MsgId[M] = MsgId(self.toLong + 1)
+        def toMsgId: Option[MsgId[M]] = if self.isZero then None else Some(MsgId(self.toLong))
         def toLong: Long = self
         def isZero: Boolean = self == 0
     }
+
+// TODO: move away
+extension [T](actor: ActorRef[T])
+    /** Turn an `ask` that returns an Either into a throwing ask */
+    def askThrow[A](f: T => Either[Throwable, A]): A =
+      actor.ask(t => f(t) match {
+        case Left(e) => throw RuntimeException(e)
+        case Right(res) => res
+      })
 
 // TODO: opaque types?
 type BatchMsg = (PeerId, Batch)

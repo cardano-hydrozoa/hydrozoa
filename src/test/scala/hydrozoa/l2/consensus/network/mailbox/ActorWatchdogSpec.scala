@@ -12,6 +12,7 @@ class ActorWatchdogSpec extends ScalaCheckSuite:
 
         class WatchdogCounter extends Watchdog:
             var counter = 0L
+
             override def wakeUp(): Unit = counter += 1
 
         supervised {

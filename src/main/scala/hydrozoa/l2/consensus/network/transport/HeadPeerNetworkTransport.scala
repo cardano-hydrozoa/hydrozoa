@@ -89,7 +89,6 @@ enum AnyMsg:
     case AckFinal2Msg(content: AckFinal2, aux: AckAux)
     case ReqDeinitMsg(content: ReqDeinit, aux: ReqAux)
     case AckDeinitMsg(content: AckDeinit, aux: AckAux)
-    case AckHearbeatMsg(content: Heartbeat, aux: AckAux)
 
     def asReqOrAck: Either[(TestPeer, Long, Req), (TestPeer, Long, TestPeer, Long, Ack)] =
         this match
@@ -129,8 +128,6 @@ enum AnyMsg:
                 Left(aux.from, aux.seq, content)
             case AckDeinitMsg(content, aux) =>
                 Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
-            case AckHearbeatMsg(content, aux) =>
-                Right(aux.from, aux.seq, aux.replyTo, aux.replyToSeq, content)
 
     def origin: (TestPeer, Long) = this.asAck match
         case Some(from, seq, _) => (from, seq)
@@ -155,7 +152,6 @@ enum AnyMsg:
         case AckFinal2Msg(_, aux)      => aux.from -> aux.seq
         case ReqDeinitMsg(_, aux)      => aux.from -> aux.seq
         case AckDeinitMsg(_, aux)      => aux.from -> aux.seq
-        case AckHearbeatMsg(_, aux)    => aux.from -> aux.seq
 
     def asAck: Option[(TestPeer, Long, Ack)] = this match
         case AckVerKeyMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
@@ -170,7 +166,7 @@ enum AnyMsg:
         case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case _                               => None
 
-    def asMsg: Msg = this match
+    def asMsg: ProtocolMsg = this match
         case ReqVerKeyMsg(content, _)      => content
         case AckVerKeyMsg(content, _)      => content
         case ReqInitMsg(content, _)        => content
@@ -189,7 +185,6 @@ enum AnyMsg:
         case AckFinal2Msg(content, _)      => content
         case ReqDeinitMsg(content, _)      => content
         case AckDeinitMsg(content, _)      => content
-        case AckHearbeatMsg(content, _)    => content
 
 object AnyMsg:
     def apply[A <: Aux](msg: Req, aux: ReqAux): AnyMsg = msg match
@@ -213,7 +208,6 @@ object AnyMsg:
         case content: AckFinal       => AckFinalMsg(content, aux)
         case content: AckFinal2      => AckFinal2Msg(content, aux)
         case content: AckDeinit      => AckDeinitMsg(content, aux)
-        case heartbeat: Heartbeat    => AckHearbeatMsg(heartbeat, aux)
 
 given anyMsgCodec: JsonValueCodec[AnyMsg] =
     JsonCodecMaker.make

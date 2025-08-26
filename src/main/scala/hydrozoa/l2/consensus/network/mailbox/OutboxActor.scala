@@ -1,12 +1,13 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import cats.syntax.all.*
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.{Ack, Heartbeat, Req}
-import hydrozoa.node.db.{DBReader, DBWriterActor}
+import hydrozoa.l2.consensus.network.ProtocolMsg
+import hydrozoa.l2.consensus.network.mailbox.OutboxActorError.DatabaseReadError
+import hydrozoa.node.db.*
 import ox.channels.ActorRef
 
 import scala.collection.mutable
-import scala.util.{Failure, Success, Try}
 
 // TODO: wrappers/tags for outbox (and inbox for that matter)
 
@@ -26,16 +27,39 @@ import scala.util.{Failure, Success, Try}
 class OutboxActor(
     private val dbReader: DBReader,
     private val dbWriter: ActorRef[DBWriterActor],
-    private val transmitter: ActorRef[TransmitterActor]
+    private val transmitter: ActorRef[TransmitterActor],
+    private val ownPeer: PeerId
 ) extends Watchdog:
 
     // ---------------------------------------------  Volatile state
     // The common delivery queue
-    private val queue: mutable.Buffer[MailboxMsg] = mutable.Buffer.empty
+    // TODO: This queue SHOULD be a data structure that obeys the following properties:
+    // - The entries in the queue must be strictly monotonically increasing and in sequential order
+    // - Efficient slicing
+    // - Efficient append
+    // - Efficient dropping (from memory) of a "head slice"
+    // (If we can obey the invariant, we can have an API that returns `MsgBatch`s directly rather than returning
+    // List[Msg] and needing to call MsgBatch.fromList)
+    private val queue: mutable.Buffer[MailboxMsg[Outbox]] = mutable.Buffer.empty
 
-    private val matchIndices: mutable.Map[PeerId, MatchIndex] = mutable.Map.empty
+    // TODO combine with peersAwaitingMessages into a OutboxPeerData(?)
+    private val matchIndices: mutable.Map[PeerId, MatchIndex[Outbox]] = mutable.Map.empty
 
-    // TODO: When a peer is caught-up, add him to this set.
+    /** Return the match index for a given peer */
+    def matchIndex(peer: PeerId): MatchIndex[Outbox] = matchIndices.get(peer) match {
+        case None        => MatchIndex(0) // QUESTION: Is this correct?
+        case Some(index) => index
+    }
+
+    /**   - A peer is added to this set when `matchIndex` is _received_ from the peer, but there are
+      *     no new messages to send.
+      *   - A peer is removed when any the outbox tells the transmitter to send any messages to that
+      *     peer. Note that this doesn't ensure delivery. A peer can be removed from this in two
+      *     ways:
+      *     - When a non-empty batch is sent to the transmitter for that peer
+      *     - A empty batch is told to the transmitter in response to a tell from the Outbox
+      *       Watchdog
+      */
     //  When we receive a new outgoing message, we'll broadcast it to all peers in the set and then empty it.
     //  This avoids endless ping-ponging of addEntries/confirmMatchIndex with caught-up peers.
     val peersAwaitingMessages: mutable.Set[PeerId] = mutable.Set.empty
@@ -52,31 +76,21 @@ class OutboxActor(
 
     // ---------------------------------------------  Public API
 
-    /** Persist and enqueue an outgoing message for delivering.
-      *
-      * @param msg
-      *   the outgoing message
-      * @return
-      *   the id of the persisted message
-      */
-    def addToOutbox(msg: Req | Ack): MsgId = {
-        log.info(s"Adding to outbox: $msg")
-        // 1. Persist a message (not to lose them in case of a crash)
-        val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
-        // 2. Append to the end of the delivery queue
-        queue.append(MailboxMsg(msgId, AnyMsg.apply(msg)))
-        // TODO: remove? 3. Return the msg ID
-        msgId
-    }
-
-    /** Brings a possibly new [[matchIndex]] from a [[peer]].
+    /** Called by the [[Receiver]] when we receive a message from a remote peer indicating the
+      * highest message ID that they have successfully processed. Will send a new message to the
+      * peer with the next batch.
       *
       * @param peer
       * @param matchIndex
       */
-    def confirmMatchIndex(peer: PeerId, matchIndex: MatchIndex): Unit = {
+    def confirmMatchIndex(
+        peer: PeerId,
+        matchIndex: MatchIndex[Outbox]
+    ): Either[OutboxActorError, Unit] = {
 
-        log.info(s"Confirming match index from $peer: $matchIndex")
+        log.info(
+          s"[${ownPeer.asString}] Got a confirmation for match index from $peer: $matchIndex"
+        )
 
         // TODO: highestOwnOutMsgId may be the last element of the queue or the last known msg if from the database(?)
         // TODO: assert(matchIndex < highestOwnOutMsgId)
@@ -84,31 +98,35 @@ class OutboxActor(
         // Store a possibly new value
         val _ = matchIndices.put(peer, matchIndex)
 
-        // Make the batch
-        val batch = mkBatch(matchIndex)
+        for
+            // Make the batch
+            batch <- mkBatch(matchIndex)
 
-        // Send the batch or add to the set of awaiting peers
-        if (batch.nonEmpty) {
-            transmitter.tell(_.appendEntries(peer, batch))
-        } else {
-            val _ = peersAwaitingMessages.add(peer)
-        }
+            // Send the batch or add to the set of awaiting peers
+            _ =
+                if (batch.nonEmpty) {
+                    // NOTE: swallows errors. If the transmitter can't send, the outbox doesn't care.
+                    transmitter.tell(_.appendEntries(peer, batch): Unit)
+                    peersAwaitingMessages.remove(peer)
+                } else {
+                    peersAwaitingMessages.add(peer)
+                }
 
-        // Clean up the queue
+            // Clean up the queue
 
-        // Now the map has at least one value, so `minBy` won't throw.
-        val lowestIndex: MatchIndex = matchIndices.values.minBy(_.toLong)
-        lowestIndex.toMsgId match {
+            // Now the map has at least one value, so `minBy` won't throw.
+            lowestIndex: MatchIndex[Outbox] = matchIndices.values.minBy(_.toLong)
+        yield lowestIndex.toMsgId match {
             case Some(cleanUpTo) =>
                 // Drop the prefix in the queue
-                log.info(s"Cleaning up messages up to id=$cleanUpTo (including) from the queue.")
+                log.info(
+                  s"[${ownPeer.asString}] Cleaning up messages up to id=${cleanUpTo} (including) from the queue."
+                )
                 queue.dropWhileInPlace(msg => msg.id.toLong < lowestIndex.toLong)
 
             case None => ()
         }
     }
-
-    // ---------------------------------------------  Private API
 
     /** Makes the next batch for sending, either from the database, from the queue, or from the
       * both.
@@ -117,54 +135,73 @@ class OutboxActor(
       * @return
       *   possibly empty batch
       */
-    private def mkBatch(matchIndex: MatchIndex): Batch =
+    private def mkBatch(
+        matchIndex: MatchIndex[Outbox]
+    ): Either[OutboxActorError, MsgBatch[Outbox]] =
 
         // TODO: if matchIndex == highestOwnOutMsgId (queue.lastOption) return List.empty
 
         val firstMsgId = matchIndex.nextMsgId
-        val maxLastMsgId = MsgId(matchIndex.toLong + maxEntriesPerBatch)
+        val maxLastMsgId = MsgId[Outbox](matchIndex.toLong + maxEntriesPerBatch)
 
         // First, we need to read from the database if needed
         queue.headOption match {
+            // Empty Queue, read from the DB if needed
             case None =>
                 // This prevents from a db trip if `matchIndex` is zero
-                if !matchIndex.isZero then dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId)
-                else Batch.empty
+                if !matchIndex.isZero
+                then
+                    dbReader.readOutgoingMessages(firstMsgId, maxLastMsgId) match {
+                        case Left(err)       => Left(DatabaseReadError(err))
+                        case Right(msgBatch) => Right(msgBatch)
+                    }
+                else Right(MsgBatch.empty)
+
+            // Non-empty queue; read from the DB if needed or pull directly from the queue
             case Some(queueHead) =>
                 if queueHead.id.toLong > firstMsgId.toLong then {
                     // Reading up to the queue's head or till the end of the batch
-                    val readUpTo = MsgId(
+                    val readUpTo = MsgId[Outbox](
                       math.min(queueHead.id.toLong - 1, maxLastMsgId.toLong)
                     )
-                    val dbPart = dbReader.readOutgoingMessages(firstMsgId, readUpTo)
-
-                    // Then, if there is some space left in the batch, we can try adding messages from the queue.
-                    if dbPart.length < maxEntriesPerBatch then {
-                        val firstMsgIdFromQueue =
-                            dbPart.lastOption.map(_.id.nextMsgId).getOrElse(firstMsgId)
-                        val maxLastMsgIdFromQueue = MsgId(
-                          firstMsgIdFromQueue.toLong + maxEntriesPerBatch - dbPart.length
-                        )
-                        Try(
-                          Batch
-                              .fromList(
-                                dbPart ++ readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue)
-                              )
-                              .get
-                        ) match
-                            case Success(b) => b
-                            // FIXME: Better exception type
-                            case Failure(e) =>
-                                throw RuntimeException(
-                                  "Error constructing message batch: db part and queue part do not obey the required invariants."
+                    dbReader.readOutgoingMessages(firstMsgId, readUpTo) match {
+                        case Left(err)     => Left(DatabaseReadError(err))
+                        case Right(dbPart) =>
+                            // Then, if there is some space left in the batch, we can try adding messages from the queue.
+                            if dbPart.length < maxEntriesPerBatch then {
+                                val firstMsgIdFromQueue =
+                                    dbPart.lastOption.map(_.id.nextMsgId).getOrElse(firstMsgId)
+                                val maxLastMsgIdFromQueue = MsgId[Outbox](
+                                  firstMsgIdFromQueue.toLong + maxEntriesPerBatch - dbPart.length
                                 )
+                                readFromQueue(firstMsgIdFromQueue, maxLastMsgIdFromQueue) match {
+                                    case Right(queuePart) =>
+                                        MsgBatch
+                                            .fromList[Outbox](
+                                              dbPart ++ queuePart
+                                            ) match
+                                            case Some(b) => Right(b)
+                                            case None =>
+                                                Left(
+                                                  OutboxActorError.DbPartAndQueueNotCoherent(
+                                                    dbPart,
+                                                    queuePart
+                                                  )
+                                                )
+                                    case Left(err) => Left(err)
+                                }
 
-                    } else { dbPart }
+                            } else {
+                                Right(dbPart)
+                            }
+                    }
                 } else {
                     // No need to read from the db
                     readFromQueue(firstMsgId, maxLastMsgId)
                 }
         }
+
+    // ---------------------------------------------  Private API
 
     /** Reads messages in range [firstMessage, maxLastMsgId] from the delivery queue.
       *
@@ -174,26 +211,62 @@ class OutboxActor(
       *   possibly empty list of messages
       */
     // TODO: use MsgId + Int/Long
-    private def readFromQueue(firstMessage: MsgId, maxLastMsgId: MsgId): Batch =
+    private def readFromQueue(
+        firstMessage: MsgId[Outbox],
+        maxLastMsgId: MsgId[Outbox]
+    ): Either[OutboxActorError, MsgBatch[Outbox]] =
         val n = maxLastMsgId.toLong - firstMessage.toLong
         queue.headOption match {
-            case None => Batch.empty
+            case None => Right(MsgBatch.empty)
             case Some(head) =>
                 val startOffset = firstMessage.toLong - head.id.toLong
-                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt)
-                // TODO: remove option
-                Batch.fromList(slice.toList).get
+                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt).toList
+                MsgBatch.fromList[Outbox](slice) match
+                    case None        => Left(OutboxActorError.QueueMalformed(slice))
+                    case Some(batch) => Right(batch)
         }
 
-    /** Unconditionally triggers a heartbeat message to be broadcasted to all peers.
+    /** Unconditionally triggers a heartbeat message to be broadcasted to all peers that are
+      * awaiting messages.
       */
-    override def wakeUp(): Unit =
-        if matchIndices.nonEmpty then
-            val _ = addToOutbox(Heartbeat())
-            // TODO: Initially this map is empty, so we need to wait till the first `matchIndex`
-            //      pops up from a peer or add them proactively.
-            matchIndices.foreach((peer, index) =>
-                val batch = mkBatch(index)
-                assert(batch.nonEmpty, "Batch in wakeUp should contain at least heartbeat message.")
-                transmitter.tell(_.appendEntries(peer, batch))
-            )
+    override def wakeUp(): Unit = {
+        log.info(
+          s"[${ownPeer.asString}] Sending heartbeat/batch to all awaiting peers: $peersAwaitingMessages"
+        )
+        peersAwaitingMessages.foreach(peer => {
+            transmitter.tell(_.appendEntries(peer, MsgBatch.empty[Outbox]): Unit)
+        })
+        peersAwaitingMessages   .clear()
+    }
+
+    /** Persist and enqueue an outgoing message for delivering.
+      *
+      * @param msg
+      *   the outgoing message
+      * @return
+      *   the id of the persisted message
+      */
+    def addToOutbox(msg: ProtocolMsg): MsgId[Outbox] = {
+        msg match {
+            case _ =>
+                log.info(s"[${ownPeer.asString}] Adding to outbox: $msg")
+                // 1. Persist a message (not to lose them in case of a crash)
+                val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
+                // 2. Append to the end of the delivery queue
+                queue.append(MailboxMsg(msgId, msg))
+                // TODO: remove? 3. Return the msg ID
+                msgId
+        }
+    }
+
+enum OutboxActorError extends Throwable:
+    case DatabaseReadError(e: DbReadOutgoingError)
+
+    /** Returned during recovery if the dbPart and the queuePart, taken together, don't obey the
+      * invariants of a MsgBatch
+      */
+    case DbPartAndQueueNotCoherent(dbPart: MsgBatch[Outbox], queuePart: MsgBatch[Outbox])
+
+    /** Returned when the queue part, taken in isolation, doesn't obey the invariants of a MsgBatch
+      */
+    case QueueMalformed(msgs: List[MailboxMsg[Outbox]])

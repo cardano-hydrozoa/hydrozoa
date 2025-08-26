@@ -47,13 +47,14 @@ trait HeadPeerNetwork {
   * ------------------------------------------------------------------------------------------
   */
 
-sealed trait Msg
+/** Broadcast messages from miniprotocol actors to their counterparts at other peers */
+sealed trait ProtocolMsg
 
-sealed trait Req extends Msg:
+sealed trait Req extends ProtocolMsg:
     type ackType <: Ack
     type resultType
 
-sealed trait Ack extends Msg
+sealed trait Ack extends ProtocolMsg
 
 given msgCodec: JsonValueCodec[Msg] = JsonCodecMaker.make
 given Schema[Msg] = Schema.derived[Msg]

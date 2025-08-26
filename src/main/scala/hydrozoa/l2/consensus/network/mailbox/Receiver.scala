@@ -1,5 +1,7 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import hydrozoa.l2.consensus.network.mailbox.{MsgBatch}
+import ox.channels.ActorRef
 import com.github.plokhotnyuk.jsoniter_scala.core.readFromString
 import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.mailbox.BatchMsgOrMatchIndexMsg.{
@@ -20,15 +22,17 @@ import ox.scheduling.{RepeatConfig, repeat}
 
 import scala.util.Try
 
-/** Likely, not an actor but something else that physically receives messages from multiple
-  * [[TransmitterActor]]s and passes them to the [[InboxActor]] or [[OutboxActor]].
+/** Likely, not an actor but something else that physically receives messages from multiple remote
+ * [[TransmitterActor]]s and passes them to the local [[InboxActor]] or [[OutboxActor]].
   */
 abstract class Receiver(outboxActor: ActorRef[OutboxActor], inboxActor: ActorRef[InboxActor]):
 
-    final def handleAppendEntries(batchMsg: BatchMsg): Unit =
+    /** An incoming request from a peer telling us to add new messages to our inbox */
+    final def handleAppendEntries(from: PeerId, batch: MsgBatch[Inbox]): Unit =
         inboxActor.tell(_.appendEntries(batchMsg._1, batchMsg._2))
 
-    final def handleConfirmMatchIndex(matchIndexMsg: MatchIndexMsg): Unit =
+    /** An incoming request from a peer, indicating the highest message THEY have processed */
+    final def handleConfirmMatchIndex(from: PeerId, matchIndex: MatchIndex[Outbox]): Unit =
         outboxActor.tell(_.confirmMatchIndex(matchIndexMsg._1, matchIndexMsg._2))
 
 /** A short-circuit receiver.
