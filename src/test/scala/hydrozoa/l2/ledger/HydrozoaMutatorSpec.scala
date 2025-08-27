@@ -17,7 +17,6 @@ import scalus.cardano.ledger.HashPurpose.KeyHash
 import scalus.cardano.ledger.HashSize.given_HashSize_Blake2b_224
 import scalus.cardano.ledger.rules.State
 
-
 class HydrozoaMutatorSpec extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(200)

@@ -16,6 +16,7 @@ trait DBWriterActor {
       */
     def persistOutgoingMessage(msg: ProtocolMsg): MsgId[Outbox]
 
+    // TODO: save the whole batch atomically in a db transaction
     /** Save an incoming message. Since we have a natural primary key [[InMsgId]], it doesn't return
       * anything.
       *

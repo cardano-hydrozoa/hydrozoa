@@ -119,6 +119,7 @@ object Batch:
     def fromList[M <: Mailbox](list: List[MailboxMsg[M]]): Option[Batch[M]] =
         // TODO add checks
         Some(list)
+    def singleton[M <: Mailbox](msg: MailboxMsg[M]): Batch[M] = List(msg)
 
 type Batch[M <: Mailbox] = Batch.Batch[M]
 

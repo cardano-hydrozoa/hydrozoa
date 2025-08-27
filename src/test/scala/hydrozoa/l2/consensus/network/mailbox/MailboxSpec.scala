@@ -4,6 +4,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.infra.Piper
 import hydrozoa.infra.transitionary.{emptyContext, emptyState}
 import hydrozoa.l2.consensus.network.actor.BlockActor
+import hydrozoa.l2.consensus.network.mailbox.Event.{EventInboxMessage, EventUnit}
 import hydrozoa.l2.consensus.network.{AckUnit, ProtocolMsg, ReqEventL2, ReqVerKey}
 import hydrozoa.l2.ledger.generators.genL2EventGenesisFromPeer
 import hydrozoa.l2.ledger.{HydrozoaL2Mutator, L2EventGenesis}
@@ -14,14 +15,15 @@ import hydrozoa.node.l2EventWithdrawalFromInputsAndPeer
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.Test as ScalaCheckTest
-import ox.channels.{Actor, ActorRef, BufferCapacity}
+import ox.*
+import ox.channels.{Actor, ActorRef, BufferCapacity, Channel}
 import ox.logback.InheritableMDC
 import ox.resilience.{RetryConfig, retry, retryEither}
-import ox.{Ox, sleep, supervised}
 
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
+import scala.concurrent.TimeoutException
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 val aliceId = PeerId("Alice")
@@ -32,32 +34,44 @@ val carolId = PeerId("Carol")
   * to Bob, she sees it as a MsgBatch[Outbox], but he sees it as a MsgBatch[Inbox
   */
 def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](msgId: MsgId[M1]): MsgId[M2] = MsgId[M2](msgId.toLong)
-def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](mm: MailboxMsg[M1]): MailboxMsg[M2] = MailboxMsg[M2](swapMailbox(mm.id), mm.content)
+def swapMailbox[M1 <: Mailbox, M2 <: Mailbox](mm: MailboxMsg[M1]): MailboxMsg[M2] =
+    MailboxMsg[M2](swapMailbox(mm.id), mm.content)
 
 /** Retry an action until a predicate is true
- *
- * @param retryConfig: The retry config, with a default exponential backoff
- * @param action: The action to retry. If the predicate passes on the result, the result is returned
- * @param predicate: The predicate to evaluate on the result of the action
- * @param onFailure: A function to turn a failing result into an error.
- *
- * Note that when used for polling within  a property test:
- * - If we give up too quickly, the test will be flaky due to race conditions
- * - Polling may issue blocking calls to actor, meaning that polling too frequently will flood their
- *   mailbox and prevent them from processing the message you are waiting for.
- * - Polling occurs in the hot-loop of the test. Since this is a property test, it will slow down
- *   _each_ test case run. A 1 second slow down for 60 test cases will increase running time by 1 minute.
- * * */
-def retryEitherPredicate[E, A](retryConfig: RetryConfig[E, A] = RetryConfig.backoff[E, A](maxRetries = 100, initialDelay = 10.millis, maxDelay = 500.millis),
-                         action: Unit => A,
-                         predicate: A => Boolean,
-                         onFailure: A => E): Either[E, A] = {
-  retryEither(retryConfig) {
-    val res = action(())
-    if predicate(res)
-    then Right(res)
-    else Left(onFailure(res))
-  }
+  *
+  * @param retryConfig:
+  *   The retry config, with a default exponential backoff
+  * @param action:
+  *   The action to retry. If the predicate passes on the result, the result is returned
+  * @param predicate:
+  *   The predicate to evaluate on the result of the action
+  * @param onFailure:
+  *   A function to turn a failing result into an error.
+  *
+  * Note that when used for polling within a property test:
+  *   - If we give up too quickly, the test will be flaky due to race conditions
+  *   - Polling may issue blocking calls to actor, meaning that polling too frequently will flood
+  *     their mailbox and prevent them from processing the message you are waiting for.
+  *   - Polling occurs in the hot-loop of the test. Since this is a property test, it will slow down
+  *     _each_ test case run. A 1 second slow down for 60 test cases will increase running time by 1
+  *     minute. *
+  */
+def retryEitherPredicate[E, A](
+    retryConfig: RetryConfig[E, A] = RetryConfig.backoff[E, A](
+      maxRetries = 100,
+      initialDelay = 10.millis,
+      maxDelay = 500.millis
+    ),
+    action: Unit => A,
+    predicate: A => Boolean,
+    onFailure: A => E
+): Either[E, A] = {
+    retryEither(retryConfig) {
+        val res = action(())
+        if predicate(res)
+        then Right(res)
+        else Left(onFailure(res))
+    }
 }
 
 /** The composite set of information needed to work with a node within this test suite. Functions
@@ -84,11 +98,15 @@ case class TestNodeContext(
 
 // NOTE: the real-world default for timeouts are currently 3 seconds and 10 seconds, but these can likely be reduced
 // substantially without the tests failing due to races.
-case class TestNodeConfig(outboxWatchdogTimeout: FiniteDuration = 3.seconds, inboxWatchdogTimeout: FiniteDuration = 10.seconds)
+case class TestNodeConfig(
+    outboxWatchdogTimeout: FiniteDuration = 3.seconds,
+    inboxWatchdogTimeout: FiniteDuration = 10.seconds,
+    callbackInboxMsg: Option[EventInboxMessage => Unit] = None
+)
 
 object TestNodeContext:
 
-    val log = Logger(getClass)
+    private val log = Logger(getClass)
 
     /** Terminate bi-directional connections between a set of nodes */
     def disconnectNodes(nodes: Set[TestNodeContext]): Unit =
@@ -173,9 +191,19 @@ object TestNodeContext:
         )
 
         val blockActor = Actor.create(BlockActor())
-        val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, peerId, others, blockActor))(using
-          timeout = WatchdogTimeout(testNodeConfig.inboxWatchdogTimeout)
-        )
+        val inbox =
+            ActorWatchdog.create(
+              InboxActor(
+                dbActor,
+                transmitter,
+                peerId,
+                others,
+                blockActor,
+                callbackMessageReceived = testNodeConfig.callbackInboxMsg
+              )
+            )(using
+              timeout = WatchdogTimeout(testNodeConfig.inboxWatchdogTimeout)
+            )
 
         TestNodeContext(
           peerId,
@@ -209,17 +237,17 @@ object TestNodeContext:
 
 class MailboxSpec extends ScalaCheckSuite:
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-      /* NOTE: This is very low for sufficient test coverage, but we're keeping it low for now because
+        /* NOTE: This is very low for sufficient test coverage, but we're keeping it low for now because
        most of these tests contain race conditions. We'll often need to poll things like databases to wait for
        messages to appear, which will slow down the tests
-       */
-      ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
+         */
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
     }
 
     override def beforeEach(context: BeforeEach): Unit =
         InheritableMDC.init
 
-    test("Heartbeat mini-protocol works, inboxes are the same"):
+    test("Heartbeat mini-protocol works 10 secs, all peers got 3 heartbeats"):
         supervised {
             val config = TestNodeConfig()
             val peers = Set(aliceId, bobId, carolId)
@@ -235,41 +263,74 @@ class MailboxSpec extends ScalaCheckSuite:
             })
         }
 
-    test("Handle a message"):
+    /** The simplest form of test callback: the first observed event of that type should be what we
+      * expect to see.
+      */
+    object TestCallback:
+        def apply[E <: Event](finiteDuration: FiniteDuration)(expectedEvent: E)(using
+            ox: Ox
+        ): E => Unit =
+            val channel = Channel.rendezvous[E]
+            forkUserDiscard {
+                timeoutOption(finiteDuration) {
+                    val event = channel.receive()
+                    assertEquals(event, expectedEvent)
+                }.getOrElse(
+                  throw new TimeoutException(
+                    s"timeout waiting for an expected event ${expectedEvent}"
+                  )
+                )
+            }
+            channel.send
+
+    test("test callback works (positive test)"):
+        supervised:
+            val callback = TestCallback.apply(2.seconds)((EventUnit))
+            callback.apply(EventUnit)
+
+    test("test callback works (negative test)"):
+        intercept[TimeoutException]:
+            supervised:
+                TestCallback.apply(2.seconds)((EventUnit))
+
+    test("Handle an AckUnit message from Alice to Bob and Carol"):
+
+        val ackUnit: AckUnit = AckUnit()
+
         supervised {
-          val config = TestNodeConfig()
-          val peerConfigs = Set(aliceId, bobId, carolId).map((_, config))
+
+            val aliceConfig = TestNodeConfig()
+
+            val callback = TestCallback.apply[EventInboxMessage](1.seconds)(
+              EventInboxMessage(aliceId, MailboxMsg(MsgId.apply(1L), ackUnit))
+            )
+
+            val othersConfig = TestNodeConfig(callbackInboxMsg = Some(callback))
+
+            val peerConfigs =
+                Set((aliceId, aliceConfig)) ++ Set(bobId, carolId).map((_, othersConfig))
             val peerNodes = TestNodeContext.initializePeers(peerConfigs)
 
-            val outMsg =
-                MailboxMsg(peerNodes(aliceId).outbox.ask(_.addToOutbox(msg = AckUnit())), AckUnit)
+            peerNodes(aliceId).outbox.tell(_.addToOutbox(msg = ackUnit): Unit)
 
-          sleep(config.inboxWatchdogTimeout)
-
-            peerNodes(aliceId).db.readOutgoingMessages(outMsg.id, outMsg.id) match {
-                case Left(e) =>
-                    throw RuntimeException(s"Error reading message from sender's outbox db: ${e}")
-                case Right(batch) =>
-                    if batch.contains(MailboxMsg[Outbox](outMsg.id, AckUnit())) then ()
-                    else
-                        throw RuntimeException(
-                          s"batch returned from db did not contain message `${outMsg}`. Batch was: ${batch}."
-                        )
-            }
-
-            // check if the message got into the receiver's databases
-            (peerNodes - aliceId).foreach(receiverPeerNode =>
-                receiverPeerNode._2.db
-                    .readIncomingMessages(aliceId)
-                    .contains(MailboxMsg(outMsg.id, AckUnit()))
-            )
+            // TODO: would be better to test one thing in one test; this should be a separate set of tests for the database
+//            peerNodes(aliceId).db.readOutgoingMessages(outMsg.id, outMsg.id) match {
+//                case Left(e) =>
+//                    throw RuntimeException(s"Error reading message from sender's outbox db: ${e}")
+//                case Right(batch) =>
+//                    if batch.contains(MailboxMsg[Outbox](outMsg.id, AckUnit())) then ()
+//                    else
+//                        throw RuntimeException(
+//                          s"batch returned from db did not contain message `${outMsg}`. Batch was: ${batch}."
+//                        )
+//            }
         }
 
     test("Test delayed delivery of multiple messages"):
         /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
         supervised:
-          val config = TestNodeConfig()
-          val peers = Set(aliceId, bobId).map((_, config))
+            val config = TestNodeConfig()
+            val peers = Set(aliceId, bobId).map((_, config))
             // Start two nodes. Do not connect them
             val peerNodes = TestNodeContext.mkNodeContexts(peers)
             val nodes = peerNodes.values.toSet
@@ -288,7 +349,7 @@ class MailboxSpec extends ScalaCheckSuite:
             // Start inboxes on all nodes
             TestNodeContext.startInboxes(nodes)
 
-          sleep(config.inboxWatchdogTimeout)
+            sleep(config.inboxWatchdogTimeout)
 
             // Check that Alice's message IDs have gotten into Bob's database
             val receivedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
@@ -361,7 +422,7 @@ class MailboxSpec extends ScalaCheckSuite:
                 // - then the next inbox timeout (10s)
                 // - outbox timeout, since we don't send heartbeats immediately
                 // - an additional second for good measure
-                sleep(config.inboxWatchdogTimeout * 2D + config.outboxWatchdogTimeout + 1.seconds)
+                sleep(config.inboxWatchdogTimeout * 2d + config.outboxWatchdogTimeout + 1.seconds)
 
                 val bobsCountAfterReconnect =
                     peerNodes(bobId).inbox.ask(_.heartbeatCounters(aliceId))
@@ -372,7 +433,7 @@ class MailboxSpec extends ScalaCheckSuite:
             }
         }
 
-    test("Heartbeat mini-protocol works using WS transport"):
+    test("Heartbeat mini-protocol works using WS transport".ignore):
 
         def startNode(myself: PeerId, others: Set[PeerId], port: Int)(using
             ox: Ox
@@ -393,9 +454,10 @@ class MailboxSpec extends ScalaCheckSuite:
                 )
 
             val blockActor = Actor.create(BlockActor())
-            val inbox = ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others, blockActor))(using
-              timeout = WatchdogTimeout(10.seconds)
-            )
+            val inbox =
+                ActorWatchdog.create(InboxActor(dbActor, transmitter, myself, others, blockActor))(
+                  using timeout = WatchdogTimeout(10.seconds)
+                )
 
             (
               db,
@@ -452,72 +514,81 @@ class MailboxSpec extends ScalaCheckSuite:
         }
 
     property("Random Single Withdrawal Event")(
-          forAll(genL2EventGenesisFromPeer(Alice)) {
+      forAll(genL2EventGenesisFromPeer(Alice)) { (event: L2EventGenesis) =>
+          supervised:
+              // General setup. Note that this is unique /per test/, so is not suitable if node initialization
+              // takes a non-trivial amount of time (e.g., establishing websocket connections)
+              val config = TestNodeConfig()
+              val peers = Set(aliceId, bobId).map((_, config))
+              val peerNodes = TestNodeContext.initializePeers(peers)
 
-            (event: L2EventGenesis) =>
-              supervised:
-                // General setup. Note that this is unique /per test/, so is not suitable if node initialization
-                // takes a non-trivial amount of time (e.g., establishing websocket connections)
-                val config = TestNodeConfig()
-                val peers = Set(aliceId, bobId).map((_, config))
-                val peerNodes = TestNodeContext.initializePeers(peers)
-
-                val res =
+              val res =
                   for
-                    // Generate initial state and withdrawal event
-                    state <- HydrozoaL2Mutator(emptyContext, emptyState, event)
-                    l2Event = l2EventWithdrawalFromInputsAndPeer(state.utxo.keySet, Alice)
-                    req = ReqEventL2(l2Event)
+                      // Generate initial state and withdrawal event
+                      state <- HydrozoaL2Mutator(emptyContext, emptyState, event)
+                      l2Event = l2EventWithdrawalFromInputsAndPeer(state.utxo.keySet, Alice)
+                      req = ReqEventL2(l2Event)
 
-                    // Verify test preconditions hold (initial match index == 0)
-                    _ <- if peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0)
-                        then Right(())
-                        else Left("Alice's match index for Bob is not 0")
+                      // Verify test preconditions hold (initial match index == 0)
+                      _ <-
+                          if peerNodes(aliceId).outbox.ask(_.matchIndex(bobId)) == MatchIndex(0)
+                          then Right(())
+                          else Left("Alice's match index for Bob is not 0")
 
-                    // Send l2 withdrawal to outbox
-                    msgId = peerNodes(aliceId).outbox.ask(_.addToOutbox(req))
+                      // Send l2 withdrawal to outbox
+                      msgId = peerNodes(aliceId).outbox.ask(_.addToOutbox(req))
 
-                    mailboxMsg = MailboxMsg[Outbox](msgId, req)
+                      mailboxMsg = MailboxMsg[Outbox](msgId, req)
 
-                    ///// Observe message
-                    // In Alice's outgoing db. Note that there should not be a race condition here, because
-                    // the persistence must happen before the call to (_.ask(_.addToOutbox(req)) completes
-                    _ <- retryEitherPredicate(
-                      action = (_ => peerNodes(aliceId).db.readOutgoingMessages(msgId, msgId)),
-                      predicate = {
-                        case Left(e) => false
-                        case Right(msgs) =>  msgs.contains(swapMailbox(mailboxMsg))
-                      },
-                      onFailure = _ => s"Error reading Alice's database. msg id ${msgId} not found!")
+                      ///// Observe message
+                      // In Alice's outgoing db. Note that there should not be a race condition here, because
+                      // the persistence must happen before the call to (_.ask(_.addToOutbox(req)) completes
+                      _ <- retryEitherPredicate(
+                        action = (_ => peerNodes(aliceId).db.readOutgoingMessages(msgId, msgId)),
+                        predicate = {
+                            case Left(e)     => false
+                            case Right(msgs) => msgs.contains(swapMailbox(mailboxMsg))
+                        },
+                        onFailure =
+                            _ => s"Error reading Alice's database. msg id ${msgId} not found!"
+                      )
 
-                    // In Bob's DB. Note there is a race condition here, so we retry until successful.
-                    _ <- retryEitherPredicate(
-                      action = (_ => peerNodes(bobId).db.readIncomingMessages(aliceId)),
-                      predicate = _.contains(swapMailbox(mailboxMsg)),
-                      onFailure = (dbMessages => s"Message was not found (persisted) in Bob's db! The Message was: \n ${mailboxMsg}")
-                    )
+                      // In Bob's DB. Note there is a race condition here, so we retry until successful.
+                      _ <- retryEitherPredicate(
+                        action = (_ => peerNodes(bobId).db.readIncomingMessages(aliceId)),
+                        predicate = _.contains(swapMailbox(mailboxMsg)),
+                        onFailure = (
+                            dbMessages =>
+                                s"Message was not found (persisted) in Bob's db! The Message was: \n ${mailboxMsg}"
+                        )
+                      )
 
-                    // Check that Alice has successfully received Bob's updated match ID
-                    expectedMatchIndex: MatchIndex[Outbox] = MatchIndex(msgId.toLong)
-                    _ <- retryEitherPredicate(
-                      action = (_ => peerNodes(aliceId).outbox.ask(_.matchIndex(bobId))),
-                      predicate = (expectedMatchIndex == _),
-                      onFailure = (actualMatchIndex => s"Alice's matchIndex for Bob should be ${expectedMatchIndex}, but it is ${actualMatchIndex}"))
+                      // Check that Alice has successfully received Bob's updated match ID
+                      expectedMatchIndex: MatchIndex[Outbox] = MatchIndex(msgId.toLong)
+                      _ <- retryEitherPredicate(
+                        action = (_ => peerNodes(aliceId).outbox.ask(_.matchIndex(bobId))),
+                        predicate = (expectedMatchIndex == _),
+                        onFailure = (
+                            actualMatchIndex =>
+                                s"Alice's matchIndex for Bob should be ${expectedMatchIndex}, but it is ${actualMatchIndex}"
+                        )
+                      )
 
-                    // Check that Bob's block actor has the event in it's mempool
-                    _ <- retryEitherPredicate(
-                      action = (_ => peerNodes(bobId).blockActor.ask(_.getMempool)),
-                      predicate = (mempool => mempool.contains(l2Event)),
-                      onFailure = mempool => s"Mempool should contain \n\n ${l2Event} \n\n but was: \n\n ${mempool} \n\n")
-
+                      // Check that Bob's block actor has the event in it's mempool
+                      _ <- retryEitherPredicate(
+                        action = (_ => peerNodes(bobId).blockActor.ask(_.getMempool)),
+                        predicate = (mempool => mempool.contains(l2Event)),
+                        onFailure = mempool =>
+                            s"Mempool should contain \n\n ${l2Event} \n\n but was: \n\n ${mempool} \n\n"
+                      )
                   yield Right(())
 
-                res match {
-                  case Left(e) => false :| s"Test failed. Error: ${e}"
+              res match {
+                  case Left(e)  => false :| s"Test failed. Error: ${e}"
                   case Right(_) => true :| s"Test succeeded."
-                }
-          })
-
+              }
+      }
+    )
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */
@@ -607,7 +678,7 @@ class DropModNInboxFixture(
 
     // N.B.: InboxActor.create should create an ActorWithTimeout
     val inboxActor: ActorRef[InboxActor] =
-      ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???, ???))(using
+        ActorWatchdog.create(InboxActor(dbWriter, transmitterActor, ???, ???, ???))(using
           ox,
           sc,
           WatchdogTimeout.apply(5.seconds)

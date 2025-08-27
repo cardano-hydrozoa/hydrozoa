@@ -83,6 +83,7 @@ class WSReceiver(
                                       matchIndexMsg.asInstanceOf[MatchIndexMsg[Outbox]]
                                     )
                             }
+                        // TODO: handle inconsistent batches separately
                         case Left(ex) =>
                             log.error(s"Failed to parse incoming message: ${ex.getMessage}")
                     }

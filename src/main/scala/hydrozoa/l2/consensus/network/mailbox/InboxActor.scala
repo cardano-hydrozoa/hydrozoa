@@ -5,6 +5,7 @@ import com.typesafe.scalalogging.Logger
 import hydrozoa.l2.consensus.network.ReqEventL2
 import hydrozoa.l2.consensus.network.actor.BlockActor
 import hydrozoa.l2.consensus.network.mailbox.Batch.Batch
+import hydrozoa.l2.consensus.network.mailbox.Event.{EventHeartbeat, EventInboxMessage}
 import hydrozoa.node.db.DBWriterActor
 import ox.*
 import ox.channels.ActorRef
@@ -25,7 +26,12 @@ private class InboxActor(
     val transmitter: ActorRef[TransmitterActor],
     val ownPeerId: PeerId,
     val others: Set[PeerId],
-    val blockActor: ActorRef[BlockActor]
+    val blockActor: ActorRef[BlockActor],
+
+    /** Optional callback for HeartbeatEvent
+      */
+    val callbackHeartbeat: Option[EventHeartbeat => Unit] = None,
+    val callbackMessageReceived: Option[EventInboxMessage => Unit] = None
 ) extends Watchdog:
 
     private val log = Logger(getClass)
@@ -45,13 +51,16 @@ private class InboxActor(
 
     // N.B.: see InMemoryDbMemoryActor
     // TODO: Refactor all peer data into a single map
+    // TASK: don't store messages in the memory, only store the last index based on
+    // the last message of accepted batch (see comment in the beginning of [[appendEntries]]
     private val inboxes: mutable.Map[PeerId, mutable.Buffer[MailboxMsg[Inbox]]] = mutable.Map.empty
-    
+
     /** Message dispatch (sending to downstream actors) for all incoming mailbox messages */
-    private def dispatchMessages(msg : MailboxMsg[Inbox]): Unit = msg.content match {
-      case m : ReqEventL2 => blockActor.tell(_.appendToMempool(m.eventL2))
-      case _ => ()  
-    }
+    private def dispatchMessages(msg: MailboxMsg[Inbox]): Unit =
+        msg.content match {
+            case m: ReqEventL2 => blockActor.tell(_.appendToMempool(m.eventL2))
+            case _             => ()
+        }
 
     /** It's more convenient to have a separate method so we can make connections first and then
       * start.
@@ -105,7 +114,7 @@ private class InboxActor(
       */
     def appendEntries(from: PeerId, batch: Batch[Inbox]): Unit =
         if batch.isEmpty then
-            this.heartbeatCounters.updateWith(from)({
+            val newCounter = this.heartbeatCounters.updateWith(from)({
                 case None =>
                     throw RuntimeException() // FIXME this should never happen, because we initialize with all peers to 0
                 case Some(counter) => {
@@ -115,18 +124,29 @@ private class InboxActor(
                     )
                     Some(newCounter)
                 }
-            }): Unit
+            })
+            callbackHeartbeat.foreach(_(EventHeartbeat(from, newCounter.get)))
 
         log.debug(s"[${ownPeerId.asString}] Got a batch from $from: $batch");
 
+        /*
+        TODO: idempotency/monotonicity
+        val lastIndex = ???
+        if (batch.head.index != lastIndex + 1) then ignore the batch
+         */
+
+        // TODO: save the whole batch atomically
         // Persist incoming messages to DB
         batch.foreach(inMsg => dbWriter.tell(_.persistIncomingMessage(from, inMsg)))
 
-        // Persist messages in memory of Inbox Actor
-        batch.foreach(msg => this.inboxes(from).append(msg))
-        
-        // Send messages to downstream actors for processing
-        batch.foreach(msg => dispatchMessages(msg))
+        batch.foreach(msg =>
+            // Add messages to the in-memory inbox queue
+            batch.foreach(msg => this.inboxes(from).append(msg))
+            // Send messages to downstream actors for processing
+            dispatchMessages(msg)
+            // Callback
+            callbackMessageReceived.foreach(_(EventInboxMessage(from, msg)))
+        )
 
         // - When an inbox receives a batch from a peer, it marks it
         // by removing that peer ID from `pendingHeartbeats`.
@@ -175,4 +195,3 @@ private class InboxActor(
 
 enum InboxActorError extends Throwable:
     case MatchIndexForPeerNotFound
-

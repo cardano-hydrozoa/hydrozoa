@@ -247,16 +247,17 @@ class OutboxActor(
       *   the id of the persisted message
       */
     def addToOutbox(msg: ProtocolMsg): MsgId[Outbox] = {
-        msg match {
-            case _ =>
-                log.info(s"[${ownPeer.asString}] Adding to outbox: $msg")
-                // 1. Persist a message (not to lose them in case of a crash)
-                val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
-                // 2. Append to the end of the delivery queue
-                queue.append(MailboxMsg(msgId, msg))
-                // TODO: remove? 3. Return the msg ID
-                msgId
-        }
+        log.info(s"[${ownPeer.asString}] Adding to outbox: $msg")
+        // 1. Persist a message (not to lose them in case of a crash)
+        val msgId = dbWriter.ask(_.persistOutgoingMessage(msg))
+        // 2. Append to the end of the delivery queue
+        val mailboxMsg = MailboxMsg(msgId, msg)
+        queue.append(mailboxMsg)
+        peersAwaitingMessages.foreach(peer => {
+            transmitter.tell(_.appendEntries(peer, Batch.singleton[Outbox](mailboxMsg)): Unit)
+        })
+        peersAwaitingMessages.clear()
+        msgId
     }
 
 enum OutboxActorError extends Throwable:
