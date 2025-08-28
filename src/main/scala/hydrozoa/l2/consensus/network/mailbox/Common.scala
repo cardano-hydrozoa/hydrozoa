@@ -262,8 +262,6 @@ object BroadcastChannel:
         val source = BroadcastSource[A](sink)
         new BroadcastChannel(sink, source)
 
-
-
 class BroadcastSource[+A] private[hydrozoa] (
     private val readVar: MVar2[IO, Stream[A @uncheckedVariance]]
 ):

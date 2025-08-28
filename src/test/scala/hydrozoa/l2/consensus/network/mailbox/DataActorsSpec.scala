@@ -10,36 +10,39 @@ import scala.annotation.unused
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
-// Here are no more events, for observability we use messages actors pass each other.
+// There are no more events, for observability we use messages actors pass each other.
 class DataActorsSpec extends ScalaCheckSuite:
 
-//    private val log = Logger(getClass)
-
-    // This test demonstrates how to write a test flow which is driven by
-    // observable messages.
-    test("reactive test"):
+    /** This test demonstrates how to write a test flow which is driven by observable messages.
+      */
+    test("example reactive test"):
         val msgSink = BroadcastSink[AMsg]()
         val msgSource = BroadcastSource(msgSink)
 
         supervised {
-            val actorB = DataActor.create(DActorB(), msgSink)
-            val actorA = DataActor.create(DActorA(actorB), msgSink)
+            given Option[BroadcastSink[AMsg]] = Some(msgSink)
+
+            val actorB = DataActor.create(DActorB())
+            val actorA = DataActor.create(DActorA(actorB))
             actorA.tell(AMsgFoo())
 
-            // Blocks until we see `xyz` in the msgSink or timeout is up
+            // Blocks until we see `AMsgFoo()` in the msgSink or timeout is up
             val _ = FastForward(msgSource)(2.seconds)(_ == AMsgFoo())
 
-            // Blocks until we see `xyz` in the msgSink or timeout is up
+            // Blocks until we see `AMsgBar()` in the msgSink or timeout is up
             val _ = FastForward(msgSource)(2.seconds)(_ == AMsgBar())
         }
 
-    // If we need to use .ask - use CallableDataActor and just ask :-)
-    test("callable actors"):
+    /* If we need to use .ask - use CallableDataActor and just ask :-)
+     */
+    test("example callable actors"):
         val msgSink = BroadcastSink[AMsg]()
         val msgSource = BroadcastSource(msgSink)
 
         supervised {
-            val callableActor = CallableDataActor.create(ExampleCallableActor(), msgSink)
+            given Option[BroadcastSink[AMsg]] = Some(msgSink)
+
+            val callableActor = CallableDataActor.create(ExampleCallableActor())
 
             callableActor.tell(AMsgFoo())
             val ret = callableActor.ask(AMsgFoo())
@@ -51,7 +54,7 @@ class DataActorsSpec extends ScalaCheckSuite:
             val _ = FastForward(msgSource)(2.seconds)(_ == AMsgFoo())
         }
 
-    test("Msg sink support multiple consumers"):
+    test("support multiple consumers"):
 
         /** Tries to read from the channel, returns None if it can't after 1 second. */
         class ChannelReadActor(source: BroadcastSource[AMsg]):
@@ -67,7 +70,9 @@ class DataActorsSpec extends ScalaCheckSuite:
 
         supervised {
             // setup
-            val dataActor = DataActor.create(DActorB(), msgSink)
+            given Option[BroadcastSink[AMsg]] = Some(msgSink)
+
+            val dataActor = DataActor.create(DActorB())
             val readActorA = Actor.create(ChannelReadActor(msgSource1))
             val readActorB = Actor.create(ChannelReadActor(msgSource2))
             val readActorC = Actor.create(ChannelReadActor(msgSource3))
@@ -78,7 +83,6 @@ class DataActorsSpec extends ScalaCheckSuite:
             assert(readActorA.ask(_.read).contains(AMsgBar()))
             assert(readActorB.ask(_.read).contains(AMsgBar()))
             assert(readActorC.ask(_.read).contains(AMsgBar()))
-
         }
 
 /** Fixture for waiting a msg that suits the predicate and getting it back.
@@ -100,14 +104,17 @@ object FastForward:
           )
         )
 
-// Hierarchy of messages - now we need to have them explicitly
+/** Example hierarchy of messages - with data actors you need to have them defined explicitly.
+  */
 sealed trait AMsg
 sealed trait AMsgA extends AMsg
 sealed trait AMsgB extends AMsg
 final case class AMsgFoo() extends AMsgA
 final case class AMsgBar() extends AMsgB
 
-// sample actor for .tell
+/** An example actor for `.tell` that should call another actor [[actorB]] by contract.
+  * @param actorB
+  */
 class DActorA(actorB: DataActorRef[AMsgB]) extends DataActor:
 
     type Msg = AMsgA
@@ -123,7 +130,9 @@ class DActorA(actorB: DataActorRef[AMsgB]) extends DataActor:
         sleep(1.second)
         actorB.tell(AMsgBar())
 
-// sample actor for .tell
+/** An example actor for `.tell` that do nothing, though we want to observe the incoming message in
+  * out tests.
+  */
 class DActorB extends DataActor:
 
     type Msg = AMsgB
@@ -138,7 +147,8 @@ class DActorB extends DataActor:
         log.info("bar!")
     }
 
-// An example actor for .ask
+/** A callable actor for showcasing how `.ask` works.
+  */
 class ExampleCallableActor() extends CallableDataActor:
 
     type Msg = AMsgA
