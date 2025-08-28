@@ -22,7 +22,7 @@ trait CallableDataActor extends DataActor:
 class DataActorRef[M](c: Sink[M], msgSink: Option[BroadcastSink[M]] = None):
     def tell(msg: M): Unit =
         c.send(msg)
-        msgSink.foreach(_.writeChan(msg).unsafeRunSync())
+        msgSink.foreach(_.writeChan(msg))
 end DataActorRef
 
 // Wrapper for messages to use with [[CallableDataActorRef]]
@@ -37,14 +37,14 @@ class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: BroadcastSink[
         val cf = new CompletableFuture[R]()
         c.send(Ask(msg, cf))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.writeChan(msg).unsafeRunSync()
+        msgSink.writeChan(msg)
         unwrapExecutionException(cf.get())
     end ask
 
     def tell(msg: M): Unit =
         c.send(Tell(msg))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.writeChan(msg).unsafeRunSync()
+        msgSink.writeChan(msg)
 
 end CallableDataActorRef
 

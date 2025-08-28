@@ -247,22 +247,22 @@ class BroadcastChannel[A] private (
     private val source: BroadcastSource[A]
 ):
 
-    def readChan: IO[A] = source.readChan
+    def readChan: A = source.readChan
 
-    def writeChan: A => IO[Unit] = sink.writeChan
+    def writeChan: A => Unit = sink.writeChan
 
-    def dupe: IO[BroadcastChannel[A]] =
-        for {
-            newSource <- source.dupe
-        } yield new BroadcastChannel(source = newSource, sink = sink)
+    def dupe: BroadcastChannel[A] =
+        val newSource = source.dupe
+        new BroadcastChannel(source = newSource, sink = sink)
 
 object BroadcastChannel:
     /** Create an empty broadcast channel */
-    def apply[A](): IO[BroadcastChannel[A]] =
-        for {
-            sink <- BroadcastSink[A]()
-            source <- BroadcastSource[A](sink)
-        } yield new BroadcastChannel(sink, source)
+    def apply[A](): BroadcastChannel[A] =
+        val sink = BroadcastSink[A]()
+        val source = BroadcastSource[A](sink)
+        new BroadcastChannel(sink, source)
+
+
 
 class BroadcastSource[+A] private[hydrozoa] (
     private val readVar: MVar2[IO, Stream[A @uncheckedVariance]]
@@ -270,28 +270,19 @@ class BroadcastSource[+A] private[hydrozoa] (
 
     // TODO: MVar2 exposes non-semantically-blocking tryRead and tryPut; we can thus expose tryReadChan and
     //  tryWriteChan
-    //
-    // TODO: I _think_ that if any consumer is holding a reference to an Item in the stream, all subsequent
-    // items will be held in memory and not get GC'd.
-    // My hypothesis is that once all consumers have moved passed an item, that item should be subject to garbage
-    // collection.
-    // Thus, if we hold a reference to a Broadcast channel, but never read from it, the entire collection will
-    // always be held in memory.
-    // We can expose a "write only" version that will permanently empty its readVar so that it will not hold any
-    // references, and only the consumers of the channel decide which references are kept.
 
     /** Reading an item from the broadcast channel inspects the head of the channel and advances the
       * read pointer to the next item.
       *
       * FIXME: Not exception safe.
       */
-    def readChan: IO[A] = {
+    def readChan: A = {
         for {
             stream <- readVar.take
             item <- stream.read
             _ <- readVar.put(item.stream)
         } yield item.value
-    }
+    }.unsafeRunSync()
 
     /** Duplicating an instance "B1" of BroadcastChannel returns a new instance "B2" such that:
       *   - The readVar of B2 is a _new_ MVar that _points_ to the same place as the writeVar of B1.
@@ -303,13 +294,13 @@ class BroadcastSource[+A] private[hydrozoa] (
       * points to the same place as the readVar of B1; thus any messages (even ones in the past)
       * that are visible to B1 are also visible to B2.
       */
-    def dupe: IO[BroadcastSource[A]] = {
+    def dupe: BroadcastSource[A] = {
         implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
         for {
             stream <- readVar.read
             newReadVar <- MVar[IO].of(stream)
         } yield (new BroadcastSource(readVar = newReadVar))
-    }
+    }.unsafeRunSync()
 
 class BroadcastSink[-A] private[hydrozoa] (
     private val writeVar: MVar2[IO, Stream[A @uncheckedVariance]]
@@ -321,7 +312,7 @@ class BroadcastSink[-A] private[hydrozoa] (
       *
       * FIXME: Not exception safe.
       */
-    def writeChan(value: A): IO[Unit] = {
+    def writeChan(value: A): Unit = {
         implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
         for {
             newHole: Stream[A] <- MVar[IO].empty
@@ -329,29 +320,29 @@ class BroadcastSink[-A] private[hydrozoa] (
             _ <- oldHole.put(Item(value, newHole))
             _ <- writeVar.put(newHole)
         } yield ()
-    }
+    }.unsafeRunSync()
 
-    def mkSource: IO[BroadcastSource[A @uncheckedVariance]] = {
+    def mkSource: BroadcastSource[A @uncheckedVariance] = {
         implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
         for {
             hole <- writeVar.read
             newReadVar <- MVar[IO].of(hole)
         } yield (new BroadcastSource(readVar = newReadVar))
-    }
+    }.unsafeRunSync()
 
 object BroadcastSink:
     /** Create an empty broadcast channel */
-    def apply[A](): IO[BroadcastSink[A]] = {
+    def apply[A](): BroadcastSink[A] = {
         implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
         for {
             hole <- MVar[IO].empty[Item[A]]
             writeVar <- MVar[IO].of(hole)
 
         } yield new BroadcastSink[A](writeVar)
-    }
+    }.unsafeRunSync()
 
 object BroadcastSource:
-    def apply[A](sink: BroadcastSink[A]): IO[BroadcastSource[A]] = sink.mkSource
+    def apply[A](sink: BroadcastSink[A]): BroadcastSource[A] = sink.mkSource
 
 class PubSubActor[M] extends DataActor:
     /** Surrogate key for topics */
@@ -374,9 +365,9 @@ class PubSubActor[M] extends DataActor:
         topicName: TopicName
     ): (TopicId, BroadcastSource[Msg]) = {
         lastTopicId = lastTopicId + 1L
-        val sink = BroadcastSink[Msg]().unsafeRunSync()
+        val sink = BroadcastSink[Msg]()
         topics.update(lastTopicId, (filter, sink, topicName))
-        (lastTopicId, BroadcastSource(sink).unsafeRunSync())
+        (lastTopicId, BroadcastSource(sink))
     }
 
     /** Removes a filter from the pubsub actor. All duplicates of the braodcast channel associated
@@ -390,11 +381,11 @@ class PubSubActor[M] extends DataActor:
       * @return
       */
     def subscribe(topicId: TopicId): BroadcastSource[Msg] =
-        BroadcastSource(topics(topicId)._2).unsafeRunSync()
+        BroadcastSource(topics(topicId)._2)
 
     /** Put a new message onto the appropriate broadcast channel
       * @param msg
       */
     def receive(msg: Msg): Unit = {
-        topics.values.foreach(x => if x._1(msg) then x._2.writeChan(msg).unsafeRunSync())
+        topics.values.foreach(x => if x._1(msg) then x._2.writeChan(msg))
     }
