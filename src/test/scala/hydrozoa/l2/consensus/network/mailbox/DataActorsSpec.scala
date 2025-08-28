@@ -128,8 +128,8 @@ class DataActorsSpec extends ScalaCheckSuite:
     test("Msg sink doesn't support multiple consumers"):
 
         /** Tries to read from the channel, returns None if it can't after 1 second. */
-        class ChannelReadActor(channel : Channel[AMsg]):
-            def read : Option[AMsg] =
+        class ChannelReadActor(channel: Channel[AMsg]):
+            def read: Option[AMsg] =
                 timeoutOption(1.seconds) {
                     channel.receive()
                 }
@@ -151,8 +151,6 @@ class DataActorsSpec extends ScalaCheckSuite:
             // The second actor cannot
             assert(readActorB.ask(_.read).isEmpty)
         }
-
-
 
 /** Fixture for waiting a msg that suits the predicate and getting it back.
   */
@@ -205,7 +203,6 @@ sealed trait AMsgA extends AMsg
 sealed trait AMsgB extends AMsg
 final case class AMsgFoo() extends AMsgA
 final case class AMsgBar() extends AMsgB
-
 
 // sample actor for .tell
 class DActorA(actorB: DataActorRef[AMsgB]) extends DataActor:
@@ -260,5 +257,3 @@ class ExampleCallableActor() extends CallableDataActor:
         log.info("foo!")
         sleep(1.second)
         42
-
-

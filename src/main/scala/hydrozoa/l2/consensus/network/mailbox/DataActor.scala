@@ -51,8 +51,11 @@ end CallableDataActorRef
 // Companion object for a data actor
 // TODO: (Ilia) I would pass msgSing using "using" since we likely want it to be only one for all actors
 object DataActor:
-    def create(logic: DataActor, msgSink: Option[Sink[logic.Msg]], close: Option[DataActor => Unit] = None)(
-        using
+    def create(
+        logic: DataActor,
+        msgSink: Option[Sink[logic.Msg]],
+        close: Option[DataActor => Unit] = None
+    )(using
         ox: Ox,
         sc: BufferCapacity
     ): DataActorRef[logic.Msg] =
@@ -72,8 +75,7 @@ object DataActor:
         }
         ref
     end create
-    def create(logic: DataActor, msgSink: Sink[logic.Msg]) (
-        using
+    def create(logic: DataActor, msgSink: Sink[logic.Msg])(using
         ox: Ox,
         sc: BufferCapacity
     ): DataActorRef[logic.Msg] =
@@ -84,13 +86,13 @@ end DataActor
 // TODO: (Ilia) I would pass msgSing using "using" since we likely want it to be only one for all actors
 object CallableDataActor:
     def create(
-                  logic: CallableDataActor,
-                  msgSink: Sink[logic.Msg],
-                  close: Option[DataActor => Unit] = None
-              )(using
-                ox: Ox,
-                sc: BufferCapacity
-              ): CallableDataActorRef[logic.Msg, logic.Resp] =
+        logic: CallableDataActor,
+        msgSink: Sink[logic.Msg],
+        close: Option[DataActor => Unit] = None
+    )(using
+        ox: Ox,
+        sc: BufferCapacity
+    ): CallableDataActorRef[logic.Msg, logic.Resp] =
         val c = BufferCapacity.newChannel[AskTell[logic.Msg, logic.Resp]]
         val ref = CallableDataActorRef[logic.Msg, logic.Resp](c, msgSink)
         forkDiscard {
