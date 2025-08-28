@@ -1,14 +1,17 @@
 package hydrozoa.l2.consensus.network.mailbox
 
 import com.typesafe.scalalogging.Logger
+import hydrozoa.l2.consensus.network.mailbox.AskTell.{Ask, Tell}
 import munit.Assertions.assertEquals
 import munit.ScalaCheckSuite
 import ox.*
 import ox.channels.{BufferCapacity, Channel, Sink, Source}
 
+import java.util.concurrent.CompletableFuture
 import scala.annotation.unused
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{ExecutionException, TimeoutException}
+import scala.util.control.NonFatal
 
 class DataActorsSpec extends ScalaCheckSuite:
 
@@ -82,7 +85,8 @@ class DataActorsSpec extends ScalaCheckSuite:
         }
 
         msgTrace.done()
-        val msgs = msgTrace.toList
+        msgSink.done()
+        val msgs = msgTrace.toList ++ msgSink.toList
 
         log.info(s"Got messages: $msgs")
 
@@ -93,6 +97,21 @@ class DataActorsSpec extends ScalaCheckSuite:
             FirstThisThenThat(AMsgFoo(), AMsgBar())
           )
         )
+
+    test("callable actors"):
+        val msgSink = Channel.unlimited[AMsg]
+
+        supervised {
+            val callableActor = CallableDataActor.create(ExampleCallableActor(), msgSink)
+
+            callableActor.tell(AMsgFoo())
+            val ret = callableActor.ask(AMsgFoo())
+
+            assertEquals(ret, 42)
+
+            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
+            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
+        }
 
 /** The simplest form of test callback: the first observed event of that type should be what we
   * expect to see.
@@ -145,7 +164,10 @@ final case class AMsgBar() extends AMsgB
 trait DataActor:
     type Msg
     def receive(msg: Msg): Unit
-    // def close(): Unit = ()
+
+trait CallableDataActor extends DataActor:
+    type Resp
+    def respond(msg: Msg): Resp
 
 class DActorA(actorB: DataActorRef[AMsgB]) extends DataActor:
 
@@ -176,31 +198,52 @@ class DActorB extends DataActor:
         log.info("bar!")
     }
 
-class DataActorRef[M](c: Sink[M], msgSink: Sink[M]):
-//    def ask(f: T => E): E =
-//        val cf = new CompletableFuture[E]()
-//        c.send { t =>
-//            try {
-//                val ret = f(t)
-//                eventSink.send(ret)
-//                cf.complete(ret).discard
-//            } catch
-//                case NonFatal(e) =>
-//                    // since this is an ask, only propagating the exception to the caller, not to the scope
-//                    cf.completeExceptionally(e).discard
-//                case t: Throwable =>
-//                    // fatal exceptions are propagated to the scope (e.g. InterruptedException)
-//                    cf.completeExceptionally(t).discard
-//                    throw t
-//        }
-//        unwrapExecutionException(cf.get())
-//    end ask
+class ExampleCallableActor() extends CallableDataActor:
 
+    type Msg = AMsgA
+
+    type Resp = Int
+
+    private val log = Logger(getClass)
+
+    def receive(msg: Msg): Unit = msg match {
+        // NB: Let's use .discard not `: Unit` everywhere!
+        case arg: AMsgFoo => foo(arg).discard
+    }
+
+    def respond(msg: Msg): Int = msg match {
+        case arg: AMsgFoo => foo(arg)
+    }
+
+    def foo(_arg: AMsgFoo): Int =
+        log.info("foo!")
+        sleep(1.second)
+        42
+
+class DataActorRef[M](c: Sink[M], msgSink: Sink[M]):
     def tell(msg: M): Unit =
         c.send(msg)
         msgSink.send(msg)
 
 end DataActorRef
+
+enum AskTell[M, R]:
+    case Ask(msg: M, cf: CompletableFuture[R])
+    case Tell(msg: M)
+
+class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: Sink[M]):
+    def ask(msg: M): R =
+        val cf = new CompletableFuture[R]()
+        c.send(Ask(msg, cf))
+        msgSink.send(msg)
+        unwrapExecutionException(cf.get())
+    end ask
+
+    def tell(msg: M): Unit =
+        c.send(Tell(msg))
+        msgSink.send(msg)
+
+end CallableDataActorRef
 
 object DataActor:
     def create(logic: DataActor, msgSink: Sink[logic.Msg], close: Option[DataActor => Unit] = None)(
@@ -225,6 +268,50 @@ object DataActor:
         ref
     end create
 end DataActor
+
+object CallableDataActor:
+    def create(
+        logic: CallableDataActor,
+        msgSink: Sink[logic.Msg],
+        close: Option[DataActor => Unit] = None
+    )(using
+        ox: Ox,
+        sc: BufferCapacity
+    ): CallableDataActorRef[logic.Msg, logic.Resp] =
+        val c = BufferCapacity.newChannel[AskTell[logic.Msg, logic.Resp]]
+        val ref = CallableDataActorRef[logic.Msg, logic.Resp](c, msgSink)
+        forkDiscard {
+            try
+                forever {
+                    val m = c.receive()
+
+                    m match {
+                        case Tell(msg) =>
+                            try logic.receive(msg)
+                            catch
+                                case t: Throwable =>
+                                    c.error(t)
+                                    throw t
+                        case Ask(msg, cf) =>
+                            try
+                                val res = logic.respond(msg)
+                                cf.complete(res).discard
+                            catch
+                                case NonFatal(e) =>
+                                    // since this is an ask, only propagating the exception to the caller, not to the scope
+                                    cf.completeExceptionally(e).discard
+                                case t: Throwable =>
+                                    // fatal exceptions are propagated to the scope (e.g. InterruptedException)
+                                    cf.completeExceptionally(t).discard
+                                    c.error(t)
+                                    throw t
+                    }
+                }
+            finally close.foreach(c => uninterruptible(c(logic)))
+        }
+        ref
+    end create
+end CallableDataActor
 
 private inline def unwrapExecutionException[T](f: => T): T =
     try f
