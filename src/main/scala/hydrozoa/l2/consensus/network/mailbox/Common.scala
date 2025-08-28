@@ -8,6 +8,7 @@ import hydrozoa.l2.consensus.network.{*, given}
 import ox.channels.ActorRef
 import sttp.tapir.Schema
 
+import scala.annotation.unchecked.uncheckedVariance
 import scala.collection.{MapView, mutable}
 import scala.concurrent.ExecutionContext
 
@@ -263,8 +264,8 @@ object BroadcastChannel:
             source <- BroadcastSource[A](sink)
         } yield new BroadcastChannel(sink, source)
 
-class BroadcastSource[A] private[hydrozoa] (
-    private val readVar: MVar2[IO, Stream[A]]
+class BroadcastSource[+A] private[hydrozoa] (
+    private val readVar: MVar2[IO, Stream[A @uncheckedVariance]]
 ):
 
     // TODO: MVar2 exposes non-semantically-blocking tryRead and tryPut; we can thus expose tryReadChan and
@@ -310,8 +311,8 @@ class BroadcastSource[A] private[hydrozoa] (
         } yield (new BroadcastSource(readVar = newReadVar))
     }
 
-class BroadcastSink[A] private[hydrozoa] (
-    private val writeVar: MVar2[IO, Stream[A]]
+class BroadcastSink[-A] private[hydrozoa] (
+    private val writeVar: MVar2[IO, Stream[A @uncheckedVariance]]
 ):
 
     /** Writing to a channel inspects the write pointer to obtain the current (empty) item, creates
@@ -330,7 +331,7 @@ class BroadcastSink[A] private[hydrozoa] (
         } yield ()
     }
 
-    def mkSource: IO[BroadcastSource[A]] = {
+    def mkSource: IO[BroadcastSource[A @uncheckedVariance]] = {
         implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
         for {
             hole <- writeVar.read

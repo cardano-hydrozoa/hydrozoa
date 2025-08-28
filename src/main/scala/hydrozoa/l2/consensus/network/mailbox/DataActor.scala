@@ -19,10 +19,10 @@ trait CallableDataActor extends DataActor:
     def respond(msg: Msg): Resp
 
 // Reference to a data actor
-class DataActorRef[M](c: Sink[M], msgSink: Option[Sink[M]] = None):
+class DataActorRef[M](c: Sink[M], msgSink: Option[BroadcastSink[M]] = None):
     def tell(msg: M): Unit =
         c.send(msg)
-        msgSink.foreach(_.send(msg))
+        msgSink.foreach(_.writeChan(msg).unsafeRunSync())
 end DataActorRef
 
 // Wrapper for messages to use with [[CallableDataActorRef]]
@@ -32,19 +32,19 @@ enum AskTell[M, R]:
     case Tell(msg: M)
 
 // Reference to a data actor with .ask support
-class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: Sink[M]):
+class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: BroadcastSink[M]):
     def ask(msg: M): R =
         val cf = new CompletableFuture[R]()
         c.send(Ask(msg, cf))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.send(msg)
+        msgSink.writeChan(msg).unsafeRunSync()
         unwrapExecutionException(cf.get())
     end ask
 
     def tell(msg: M): Unit =
         c.send(Tell(msg))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.send(msg)
+        msgSink.writeChan(msg).unsafeRunSync()
 
 end CallableDataActorRef
 
@@ -53,7 +53,7 @@ end CallableDataActorRef
 object DataActor:
     def create(
         logic: DataActor,
-        msgSink: Option[Sink[logic.Msg]],
+        msgSink: Option[BroadcastSink[logic.Msg]],
         close: Option[DataActor => Unit] = None
     )(using
         ox: Ox,
@@ -75,7 +75,7 @@ object DataActor:
         }
         ref
     end create
-    def create(logic: DataActor, msgSink: Sink[logic.Msg])(using
+    def create(logic: DataActor, msgSink: BroadcastSink[logic.Msg])(using
         ox: Ox,
         sc: BufferCapacity
     ): DataActorRef[logic.Msg] =
@@ -87,7 +87,7 @@ end DataActor
 object CallableDataActor:
     def create(
         logic: CallableDataActor,
-        msgSink: Sink[logic.Msg],
+        msgSink: BroadcastSink[logic.Msg],
         close: Option[DataActor => Unit] = None
     )(using
         ox: Ox,

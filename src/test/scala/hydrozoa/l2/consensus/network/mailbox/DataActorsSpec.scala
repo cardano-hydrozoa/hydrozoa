@@ -18,7 +18,7 @@ class DataActorsSpec extends ScalaCheckSuite:
     // This test demonstrates how to write a test flow which is driven by
     // observable messages.
     test("reactive test"):
-        val msgSink = Channel.unlimited[AMsg]
+        val msgSink = BroadcastSink[AMsg]().unsafeRunSync()
 
         supervised {
             val actorB = DataActor.create(DActorB(), msgSink)
@@ -44,7 +44,7 @@ class DataActorsSpec extends ScalaCheckSuite:
     // If we don't want/need to wait for any messages we can just run and
     // do some after-run cold checks
     test("passive test"):
-        val msgSink = Channel.unlimited[AMsg]
+        val msgSink = BroadcastSink[AMsg]().unsafeRunSync()
 
         supervised {
             // setup
@@ -74,8 +74,8 @@ class DataActorsSpec extends ScalaCheckSuite:
     // We can combine both approaches, we decided to teach FastForward to pass messages it
     // skips over so we can get the full list of messages after the run.
     test("mixed test"):
-        val msgSink = Channel.unlimited[AMsg]
-        val msgTrace = Channel.unlimited[AMsg]
+        val msgSink = BroadcastSink[AMsg]().unsafeRunSync()
+        val msgTrace = BroadcastSink[AMsg]().unsafeRunSync()
 
         supervised {
 
@@ -110,7 +110,7 @@ class DataActorsSpec extends ScalaCheckSuite:
 
     // If we need to use .ask - use CallableDataActor and just ask :-)
     test("callable actors"):
-        val msgSink = Channel.unlimited[AMsg]
+        val msgSink = BroadcastSink[AMsg]().unsafeRunSync()
 
         supervised {
             val callableActor = CallableDataActor.create(ExampleCallableActor(), msgSink)
@@ -134,7 +134,7 @@ class DataActorsSpec extends ScalaCheckSuite:
                     channel.receive()
                 }
 
-        val msgSink = Channel.unlimited[AMsg]
+        val msgSink = BroadcastSink[AMsg]().unsafeRunSync()
 
         supervised {
 
