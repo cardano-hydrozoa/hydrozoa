@@ -54,6 +54,7 @@ lazy val core = (project in file("."))
         "io.bullet" %% "borer-derivation" % "1.12.0",
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
+        "org.typelevel" %% "cats-effect" % "2.5.3" withSources() withJavadoc(),
         "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(

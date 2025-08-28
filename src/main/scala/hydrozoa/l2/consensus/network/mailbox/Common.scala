@@ -1,10 +1,14 @@
 package hydrozoa.l2.consensus.network.mailbox
 
+import cats.effect.*
+import cats.effect.concurrent.*
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonValueCodec
 import com.github.plokhotnyuk.jsoniter_scala.macros.JsonCodecMaker
 import hydrozoa.l2.consensus.network.{ProtocolMsg, *, given}
 import ox.channels.ActorRef
 import sttp.tapir.Schema
+
+import scala.concurrent.ExecutionContext
 
 // Actor message: What Ox does with _.tell, _.ask.
 // Protocol Message: Broadcast messages from miniprotocol actors to their counterparts at other peers
@@ -212,3 +216,97 @@ given batchMsgOrMatchIndexMsgCodec[M <: Mailbox]: JsonValueCodec[BatchMsgOrMatch
 
 given batchMsgOrMatchIndexMsgSchema[M <: Mailbox]: Schema[BatchMsgOrMatchIndexMsg[M]] =
     Schema.binary[BatchMsgOrMatchIndexMsg[M]]
+
+/**
+ * See: https://github.com/simonmar/parconc-examples/blob/master/chan2.hs
+ * And page 135 of Simon Marlow's "Parallel and Concurrent Programming in Haskell"
+ *
+ * Note that I don't know if this implementation is exception safe; if an exception
+ * arises at certain points (for instance, in the middle of writeChan or readChan),
+ * we may deadlock.
+ *
+ * An exception-safe implementation in haskell can be found page 163 in Marlow.
+ * https://github.com/simonmar/parconc-examples/blob/master/chan3.hs
+ */
+object BroadcastChannel:
+    type Stream[A] = MVar2[IO, Item[A]]
+
+    case class Item[A](value: A, stream: Stream[A])
+
+    /** The underlying data structure of a broadcast channel can be thought of as a linked list (i.e., [[Stream]])
+     * of [[Item]]s, where each Item[A] contains a value of type A and a reference to the next [[Item]].*
+     *
+     * An instance of BroadcastChannel[A] contains two "pointers" to positions in this stream: a "read" position
+     * and a "write" position. The "write" is the same for all consumers, meaning that a write from any consumer
+     * of the channel will appear on all duplicated channels. The Read position is individual, meaning that reading
+     * from one duplicated instances does not remove the value from other duplicated instances.
+     */
+    class BroadcastChannel[A](private val readVar: MVar2[IO, Stream[A]], private val writeVar: MVar2[IO, Stream[A]]):
+        // TODO: MVar2 exposes non-semantically-blocking tryRead and tryPut; we can thus expose tryReadChan and
+        //  tryWriteChan
+        //
+        // TODO: I _think_ that if any consumer is holding a reference to an Item in the stream, all subsequent
+        // items will be held in memory and not get GC'd.
+        // My hypothesis is that once all consumers have moved passed an item, that item should be subject to garbage
+        // collection.
+        // Thus, if we hold a reference to a Broadcast channel, but never read from it, the entire collection will
+        // always be held in memory.
+        // We can expose a "write only" version that will permanently empty its readVar so that it will not hold any
+        // references, and only the consumers of the channel decide which references are kept.
+
+        /** Create an empty broadcast channel */
+        def apply: IO[BroadcastChannel[A]] = {
+            implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
+            for {
+                hole: Stream[A] <- MVar[IO].empty
+                readVar <- MVar[IO].of(hole)
+                writeVar <- MVar[IO].of(hole)
+            } yield BroadcastChannel(readVar, writeVar)
+        }
+
+        /** Reading an item from the broadcast channel inspects the head of the channel and advances the read pointer
+         * to the next item.
+         * 
+         * FIXME: Not exception safe. 
+         * */
+        def readChan: IO[A] = {
+            for {
+                stream <- readVar.take
+                item <- stream.read
+                _ <- readVar.put(item.stream)
+            } yield item.value
+        }
+
+        /** Writing to a channel inspects the write pointer to obtain the current (empty) item, creates a new (empty)
+         * item for the stream, and writes the given value and pointer to the new item to the current item.
+         * 
+         * FIXME: Not exception safe.
+         */
+        def writeChan(value: A): IO[Unit] = {
+            implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
+            for {
+                newHole: Stream[A] <- MVar[IO].empty
+                oldHole <- writeVar.take
+                _ <- oldHole.put(Item(value, newHole))
+                _ <- writeVar.put(newHole)
+            } yield ()
+        }
+
+        /** Duplicating an instance "B1" of BroadcastChannel returns a new instance "B2" such that:
+         * - The readVar of B2 is a _new_ MVar that _points_ to the same place as the writeVar of B1.
+         * - The writeVar of B1 and B2 are the same.
+         *
+         * This means that B2 will start _reading_ from the point that B1 is currently _writing_.
+         *
+         * TODO: an alternate implementation could be exposed that gives B2 a distinct readVar that points to
+         * the same place as the readVar of B1; thus any messages (even ones in the past) that are visible to B1
+         * are also visible to B2.
+         * */
+        def dupe: IO[BroadcastChannel[A]] = {
+            implicit val cs: ContextShift[IO] = IO.contextShift(ExecutionContext.Implicits.global)
+            for {
+                hole <- writeVar.read
+                newReadVar <- MVar[IO].of(hole)
+            } yield BroadcastChannel(readVar = newReadVar, writeVar = writeVar)
+        }
+
