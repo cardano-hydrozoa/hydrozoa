@@ -8,6 +8,7 @@ import hydrozoa.l2.consensus.network.{*, given}
 import ox.channels.ActorRef
 import sttp.tapir.Schema
 
+import scala.collection.{MapView, mutable}
 import scala.concurrent.ExecutionContext
 
 // Actor message: What Ox does with _.tell, _.ask.
@@ -231,7 +232,7 @@ private case class Item[A](value: A, stream: Stream[A])
  * we may deadlock.
  *
  * An exception-safe implementation in haskell can be found page 163 in Marlow.
- * https://github.com/simonmar/parconc-examples/blob/master/chan3.hs
+ * Code is here: https://github.com/simonmar/parconc-examples/blob/master/chan3.hs
  *
  * The underlying data structure of a broadcast channel can be thought of as a linked list (i.e., [[Stream]])
  * of [[Item]]s, where each Item[A] contains a value of type A and a reference to the next [[Item]].*
@@ -253,7 +254,6 @@ sealed abstract case class BroadcastChannel[A] private( private val readVar: MVa
     // always be held in memory.
     // We can expose a "write only" version that will permanently empty its readVar so that it will not hold any
     // references, and only the consumers of the channel decide which references are kept.
-
 
     /** Reading an item from the broadcast channel inspects the head of the channel and advances the read pointer
      * to the next item.
@@ -312,3 +312,46 @@ object BroadcastChannel:
 
         } yield new BroadcastChannel[A](readVar, writeVar) {}
     }
+
+
+class PubSubActor[M] extends DataActor:
+    /** Surrogate key for topics */
+    opaque type TopicId = Long
+    /** Human Readable topic name */
+    private type TopicName = String
+    type Msg = M
+
+    private var lastTopicId: TopicId = 0
+    private val topics: mutable.Map[TopicId, (Msg => Boolean, BroadcastChannel[Msg], TopicName)] = mutable.Map.empty
+    def getTopicNames: MapView[TopicId, TopicName] = topics.view.mapValues(_._3)
+
+    /** Register a new filter with the given name, returning a surrogate key for future subscriptions and a
+     * instance of the BroadcastChannel for these messages */
+    def registerFilter(filter: Msg => Boolean, topicName: TopicName): (TopicId, BroadcastChannel[Msg]) = {
+        lastTopicId = lastTopicId + 1L
+        val chan = BroadcastChannel[Msg]().unsafeRunSync()
+        topics.update(lastTopicId, (filter, chan, topicName))
+        (lastTopicId, chan.dupe.unsafeRunSync())
+    }
+
+    /**
+     * Removes a filter from the pubsub actor. All duplicates of the braodcast channel associated with this topicId
+     * will stop receiving new messages; they will block indefinitely after reaching the last message.
+     * */
+    def deregisterFilter(topic: TopicId): Unit = topics.remove(topic): Unit
+
+    /**
+     * Subscribe to a  given topic ID, returning a duplicate broadcast channel
+     * @param topicId
+     * @return
+     */
+    def subscribe(topicId: TopicId): BroadcastChannel[Msg] = topics(topicId)._2.dupe.unsafeRunSync()
+
+    /**
+     * Put a new message onto the appropriate broadcast channel
+     * @param msg
+     */
+    def receive(msg: Msg): Unit = {
+        topics.values.foreach(x => if x._1(msg) then x._2.writeChan(msg).unsafeRunSync())
+    }
+
