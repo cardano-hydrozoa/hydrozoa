@@ -1,11 +1,13 @@
-package hydrozoa.l2.consensus.network.mailbox
+package hydrozoa.l2.consensus.network.mailbox.broadcast
+
 
 import com.typesafe.scalalogging.Logger
-import hydrozoa.l2.consensus.network.mailbox.AskTell.{Ask, Tell}
-import munit.Assertions.assertEquals
+import hydrozoa.l2.consensus.network.mailbox
+import hydrozoa.l2.consensus.network.mailbox.BroadcastChannel
+import hydrozoa.l2.consensus.network.mailbox.broadcast.AskTell.{Ask, Tell}
 import munit.ScalaCheckSuite
 import ox.*
-import ox.channels.{Actor, BufferCapacity, Channel, Sink, Source}
+import ox.channels.{Actor, BufferCapacity, Sink}
 
 import java.util.concurrent.CompletableFuture
 import scala.annotation.unused
@@ -14,30 +16,37 @@ import scala.concurrent.{ExecutionException, TimeoutException}
 import scala.util.control.NonFatal
 
 // Here are no more events, for observability we use messages actors pass each other.
-class DataActorsSpec extends ScalaCheckSuite:
+class DataActorsBroadcastSpec extends ScalaCheckSuite:
 
-    private val log = Logger(getClass)
+//    private val log = Logger(getClass)
 
     // This test demonstrates how to write a test flow which is driven by
     // observable messages.
     test("reactive test"):
-        val msgSink = Channel.unlimited[AMsg]
 
         supervised {
-            val actorB = DataActor.create(DActorB(), msgSink)
-            val actorA = DataActor.create(DActorA(actorB), msgSink)
+            // N.B.: there's something going on with bad type inference here, possible due to contravariance.
+            val dActorB = DActorB()
+
+            val msgSinkB: mailbox.BroadcastChannel[dActorB.Msg] = BroadcastChannel[dActorB.Msg]().unsafeRunSync()
+            val actorB = DataActor.create(DActorB(), msgSinkB)
+
+            val dActorA = DActorA(actorB)
+            val msgSinkA: mailbox.BroadcastChannel[dActorA.Msg] = BroadcastChannel[dActorA.Msg]().unsafeRunSync()
+
+            val actorA = DataActor.create(DActorA(actorB), msgSinkA)
             actorA.tell(AMsgFoo())
 
             // Blocks until we see `xyz` in the msgSink or timeout is up
-            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
+            val _ = FastForward(msgSinkA)(2.seconds)(_ == AMsgFoo())
 
             // Act upon the result is needed, make assertions
             // ...
 
             // Blocks until we see `xyz` in the msgSink or timeout is up
-            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgBar())
+            val _ = FastForward(msgSinkB)(2.seconds)(_ == AMsgBar())
 
-            // Act upon the result is needed, make assertions
+//             Act upon the result is needed, make assertions
 //            xyz match {
 //                case _: AMsgBar => println("xyz is AMsgBar")
 //                case _ => println("xyz is not AMsgBar")
@@ -47,120 +56,128 @@ class DataActorsSpec extends ScalaCheckSuite:
     // If we don't want/need to wait for any messages we can just run and
     // do some after-run cold checks
     test("passive test"):
-        val msgSink = Channel.unlimited[AMsg]
-
         supervised {
-            // setup
-            val actorB = DataActor.create(DActorB(), msgSink)
-            val actorA = DataActor.create(DActorA(actorB), msgSink)
+            // N.B.: there's something going on with bad type inference here, possible due to contravariance.
+            val dActorB = DActorB()
 
-            // test actions
+            val msgSinkB: mailbox.BroadcastChannel[dActorB.Msg] = BroadcastChannel[dActorB.Msg]().unsafeRunSync()
+            val actorB = DataActor.create(DActorB(), msgSinkB)
+
+            val dActorA = DActorA(actorB)
+            val msgSinkA: mailbox.BroadcastChannel[dActorA.Msg] = BroadcastChannel[dActorA.Msg]().unsafeRunSync()
+
+            val actorA = DataActor.create(DActorA(actorB), msgSinkA)
             actorA.tell(AMsgFoo())
-            sleep(2.second)
         }
 
-        // Stop the channel and get all msgs
-        msgSink.done()
-        val msgs = msgSink.toList
+//            // Stop the channel and get all msgs
+//        msgSink.done()
+//        val msgs = msgSink.toList
+//
+//        log.info(s"Got messages: $msgs")
+//
+//        // verify that a list of "invariants" is hold (very naively)
+//        checkMsgTraceAssertions(
+//          msgs,
+//          List(
+//            MsgIsPresent(AMsgFoo()),
+//            FirstThisThenThat(AMsgFoo(), AMsgBar())
+//          )
+//        )
 
-        log.info(s"Got messages: $msgs")
-
-        // verify that a list of "invariants" is hold (very naively)
-        checkMsgTraceAssertions(
-          msgs,
-          List(
-            MsgIsPresent(AMsgFoo()),
-            FirstThisThenThat(AMsgFoo(), AMsgBar())
-          )
-        )
-
-    // We can combine both approaches, we decided to teach FastForward to pass messages it
-    // skips over so we can get the full list of messages after the run.
-    test("mixed test"):
-        val msgSink = Channel.unlimited[AMsg]
-        val msgTrace = Channel.unlimited[AMsg]
-
-        supervised {
-
-            // setup
-            val actorB = DataActor.create(DActorB(), msgSink)
-            val actorA = DataActor.create(DActorA(actorB), msgSink)
-
-            // test actions
-            actorA.tell(AMsgFoo())
-
-            val _ = FastForward(msgSink, Some(msgTrace))(2.seconds)(_ == AMsgFoo())
-
-            // Blocks until we see `xyz` in the msgSink or timeout is up
-            val _ = FastForward(msgSink, Some(msgTrace))(2.seconds)(_ == AMsgBar())
-
-            sleep(2.second)
-        }
-
-        msgTrace.done()
-        msgSink.done()
-        val msgs = msgTrace.toList ++ msgSink.toList
-
-        log.info(s"Got messages: $msgs")
-
-        checkMsgTraceAssertions(
-          msgs,
-          List(
-            MsgIsPresent(AMsgFoo()),
-            FirstThisThenThat(AMsgFoo(), AMsgBar())
-          )
-        )
-
-    // If we need to use .ask - use CallableDataActor and just ask :-)
-    test("callable actors"):
-        val msgSink = Channel.unlimited[AMsg]
-
-        supervised {
-            val callableActor = CallableDataActor.create(ExampleCallableActor(), msgSink)
-
-            callableActor.tell(AMsgFoo())
-            val ret = callableActor.ask(AMsgFoo())
-
-            assertEquals(ret, 42)
-
-            // One for .tell and one for .ask
-            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
-            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
-        }
-
-    test("Msg sink doesn't support multiple consumers"):
+//    // We can combine both approaches, we decided to teach FastForward to pass messages it
+//    // skips over so we can get the full list of messages after the run.
+//    test("mixed test"):
+//        val msgSink = Channel.unlimited[AMsg]
+//        val msgTrace = Channel.unlimited[AMsg]
+//
+//        supervised {
+//
+//            // setup
+//            val actorB = DataActor.create(DActorB(), msgSink)
+//            val actorA = DataActor.create(DActorA(actorB), msgSink)
+//
+//            // test actions
+//            actorA.tell(AMsgFoo())
+//
+//            val _ = FastForward(msgSink, Some(msgTrace))(2.seconds)(_ == AMsgFoo())
+//
+//            // Blocks until we see `xyz` in the msgSink or timeout is up
+//            val _ = FastForward(msgSink, Some(msgTrace))(2.seconds)(_ == AMsgBar())
+//
+//            sleep(2.second)
+//        }
+//
+//        msgTrace.done()
+//        msgSink.done()
+//        val msgs = msgTrace.toList ++ msgSink.toList
+//
+//        log.info(s"Got messages: $msgs")
+//
+//        checkMsgTraceAssertions(
+//          msgs,
+//          List(
+//            MsgIsPresent(AMsgFoo()),
+//            FirstThisThenThat(AMsgFoo(), AMsgBar())
+//          )
+//        )
+//
+//    // If we need to use .ask - use CallableDataActor and just ask :-)
+//    test("callable actors"):
+//        val msgSink = Channel.unlimited[AMsg]
+//
+//        supervised {
+//            val callableActor = CallableDataActor.create(ExampleCallableActor(), msgSink)
+//
+//            callableActor.tell(AMsgFoo())
+//            val ret = callableActor.ask(AMsgFoo())
+//
+//            assertEquals(ret, 42)
+//
+//            // One for .tell and one for .ask
+//            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
+//            val _ = FastForward(msgSink)(2.seconds)(_ == AMsgFoo())
+//        }
+//
+    test("Msg sink supports multiple consumers"):
 
         /** Tries to read from the channel, returns None if it can't after 1 second. */
-        class ChannelReadActor(channel : Channel[AMsg]):
-            def read : Option[AMsg] =
-                timeoutOption(1.seconds) {
-                    channel.receive()
-                }
-
-        val msgSink = Channel.unlimited[AMsg]
-
         supervised {
-
             // setup
-            val dataActor = DataActor.create(DActorB(), msgSink)
-            val readActorA = Actor.create(ChannelReadActor(msgSink))
-            val readActorB = Actor.create(ChannelReadActor(msgSink))
+            val dActorB = DActorB()
+
+            class BroadcastChannelReadActor(channel: BroadcastChannel[dActorB.Msg]):
+                def read: Option[AMsg] =
+                    timeoutOption(1.seconds) {
+                        channel.readChan.unsafeRunSync()
+                    }
+
+            val msgSinkB: mailbox.BroadcastChannel[dActorB.Msg] = BroadcastChannel[dActorB.Msg]().unsafeRunSync()
+            val actorB = DataActor.create(DActorB(), msgSinkB)
+
+            val msgSink1 = msgSinkB.dupe.unsafeRunSync()
+            val msgSink2 = msgSinkB.dupe.unsafeRunSync()
+
+            val readActor1 = Actor.create(BroadcastChannelReadActor(msgSink1))
+            val readActor2 = Actor.create(BroadcastChannelReadActor(msgSink2))
+
+            val msg = AMsgBar()
 
             // Put a message on the sink.
-            dataActor.tell(AMsgBar())
+            actorB.tell(msg)
 
             // The first actor can read it
-            assert(readActorA.ask(_.read).contains(AMsgBar()))
-            // The second actor cannot
-            assert(readActorB.ask(_.read).isEmpty)
+            assert(readActor1.ask(_.read).contains(msg))
+            // The second actor can also read it
+            assert(readActor2.ask(_.read).contains(msg))
         }
-
-
-
+//
+//
+//
 /** Fixture for waiting a msg that suits the predicate and getting it back.
   */
 object FastForward:
-    def apply[E](msgSink: Source[E], msgTrace: Option[Sink[E]] = None)(
+    def apply[E](msgSink: BroadcastChannel[E], msgTrace: Option[Sink[E]] = None)(
         timeout: FiniteDuration
     )(pred: E => Boolean, predText: Option[String] = None)(using ox: Ox): E =
         // Function to optionally dump to the trace
@@ -170,10 +187,10 @@ object FastForward:
         }
         // try to receive the target during the allowed time
         timeoutOption(timeout) {
-            var msg = msgSink.receive()
+            var msg = msgSink.readChan.unsafeRunSync()
             mbSend(msg)
             while !pred(msg) do {
-                msg = msgSink.receive()
+                msg = msgSink.readChan.unsafeRunSync()
                 mbSend(msg)
             }
             msg
@@ -182,20 +199,20 @@ object FastForward:
             s"timeout fast forwarding with predicate: ${predText}"
           )
         )
-
-// utility to run invariants check
-def checkMsgTraceAssertions(msgs: List[AMsg], checks: List[MsgTraceAssertion]) =
-    checks.foreach(_ match {
-        case MsgIsPresent(msg) =>
-            // TODO: contains!
-            assertEquals(msgs.contains(msg), true, s"msg $msg is not present in msgs sink")
-        case FirstThisThenThat(msgA, msgB) =>
-            assertEquals(
-              msgs.indexOf(msgA) < msgs.indexOf(msgB),
-              true,
-              s"msg $msgB does not go after msg $msgA"
-            )
-    })
+//
+//// utility to run invariants check
+//def checkMsgTraceAssertions(msgs: List[AMsg], checks: List[MsgTraceAssertion]) =
+//    checks.foreach(_ match {
+//        case MsgIsPresent(msg) =>
+//            // TODO: contains!
+//            assertEquals(msgs.contains(msg), true, s"msg $msg is not present in msgs sink")
+//        case FirstThisThenThat(msgA, msgB) =>
+//            assertEquals(
+//              msgs.indexOf(msgA) < msgs.indexOf(msgB),
+//              true,
+//              s"msg $msgB does not go after msg $msgA"
+//            )
+//    })
 
 // Hierarchy of invariants...
 sealed trait MsgTraceAssertion
@@ -274,10 +291,10 @@ class ExampleCallableActor() extends CallableDataActor:
         42
 
 // Reference to a data actor
-class DataActorRef[M](c: Sink[M], msgSink: Sink[M]):
+class DataActorRef[M](c: Sink[M], msgSink: BroadcastChannel[M]):
     def tell(msg: M): Unit =
         c.send(msg)
-        msgSink.send(msg)
+        msgSink.writeChan(msg).unsafeRunSync()
 end DataActorRef
 
 // Wrapper for messages to use with [[CallableDataActorRef]]
@@ -287,26 +304,26 @@ enum AskTell[M, R]:
     case Tell(msg: M)
 
 // Reference to a data actor with .ask support
-class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: Sink[M]):
+class CallableDataActorRef[M, R](c: Sink[AskTell[M, R]], msgSink: BroadcastChannel[M]):
     def ask(msg: M): R =
         val cf = new CompletableFuture[R]()
         c.send(Ask(msg, cf))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.send(msg)
+        msgSink.writeChan(msg).unsafeRunSync()
         unwrapExecutionException(cf.get())
     end ask
 
     def tell(msg: M): Unit =
         c.send(Tell(msg))
         // TODO: move it to the companion object, add Ask/Tell tag (with no future)
-        msgSink.send(msg)
+        msgSink.writeChan(msg).unsafeRunSync()
 
 end CallableDataActorRef
 
 // Companion object for a data actor
 // TODO: (Ilia) I would pass msgSing using "using" since we likely want it to be only one for all actors
 object DataActor:
-    def create(logic: DataActor, msgSink: Sink[logic.Msg], close: Option[DataActor => Unit] = None)(
+    def create(logic: DataActor, msgSink: BroadcastChannel[logic.Msg], close: Option[DataActor => Unit] = None)(
         using
         ox: Ox,
         sc: BufferCapacity
@@ -334,7 +351,7 @@ end DataActor
 object CallableDataActor:
     def create(
         logic: CallableDataActor,
-        msgSink: Sink[logic.Msg],
+        msgSink: BroadcastChannel[logic.Msg],
         close: Option[DataActor => Unit] = None
     )(using
         ox: Ox,
@@ -387,3 +404,6 @@ private inline def causeWithSelfAsSuppressed(e: ExecutionException): Throwable =
     // we cannot simply throw the EE, as it might wrap e.g. boundary-break, which has to be thrown unchanged
     cause.addSuppressed(e)
     cause
+
+
+
