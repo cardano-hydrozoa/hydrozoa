@@ -220,7 +220,7 @@ class OutboxActor(
             case None => Right(Batch.empty)
             case Some(head) =>
                 val startOffset = firstMessage.toLong - head.id.toLong
-                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt).toList
+                val slice = queue.slice(startOffset.toInt, (startOffset + n).toInt + 1).toList
                 Batch.fromList[Outbox](slice) match
                     case None        => Left(OutboxActorError.QueueMalformed(slice))
                     case Some(batch) => Right(batch)
