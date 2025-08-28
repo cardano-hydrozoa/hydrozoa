@@ -26,26 +26,29 @@ class TestWithObserverSpec extends ScalaCheckSuite:
     override def beforeEach(context: BeforeEach): Unit =
         InheritableMDC.init
 
-    test("baz"):
+    test("observe events"):
         log.info("42")
         supervised {
             val eventSink = Channel.unlimited[Event1]
             val actorB = ActorRefObservable.create[ActorB, Event1](ActorB(), eventSink)
-            @unused
             val actorA = ActorRefObservable.create[ActorA, Event1](ActorA(Some(actorB)), eventSink)
 
+            // One call
             actorA.tell(_.foo())
 
+            // Two events since actor A calls actor B
             log.info(s"${eventSink.receive()}")
             log.info(s"${eventSink.receive()}")
         }
 
+// The hierarchy of events
 sealed trait Event1
 sealed trait Event1A extends Event1
 sealed trait Event1B extends Event1
 case class Event1Foo() extends Event1A
 case class Event1Bar(ref: Event1Foo) extends Event1B
 
+// Two actors for the test showcase
 class ActorA(@unused actorB: Option[ActorRefObservable[ActorB, Event1]] = None):
 
     private val log = Logger(getClass)
@@ -67,6 +70,7 @@ class ActorB:
         Event1Bar(eventA)
     }
 
+// This class identical to [[ActorRef]], but takes a sink to dump all events that actors' "logic" returns.
 class ActorRefObservable[T, E](c: Sink[T => Unit], eventSink: Sink[E]):
     def ask(f: T => E): E =
         val cf = new CompletableFuture[E]()
@@ -87,13 +91,16 @@ class ActorRefObservable[T, E](c: Sink[T => Unit], eventSink: Sink[E]):
         unwrapExecutionException(cf.get())
     end ask
 
-    def tell(f: T => E): Unit =
+    def tell(f: T => E): Unit = {
+        // Here we build a closure that encapsulates the original one and dumping the event
         c.send(t => {
             val ret = f(t)
             eventSink.send(ret)
         })
+    }
 end ActorRefObservable
 
+// I think this just passes eventSink and uses [[ActorRefObservable]], otherwise identical to Ox's [[Actor]].
 object ActorRefObservable:
     def create[T, E](logic: T, eventSink: Sink[E], close: Option[T => Unit] = None)(using
         ox: Ox,
