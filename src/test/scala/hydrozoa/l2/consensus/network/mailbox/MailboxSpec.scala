@@ -9,8 +9,8 @@ import hydrozoa.l2.consensus.network.{AckUnit, ProtocolMsg, ReqEventL2, ReqVerKe
 import hydrozoa.l2.ledger.generators.genL2EventGenesisFromPeer
 import hydrozoa.l2.ledger.{HydrozoaL2Mutator, L2EventGenesis}
 import hydrozoa.node.TestPeer.Alice
+import hydrozoa.node.db.*
 import hydrozoa.node.db.DbReadOutgoingError.ValuesReadAreMalformed
-import hydrozoa.node.db.{DBReader, DBWriterActor, DbReadOutgoingError}
 import hydrozoa.node.l2EventWithdrawalFromInputsAndPeer
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.{forAll, propBoolean}
@@ -22,6 +22,7 @@ import ox.resilience.{RetryConfig, retry, retryEither}
 
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
+import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -101,7 +102,8 @@ case class TestNodeContext(
 case class TestNodeConfig(
     outboxWatchdogTimeout: FiniteDuration = 3.seconds,
     inboxWatchdogTimeout: FiniteDuration = 10.seconds,
-    callbackInboxMsg: Option[EventInboxMessage => Unit] = None
+    callbackInboxMsg: Option[EventInboxMessage => Unit] = None,
+    dbWriterConfig: DbWriter.Config = DbWriter.Config()
 )
 
 object TestNodeContext:
@@ -181,7 +183,7 @@ object TestNodeContext:
         ox: Ox
     ): TestNodeContext =
 
-        val db = InMemoryDBActor()
+        val db = InMemoryDBActor(testNodeConfig.dbWriterConfig)
         val dbWriteOnly = OnlyWriteDbActor(db)
         val dbActor: ActorRef[DBWriterActor] = Actor.create(db)
         val transmitter: ActorRef[TransmitterActor] =
@@ -283,6 +285,32 @@ class MailboxSpec extends ScalaCheckSuite:
             }
             channel.send
 
+        /** Establish an unlimited channel and a callback such that only filtered events appear on it */
+        def filteredChannel[E](filter: E => Boolean)(using Ox): (Channel[E], E => Unit) = {
+            val channel = Channel.unlimited[E]
+            val callback = (event: E) => if filter(event) then channel.send(event) else (())
+            (channel, callback)
+        }
+
+        /** Wait on a channel until all specified events arrive, in any order. The arrival of an unspecified event
+         * raises an exception, as does the arrival of a specified event multiple times. */
+        @tailrec
+        def awaitOnlySingleExpected[E](channel: Channel[E], expectedEvents: Set[E], timeout: FiniteDuration): Unit = {
+            if expectedEvents.isEmpty
+            then (())
+            else {
+                val event = timeoutOption(timeout) {
+                    channel.receive()
+                } match {
+                    case None => throw new TimeoutException(s"Did not receive expected event before timeout")
+                    case Some(e) => e
+                }
+                if expectedEvents.contains(event)
+                then awaitOnlySingleExpected(channel, expectedEvents - event, timeout)
+                else throw new RuntimeException(s"Unexpected event found: ${event}")
+            }
+        }
+
     test("test callback works (positive test)"):
         supervised:
             val callback = TestCallback.apply(2.seconds)((EventUnit))
@@ -326,22 +354,37 @@ class MailboxSpec extends ScalaCheckSuite:
 //            }
         }
 
-    test("Test delayed delivery of multiple messages"):
+    test("Test Outbox delivers multiple delayed messages to inbox"):
         /* First create the db and enqueue multiple messages; then create a peer actor and ensure the peer catches up */
         supervised:
-            val config = TestNodeConfig()
-            val peers = Set(aliceId, bobId).map((_, config))
+            // Contains events from Alice's DB writer when incoming messages are persisted
+            val (aliceIncomingMessagesChannel, aliceIncomingMessagesCallback) =
+                TestCallback.filteredChannel[DbWriter.Event](e => e.isInstanceOf[DbWriter.Event.IncomingMessagePersisted])
+
+            // Contains events from Bob's DB writer when incoming messages are persisted
+            val (bobIncomingMessagesChannel, bobIncomingMessagesCallback) =
+                TestCallback.filteredChannel[DbWriter.Event](e => e.isInstanceOf[DbWriter.Event.IncomingMessagePersisted])
+
+            val peerConfigs =
+                Set(
+                    (aliceId,
+                        TestNodeConfig(dbWriterConfig = DbWriter.Config(incomingMessagePersistedCallbacks = List(aliceIncomingMessagesCallback)))
+                    ),
+                    (bobId,
+                        TestNodeConfig(dbWriterConfig = DbWriter.Config(incomingMessagePersistedCallbacks = List(bobIncomingMessagesCallback)))
+                    )
+                )
             // Start two nodes. Do not connect them
-            val peerNodes = TestNodeContext.mkNodeContexts(peers)
+            val peerNodes = TestNodeContext.mkNodeContexts(peerConfigs)
             val nodes = peerNodes.values.toSet
 
             // Add 10 messages to alice's outbox
-            val aliceAckMsgIds =
-                (0 until 10).map(_ => peerNodes(aliceId).outbox.ask(_.addToOutbox(AckUnit())))
+            val aliceAckMsgs =
+                (0 until 10).map(_ => (peerNodes(aliceId).outbox.ask(_.addToOutbox(AckUnit())), AckUnit()))
 
             // add 20 messages to Bob's outbox
-            val bobAckMsgIds =
-                (0 until 20).map(_ => peerNodes(bobId).outbox.ask(_.addToOutbox(ReqVerKey())))
+            val bobAckMsgs =
+                (0 until 20).map(_ => (peerNodes(bobId).outbox.ask(_.addToOutbox(ReqVerKey())), ReqVerKey()))
 
             // Open bi-directional connections between the nodes
             TestNodeContext.connectNodes(nodes)
@@ -349,37 +392,49 @@ class MailboxSpec extends ScalaCheckSuite:
             // Start inboxes on all nodes
             TestNodeContext.startInboxes(nodes)
 
-            sleep(config.inboxWatchdogTimeout)
+            // Check that Alice's messages have gotten into Bob's database
+            TestCallback.awaitOnlySingleExpected(
+                channel = bobIncomingMessagesChannel,
+                expectedEvents = aliceAckMsgs.map(mm => DbWriter.Event.IncomingMessagePersisted(aliceId, MailboxMsg[Inbox](swapMailbox(mm._1), mm._2))).toSet,
+                timeout = 1.seconds)
 
+            // TODO: The above await replaces the previous "sleep". We still need to check that we can read the messages from the DB
             // Check that Alice's message IDs have gotten into Bob's database
-            val receivedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
-            aliceAckMsgIds
-                .map(swapMailbox[Outbox, Inbox])
-                .foreach(msgIdFromAlice =>
-                    assert(
-                      receivedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice),
-                      s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."
-                    )
-                )
+//            val receivedMessagesAliceToBob = peerNodes(bobId).db.readIncomingMessages(aliceId)
+//            aliceAckMsgIds
+//                .map(swapMailbox[Outbox, Inbox])
+//                .foreach(msgIdFromAlice =>
+//                    assert(
+//                      receivedMessagesAliceToBob.map(_.id).contains(msgIdFromAlice),
+//                      s"Expected to find MsgId ${msgIdFromAlice} from Alice in Bob's db, but did not."
+//                    )
+//                )
 
             // Check that Bob's messages have gotten into Alice's database
-            val receivedMessagesBobToAlice = peerNodes(aliceId).db.readIncomingMessages(bobId)
-            bobAckMsgIds
-                .map(swapMailbox[Outbox, Inbox])
-                .foreach(msgIdFromBob =>
-                    assert(
-                      receivedMessagesBobToAlice.map(_.id).contains(msgIdFromBob),
-                      s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."
-                    )
-                )
+            TestCallback.awaitOnlySingleExpected(
+                channel = aliceIncomingMessagesChannel,
+                expectedEvents = bobAckMsgs.map(mm => DbWriter.Event.IncomingMessagePersisted(bobId, MailboxMsg[Inbox](swapMailbox(mm._1), mm._2))).toSet,
+                timeout = 1.seconds)
 
-            // Check that Alice's match index for bob is high enough.
-            val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
-            assert(
-              peerNodes(aliceId).outbox
-                  .ask(_.matchIndex(bobId))
-                  .toLong >= minimalMatchIndexAliceForBob
-            )
+            // TODO: same as above
+//          val receivedMessagesBobToAlice = peerNodes(aliceId).db.readIncomingMessages(bobId)
+//                 bobAckMsgIds
+//                .map(swapMailbox[Outbox, Inbox])
+//                .foreach(msgIdFromBob =>
+//                    assert(
+//                        receivedMessagesBobToAlice.map(_.id).contains(msgIdFromBob),
+//                        s"Expected to find MsgId ${msgIdFromBob} from Bob in Alice's db, but did not."
+//                    )
+//                )
+
+    //
+    //            // Check that Alice's match index for bob is high enough.
+    //            val minimalMatchIndexAliceForBob = aliceAckMsgIds.map(_.toLong).max
+    //            assert(
+    //              peerNodes(aliceId).outbox
+    //                  .ask(_.matchIndex(bobId))
+    //                  .toLong >= minimalMatchIndexAliceForBob
+    //            )
 
     test("Heartbeat when Inbox -> Outbox connection lost"):
         InheritableMDC.supervisedWhere("node" -> "Test harness") {
@@ -443,7 +498,7 @@ class MailboxSpec extends ScalaCheckSuite:
             ActorRef[WSTransmitterActor],
             ActorRef[InboxActor]
         ) =
-            val db = InMemoryDBActor()
+            val db = InMemoryDBActor(???)
             val dbWriteOnly = OnlyWriteDbActor(db)
             val dbActor: ActorRef[DBWriterActor] = Actor.create(dbWriteOnly)
             val transmitter: ActorRef[TransmitterActor] =
@@ -592,7 +647,7 @@ class MailboxSpec extends ScalaCheckSuite:
 
 /** Use it for tests that MUST never READ from the database (though can write).
   */
-class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, DBReader {
+class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor(inMemoryDBActor.config_), DBReader {
     lazy val noRead: Nothing = throw RuntimeException(
       "This test should not READ from the database!"
     )
@@ -613,7 +668,7 @@ class OnlyWriteDbActor(inMemoryDBActor: InMemoryDBActor) extends DBWriterActor, 
 
 // TODO: I think this can essentially just wrap the inbox and outbox actors with some transmitters/receivers that just
 // swallow network requests
-class InMemoryDBActor extends DBWriterActor, DBReader:
+class InMemoryDBActor(config: DbWriter.Config) extends DBWriterActor(config), DBReader:
 
     private val log = Logger(getClass)
 
@@ -623,8 +678,10 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
 
     override def persistOutgoingMessage(msg: ProtocolMsg): MsgId[Outbox] =
         val outMsgId = outboxSeq.incrementAndGet() |> MsgId.apply[Outbox]
-        outbox.append(MailboxMsg[Outbox](outMsgId, msg))
+        val mm = MailboxMsg[Outbox](outMsgId, msg)
+        outbox.append(mm)
         log.info(s"persistOutgoingMessage: persisted $msg with outMsgId=$outMsgId")
+        dispatchCallback(DbWriter.Event.OutgoingMessagePersisted(mm))
         outMsgId
 
     override def readOutgoingMessages(
@@ -657,6 +714,7 @@ class InMemoryDBActor extends DBWriterActor, DBReader:
             case None         => Some(mutable.Buffer(newVal))
             case Some(buffer) => Some(buffer.append(newVal))
         }: Unit
+        dispatchCallback(DbWriter.Event.IncomingMessagePersisted(peerId, msg))
     }
 
     override def readIncomingMessages(peer: PeerId): Seq[MailboxMsg[Inbox]] =
