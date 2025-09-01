@@ -1,5 +1,7 @@
 package hydrozoa.multisig.actors.pure
 
+import scala.concurrent.duration.FiniteDuration
+
 /**
  * # Multisig regime protocol requests and responses
  * See diagram: https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X
@@ -66,33 +68,33 @@ sealed trait ActorRespDatabase extends ActorResp
 
 /** ## Async requests */
 
-/** L1 deposits (pink) */
+/** L1 deposits */
 case class NewDepositL1 (
     ) extends ActorReqBlock, ActorReqComm, ActorReqCommBoss
 
 case class NewDepositL1Info (
     ) extends ActorReqBlock
 
-/** L2 transactions (blue) */
+/** L2 transactions */
 case class NewTxL2 (
     ) extends ActorReqBlock, ActorReqComm, ActorReqCommBoss
 
 case class NewTxL2Info (
     ) extends ActorReqBlock
 
-/** L2 blocks (orange) */
+/** L2 blocks */
 case class NewBlockL2 (
     ) extends ActorReqBlock, ActorReqComm, ActorReqCommBoss
 
 case class AckBlockL2 (
     ) extends ActorReqBlock, ActorReqComm, ActorReqCommBoss
 
-/** L2 block confirmations (local-only signal) (purple) */
+/** L2 block confirmations (local-only signal) */
 case class ConfirmBlockL2 (
     ) extends ActorReqCardano, ActorReqCommBoss, ActorReqEvent
 
 /**
- * Communication batches requested and delivered asynchronously between pairs of local/remote comm actors (black)
+ * Communication batches requested and delivered asynchronously between pairs of local/remote comm actors
  */
 case class ReqCommBatch (
     ) extends ActorReqComm
@@ -101,7 +103,7 @@ case class RespCommBatch (
     ) extends ActorReqComm
 
 /**
- * Submit L1 effect to the Cardano blockchain (black)
+ * Submit L1 effect to the Cardano blockchain
  * The response is ignored, so we model this as an async request in the pure model.
  */
 case class SubmitL1Effects (
@@ -109,7 +111,7 @@ case class SubmitL1Effects (
 
 /** ## Sync requests and responses */
 
-/** Block actor's synchronization about its leader/follower status with the comm-boss actor (black) */
+/** Block actor's synchronization about its leader/follower status with the comm-boss actor */
 case class SyncLeaderBossComm (
     ) extends ActorReqCommBoss
 
@@ -122,7 +124,7 @@ case class SyncFollowerBossComm (
 case class RespSyncFollowerBossComm (
     ) extends ActorRespCommBoss
 
-/** Comm-boss actor's synchronization about block actor's leader/follower status with the local comm actors (black) */
+/** Comm-boss actor's synchronization about block actor's leader/follower status with the local comm actors */
 case class SyncLeaderComm (
     ) extends ActorReqComm
 
@@ -135,14 +137,14 @@ case class SyncFollowerComm (
 case class RespSyncFollowerComm (
     ) extends ActorRespComm
 
-/** Time (sand/clam shell) */
-case class GetTime (
-    ) extends ActorReqClock
+/** Time */
+case object GetTime extends ActorReqClock
 
 case class RespTime (
+      time: FiniteDuration
     ) extends ActorRespClock
 
-/** Get the head's current utxo state in Cardano (black) */
+/** Get the head's current utxo state in Cardano */
 case class GetHeadStateOnCardano (
     ) extends ActorReqCardanoBlockchain
 
@@ -155,30 +157,30 @@ case class RespHeadStateOnCardano (
 case class RespPut (
     ) extends ActorRespDatabase
 
-/** Persist L1 deposits (pink) */
+/** Persist L1 deposits */
 case class PutNewDepositL1 (
     ) extends ActorReqDatabase
 
-/** Persist L2 transactions (blue) */
+/** Persist L2 transactions */
 case class PutNewTxL2 (
     ) extends ActorReqDatabase
 
-/** Persist L2 blocks (orange) */
+/** Persist L2 blocks */
 case class PutNewBlockL2 (
     ) extends ActorReqDatabase
 
 case class PutAckBlockL2 (
     ) extends ActorReqDatabase
 
-/** Persist L2 block confirmations (local-only signal) (purple) */
+/** Persist L2 block confirmations (local-only signal) */
 case class PutConfirmBlockL2 (
     ) extends ActorReqDatabase
 
-/** Persist communication batches received from remote communication actors (gray) */
+/** Persist communication batches received from remote communication actors */
 case class PutCommBatch (
     ) extends ActorReqDatabase
 
-/** Persist L1 effects of L2 blocks (gray) */
+/** Persist L1 effects of L2 blocks */
 case class PutL1Effects (
     ) extends ActorReqDatabase
 
