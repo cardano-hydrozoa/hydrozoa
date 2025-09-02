@@ -7,8 +7,6 @@ import com.suprnation.actor.ActorSystem
 import scala.concurrent.ExecutionContext.Implicits.global
 import munit.ScalaCheckSuite
 
-import scala.concurrent.duration.FiniteDuration
-
 class ClockActorSpec extends ScalaCheckSuite {
     test("Clock actor provides monotonically increasing timestamps."):
         ActorSystem[IO]("clock-system").use { system =>

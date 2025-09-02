@@ -1,6 +1,11 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.effect.IO
+import com.suprnation.actor.ActorRef.NoSendActorRef
+
 import scala.concurrent.duration.FiniteDuration
+
+type PeerId = Int
 
 /**
  * # Multisig regime protocol requests and responses
@@ -13,23 +18,33 @@ sealed trait ActorResp extends Protocol
 
 /** ## Actors receiving requests */
 /**
+ * Multisig regime actor starts-up and monitors all the actors of the multisig regime.
+ *
+ */
+sealed trait ActorReqMultisigRegime extends ActorReq
+case class TerminatedClock(actorRef: NoSendActorRef[IO]) extends ActorReqMultisigRegime
+
+/**
  * Block actor:
- * - When leader, receives L1 deposits + L2 txs and packages them into a new block.
- * - When follower, receives L2 blocks and broadcasts L2 block acks for valid blocks.
- * - When leader or follower, collects L2 block acks to confirm block effects and trigger leader/follower switch.
+ *
+ *   - When leader, receives L1 deposits + L2 txs and packages them into a new block.
+ *   - When follower, receives L2 blocks and broadcasts L2 block acks for valid blocks.
+ *   - When leader or follower, collects L2 block acks to confirm block effects and trigger leader/follower switch.
  */
 sealed trait ActorReqBlock extends ActorReq
 /**
  * Cardano actor:
- * - Keeps track of confirmed L1 effects of L2 blocks.
- * - Periodically polls the Cardano blockchain for the head's utxo state.
- * - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
+ *
+ *   - Keeps track of confirmed L1 effects of L2 blocks.
+ *   - Periodically polls the Cardano blockchain for the head's utxo state.
+ *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
  */
 sealed trait ActorReqCardano extends ActorReq
 /**
  * Cardano blockchain actor is a mock interface to the Cardano blockchain:
- * - Receives L1 effects
- * - Responds to queries about utxo state.
+ *
+ *   - Receives L1 effects
+ *   - Responds to queries about utxo state.
  */
 sealed trait ActorReqCardanoBlockchain extends ActorReq
 /**
@@ -38,8 +53,9 @@ sealed trait ActorReqCardanoBlockchain extends ActorReq
 sealed trait ActorReqClock extends ActorReq
 /**
  * Communication actor is connected to its counterpart at another peer:
- * - Requests communication batches from the counterpart.
- * - Responds to the counterpart's requests for communication batches.
+ *
+ *   - Requests communication batches from the counterpart.
+ *   - Responds to the counterpart's requests for communication batches.
  */
 sealed trait ActorReqComm extends ActorReq
 
@@ -50,8 +66,9 @@ sealed trait ActorReqCommBoss extends ActorReq
 
 /**
  * Database actor is a mock interface to a key-value store (e.g. RocksDB):
- * - Puts data in (i.e. write/persist)
- * - Gets data that was put in (i.e. read/retrieve)
+ *
+ *   - Puts data in (i.e. write/persist)
+ *   - Gets data that was put in (i.e. read/retrieve)
  */
 sealed trait ActorReqDatabase extends ActorReq
 /**
@@ -197,20 +214,21 @@ case class GetL2BlockData(
 case class RespL2BlockData(
     ) extends ActorRespDatabase
 
-/** Retrieve L1 effects of confirmed L2 blocks. */
-case class GetConfirmedL1Effects (
-    ) extends ActorReqDatabase
-
-case class RespConfirmedL1Effects (
-    ) extends ActorRespDatabase
-
 /**
  * Retrieve local events confirmed by L2 blocks:
- * - L1 deposits' multi-signed post-dated refund transactions for Cardano.
- * - L2 transaction IDs
+ *
+ *   - L1 deposits' multi-signed post-dated refund transactions for Cardano.
+ *   - L2 transaction IDs
  */
 case class GetConfirmedLocalEvents (
     ) extends ActorReqDatabase
 
 case class RespConfirmedLocalEvents (
+    ) extends ActorRespDatabase
+
+/** Retrieve L1 effects of confirmed L2 blocks. */
+case class GetConfirmedL1Effects (
+    ) extends ActorReqDatabase
+
+case class RespConfirmedL1Effects (
     ) extends ActorRespDatabase
