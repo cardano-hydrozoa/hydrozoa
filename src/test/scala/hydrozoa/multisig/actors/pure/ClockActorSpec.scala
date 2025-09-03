@@ -17,7 +17,7 @@ class ClockActorSpec extends ScalaCheckSuite {
               c <- clockActor ? GetTime
             } yield (a,b,c)
         }.unsafeToFuture().map {
-            case (RespTime(a),RespTime(b),RespTime(c)) =>
+            case (GetTimeResp(a),GetTimeResp(b),GetTimeResp(c)) =>
                 assert(a < b)
                 assert(b < c)
         }

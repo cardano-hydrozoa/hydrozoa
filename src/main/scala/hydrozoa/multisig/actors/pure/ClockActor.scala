@@ -6,6 +6,9 @@ import com.suprnation.actor.ReplyingActor
 
 import scala.concurrent.duration.FiniteDuration
 
+/**
+ * Clock actor provides time, monotonically increasing after each request.
+ */
 object ClockActor {
     def create(): IO[ClockActor] =
         for {
@@ -15,12 +18,12 @@ object ClockActor {
 }
 
 case class ClockActor(startRealTime: FiniteDuration, startMonotonic: FiniteDuration)
-    extends ReplyingActor[IO, ActorReqClock, ActorRespClock] {
-    override def receive: ReplyingReceive[IO, ActorReqClock, ActorRespClock] =
+    extends ReplyingActor[IO, ClockActorReq, ClockActorResp] {
+    override def receive: ReplyingReceive[IO, ClockActorReq, ClockActorResp] =
         PartialFunction.fromFunction({
             case GetTime =>
                 for {
                     currentMonotonic <- IO.monotonic
-                } yield RespTime(currentMonotonic - startMonotonic + startRealTime)
+                } yield GetTimeResp(currentMonotonic - startMonotonic + startRealTime)
         })
 }

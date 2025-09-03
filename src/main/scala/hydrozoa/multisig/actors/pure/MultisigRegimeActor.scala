@@ -9,13 +9,16 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
+/**
+ * Multisig boss actor starts-up and monitors all the actors of the multisig regime.
+ */
 object MultisigRegimeActor {
     def create(peerId: PeerId): IO[MultisigRegimeActor] =
         IO.pure(MultisigRegimeActor(peerId))
 }
 
 case class MultisigRegimeActor(peerId: PeerId)
-    extends Actor[IO, ActorReqMultisigRegime]{
+    extends Actor[IO, MultisigBossActorReq]{
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -30,9 +33,8 @@ case class MultisigRegimeActor(peerId: PeerId)
             _ <- context.watch(clockActor, TerminatedClock(clockActor))
         } yield ()
 
-    override def receive: Receive[IO,ActorReqMultisigRegime] =
+    override def receive: Receive[IO,MultisigBossActorReq] =
         PartialFunction.fromFunction({
-            case TerminatedClock(_) =>
-                IO.println("Clock actor has terminated.")
+            case x: TerminatedClock => IO.println("Clock actor has terminated.")
         })
 }
