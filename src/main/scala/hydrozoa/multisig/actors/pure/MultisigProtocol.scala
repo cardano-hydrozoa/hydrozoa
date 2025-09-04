@@ -128,15 +128,17 @@ case class ReqCommBatch (
 /**
  * Comm actor provides a communication batch in response to its remote comm-actor counterpart's request.
  * @param id Batch number matching the one from the request.
+ * @param eventNum The largest event num in this batch.
  * @param ack A block acknowledgment originating from the responder after the requested [[AckNum]].
  * @param block A block originating from the responder after the requested [[BlockNum]].
  * @param events A list of events originating from the responder after the requested [[EventNum]].
  */
 case class RespCommBatch (
     id: BatchNum,
+    eventNum: EventNum,
     ack: Option[(AckNum, AckBlock)],
     block: Option[(BlockNum, NewBlock)],
-    events: List[(EventNum, MultiLedgerEvent)]
+    events: List[(EventNum, NewEvent)]
     ) extends CommActorReq
 
 /**

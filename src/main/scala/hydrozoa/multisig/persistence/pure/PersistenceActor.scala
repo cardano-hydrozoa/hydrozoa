@@ -1,29 +1,58 @@
 package hydrozoa.multisig.persistence.pure
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
+import cats.syntax.traverse.toTraverseOps
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ReplyingActor
+import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, EventId, NewBlock, NewEvent, ReqCommBatch}
+
+import scala.collection.mutable
 
 /**
  * Persistence actor is a mock interface to a key-value store (e.g. RocksDB):
  *
- *   - Puts data in (i.e. write/persist)
- *   - Gets data that was put in (i.e. read/retrieve)
+ *   - Puts data into the store (i.e. write/persist)
+ *   - Gets data that was put into the store (i.e. read/retrieve)
  */
 object PersistenceActor {
-    def create(): IO[PersistenceActor] =
-        IO.pure(PersistenceActor())
+    def create(): IO[PersistenceActor] = {
+        for {
+            acks <- Ref[IO].of(mutable.TreeMap[AckId, AckBlock]())
+            batches <- Ref[IO].of(mutable.TreeMap[BatchId, ReqCommBatch]())
+            blocks <- Ref[IO].of(mutable.TreeMap[BlockId, NewBlock]())
+            events <- Ref[IO].of(mutable.TreeMap[EventId, NewEvent]())
+            confirmedBlock <- Ref[IO].of(Option.empty)
+        } yield PersistenceActor()(acks, batches, blocks, events, confirmedBlock)
+    }
 }
 
-case class PersistenceActor()
-    extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
+case class PersistenceActor()(
+        private val acks: Ref[IO, mutable.TreeMap[AckId, AckBlock]],
+        private val batches: Ref[IO, mutable.TreeMap[BatchId, ReqCommBatch]],
+        private val blocks: Ref[IO, mutable.TreeMap[BlockId, NewBlock]],
+        private val events: Ref[IO, mutable.TreeMap[EventId, NewEvent]],
+        private val confirmedBlock: Ref[IO, Option[BlockId]]
+    ) extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
     override def receive: ReplyingReceive[IO, PersistenceReq, PersistenceResp] =
         PartialFunction.fromFunction({
-            case x: PutNewEvent => ???
-            case x: PutNewBlock => ???
-            case x: PutAckBlock => ???
-            case x: PutConfirmBlock => ???
-            case x: PutCommBatch => ???
+            case x: PutNewEvent =>
+                events.update(m => m += (x.id -> x.data)) >>
+                    IO.pure(PutSucceeded)
+            case x: PutNewBlock =>
+                blocks.update(m => m += (x.id -> x.data)) >>
+                    IO.pure(PutSucceeded)
+            case x: PutAckBlock =>
+                acks.update(m => m += (x.id -> x.data)) >>
+                    IO.pure(PutSucceeded)
+            case x: PutConfirmBlock =>
+                confirmedBlock.update(_ => Some(x.id)) >>
+                    IO.pure(PutSucceeded)
+            case x: PutCommBatch =>
+                batches.update(m => m += (x.id -> x.batch)) >>
+                    x.ack.traverse(y => acks.update(m => m += y)) >>
+                    x.block.traverse(y => blocks.update(m => m += y)) >>
+                    events.update(m => m ++= x.events) >>
+                    IO.pure(PutSucceeded)
             case x: PutL1Effects => ???
             case x: PutCardanoHeadState => ???
             case x: GetBlockData => ???
@@ -53,23 +82,39 @@ sealed trait PutResp extends PersistenceResp
 case object PutSucceeded extends PersistenceResp
 //case class PutFailed(reason: String) extends PersistenceResp
 
-/** Persist L1 deposits */
+/** Persist a locally created multi-ledger event. */
 case class PutNewEvent(
+    id: EventId,
+    data: NewEvent
     ) extends PersistenceReq
 
-/** Persist L2 blocks */
+/** Persist a new block produced by the local block actor. */
 case class PutNewBlock(
+    id: BlockId,
+    data: NewBlock
     ) extends PersistenceReq
 
+/** Persist a new block acknowledgment issued by the local block actor. */
 case class PutAckBlock(
+    id: AckId,
+    data: AckBlock
     ) extends PersistenceReq
 
-/** Persist L2 block confirmations (local-only signal) */
+/** Persist the local block actor's determination that a block is confirmed (local-only signal). */
 case class PutConfirmBlock(
+    id: BlockId,
     ) extends PersistenceReq
 
-/** Persist communication batches received from remote communication actors */
+/**
+ * Persist a communication batch received by a comm actor from its remote comm-actor counterpart,
+ * atomically putting the batch's contents into the corresponding key-value maps.
+ */
 case class PutCommBatch (
+    id: BatchId,
+    batch: ReqCommBatch,
+    ack: Option[(AckId, AckBlock)],
+    block: Option[(BlockId, NewBlock)],
+    events: List[(EventId, NewEvent)]
     ) extends PersistenceReq
 
 /** Persist L1 effects of L2 blocks */
@@ -82,7 +127,7 @@ case class PutCardanoHeadState(
 
 /** ==Get/read data from the persistence system== */
 
-/** Request data referenced by an L2 block (e.g. L1 deposits and transactions). */
+/** Request data referenced by a block (e.g. multi-ledger events and absorbed/rejected L1 deposits). */
 case class GetBlockData(
     ) extends PersistenceReq
 
@@ -91,10 +136,10 @@ case class GetBlockDataResp(
     ) extends PersistenceResp
 
 /**
- * Retrieve local events confirmed by L2 blocks:
+ * Retrieve local events referenced by a confirmed block:
  *
- *   - L1 deposits' multi-signed post-dated refund transactions for Cardano.
- *   - L2 transaction IDs
+ *   - Event IDs for the L2 transactions and withdrawals referenced by the block.
+ *   - Multi-signed deposit and post-dated refund transactions for the deposit events referenced by the block.
  */
 case class GetConfirmedLocalEvents (
     ) extends PersistenceReq
