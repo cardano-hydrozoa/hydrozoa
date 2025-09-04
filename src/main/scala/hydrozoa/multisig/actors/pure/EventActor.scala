@@ -15,6 +15,6 @@ case class EventActor(peerId: PeerId)
     extends Actor[IO, EventActorReq]{
     override def receive: Receive[IO, EventActorReq] =
         PartialFunction.fromFunction({
-            case x: ConfirmBlockL2 => ???
+            case x: ConfirmBlock => ???
         })
 }

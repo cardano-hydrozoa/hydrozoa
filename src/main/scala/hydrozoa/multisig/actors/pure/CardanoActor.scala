@@ -19,6 +19,6 @@ case class CardanoActor()
     extends Actor[IO, CardanoActorReq]{
     override def receive: Receive[IO, CardanoActorReq] =
         PartialFunction.fromFunction({
-            case x: ConfirmBlockL2 => ???
+            case x: ConfirmBlock => ???
         })
 }

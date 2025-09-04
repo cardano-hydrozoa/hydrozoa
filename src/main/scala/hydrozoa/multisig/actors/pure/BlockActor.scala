@@ -19,11 +19,9 @@ case class BlockActor(peerId: PeerId)
     extends Actor[IO, BlockActorReq]{
     override def receive: Receive[IO, BlockActorReq] =
         PartialFunction.fromFunction({
-            case x: NewDepositL1 => ???
-            case x: NewDepositL1Info => ???
-            case x: NewTxL2 => ???
-            case x: NewTxL2Info => ???
-            case x: NewBlockL2 => ???
-            case x: AckBlockL2 => ???
+            case x: NewEvent => ???
+            case x: NewEventId => ???
+            case x: NewBlock => ???
+            case x: AckBlock => ???
         })
 }

@@ -19,15 +19,14 @@ case class PersistenceActor()
     extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
     override def receive: ReplyingReceive[IO, PersistenceReq, PersistenceResp] =
         PartialFunction.fromFunction({
-            case x: PutNewDepositL1 => ???
-            case x: PutNewTxL2 => ???
-            case x: PutNewBlockL2 => ???
-            case x: PutAckBlockL2 => ???
-            case x: PutConfirmBlockL2 => ???
+            case x: PutNewEvent => ???
+            case x: PutNewBlock => ???
+            case x: PutAckBlock => ???
+            case x: PutConfirmBlock => ???
             case x: PutCommBatch => ???
             case x: PutL1Effects => ???
             case x: PutCardanoHeadState => ???
-            case x: GetL2BlockData => ???
+            case x: GetBlockData => ???
             case x: GetConfirmedLocalEvents => ???
             case x: GetConfirmedL1Effects => ???
         })
@@ -48,26 +47,25 @@ sealed trait PersistenceResp extends PersistenceProtocol
 /** ==Put/write data into the persistence system== */
 
 /** Generic response to all Put requests. */
-case class PutResp(
-    ) extends PersistenceResp
+sealed trait PutResp extends PersistenceResp
+
+/** Successfully persisted the data. */
+case object PutSucceeded extends PersistenceResp
+//case class PutFailed(reason: String) extends PersistenceResp
 
 /** Persist L1 deposits */
-case class PutNewDepositL1 (
-    ) extends PersistenceReq
-
-/** Persist L2 transactions */
-case class PutNewTxL2 (
+case class PutNewEvent(
     ) extends PersistenceReq
 
 /** Persist L2 blocks */
-case class PutNewBlockL2 (
+case class PutNewBlock(
     ) extends PersistenceReq
 
-case class PutAckBlockL2 (
+case class PutAckBlock(
     ) extends PersistenceReq
 
 /** Persist L2 block confirmations (local-only signal) */
-case class PutConfirmBlockL2 (
+case class PutConfirmBlock(
     ) extends PersistenceReq
 
 /** Persist communication batches received from remote communication actors */
@@ -85,11 +83,11 @@ case class PutCardanoHeadState(
 /** ==Get/read data from the persistence system== */
 
 /** Request data referenced by an L2 block (e.g. L1 deposits and transactions). */
-case class GetL2BlockData(
+case class GetBlockData(
     ) extends PersistenceReq
 
-/** Response to [[GetL2BlockData]]. */
-case class GetL2BlockDataResp(
+/** Response to [[GetBlockData]]. */
+case class GetBlockDataResp(
     ) extends PersistenceResp
 
 /**

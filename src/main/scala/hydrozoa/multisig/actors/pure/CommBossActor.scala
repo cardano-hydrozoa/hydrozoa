@@ -16,11 +16,9 @@ case class CommBossActor(peerId: PeerId)
     extends ReplyingActor[IO, CommBossActorReq, CommBossActorResp] {
     override def receive: ReplyingReceive[IO, CommBossActorReq, CommBossActorResp] =
         PartialFunction.fromFunction({
-            case x: NewDepositL1 => ???
-            case x: NewTxL2 => ???
-            case x: NewBlockL2 => ???
-            case x: AckBlockL2 => ???
-            case x: ConfirmBlockL2 => ???
+            case x: NewEvent => ???
+            case x: NewBlock => ???
+            case x: AckBlock => ???
             case x: SyncLeaderBossComm => ???
             case x: SyncFollowerBossComm => ???
         })

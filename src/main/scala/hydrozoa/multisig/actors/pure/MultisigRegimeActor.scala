@@ -3,7 +3,7 @@ package hydrozoa.multisig.actors.pure
 import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import com.suprnation.actor.SupervisorStrategy.{Escalate, Restart, Stop}
+import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 
 import scala.concurrent.duration.DurationInt
