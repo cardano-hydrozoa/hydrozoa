@@ -43,17 +43,6 @@ sealed trait CommBossActorReq extends MultisigActorReq
 /** Requests received by the event actor. */
 sealed trait LedgerEventActorReq extends MultisigActorReq
 
-/** ==Actors' responses to synchronous requests== */
-
-/** Clock actor's responses to synchronous requests. */
-sealed trait ClockActorResp extends MultisigActorResp
-
-/** Comm actor's responses to synchronous requests. */
-sealed trait CommActorResp extends MultisigActorResp
-
-/** Comm-boss actor's responses to synchronous requests. */
-sealed trait CommBossActorResp extends MultisigActorResp
-
 /** ==Async requests== */
 
 /** A new multi-ledger ledger event, including all details about the deposit. */
@@ -62,11 +51,6 @@ case class NewLedgerEvent(
     time: FiniteDuration,
     event: LedgerEvent
     ) extends BlockActorReq, CommActorReq, CommBossActorReq
-
-/** An abbreviated notification about a new multi-ledger event, omitting any details other than the event key. */
-case class NewEventId(
-    id: LedgerEventId
-    ) extends BlockActorReq
 
 /**
  * A new L2 block.
@@ -141,93 +125,6 @@ case class NewCommBatch(
     block: Option[(BlockNum, NewBlock)],
     events: List[(LedgerEventNum, NewLedgerEvent)]
     ) extends CommActorReq
-
-/**
- * ==Synchronous requests and responses==
- * Block actor's synchronization about its leader/follower status with the comm-boss actor.
- */
-
-/** ===Leader mode synchronization=== */
-
-/**
- * Block actor synchronously requests that the comm-boss actor send it events in '''leader''' mode,
- * and to re-broadcast the same synchronous request as [[SyncLeaderComm]] to all the comm actors.
- * @param resumeSignal a [[Deferred]] value that the block actor will complete when
- *                     he's ready to receive new event messages in leader mode.
- */
-case class SyncLeaderBossComm (
-    resumeSignal: Deferred[IO, Unit]
-    ) extends CommBossActorReq
-
-/**
- * Comm-boss actor synchronously requests that the recipient comm actor send events to the block actor
- *  in '''leader''' mode. Sent upon receiving [[SyncLeaderBossComm]] from the block actor.
- * @param resumeSignal a [[Deferred]] value that the block actor will complete when
- *                     he's ready to receive new event messages in leader mode.
- */
-case class SyncLeaderComm (
-    resumeSignal: Deferred[IO, Unit]
-    ) extends CommActorReq
-
-/**
- * Comm actor responds to comm-boss actor that it is ready to send events to the block actor in '''leader''' mode,
- * as soon as the block actor completes the [[Deferred]] value provided in the request.
- * @param eventId the last event ID sent by the comm actor to the block actor before leader mode.
- */
-case class SyncLeaderCommResp(
-    eventId: LedgerEventId
-    ) extends CommActorResp
-
-/**
- * Boss-comm actor responds to the block actor that it and all the comm actors are ready to send events to
- * the block actor in '''leader''' mode, as soon as the block actor completes the [[Deferred]] value provided in
- * the request. Sent upon receiving [[SyncLeaderCommResp]] from all the comm actors.
- * @param eventIds the last event ID sent by the boss-comm and comm actor to the block actor before leader mode.
- */
-case class SyncLeaderBossCommResp(
-    eventIds: Map[PeerId, LedgerEventNum]
-    ) extends CommBossActorResp
-
-/** ===Follower mode synchronization=== */
-
-/**
- * Block actor synchronously requests that the comm-boss actor send it events in '''follower''' mode,
- * and to re-broadcast the same synchronous request as [[SyncFollowerComm]] to all the comm actors.
- * @param resumeSignal a [[Deferred]] value that the block actor will complete when
- *                     he's ready to receive new event messages in follower mode.
- */
-case class SyncFollowerBossComm (
-    resumeSignal: Deferred[IO, Unit]
-    ) extends CommBossActorReq
-
-/**
- * Comm-boss actor synchronously requests that the recipient comm actor send events to the block actor
- *  in '''follower''' mode. Sent upon receiving [[SyncFollowerBossComm]] from the block actor.
- * @param resumeSignal a [[Deferred]] value that the block actor will complete when
- *                     he's ready to receive new event messages in follower mode.
- */
-case class SyncFollowerComm (
-    resumeSignal: Deferred[IO, Unit]
-    ) extends CommActorReq
-
-/**
- * Comm actor responds to comm-boss actor that it is ready to send events to the block actor in '''follower''' mode,
- * as soon as the block actor completes the [[Deferred]] value provided in the request.
- * @param eventId the last event ID sent by the comm actor to the block actor before follower mode.
- */
-case class SyncFollowerCommResp(
-    eventId: LedgerEventId
-    ) extends CommActorResp
-
-/**
- * Boss-comm actor responds to the block actor that it and all the comm actors are ready to send events to
- * the block actor in '''follower''' mode, as soon as the block actor completes the [[Deferred]] value provided in
- * the request. Sent upon receiving [[SyncFollowerCommResp]] from all the comm actors.
- * @param eventIds the last event ID sent by the boss-comm and comm actor to the block actor before follower mode.
- */
-case class SyncFollowerBossCommResp(
-    eventIds: Map[PeerId, LedgerEventNum]
-    ) extends CommBossActorResp
 
 /** ==Multisig regime actor's messages== */
 

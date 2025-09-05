@@ -20,7 +20,6 @@ case class BlockActor(peerId: PeerId)
     override def receive: Receive[IO, BlockActorReq] =
         PartialFunction.fromFunction({
             case x: NewLedgerEvent => ???
-            case x: NewEventId => ???
             case x: NewBlock => ???
             case x: AckBlock => ???
         })
