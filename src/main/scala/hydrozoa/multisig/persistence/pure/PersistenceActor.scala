@@ -4,7 +4,7 @@ import cats.effect.{IO, Ref}
 import cats.syntax.traverse.toTraverseOps
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, LedgerEventId, NewBlock, NewLedgerEvent, GetCommBatch}
+import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, LedgerEventId, NewBlock, NewLedgerEvent, GetMsgBatch}
 
 import scala.collection.immutable
 
@@ -18,7 +18,7 @@ object PersistenceActor {
     def create(): IO[PersistenceActor] = {
         for {
             acks <- Ref[IO].of(immutable.TreeMap[AckId, AckBlock]())
-            batches <- Ref[IO].of(immutable.TreeMap[BatchId, GetCommBatch]())
+            batches <- Ref[IO].of(immutable.TreeMap[BatchId, GetMsgBatch]())
             blocks <- Ref[IO].of(immutable.TreeMap[BlockId, NewBlock]())
             events <- Ref[IO].of(immutable.TreeMap[LedgerEventId, NewLedgerEvent]())
             confirmedBlock <- Ref[IO].of(Option.empty)
@@ -26,12 +26,12 @@ object PersistenceActor {
     }
 }
 
-case class PersistenceActor()(
-        private val acks: Ref[IO, immutable.TreeMap[AckId, AckBlock]],
-        private val batches: Ref[IO, immutable.TreeMap[BatchId, GetCommBatch]],
-        private val blocks: Ref[IO, immutable.TreeMap[BlockId, NewBlock]],
-        private val events: Ref[IO, immutable.TreeMap[LedgerEventId, NewLedgerEvent]],
-        private val confirmedBlock: Ref[IO, Option[BlockId]]
+final case class PersistenceActor()(
+    private val acks: Ref[IO, immutable.TreeMap[AckId, AckBlock]],
+    private val batches: Ref[IO, immutable.TreeMap[BatchId, GetMsgBatch]],
+    private val blocks: Ref[IO, immutable.TreeMap[BlockId, NewBlock]],
+    private val events: Ref[IO, immutable.TreeMap[LedgerEventId, NewLedgerEvent]],
+    private val confirmedBlock: Ref[IO, Option[BlockId]]
     ) extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
     override def receive: ReplyingReceive[IO, PersistenceReq, PersistenceResp] =
         PartialFunction.fromFunction({
@@ -80,28 +80,28 @@ sealed trait PutResp extends PersistenceResp
 
 /** Successfully persisted the data. */
 case object PutSucceeded extends PersistenceResp
-//case class PutFailed(reason: String) extends PersistenceResp
+//final case class PutFailed(reason: String) extends PersistenceResp
 
 /** Persist a locally created multi-ledger event. */
-case class PutNewLedgerEvent(
+final case class PutNewLedgerEvent(
     id: LedgerEventId,
     data: NewLedgerEvent
     ) extends PersistenceReq
 
 /** Persist a new block produced by the local block actor. */
-case class PutNewBlock(
+final case class PutNewBlock(
     id: BlockId,
     data: NewBlock
     ) extends PersistenceReq
 
 /** Persist a new block acknowledgment issued by the local block actor. */
-case class PutAckBlock(
+final case class PutAckBlock(
     id: AckId,
     data: AckBlock
     ) extends PersistenceReq
 
 /** Persist the local block actor's determination that a block is confirmed (local-only signal). */
-case class PutConfirmBlock(
+final case class PutConfirmBlock(
     id: BlockId,
     ) extends PersistenceReq
 
@@ -109,30 +109,30 @@ case class PutConfirmBlock(
  * Persist a communication batch received by a comm actor from its remote comm-actor counterpart,
  * atomically putting the batch's contents into the corresponding key-value maps.
  */
-case class PutCommBatch (
+final case class PutCommBatch (
     id: BatchId,
-    batch: GetCommBatch,
+    batch: GetMsgBatch,
     ack: Option[(AckId, AckBlock)],
     block: Option[(BlockId, NewBlock)],
     events: List[(LedgerEventId, NewLedgerEvent)]
     ) extends PersistenceReq
 
 /** Persist L1 effects of L2 blocks */
-case class PutL1Effects (
+final case class PutL1Effects (
     ) extends PersistenceReq
 
 /** Persist the head's latest utxo state in Cardano  */
-case class PutCardanoHeadState(
+final case class PutCardanoHeadState(
     ) extends PersistenceReq
 
 /** ==Get/read data from the persistence system== */
 
 /** Request data referenced by a block (e.g. multi-ledger events and absorbed/rejected L1 deposits). */
-case class GetBlockData(
+final case class GetBlockData(
     ) extends PersistenceReq
 
 /** Response to [[GetBlockData]]. */
-case class GetBlockDataResp(
+final case class GetBlockDataResp(
     ) extends PersistenceResp
 
 /**
@@ -141,17 +141,17 @@ case class GetBlockDataResp(
  *   - Event IDs for the L2 transactions and withdrawals referenced by the block.
  *   - Multi-signed deposit and post-dated refund transactions for the deposit events referenced by the block.
  */
-case class GetConfirmedLocalEvents (
+final case class GetConfirmedLocalEvents (
     ) extends PersistenceReq
 
 /** Response to [[GetConfirmedLocalEvents]]. */
-case class GetConfirmedLocalEventsResp(
+final case class GetConfirmedLocalEventsResp(
     ) extends PersistenceResp
 
 /** Retrieve L1 effects of confirmed L2 blocks. */
-case class GetConfirmedL1Effects (
+final case class GetConfirmedL1Effects (
     ) extends PersistenceReq
 
 /** Response to [[GetConfirmedL1Effects]]. */
-case class GetConfirmedL1EffectsResp(
+final case class GetConfirmedL1EffectsResp(
     ) extends PersistenceResp

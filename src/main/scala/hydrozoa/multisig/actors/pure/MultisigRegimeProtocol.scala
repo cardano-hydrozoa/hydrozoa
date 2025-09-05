@@ -1,5 +1,9 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.effect.IO 
+
+import com.suprnation.actor.ActorRef.NoSendActorRef
+
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
 
 import scala.concurrent.duration.FiniteDuration
@@ -20,17 +24,11 @@ sealed trait MultisigRegimeManagerReq extends MultisigRegimeProtocol
 /** Requests received by actors in the multisig regime. */
 sealed trait MultisigRegimeActorReq extends MultisigRegimeProtocol
 
-/** Responses issued by actors for synchronous requests in the multisig regime. */
-sealed trait MultisigRegimeActorResp extends MultisigRegimeProtocol
-
 /** Requests received by the block actor. */
 sealed trait BlockActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the Cardano actor. */
-sealed trait CardanoActorReq extends MultisigRegimeActorReq
-
-/** Requests received by the clock actor. */
-sealed trait ClockActorReq extends MultisigRegimeActorReq
+sealed trait CardanoEventActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the comm actor. */
 sealed trait CommActorReq extends MultisigRegimeActorReq
@@ -41,13 +39,13 @@ sealed trait LedgerEventActorReq extends MultisigRegimeActorReq
 /** ==Async requests== */
 
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
-case class SubmitLedgerEvent(
+final case class SubmitLedgerEvent(
     event: LedgerEvent
     ) extends LedgerEventActorReq
 
 /**
  * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a LedgerEventId. */
-case class NewLedgerEvent(
+final case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
     event: LedgerEvent
@@ -70,7 +68,7 @@ case class NewLedgerEvent(
  * @param ledgerCallbacksRejected The set of deposits that will never be absorbed into the head's treasury because they
  *                                do not fulfill the absorption criteria.
  */
-case class NewBlock(
+final case class NewBlock(
     id: BlockId,
     time: FiniteDuration,
     blockType: BlockType,
@@ -87,15 +85,17 @@ case class NewBlock(
  * then the peer can consider the block to be confirmed by multisig consensus.
  * Note that for major and final blocks, two rounds of acknowledgements are needed to confirm.
  */
-case class AckBlock(
+final case class AckBlock(
     id: AckId,
     time: FiniteDuration
     ) extends BlockActorReq, CommActorReq
 
 /** L2 block confirmations (local-only signal) */
-case class ConfirmBlock(
+final case class ConfirmBlock(
     id: BlockId
-    ) extends CardanoActorReq, LedgerEventActorReq
+    ) extends CardanoEventActorReq, LedgerEventActorReq
+
+
 
 /**
  * Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
@@ -105,7 +105,7 @@ case class ConfirmBlock(
  * @param blockNum The requester's last seen block from the remote peer.
  * @param eventNum The requester's last seen event number from the remote peer.
  */
-case class GetCommBatch(
+final case class GetMsgBatch(
     id: BatchNum,
     ackNum: AckNum,
     blockNum: BlockNum,
@@ -113,7 +113,7 @@ case class GetCommBatch(
     ) extends CommActorReq
 
 /**
- * Comm actor provides a communication batch in response to its remote comm-actor counterpart's request.
+ * Comm actor provides a batch in response to its remote comm-actor counterpart's request.
  *
  * @param id       Batch number matching the one from the request.
  * @param eventNum The largest event num in this batch.
@@ -121,7 +121,7 @@ case class GetCommBatch(
  * @param block    A block originating from the responder after the requested [[BlockNum]].
  * @param events   A list of events originating from the responder after the requested [[LedgerEventNum]].
  */
-case class NewCommBatch(
+final case class NewMsgBatch(
     id: BatchNum,
     eventNum: LedgerEventNum,
     ack: Option[(AckNum, AckBlock)],
@@ -129,9 +129,24 @@ case class NewCommBatch(
     events: List[(LedgerEventNum, NewLedgerEvent)]
     ) extends CommActorReq
 
+/** Connect a comm actor to its remote counterpart comm actor. */
+final case class ConnectRemoteCommActor(
+    remoteCommActor: CommActorRef
+    ) extends CommActorReq
+
 /** ==Multisig regime manager's messages== */
 
-// Mostly these will be concerned with messages about watched actors terminating.
+final case class TerminatedBlockActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+
+final case class TerminatedCardanoEventActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+
+final case class TerminatedCommActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+
+final case class TerminatedLedgerEventActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+
+final case class TerminatedCardanoBackend(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+
+final case class TerminatedPersistenceActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
 /** ==Entity identifiers== */
 

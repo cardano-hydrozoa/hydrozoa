@@ -10,6 +10,6 @@ sealed trait LedgerCallback
 
 case class DepositCallbackL1() extends LedgerCallback
 
-class MultiLedger() {
+class MultiLedger {
 
 }

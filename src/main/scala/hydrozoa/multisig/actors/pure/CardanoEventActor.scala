@@ -1,6 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.IO
+import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 
 /**
@@ -11,13 +11,22 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
  */
 object CardanoEventActor {
-    def create(peerId: PeerId): IO[CardanoEventActor] =
-        IO.pure(CardanoEventActor())
+    def create(peerId: PeerId,
+               cba0: CardanoBackendRef,
+               per0: PersistenceRef
+              ): IO[CardanoEventActor] = {
+        for {
+            cba <- Ref.of[IO, Option[CardanoBackendRef]](Some(cba0))
+            per <- Ref.of[IO, Option[PersistenceRef]](Some(per0))
+        } yield CardanoEventActor()(cba, per)
+    }
 }
 
-case class CardanoEventActor()
-    extends Actor[IO, CardanoActorReq]{
-    override def receive: Receive[IO, CardanoActorReq] =
+final case class CardanoEventActor() (
+    private val cardanoBackend: Ref[IO, Option[CardanoBackendRef]],
+    private val persistence: Ref[IO, Option[PersistenceRef]]
+    ) extends Actor[IO, CardanoEventActorReq]{
+    override def receive: Receive[IO, CardanoEventActorReq] =
         PartialFunction.fromFunction({
             case x: ConfirmBlock => ???
         })

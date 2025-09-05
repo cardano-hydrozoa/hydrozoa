@@ -1,21 +1,41 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.IO
+import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 
 /**
  * Event actor is the source of new L1 deposits and L2 transactions for the head.
  */
 object LedgerEventActor {
-    def create(peerId: PeerId): IO[LedgerEventActor] =
-        IO.pure(LedgerEventActor(peerId))
+    def create(peerId: PeerId,
+               bla0: Deferred[IO, BlockActorRef],
+               cas0: Deferred[IO, List[CommActorRef]],
+               per0: PersistenceRef
+              ): IO[LedgerEventActor] =
+      for {
+          bla <- Ref.of[IO, Option[BlockActorRef]](None)
+          cas <- Ref.of[IO, Option[List[CommActorRef]]](None)
+          per <- Ref.of[IO, Option[PersistenceRef]](Some(per0))
+      } yield LedgerEventActor(peerId)(bla0, cas0)(bla, cas, per)
 }
 
-case class LedgerEventActor(peerId: PeerId)
-    extends Actor[IO, LedgerEventActorReq]{
+final case class LedgerEventActor(peerId: PeerId)(
+    private val blockActor0: Deferred[IO, BlockActorRef],
+    private val commActors0: Deferred[IO, List[CommActorRef]],
+    ) (
+    private val blockActor: Ref[IO, Option[BlockActorRef]],
+    private val commActors: Ref[IO, Option[List[CommActorRef]]],
+    private val persistence: Ref[IO, Option[PersistenceRef]]
+    ) extends Actor[IO, LedgerEventActorReq]{
+    override def preStart: IO[Unit] =
+        for {
+            bla <- blockActor0.get; _ <- blockActor.set(Some(bla))
+            cas <- commActors0.get; _ <- commActors.set(Some(cas))
+        } yield ()
+    
     override def receive: Receive[IO, LedgerEventActorReq] =
         PartialFunction.fromFunction({
-            case x: SubmitLedgerEvent => ??? 
+            case x: SubmitLedgerEvent => ???
             case x: ConfirmBlock => ???
         })
 }

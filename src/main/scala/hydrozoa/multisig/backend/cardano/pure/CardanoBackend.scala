@@ -9,14 +9,14 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  *   - Receives L1 effects
  *   - Responds to queries about utxo state.
  */
-object CardanoBackendActor {
-    def create(): IO[CardanoBackendActor] =
-        IO.pure(CardanoBackendActor())
+object CardanoBackend {
+    def create(): IO[CardanoBackend] =
+        IO.pure(CardanoBackend())
 }
 
-case class CardanoBackendActor()
-    extends Actor[IO, CardanoBackendActorReq]{
-    override def receive: Receive[IO, CardanoBackendActorReq] =
+final case class CardanoBackend()
+    extends Actor[IO, CardanoBackendReq]{
+    override def receive: Receive[IO, CardanoBackendReq] =
         PartialFunction.fromFunction({
             case x: SubmitL1Effects => ???
             case x: GetCardanoHeadState => ???
@@ -27,22 +27,22 @@ case class CardanoBackendActor()
  * Cardano backend protocol.
  * See diagram: [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
  */
-sealed trait CardanoBackendActorProtocol
-sealed trait CardanoBackendActorReq extends CardanoBackendActorProtocol
-sealed trait CardanoBackendActorResp extends CardanoBackendActorProtocol
+sealed trait CardanoBackendProtocol
+sealed trait CardanoBackendReq extends CardanoBackendProtocol
+sealed trait CardanoBackendResp extends CardanoBackendProtocol
 
 /**
  * Submit L1 effects to the Cardano backend.
  * The response from the backend is ignored, so we model this as an async request in the pure model.
  */
-case class SubmitL1Effects (
-    ) extends CardanoBackendActorReq
+final case class SubmitL1Effects (
+    ) extends CardanoBackendReq
 
 /** Get the head's current utxo state in Cardano. */
-case class GetCardanoHeadState(
-    ) extends CardanoBackendActorReq
+final case class GetCardanoHeadState(
+    ) extends CardanoBackendReq
 
 /** The head's current utxo state in Cardano, provided in response to [[GetCardanoHeadState]]. */
-case class GetCardanoHeadStateResp(
-    ) extends CardanoBackendActorResp
+final case class GetCardanoHeadStateResp(
+    ) extends CardanoBackendResp
 
