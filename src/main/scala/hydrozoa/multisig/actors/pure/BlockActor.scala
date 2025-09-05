@@ -11,42 +11,72 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  *   - When leader or follower, collects L2 block acks to confirm block effects and trigger leader/follower switch.
  */
 object BlockActor {
-    def create(peerId: PeerId,
-               cea0: Deferred[IO, CardanoEventActorRef],
-               cas0: Deferred[IO, List[CommActorRef]],
-               lea0: Deferred[IO, LedgerEventActorRef],
-               per0: PersistenceRef
-              ): IO[BlockActor] = {
+    final case class Config(peerId: PeerId)
+
+    object State {
+        def create: IO[State] =
+            for {
+                nBlock <- Ref.of[IO, BlockNum](0)
+            } yield State(nBlock)
+    }
+    final case class State(nBlock: Ref[IO, BlockNum])
+
+    sealed trait Connections
+    final case class ConnectionsLive(
+        cardanoEventActor: CardanoEventActorRef,
+        commActors: List[CommActorRef],
+        ledgerEventActor: LedgerEventActorRef,
+        persistence: PersistenceRef,
+        ) extends Connections
+    final case class ConnectionsPending(
+        cardanoEventActor: Deferred[IO, CardanoEventActorRef],
+        commActors: Deferred[IO, List[CommActorRef]],
+        ledgerEventActor: Deferred[IO, LedgerEventActorRef],
+        persistence: Deferred[IO, PersistenceRef],
+        ) extends Connections
+
+    def create(config: Config, conn0: Connections): IO[BlockActor] = {
         for {
-            cea <- Ref.of[IO, Option[CardanoEventActorRef]](None)
-            cas <- Ref.of[IO, Option[List[CommActorRef]]](None)
-            lea <- Ref.of[IO, Option[LedgerEventActorRef]](None)
-            per <- Ref.of[IO, Option[PersistenceRef]](Some(per0))
-        } yield BlockActor(peerId)(cea0, cas0, lea0)(cea, cas, lea, per)
+            conn <- Ref.of[IO, Connections](conn0)
+            state <- State.create
+        } yield BlockActor(config)(conn, state)
     }
 }
 
-final case class BlockActor(peerId: PeerId)(
-    private val cardanoEventActor0: Deferred[IO, CardanoEventActorRef],
-    private val commActors0: Deferred[IO, List[CommActorRef]],
-    private val ledgerEventActor0: Deferred[IO, LedgerEventActorRef],
-    )(
-    private val cardanoEventActor: Ref[IO, Option[CardanoEventActorRef]],
-    private val commActors: Ref[IO, Option[List[CommActorRef]]],
-    private val ledgerEventActor: Ref[IO, Option[LedgerEventActorRef]],
-    private val persistence: Ref[IO, Option[PersistenceRef]]
+final case class BlockActor(config: BlockActor.Config)(
+    private val connections: Ref[IO, BlockActor.Connections],
+    private val state: BlockActor.State
     ) extends Actor[IO, BlockActorReq]{
     override def preStart: IO[Unit] =
-        for {
-            cea <- cardanoEventActor0.get; _ <- cardanoEventActor.set(Some(cea))
-            cas <- commActors0.get; _ <- commActors.set(Some(cas))
-            lea <- ledgerEventActor0.get; _ <- ledgerEventActor.set(Some(lea))
-        } yield ()
+        connections.get.flatMap({
+            case x: BlockActor.ConnectionsPending =>
+                for {
+                    cea <- x.cardanoEventActor.get
+                    cas <- x.commActors.get
+                    lea <- x.ledgerEventActor.get
+                    per <- x.persistence.get
+                    _ <- connections.set(BlockActor.ConnectionsLive(cea, cas, lea, per))
+                } yield ()
+            case x: BlockActor.ConnectionsLive =>
+                IO.pure(())
+        })
         
     override def receive: Receive[IO, BlockActorReq] =
-        PartialFunction.fromFunction({
-            case x: NewLedgerEvent => ???
-            case x: NewBlock => ???
-            case x: AckBlock => ???
-        })
+        PartialFunction.fromFunction(req =>
+            connections.get.flatMap({
+                case conn: BlockActor.ConnectionsLive =>
+                    this.receiveTotal(req, conn)
+                case _ =>
+                    IO.raiseError(Error("Impossible: Block actor is receiving before its connections are live."))
+            }))
+
+    private def receiveTotal(req: BlockActorReq, conn: BlockActor.ConnectionsLive): IO[Unit] =
+        req match {
+            case x: NewLedgerEvent =>
+                ???
+            case x: NewBlock =>
+                ???
+            case x: AckBlock =>
+                ???
+        }
 }

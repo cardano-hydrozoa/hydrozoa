@@ -2,6 +2,7 @@ package hydrozoa.multisig.actors.pure
 
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.actors.pure
 
 /**
  * Cardano actor:
@@ -11,23 +12,60 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
  */
 object CardanoEventActor {
-    def create(peerId: PeerId,
-               cba0: CardanoBackendRef,
-               per0: PersistenceRef
-              ): IO[CardanoEventActor] = {
+    final case class Config()
+
+    object State {
+        def create: IO[State] =
+            IO.pure(State())
+    }
+    final case class State()
+
+    sealed trait Connections
+    final case class ConnectionsLive(
+        cardanoBackend: CardanoBackendRef,
+        persistence: PersistenceRef
+        ) extends Connections
+    final case class ConnectionsPending(
+        cardanoBackend: Deferred[IO, CardanoBackendRef],
+        persistence: Deferred[IO, PersistenceRef]
+        ) extends Connections
+
+    def create(config: Config, conn0: Connections): IO[CardanoEventActor] = {
         for {
-            cba <- Ref.of[IO, Option[CardanoBackendRef]](Some(cba0))
-            per <- Ref.of[IO, Option[PersistenceRef]](Some(per0))
-        } yield CardanoEventActor()(cba, per)
+            conn <- Ref.of[IO, Connections](conn0)
+            state <- State.create
+        } yield CardanoEventActor(config)(conn, state)
     }
 }
 
-final case class CardanoEventActor() (
-    private val cardanoBackend: Ref[IO, Option[CardanoBackendRef]],
-    private val persistence: Ref[IO, Option[PersistenceRef]]
+final case class CardanoEventActor(config: CardanoEventActor.Config) (
+    private val connections: Ref[IO, CardanoEventActor.Connections],
+    private val state: pure.CardanoEventActor.State
     ) extends Actor[IO, CardanoEventActorReq]{
-    override def receive: Receive[IO, CardanoEventActorReq] =
-        PartialFunction.fromFunction({
-            case x: ConfirmBlock => ???
+    override def preStart: IO[Unit] =
+        connections.get.flatMap({
+            case x: CardanoEventActor.ConnectionsPending =>
+                for {
+                    cba <- x.cardanoBackend.get
+                    per <- x.persistence.get
+                    _ <- connections.set(CardanoEventActor.ConnectionsLive(cba, per))
+                } yield ()
+            case x: CardanoEventActor.ConnectionsLive =>
+                IO.pure(())
         })
+    
+    override def receive: Receive[IO, CardanoEventActorReq] =
+        PartialFunction.fromFunction(req =>
+            connections.get.flatMap({
+                case conn: pure.CardanoEventActor.ConnectionsLive =>
+                    this.receiveTotal(req, conn)
+                case _ =>
+                    IO.raiseError(Error("Impossible: Cardano event actor is receiving before its connections are live."))
+            }))
+
+    private def receiveTotal(req: CardanoEventActorReq, conn: pure.CardanoEventActor.ConnectionsLive): IO[Unit] =
+        req match {
+            case x: ConfirmBlock =>
+                ???
+        }
 }

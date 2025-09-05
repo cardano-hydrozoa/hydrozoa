@@ -124,11 +124,6 @@ final case class NewMsgBatch(
     events: Queue[NewLedgerEvent]
     ) extends CommActorReq
 
-/** Connect a comm actor to its remote counterpart comm actor. */
-final case class ConnectRemoteCommActor(
-    remoteCommActor: CommActorRef
-    ) extends CommActorReq
-
 /** ==Multisig regime manager's messages== */
 
 final case class TerminatedBlockActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq

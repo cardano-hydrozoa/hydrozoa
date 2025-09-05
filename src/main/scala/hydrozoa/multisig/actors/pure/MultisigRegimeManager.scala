@@ -53,29 +53,49 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
 
     override def preStart: IO[Unit] =
         for {
-            cba0 <- cardanoBackend.get
-            per0 <- persistence.get
-            
+            cba0 <- Deferred[IO, CardanoBackendRef]
+            per0 <- Deferred[IO, PersistenceRef]
             bla0 <- Deferred[IO, BlockActorRef]
             cas0 <- Deferred[IO, List[CommActorRef]]
             cea0 <- Deferred[IO, CardanoEventActorRef]
             lea0 <- Deferred[IO, LedgerEventActorRef]
-            
-            bla <- context.actorOf(BlockActor.create(peerId, cea0, cas0, lea0, per0))
-            cas <- peers.filterNot(_ == peerId)
-                .traverse(pid => context.actorOf(CommActor.create(peerId, pid, bla0, per0)))
-            cea <- context.actorOf(CardanoEventActor.create(peerId, cba0, per0))
-            lea <- context.actorOf(LedgerEventActor.create(peerId, bla0, cas0, per0))
+
+            _ <- cardanoBackend.get.flatMap(cba0.complete)
+            _ <- persistence.get.flatMap(per0.complete)
+
+            bla <- context.actorOf(BlockActor.create(
+                BlockActor.Config(peerId),
+                BlockActor.ConnectionsPending(cea0, cas0, lea0, per0)
+            ))
+            cas <- peers.filterNot(_ == peerId).traverse(pid =>
+                for {
+                    rca0 <- Deferred[IO, CommActorRef]
+                    ca <- context.actorOf(CommActor.create(
+                        CommActor.Config(peerId, pid),
+                        CommActor.ConnectionsPending(bla0, per0, rca0)
+                    ))
+                } yield (ca, rca0)
+            )
+            cea <- context.actorOf(CardanoEventActor.create(
+                CardanoEventActor.Config(),
+                CardanoEventActor.ConnectionsPending(cba0, per0)
+            ))
+            lea <- context.actorOf(LedgerEventActor.create(
+                LedgerEventActor.Config(peerId),
+                LedgerEventActor.ConnectionsPending(bla0, cas0, per0)
+            ))
             
             _ <- bla0.complete(bla)
-            _ <- cas0.complete(cas)
+            _ <- cas0.complete(cas.map(_._1))
             _ <- cea0.complete(cea)
             _ <- lea0.complete(lea)
             
             _ <- context.watch(bla, TerminatedBlockActor(bla))
-            _ <- cas.traverse(r => context.watch(r, TerminatedCommActor(r)))
+            _ <- cas.traverse(r => context.watch(r._1, TerminatedCommActor(r._1)))
             _ <- context.watch(cea, TerminatedCardanoEventActor(cea))
             _ <- context.watch(lea, TerminatedLedgerEventActor(lea))
+
+            // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()
         
     override def receive: Receive[IO, MultisigRegimeManagerReq] =
@@ -92,6 +112,7 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
                 IO.println("Terminated cardano backend")
             case TerminatedPersistenceActor(_) =>
                 IO.println("Terminated persistence")
+            // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
         })
         
 }
