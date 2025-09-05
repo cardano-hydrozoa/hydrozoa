@@ -6,14 +6,14 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 /**
  * Event actor is the source of new L1 deposits and L2 transactions for the head.
  */
-object EventActor {
-    def create(peerId: PeerId): IO[EventActor] =
-        IO.pure(EventActor(peerId))
+object LedgerEventActor {
+    def create(peerId: PeerId): IO[LedgerEventActor] =
+        IO.pure(LedgerEventActor(peerId))
 }
 
-case class EventActor(peerId: PeerId)
-    extends Actor[IO, EventActorReq]{
-    override def receive: Receive[IO, EventActorReq] =
+case class LedgerEventActor(peerId: PeerId)
+    extends Actor[IO, LedgerEventActorReq]{
+    override def receive: Receive[IO, LedgerEventActorReq] =
         PartialFunction.fromFunction({
             case x: ConfirmBlock => ???
         })

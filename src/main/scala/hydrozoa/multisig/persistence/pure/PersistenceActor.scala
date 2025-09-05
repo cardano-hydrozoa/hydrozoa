@@ -4,9 +4,9 @@ import cats.effect.{IO, Ref}
 import cats.syntax.traverse.toTraverseOps
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, EventId, NewBlock, NewEvent, ReqCommBatch}
+import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, LedgerEventId, NewBlock, NewLedgerEvent, GetCommBatch}
 
-import scala.collection.mutable
+import scala.collection.immutable
 
 /**
  * Persistence actor is a mock interface to a key-value store (e.g. RocksDB):
@@ -17,41 +17,41 @@ import scala.collection.mutable
 object PersistenceActor {
     def create(): IO[PersistenceActor] = {
         for {
-            acks <- Ref[IO].of(mutable.TreeMap[AckId, AckBlock]())
-            batches <- Ref[IO].of(mutable.TreeMap[BatchId, ReqCommBatch]())
-            blocks <- Ref[IO].of(mutable.TreeMap[BlockId, NewBlock]())
-            events <- Ref[IO].of(mutable.TreeMap[EventId, NewEvent]())
+            acks <- Ref[IO].of(immutable.TreeMap[AckId, AckBlock]())
+            batches <- Ref[IO].of(immutable.TreeMap[BatchId, GetCommBatch]())
+            blocks <- Ref[IO].of(immutable.TreeMap[BlockId, NewBlock]())
+            events <- Ref[IO].of(immutable.TreeMap[LedgerEventId, NewLedgerEvent]())
             confirmedBlock <- Ref[IO].of(Option.empty)
         } yield PersistenceActor()(acks, batches, blocks, events, confirmedBlock)
     }
 }
 
 case class PersistenceActor()(
-        private val acks: Ref[IO, mutable.TreeMap[AckId, AckBlock]],
-        private val batches: Ref[IO, mutable.TreeMap[BatchId, ReqCommBatch]],
-        private val blocks: Ref[IO, mutable.TreeMap[BlockId, NewBlock]],
-        private val events: Ref[IO, mutable.TreeMap[EventId, NewEvent]],
+        private val acks: Ref[IO, immutable.TreeMap[AckId, AckBlock]],
+        private val batches: Ref[IO, immutable.TreeMap[BatchId, GetCommBatch]],
+        private val blocks: Ref[IO, immutable.TreeMap[BlockId, NewBlock]],
+        private val events: Ref[IO, immutable.TreeMap[LedgerEventId, NewLedgerEvent]],
         private val confirmedBlock: Ref[IO, Option[BlockId]]
     ) extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
     override def receive: ReplyingReceive[IO, PersistenceReq, PersistenceResp] =
         PartialFunction.fromFunction({
-            case x: PutNewEvent =>
-                events.update(m => m += (x.id -> x.data)) >>
+            case x: PutNewLedgerEvent =>
+                events.update(m => m + (x.id -> x.data)) >>
                     IO.pure(PutSucceeded)
             case x: PutNewBlock =>
-                blocks.update(m => m += (x.id -> x.data)) >>
+                blocks.update(m => m + (x.id -> x.data)) >>
                     IO.pure(PutSucceeded)
             case x: PutAckBlock =>
-                acks.update(m => m += (x.id -> x.data)) >>
+                acks.update(m => m + (x.id -> x.data)) >>
                     IO.pure(PutSucceeded)
             case x: PutConfirmBlock =>
                 confirmedBlock.update(_ => Some(x.id)) >>
                     IO.pure(PutSucceeded)
             case x: PutCommBatch =>
-                batches.update(m => m += (x.id -> x.batch)) >>
-                    x.ack.traverse(y => acks.update(m => m += y)) >>
-                    x.block.traverse(y => blocks.update(m => m += y)) >>
-                    events.update(m => m ++= x.events) >>
+                batches.update(m => m + (x.id -> x.batch)) >>
+                    x.ack.traverse(y => acks.update(m => m + y)) >>
+                    x.block.traverse(y => blocks.update(m => m + y)) >>
+                    events.update(m => m ++ x.events) >>
                     IO.pure(PutSucceeded)
             case x: PutL1Effects => ???
             case x: PutCardanoHeadState => ???
@@ -83,9 +83,9 @@ case object PutSucceeded extends PersistenceResp
 //case class PutFailed(reason: String) extends PersistenceResp
 
 /** Persist a locally created multi-ledger event. */
-case class PutNewEvent(
-    id: EventId,
-    data: NewEvent
+case class PutNewLedgerEvent(
+    id: LedgerEventId,
+    data: NewLedgerEvent
     ) extends PersistenceReq
 
 /** Persist a new block produced by the local block actor. */
@@ -111,10 +111,10 @@ case class PutConfirmBlock(
  */
 case class PutCommBatch (
     id: BatchId,
-    batch: ReqCommBatch,
+    batch: GetCommBatch,
     ack: Option[(AckId, AckBlock)],
     block: Option[(BlockId, NewBlock)],
-    events: List[(EventId, NewEvent)]
+    events: List[(LedgerEventId, NewLedgerEvent)]
     ) extends PersistenceReq
 
 /** Persist L1 effects of L2 blocks */

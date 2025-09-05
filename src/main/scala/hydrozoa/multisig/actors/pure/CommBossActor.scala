@@ -1,6 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ReplyingActor
 
@@ -16,7 +16,7 @@ case class CommBossActor(peerId: PeerId)
     extends ReplyingActor[IO, CommBossActorReq, CommBossActorResp] {
     override def receive: ReplyingReceive[IO, CommBossActorReq, CommBossActorResp] =
         PartialFunction.fromFunction({
-            case x: NewEvent => ???
+            case x: NewLedgerEvent => ???
             case x: NewBlock => ???
             case x: AckBlock => ???
             case x: SyncLeaderBossComm => ???

@@ -10,12 +10,12 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  *   - Periodically polls the Cardano blockchain for the head's utxo state.
  *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
  */
-object CardanoActor {
-    def create(peerId: PeerId): IO[CardanoActor] =
-        IO.pure(CardanoActor())
+object CardanoEventActor {
+    def create(peerId: PeerId): IO[CardanoEventActor] =
+        IO.pure(CardanoEventActor())
 }
 
-case class CardanoActor()
+case class CardanoEventActor()
     extends Actor[IO, CardanoActorReq]{
     override def receive: Receive[IO, CardanoActorReq] =
         PartialFunction.fromFunction({

@@ -12,12 +12,12 @@ import scala.language.postfixOps
 /**
  * Multisig boss actor starts-up and monitors all the actors of the multisig regime.
  */
-object MultisigRegimeActor {
-    def create(peerId: PeerId): IO[MultisigRegimeActor] =
-        IO.pure(MultisigRegimeActor(peerId))
+object MultisigBossActor {
+    def create(peerId: PeerId): IO[MultisigBossActor] =
+        IO.pure(MultisigBossActor(peerId))
 }
 
-case class MultisigRegimeActor(peerId: PeerId)
+case class MultisigBossActor(peerId: PeerId)
     extends Actor[IO, MultisigBossActorReq]{
 
     override def supervisorStrategy: SupervisionStrategy[IO] =

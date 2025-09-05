@@ -1,11 +1,15 @@
 package hydrozoa.multisig.ledger.multi.trivial
 
-sealed trait MultiLedgerEvent
+sealed trait LedgerEvent
 
-case class TransactionL2() extends MultiLedgerEvent
-case class WithdrawalL2() extends MultiLedgerEvent
-case class DepositL1() extends MultiLedgerEvent
+case class TransactionL2() extends LedgerEvent
+case class WithdrawalL2() extends LedgerEvent
+case class DepositL1() extends LedgerEvent
 
-class MultiLedger {
+sealed trait LedgerCallback
+
+case class DepositCallbackL1() extends LedgerCallback
+
+class MultiLedger() {
 
 }
