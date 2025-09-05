@@ -1,11 +1,10 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.IO 
-
+import cats.effect.IO
 import com.suprnation.actor.ActorRef.NoSendActorRef
-
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
 
+import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 
 /** =Multisig regime protocol= */
@@ -95,8 +94,6 @@ final case class ConfirmBlock(
     id: BlockId
     ) extends CardanoEventActorReq, LedgerEventActorReq
 
-
-
 /**
  * Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
  * or block acknowledgements originating from the remote peer.
@@ -116,17 +113,15 @@ final case class GetMsgBatch(
  * Comm actor provides a batch in response to its remote comm-actor counterpart's request.
  *
  * @param id       Batch number matching the one from the request.
- * @param eventNum The largest event num in this batch.
  * @param ack      A block acknowledgment originating from the responder after the requested [[AckNum]].
  * @param block    A block originating from the responder after the requested [[BlockNum]].
  * @param events   A list of events originating from the responder after the requested [[LedgerEventNum]].
  */
 final case class NewMsgBatch(
     id: BatchNum,
-    eventNum: LedgerEventNum,
-    ack: Option[(AckNum, AckBlock)],
-    block: Option[(BlockNum, NewBlock)],
-    events: List[(LedgerEventNum, NewLedgerEvent)]
+    ack: Option[AckBlock],
+    block: Option[NewBlock],
+    events: Queue[NewLedgerEvent]
     ) extends CommActorReq
 
 /** Connect a comm actor to its remote counterpart comm actor. */
