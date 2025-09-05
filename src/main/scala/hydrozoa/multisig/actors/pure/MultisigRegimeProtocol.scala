@@ -1,7 +1,5 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.{Deferred, IO}
-// import com.suprnation.actor.ActorRef.NoSendActorRef
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
 
 import scala.concurrent.duration.FiniteDuration
@@ -12,63 +10,66 @@ import scala.concurrent.duration.FiniteDuration
  * Multisig regime's protocol for actor requests and responses.
  * See diagram: [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
  */
-sealed trait MultisigProtocol
+sealed trait MultisigRegimeProtocol
 
 /** ==Actors receiving requests== */
 
-/** Requests received by the multisig boss actor. */
-sealed trait MultisigBossActorReq extends MultisigProtocol
+/** Requests received by the multisig regime manager. */
+sealed trait MultisigRegimeManagerReq extends MultisigRegimeProtocol
 
 /** Requests received by actors in the multisig regime. */
-sealed trait MultisigActorReq extends MultisigProtocol
+sealed trait MultisigRegimeActorReq extends MultisigRegimeProtocol
 
 /** Responses issued by actors for synchronous requests in the multisig regime. */
-sealed trait MultisigActorResp extends MultisigProtocol
+sealed trait MultisigRegimeActorResp extends MultisigRegimeProtocol
 
 /** Requests received by the block actor. */
-sealed trait BlockActorReq extends MultisigActorReq
+sealed trait BlockActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the Cardano actor. */
-sealed trait CardanoActorReq extends MultisigActorReq
+sealed trait CardanoActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the clock actor. */
-sealed trait ClockActorReq extends MultisigActorReq
+sealed trait ClockActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the comm actor. */
-sealed trait CommActorReq extends MultisigActorReq
-
-/** Requests received by the comm-boss actor. */
-sealed trait CommBossActorReq extends MultisigActorReq
+sealed trait CommActorReq extends MultisigRegimeActorReq
 
 /** Requests received by the event actor. */
-sealed trait LedgerEventActorReq extends MultisigActorReq
+sealed trait LedgerEventActorReq extends MultisigRegimeActorReq
 
 /** ==Async requests== */
 
-/** A new multi-ledger ledger event, including all details about the deposit. */
+/** Submit a new ledger event to the head via a peer's ledger event actor. */
+case class SubmitLedgerEvent(
+    event: LedgerEvent
+    ) extends LedgerEventActorReq
+
+/**
+ * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a LedgerEventId. */
 case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
     event: LedgerEvent
-    ) extends BlockActorReq, CommActorReq, CommBossActorReq
+    ) extends BlockActorReq, CommActorReq
 
 /**
- * A new L2 block.
+ * The block actor announces a new block.
  *
- * @param id                     The block ID, increasing by one for every consecutive new block.
- * @param time                   The creation time of the block.
- * @param blockType              The block's type: initial, minor, major, or final.
- * @param ledgerEventIdsRequired The event number for each peer that the block creator had processed at the moment the block
- *                               was created. Every follower must reach the same event numbers for each peer before attempting
- *                               to verify the block.
- * @param ledgerEventsValid      The sequence of valid events that the block creator has applied to transition the previous block's
- *                               multi-ledger state. Every follower must apply these events in the same order when verifying the
- *                               block.
- * @param ledgerEventsInvalid          The sequence of events that must be invalid when applied after the [[ledgerEventsValid]].
+ * @param id                      The block ID, increasing by one for every consecutive new block.
+ * @param time                    The creation time of the block.
+ * @param blockType               The block's type: initial, minor, major, or final.
+ * @param ledgerEventIdsRequired  The event number for each peer that the block creator had processed at the moment the
+ *                                block was created. Every follower must reach the same event numbers for each peer
+ *                                before attempting to verify the block.
+ * @param ledgerEventsValid       The sequence of valid events that the block creator has applied to transition the
+ *                                previous block's multi-ledger state. Every follower must apply these events in the
+ *                                same order when verifying the block.
+ * @param ledgerEventsInvalid     The sequence of events that must be invalid when applied after [[ledgerEventsValid]].
+ * @param ledgerCallbacksAccepted The set of mature deposits that are absorbed by this block into the head's treasury.
+ * @param ledgerCallbacksRejected The set of deposits that will never be absorbed into the head's treasury because they
+ *                                do not fulfill the absorption criteria.
  */
-// * @param absorbedDeposits The set of mature deposits that are absorbed by this block into the head's treasury.
-// * @param rejectedDeposits The set of deposits that will never be absorbed into the head's treasury because they
-// *                         do not fulfill the absorption criteria.
 case class NewBlock(
     id: BlockId,
     time: FiniteDuration,
@@ -78,16 +79,18 @@ case class NewBlock(
     ledgerEventsInvalid: List[LedgerEventId],
     ledgerCallbacksAccepted: List[LedgerCallbackId],
     ledgerCallbacksRejected: List[LedgerCallbackId]
-    ) extends BlockActorReq, CommActorReq, CommBossActorReq
+    ) extends BlockActorReq, CommActorReq
 
 /**
- * A peer's acknowledgement of an L2 block.
+ * A peer's block actor announces its acknowledgement of an L2 block.
  * When a peer's block actor acknowledges a block and receives all other peers' acknowledgement of the block,
- * then the peer can consider the block to be confirmed by multisig consensus. */
+ * then the peer can consider the block to be confirmed by multisig consensus.
+ * Note that for major and final blocks, two rounds of acknowledgements are needed to confirm.
+ */
 case class AckBlock(
     id: AckId,
     time: FiniteDuration
-    ) extends BlockActorReq, CommActorReq, CommBossActorReq
+    ) extends BlockActorReq, CommActorReq
 
 /** L2 block confirmations (local-only signal) */
 case class ConfirmBlock(
@@ -126,10 +129,9 @@ case class NewCommBatch(
     events: List[(LedgerEventNum, NewLedgerEvent)]
     ) extends CommActorReq
 
-/** ==Multisig regime actor's messages== */
+/** ==Multisig regime manager's messages== */
 
-// /** Received by the multisig regime actor when its clock-actor child terminates. */
-// case class TerminatedClock(actorRef: NoSendActorRef[IO]) extends MultisigBossActorReq
+// Mostly these will be concerned with messages about watched actors terminating.
 
 /** ==Entity identifiers== */
 

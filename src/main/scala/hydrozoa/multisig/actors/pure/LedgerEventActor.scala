@@ -15,6 +15,7 @@ case class LedgerEventActor(peerId: PeerId)
     extends Actor[IO, LedgerEventActorReq]{
     override def receive: Receive[IO, LedgerEventActorReq] =
         PartialFunction.fromFunction({
+            case x: SubmitLedgerEvent => ??? 
             case x: ConfirmBlock => ???
         })
 }

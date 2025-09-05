@@ -10,15 +10,15 @@ import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
 /**
- * Multisig boss actor starts-up and monitors all the actors of the multisig regime.
+ * Multisig regime manager starts-up and monitors all the actors of the multisig regime.
  */
-object MultisigBossActor {
-    def create(peerId: PeerId): IO[MultisigBossActor] =
-        IO.pure(MultisigBossActor(peerId))
+object MultisigRegimeManager {
+    def create(peerId: PeerId): IO[MultisigRegimeManager] =
+        IO.pure(MultisigRegimeManager(peerId))
 }
 
-case class MultisigBossActor(peerId: PeerId)
-    extends Actor[IO, MultisigBossActorReq]{
+case class MultisigRegimeManager(peerId: PeerId)
+    extends Actor[IO, MultisigRegimeManagerReq]{
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -29,6 +29,4 @@ case class MultisigBossActor(peerId: PeerId)
 
     override def preStart: IO[Unit] = 
         IO.pure(())
-
-    // override def receive: Receive[IO,MultisigBossActorReq] =
 }
