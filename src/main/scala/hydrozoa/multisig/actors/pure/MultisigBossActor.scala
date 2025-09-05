@@ -1,8 +1,8 @@
 package hydrozoa.multisig.actors.pure
 
 import cats.effect.IO
-import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.NoSendActorRef
+import com.suprnation.actor.Actor.Actor
+// import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 
@@ -27,14 +27,8 @@ case class MultisigBossActor(peerId: PeerId)
             case _: Exception                => Escalate
         }
 
-    override def preStart: IO[Unit] =
-        for {
-            clockActor <- context.replyingActorOf(ClockActor.create(), "clock")
-            _ <- context.watch(clockActor, TerminatedClock(clockActor))
-        } yield ()
+    override def preStart: IO[Unit] = 
+        IO.pure(())
 
-    override def receive: Receive[IO,MultisigBossActorReq] =
-        PartialFunction.fromFunction({
-            case x: TerminatedClock => IO.println("Clock actor has terminated.")
-        })
+    // override def receive: Receive[IO,MultisigBossActorReq] =
 }

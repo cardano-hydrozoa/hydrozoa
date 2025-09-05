@@ -1,7 +1,7 @@
 package hydrozoa.multisig.actors.pure
 
 import cats.effect.{Deferred, IO}
-import com.suprnation.actor.ActorRef.NoSendActorRef
+// import com.suprnation.actor.ActorRef.NoSendActorRef
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
 
 import scala.concurrent.duration.FiniteDuration
@@ -229,24 +229,10 @@ case class SyncFollowerBossCommResp(
     eventIds: Map[PeerId, LedgerEventNum]
     ) extends CommBossActorResp
 
-/**
- * Request the current timestamp from the clock actor.
- * Guaranteed to be monotonically increasing with each request.
- */
-case object GetTime extends ClockActorReq
-
-/**
- * The current timestamp, provided by the clock actor in response to a synchronous request.
- * Guaranteed to be monotonically increasing with each request.
- */
-case class GetTimeResp(
-    time: FiniteDuration
-    ) extends ClockActorResp
-
 /** ==Multisig regime actor's messages== */
 
-/** Received by the multisig regime actor when its clock-actor child terminates. */
-case class TerminatedClock(actorRef: NoSendActorRef[IO]) extends MultisigBossActorReq
+// /** Received by the multisig regime actor when its clock-actor child terminates. */
+// case class TerminatedClock(actorRef: NoSendActorRef[IO]) extends MultisigBossActorReq
 
 /** ==Entity identifiers== */
 
