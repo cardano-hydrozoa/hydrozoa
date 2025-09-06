@@ -1,10 +1,10 @@
 package hydrozoa.multisig.persistence.pure
 
+import cats.implicits._
 import cats.effect.{IO, Ref}
-import cats.syntax.traverse.toTraverseOps
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, LedgerEventId, NewBlock, NewLedgerEvent, GetMsgBatch}
+import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, ConfirmBlock, GetMsgBatch, LedgerEventId, NewBlock, NewLedgerEvent, NewMsgBatch, PersistedReq}
 
 import scala.collection.immutable
 
@@ -35,24 +35,27 @@ final case class PersistenceActor()(
     ) extends ReplyingActor[IO, PersistenceReq, PersistenceResp]{
     override def receive: ReplyingReceive[IO, PersistenceReq, PersistenceResp] =
         PartialFunction.fromFunction({
-            case x: PutNewLedgerEvent =>
-                events.update(m => m + (x.id -> x.data)) >>
-                    IO.pure(PutSucceeded)
-            case x: PutNewBlock =>
-                blocks.update(m => m + (x.id -> x.data)) >>
-                    IO.pure(PutSucceeded)
-            case x: PutAckBlock =>
-                acks.update(m => m + (x.id -> x.data)) >>
-                    IO.pure(PutSucceeded)
-            case x: PutConfirmBlock =>
-                confirmedBlock.update(_ => Some(x.id)) >>
-                    IO.pure(PutSucceeded)
-            case x: PutCommBatch =>
-                batches.update(m => m + (x.id -> x.batch)) >>
-                    x.ack.traverse(y => acks.update(m => m + y)) >>
-                    x.block.traverse(y => blocks.update(m => m + y)) >>
-                    events.update(m => m ++ x.events) >>
-                    IO.pure(PutSucceeded)
+            case PutActorReq(data) =>
+                data match {
+                    case x: NewLedgerEvent =>
+                        events.update(m => m + (x.id -> x)) >>
+                            IO.pure(PutSucceeded)
+                    case x: NewBlock =>
+                        blocks.update(m => m + (x.id -> x)) >>
+                            IO.pure(PutSucceeded)
+                    case x: AckBlock =>
+                        acks.update(m => m + (x.id -> x)) >>
+                            IO.pure(PutSucceeded)
+                    case x: ConfirmBlock =>
+                        confirmedBlock.update(_ => Some(x.id)) >>
+                            IO.pure(PutSucceeded)
+                    case x: NewMsgBatch =>
+                        batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
+                            x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
+                            x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
+                            x.events.traverse_(y => events.update(m => m ++ y.map(y => y.id -> y))) >>
+                            IO.pure(PutSucceeded)
+                }
             case x: PutL1Effects => ???
             case x: PutCardanoHeadState => ???
             case x: GetBlockData => ???
@@ -75,47 +78,16 @@ sealed trait PersistenceResp extends PersistenceProtocol
 
 /** ==Put/write data into the persistence system== */
 
+final case class PutActorReq(
+    data: PersistedReq
+    ) extends PersistenceReq
+
 /** Generic response to all Put requests. */
 sealed trait PutResp extends PersistenceResp
 
 /** Successfully persisted the data. */
 case object PutSucceeded extends PersistenceResp
 //final case class PutFailed(reason: String) extends PersistenceResp
-
-/** Persist a locally created multi-ledger event. */
-final case class PutNewLedgerEvent(
-    id: LedgerEventId,
-    data: NewLedgerEvent
-    ) extends PersistenceReq
-
-/** Persist a new block produced by the local block actor. */
-final case class PutNewBlock(
-    id: BlockId,
-    data: NewBlock
-    ) extends PersistenceReq
-
-/** Persist a new block acknowledgment issued by the local block actor. */
-final case class PutAckBlock(
-    id: AckId,
-    data: AckBlock
-    ) extends PersistenceReq
-
-/** Persist the local block actor's determination that a block is confirmed (local-only signal). */
-final case class PutConfirmBlock(
-    id: BlockId,
-    ) extends PersistenceReq
-
-/**
- * Persist a communication batch received by a comm actor from its remote comm-actor counterpart,
- * atomically putting the batch's contents into the corresponding key-value maps.
- */
-final case class PutCommBatch (
-    id: BatchId,
-    batch: GetMsgBatch,
-    ack: Option[(AckId, AckBlock)],
-    block: Option[(BlockId, NewBlock)],
-    events: List[(LedgerEventId, NewLedgerEvent)]
-    ) extends PersistenceReq
 
 /** Persist L1 effects of L2 blocks */
 final case class PutL1Effects (

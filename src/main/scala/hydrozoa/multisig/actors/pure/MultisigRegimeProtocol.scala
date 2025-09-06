@@ -23,6 +23,9 @@ sealed trait MultisigRegimeManagerReq extends MultisigRegimeProtocol
 /** Requests received by actors in the multisig regime. */
 sealed trait MultisigRegimeActorReq extends MultisigRegimeProtocol
 
+/** Requests that must be persisted. */
+sealed trait PersistedReq extends MultisigRegimeProtocol
+
 /** Requests received by the block actor. */
 sealed trait BlockActorReq extends MultisigRegimeActorReq
 
@@ -48,7 +51,7 @@ final case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
     event: LedgerEvent
-    ) extends BlockActorReq, CommActorReq
+    ) extends BlockActorReq, CommActorReq, PersistedReq
 
 /**
  * The block actor announces a new block.
@@ -76,7 +79,7 @@ final case class NewBlock(
     ledgerEventsInvalid: List[LedgerEventId],
     ledgerCallbacksAccepted: List[LedgerCallbackId],
     ledgerCallbacksRejected: List[LedgerCallbackId]
-    ) extends BlockActorReq, CommActorReq
+    ) extends BlockActorReq, CommActorReq, PersistedReq
 
 /**
  * A peer's block actor announces its acknowledgement of an L2 block.
@@ -87,12 +90,12 @@ final case class NewBlock(
 final case class AckBlock(
     id: AckId,
     time: FiniteDuration
-    ) extends BlockActorReq, CommActorReq
+    ) extends BlockActorReq, CommActorReq, PersistedReq
 
 /** L2 block confirmations (local-only signal) */
 final case class ConfirmBlock(
     id: BlockId
-    ) extends CardanoEventActorReq, LedgerEventActorReq
+    ) extends CardanoEventActorReq, LedgerEventActorReq, PersistedReq
 
 /**
  * Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
@@ -103,7 +106,7 @@ final case class ConfirmBlock(
  * @param eventNum The requester's last seen event number from the remote peer.
  */
 final case class GetMsgBatch(
-    id: BatchNum,
+    id: BatchId,
     ackNum: AckNum,
     blockNum: BlockNum,
     eventNum: LedgerEventNum
@@ -113,16 +116,26 @@ final case class GetMsgBatch(
  * Comm actor provides a batch in response to its remote comm-actor counterpart's request.
  *
  * @param id       Batch number matching the one from the request.
- * @param ack      A block acknowledgment originating from the responder after the requested [[AckNum]].
- * @param block    A block originating from the responder after the requested [[BlockNum]].
- * @param events   A list of events originating from the responder after the requested [[LedgerEventNum]].
+ * @param ack      If provided, a block acknowledgment originating from the responder after the requested [[AckNum]].
+ *                 Otherwise, just the latest block acknowledgment number originating from the responder.
+ * @param block    If provided, a block originating from the responder after the requested [[BlockNum]].
+ *                 Otherwise, just the latest block number originating from the responder.
+ * @param events   If provided, a non-empty list of events originating from the responder after the requested
+ *                 [[LedgerEventNum]]. Otherwise, just the latest event number originating from the responder.
  */
 final case class NewMsgBatch(
-    id: BatchNum,
-    ack: Option[AckBlock],
-    block: Option[NewBlock],
-    events: Queue[NewLedgerEvent]
-    ) extends CommActorReq
+    id: BatchId,
+    ack: Either[AckNum, AckBlock],
+    block: Either[BlockNum, NewBlock],
+    events: Either[LedgerEventNum, Queue[NewLedgerEvent]]
+    ) extends CommActorReq, PersistedReq {
+    def nextGetMsgBatch = GetMsgBatch(
+        id,
+        ack.fold(identity, x => x.id._2),
+        block.fold(identity, x => x.id),
+        events.fold(identity, x => x.last.id._2)
+    )
+}
 
 /** ==Multisig regime manager's messages== */
 

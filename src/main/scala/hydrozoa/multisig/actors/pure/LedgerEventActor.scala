@@ -3,7 +3,7 @@ package hydrozoa.multisig.actors.pure
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.persistence.pure.PutNewLedgerEvent
+import hydrozoa.multisig.persistence.pure.PutActorReq
 
 /**
  * Event actor is the source of new L1 deposits and L2 transactions for the head.
@@ -73,7 +73,7 @@ final case class LedgerEventActor(config: LedgerEventActor.Config)(
                     t <- IO.monotonic
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, t, x.event)
-                    _ <- conn.persistence ? PutNewLedgerEvent(newId, newEvent)
+                    _ <- conn.persistence ? PutActorReq(newEvent)
                     _ <- conn.blockActor ! newEvent
                     _ <- (conn.commActors ! newEvent).parallel
                 } yield ()
