@@ -1,5 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.implicits._
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 
@@ -67,7 +68,7 @@ final case class CommActor(config: CommActor.Config)(
                     _ <- connections.set(CommActor.ConnectionsLive(bla, per, rca))
                 } yield ()
             case x: CommActor.ConnectionsLive =>
-                IO.pure(())
+                ().pure
         })
     
     override def receive: Receive[IO, CommActorReq] = PartialFunction.fromFunction(req =>
@@ -75,7 +76,7 @@ final case class CommActor(config: CommActor.Config)(
             case conn: CommActor.ConnectionsLive =>
                 this.receiveTotal(req, conn)
             case _ =>
-                IO.raiseError(Error("Impossible: Comm actor is receiving before its connections are live."))
+                Error("Impossible: Comm actor is receiving before its connections are live.").raiseError
         }))
 
     private def receiveTotal(req: CommActorReq, conn: CommActor.ConnectionsLive): IO[Unit] =

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.backend.cardano.pure
 
+import cats.implicits._
 import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 
@@ -11,7 +12,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
  */
 object CardanoBackend {
     def create(): IO[CardanoBackend] =
-        IO.pure(CardanoBackend())
+        CardanoBackend().pure
 }
 
 final case class CardanoBackend()

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.implicits._
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.actors.pure
@@ -16,7 +17,7 @@ object CardanoEventActor {
 
     object State {
         def create: IO[State] =
-            IO.pure(State())
+            State().pure
     }
     final case class State()
 
@@ -51,7 +52,7 @@ final case class CardanoEventActor(config: CardanoEventActor.Config) (
                     _ <- connections.set(CardanoEventActor.ConnectionsLive(cba, per))
                 } yield ()
             case x: CardanoEventActor.ConnectionsLive =>
-                IO.pure(())
+                ().pure
         })
     
     override def receive: Receive[IO, CardanoEventActorReq] =
@@ -60,7 +61,7 @@ final case class CardanoEventActor(config: CardanoEventActor.Config) (
                 case conn: pure.CardanoEventActor.ConnectionsLive =>
                     this.receiveTotal(req, conn)
                 case _ =>
-                    IO.raiseError(Error("Impossible: Cardano event actor is receiving before its connections are live."))
+                    Error("Impossible: Cardano event actor is receiving before its connections are live.").raiseError
             }))
 
     private def receiveTotal(req: CardanoEventActorReq, conn: pure.CardanoEventActor.ConnectionsLive): IO[Unit] =

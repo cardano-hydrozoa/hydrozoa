@@ -1,5 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.implicits._
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 
@@ -58,7 +59,7 @@ final case class BlockActor(config: BlockActor.Config)(
                     _ <- connections.set(BlockActor.ConnectionsLive(cea, cas, lea, per))
                 } yield ()
             case x: BlockActor.ConnectionsLive =>
-                IO.pure(())
+                ().pure
         })
         
     override def receive: Receive[IO, BlockActorReq] =
@@ -67,7 +68,7 @@ final case class BlockActor(config: BlockActor.Config)(
                 case conn: BlockActor.ConnectionsLive =>
                     this.receiveTotal(req, conn)
                 case _ =>
-                    IO.raiseError(Error("Impossible: Block actor is receiving before its connections are live."))
+                    Error("Impossible: Block actor is receiving before its connections are live.").raiseError
             }))
 
     private def receiveTotal(req: BlockActorReq, conn: BlockActor.ConnectionsLive): IO[Unit] =

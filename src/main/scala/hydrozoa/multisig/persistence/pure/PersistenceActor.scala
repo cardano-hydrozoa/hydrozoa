@@ -39,22 +39,22 @@ final case class PersistenceActor()(
                 data match {
                     case x: NewLedgerEvent =>
                         events.update(m => m + (x.id -> x)) >>
-                            IO.pure(PutSucceeded)
+                            PutSucceeded.pure
                     case x: NewBlock =>
                         blocks.update(m => m + (x.id -> x)) >>
-                            IO.pure(PutSucceeded)
+                            PutSucceeded.pure
                     case x: AckBlock =>
                         acks.update(m => m + (x.id -> x)) >>
-                            IO.pure(PutSucceeded)
+                            PutSucceeded.pure
                     case x: ConfirmBlock =>
                         confirmedBlock.update(_ => Some(x.id)) >>
-                            IO.pure(PutSucceeded)
+                            PutSucceeded.pure
                     case x: NewMsgBatch =>
                         batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
                             x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
                             x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
                             x.events.traverse_(y => events.update(m => m ++ y.map(y => y.id -> y))) >>
-                            IO.pure(PutSucceeded)
+                            PutSucceeded.pure
                 }
             case x: PutL1Effects => ???
             case x: PutCardanoHeadState => ???

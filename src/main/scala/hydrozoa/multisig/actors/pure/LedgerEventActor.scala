@@ -1,5 +1,6 @@
 package hydrozoa.multisig.actors.pure
 
+import cats.implicits._
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
@@ -53,7 +54,7 @@ final case class LedgerEventActor(config: LedgerEventActor.Config)(
                     _ <- connections.set(LedgerEventActor.ConnectionsLive(bla, cas, per))
                 } yield ()
             case x: LedgerEventActor.ConnectionsLive =>
-                IO.pure(())
+                ().pure
         })
     
     override def receive: Receive[IO, LedgerEventActorReq] =
@@ -62,7 +63,7 @@ final case class LedgerEventActor(config: LedgerEventActor.Config)(
                 case conn: LedgerEventActor.ConnectionsLive =>
                     this.receiveTotal(req, conn)
                 case _ =>
-                    IO.raiseError(Error("Impossible: Ledger event actor is receiving before its connections are live."))
+                    Error("Impossible: Ledger event actor is receiving before its connections are live.").raiseError
             }))
 
     private def receiveTotal(req: LedgerEventActorReq, conn: LedgerEventActor.ConnectionsLive): IO[Unit] =
