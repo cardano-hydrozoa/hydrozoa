@@ -1,8 +1,9 @@
 package hydrozoa.multisig.persistence.pure
 
-import cats.implicits._
+import cats.implicits.*
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.ReplyingReceive
+import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, ConfirmBlock, GetMsgBatch, LedgerEventId, NewBlock, NewLedgerEvent, NewMsgBatch, PersistedReq}
 
@@ -127,3 +128,5 @@ final case class GetConfirmedL1Effects (
 /** Response to [[GetConfirmedL1Effects]]. */
 final case class GetConfirmedL1EffectsResp(
     ) extends PersistenceResp
+
+type PersistenceActorRef = ActorRef[IO, PersistenceReq]

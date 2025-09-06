@@ -2,27 +2,15 @@ package hydrozoa.multisig.actors.pure
 
 import cats.*
 import cats.implicits.*
-//import cats.effect.syntax._
 import cats.effect.{Deferred, IO, Ref}
-
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
-
-import hydrozoa.multisig.backend.cardano.pure.CardanoBackendReq
-import hydrozoa.multisig.persistence.pure.PersistenceReq
+import hydrozoa.multisig.backend.cardano.pure.CardanoBackendRef
+import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
-
-type BlockActorRef = ActorRef[IO, BlockActorReq]
-type CardanoEventActorRef = ActorRef[IO, CardanoEventActorReq]
-type CommActorRef = ActorRef[IO, CommActorReq]
-type LedgerEventActorRef = ActorRef[IO, LedgerEventActorReq]
-
-type CardanoBackendRef = ActorRef[IO, CardanoBackendReq]
-type PersistenceRef = ActorRef[IO, PersistenceReq]
 
 /**
  * Multisig regime manager starts-up and monitors all the actors of the multisig regime.
@@ -31,7 +19,7 @@ object MultisigRegimeManager {
     def create(peerId: PeerId,
                peers: List[PeerId],
                cba: CardanoBackendRef,
-               per: PersistenceRef
+               per: PersistenceActorRef
               ): IO[MultisigRegimeManager] =
         for {
             cardanoBackend <- Ref[IO].of(cba)
@@ -41,7 +29,7 @@ object MultisigRegimeManager {
 
 final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
     private val cardanoBackend: Ref[IO, CardanoBackendRef],
-    private val persistence: Ref[IO, PersistenceRef]
+    private val persistence: Ref[IO, PersistenceActorRef]
     ) extends Actor[IO, MultisigRegimeManagerReq]{
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
@@ -53,47 +41,68 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
 
     override def preStart: IO[Unit] =
         for {
-            cba0 <- Deferred[IO, CardanoBackendRef]
-            per0 <- Deferred[IO, PersistenceRef]
-            bla0 <- Deferred[IO, BlockActorRef]
-            cas0 <- Deferred[IO, List[CommActorRef]]
-            cea0 <- Deferred[IO, CardanoEventActorRef]
-            lea0 <- Deferred[IO, LedgerEventActorRef]
+            pendingCardanoBackend <- Deferred[IO, CardanoBackendRef]
+            pendingPersistence <- Deferred[IO, PersistenceActorRef]
+            pendingBlockActor <- Deferred[IO, BlockActorRef]
+            pendingLocalCommActors <- Deferred[IO, List[CommActorRef]]
+            pendingCardanoEventActor <- Deferred[IO, CardanoEventActorRef]
+            pendingLedgerEventActor <- Deferred[IO, LedgerEventActorRef]
 
-            _ <- cardanoBackend.get.flatMap(cba0.complete)
-            _ <- persistence.get.flatMap(per0.complete)
+            _ <- cardanoBackend.get.flatMap(pendingCardanoBackend.complete)
+            _ <- persistence.get.flatMap(pendingPersistence.complete)
 
-            bla <- context.actorOf(BlockActor.create(
+            blockActor <- context.actorOf(BlockActor.create(
                 BlockActor.Config(peerId),
-                BlockActor.ConnectionsPending(cea0, cas0, lea0, per0)
+                BlockActor.ConnectionsPending(
+                    cardanoEventActor = pendingCardanoEventActor,
+                    commActors = pendingLocalCommActors,
+                    ledgerEventActor = pendingLedgerEventActor,
+                    persistence = pendingPersistence
+                )
             ))
-            cas <- peers.filterNot(_ == peerId).traverse(pid =>
+
+            localCommActorsPendingRemoteActors <- peers.filterNot(_ == peerId).traverse(pid =>
                 for {
-                    rca0 <- Deferred[IO, CommActorRef]
-                    ca <- context.actorOf(CommActor.create(
+                    pendingRemoteCommActor <- Deferred[IO, CommActorRef]
+                    localCommActor <- context.actorOf(CommActor.create(
                         CommActor.Config(peerId, pid),
-                        CommActor.ConnectionsPending(bla0, per0, rca0)
+                        CommActor.ConnectionsPending(
+                            blockActor = pendingBlockActor,
+                            persistence = pendingPersistence,
+                            remoteCommActor = pendingRemoteCommActor
+                        )
                     ))
-                } yield (ca, rca0)
+                } yield (localCommActor, pendingRemoteCommActor)
             )
-            cea <- context.actorOf(CardanoEventActor.create(
+
+            localCommActors = localCommActorsPendingRemoteActors.map(_._1)
+
+            cardanoEventActor <- context.actorOf(CardanoEventActor.create(
                 CardanoEventActor.Config(),
-                CardanoEventActor.ConnectionsPending(cba0, per0)
+                CardanoEventActor.ConnectionsPending(
+                    cardanoBackend = pendingCardanoBackend,
+                    persistence = pendingPersistence
+                )
             ))
-            lea <- context.actorOf(LedgerEventActor.create(
+
+            ledgerEventActor <- context.actorOf(LedgerEventActor.create(
                 LedgerEventActor.Config(peerId),
-                LedgerEventActor.ConnectionsPending(bla0, cas0, per0)
+                LedgerEventActor.ConnectionsPending(
+                    blockActor = pendingBlockActor,
+                    commActors = pendingLocalCommActors,
+                    persistence = pendingPersistence
+                )
             ))
-            
-            _ <- bla0.complete(bla)
-            _ <- cas0.complete(cas.map(_._1))
-            _ <- cea0.complete(cea)
-            _ <- lea0.complete(lea)
-            
-            _ <- context.watch(bla, TerminatedBlockActor(bla))
-            _ <- cas.traverse(r => context.watch(r._1, TerminatedCommActor(r._1)))
-            _ <- context.watch(cea, TerminatedCardanoEventActor(cea))
-            _ <- context.watch(lea, TerminatedLedgerEventActor(lea))
+
+            _ <- pendingBlockActor.complete(blockActor)
+            _ <- pendingLocalCommActors.complete(localCommActors)
+            _ <- pendingCardanoEventActor.complete(cardanoEventActor)
+            _ <- pendingLedgerEventActor.complete(ledgerEventActor)
+
+            _ <- context.watch(blockActor, TerminatedBlockActor(blockActor))
+            _ <- localCommActors.traverse(r => context.watch(r, TerminatedCommActor(r)))
+            _ <- context.watch(cardanoEventActor, TerminatedCardanoEventActor(cardanoEventActor))
+            _ <- context.watch(ledgerEventActor, TerminatedLedgerEventActor(ledgerEventActor))
 
             // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()

@@ -1,8 +1,9 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits._
+import cats.implicits.*
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 
 /**
  * Block actor:
@@ -22,56 +23,62 @@ object BlockActor {
     }
     final case class State(nBlock: Ref[IO, BlockNum])
 
-    sealed trait Connections
-    final case class ConnectionsLive(
-        cardanoEventActor: CardanoEventActorRef,
-        commActors: List[CommActorRef],
-        ledgerEventActor: LedgerEventActorRef,
-        persistence: PersistenceRef,
-        ) extends Connections
     final case class ConnectionsPending(
         cardanoEventActor: Deferred[IO, CardanoEventActorRef],
         commActors: Deferred[IO, List[CommActorRef]],
         ledgerEventActor: Deferred[IO, LedgerEventActorRef],
-        persistence: Deferred[IO, PersistenceRef],
-        ) extends Connections
+        persistence: Deferred[IO, PersistenceActorRef],
+    )
 
-    def create(config: Config, conn0: Connections): IO[BlockActor] = {
+    final case class Subscribers(
+        ackBlock: List[AckBlockSubscriber],
+        newBlock: List[NewBlockSubscriber],
+        confirmBlock: List[ConfirmBlockSubscriber],
+        persistence: PersistenceActorRef,
+    )
+
+    def create(config: Config, connections: ConnectionsPending): IO[BlockActor] = {
         for {
-            conn <- Ref.of[IO, Connections](conn0)
+            subscribers <- Ref.of[IO, Option[Subscribers]](None)
             state <- State.create
-        } yield BlockActor(config)(conn, state)
+        } yield BlockActor(config)(connections)(subscribers, state)
     }
 }
 
-final case class BlockActor(config: BlockActor.Config)(
-    private val connections: Ref[IO, BlockActor.Connections],
-    private val state: BlockActor.State
+// Not sure why this is needed, but otherwise Scala doesn't allow the companion object's nested classes
+// to be used directly in the case class, and it also wrongly says that Subscribers can be private.
+import BlockActor.{Config, State, ConnectionsPending, Subscribers}
+
+final case class BlockActor(config: Config)(
+    private val connections: ConnectionsPending
+    )(
+    private val subscribers: Ref[IO, Option[Subscribers]],
+    private val state: State
     ) extends Actor[IO, BlockActorReq]{
     override def preStart: IO[Unit] =
-        connections.get.flatMap({
-            case x: BlockActor.ConnectionsPending =>
-                for {
-                    cea <- x.cardanoEventActor.get
-                    cas <- x.commActors.get
-                    lea <- x.ledgerEventActor.get
-                    per <- x.persistence.get
-                    _ <- connections.set(BlockActor.ConnectionsLive(cea, cas, lea, per))
-                } yield ()
-            case x: BlockActor.ConnectionsLive =>
-                ().pure
-        })
+        for {
+            cardanoEventActor <- connections.cardanoEventActor.get
+            commActors <- connections.commActors.get
+            ledgerEventActor <- connections.ledgerEventActor.get
+            persistence <- connections.persistence.get
+            _ <- subscribers.set(Some(Subscribers(
+                ackBlock = commActors,
+                newBlock = commActors,
+                confirmBlock = List(cardanoEventActor, ledgerEventActor),
+                persistence = persistence
+            )))
+        } yield ()
         
     override def receive: Receive[IO, BlockActorReq] =
         PartialFunction.fromFunction(req =>
-            connections.get.flatMap({
-                case conn: BlockActor.ConnectionsLive =>
-                    this.receiveTotal(req, conn)
+            subscribers.get.flatMap({
+                case Some(subs) =>
+                    this.receiveTotal(req, subs)
                 case _ =>
                     Error("Impossible: Block actor is receiving before its connections are live.").raiseError
             }))
 
-    private def receiveTotal(req: BlockActorReq, conn: BlockActor.ConnectionsLive): IO[Unit] =
+    private def receiveTotal(req: BlockActorReq, subs: Subscribers): IO[Unit] =
         req match {
             case x: NewLedgerEvent =>
                 ???

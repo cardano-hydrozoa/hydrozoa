@@ -1,7 +1,7 @@
 package hydrozoa.multisig.actors.pure
 
 import cats.effect.IO
-import com.suprnation.actor.ActorRef.NoSendActorRef
+import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
 
 import scala.collection.immutable.Queue
@@ -175,3 +175,13 @@ enum BlockType:
     case BlockMinor
     case BlockMajor
     case BlockFinal
+
+type BlockActorRef = ActorRef[IO, BlockActorReq]
+type CommActorRef = ActorRef[IO, CommActorReq]
+type CardanoEventActorRef = ActorRef[IO, CardanoEventActorReq]
+type LedgerEventActorRef = ActorRef[IO, LedgerEventActorReq]
+
+type NewLedgerEventSubscriber = ActorRef[IO, NewLedgerEvent]
+type NewBlockSubscriber = ActorRef[IO, NewBlock]
+type AckBlockSubscriber = ActorRef[IO, AckBlock]
+type ConfirmBlockSubscriber = ActorRef[IO, ConfirmBlock]

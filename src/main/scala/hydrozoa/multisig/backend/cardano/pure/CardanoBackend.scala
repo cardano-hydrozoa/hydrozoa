@@ -1,8 +1,9 @@
 package hydrozoa.multisig.backend.cardano.pure
 
-import cats.implicits._
+import cats.implicits.*
 import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 
 /**
  * Cardano backend actor is a mock interface to the Cardano blockchain:
@@ -47,3 +48,4 @@ final case class GetCardanoHeadState(
 final case class GetCardanoHeadStateResp(
     ) extends CardanoBackendResp
 
+type CardanoBackendRef = ActorRef[IO, CardanoBackendReq]

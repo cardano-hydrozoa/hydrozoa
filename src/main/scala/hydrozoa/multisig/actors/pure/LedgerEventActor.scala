@@ -1,10 +1,11 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits._
+import cats.implicits.*
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.persistence.pure.PutActorReq
+import hydrozoa.multisig.persistence.pure.{PersistenceActorRef, PutActorReq}
 
 /**
  * Event actor is the source of new L1 deposits and L2 transactions for the head.
@@ -20,53 +21,56 @@ object LedgerEventActor {
     }
     final case class State(nBlock: Ref[IO, LedgerEventNum])
 
-    sealed trait Connections
-    final case class ConnectionsLive(
-        blockActor: BlockActorRef,
-        commActors: List[CommActorRef],
-        persistence: PersistenceRef,
-        ) extends Connections
+
     final case class ConnectionsPending(
         blockActor: Deferred[IO, BlockActorRef],
         commActors: Deferred[IO, List[CommActorRef]],
-        persistence: Deferred[IO, PersistenceRef],
-        ) extends Connections
+        persistence: Deferred[IO, PersistenceActorRef],
+        )
 
-    def create(config: Config, conn0: Connections): IO[LedgerEventActor] =
+    final case class Subscribers(
+        newLedgerEvent: List[NewLedgerEventSubscriber],
+        persistence: PersistenceActorRef,
+        )
+
+    def create(config: Config, connections: ConnectionsPending): IO[LedgerEventActor] =
         for {
-            conn <- Ref.of[IO, Connections](conn0)
+            subscribers <- Ref.of[IO, Option[Subscribers]](None)
             state <- State.create
-        } yield LedgerEventActor(config)(conn, state)
+        } yield LedgerEventActor(config)(connections)(subscribers, state)
 }
 
-final case class LedgerEventActor(config: LedgerEventActor.Config)(
-    private val connections: Ref[IO, LedgerEventActor.Connections],
-    private val state: LedgerEventActor.State
-    ) extends Actor[IO, LedgerEventActorReq]{
+// Not sure why this is needed, but otherwise Scala doesn't allow the companion object's nested classes
+// to be used directly in the case class, and it also wrongly says that Subscribers can be private.
+import LedgerEventActor.{Config, State, ConnectionsPending, Subscribers}
 
+final case class LedgerEventActor(config: Config)(
+    private val connections: ConnectionsPending
+    ) (
+    private val subscribers: Ref[IO, Option[Subscribers]],
+    private val state: State
+    ) extends Actor[IO, LedgerEventActorReq]{
     override def preStart: IO[Unit] =
-        connections.get.flatMap({
-            case x: LedgerEventActor.ConnectionsPending =>
-                for {
-                    bla <- x.blockActor.get
-                    cas <- x.commActors.get
-                    per <- x.persistence.get
-                    _ <- connections.set(LedgerEventActor.ConnectionsLive(bla, cas, per))
-                } yield ()
-            case x: LedgerEventActor.ConnectionsLive =>
-                ().pure
-        })
-    
+        for {
+            blockActor <- connections.blockActor.get
+            commActors <- connections.commActors.get
+            persistence <- connections.persistence.get
+            _ <- subscribers.set(Some(Subscribers(
+                newLedgerEvent = blockActor :: commActors,
+                persistence = persistence
+            )))
+        } yield ()
+
     override def receive: Receive[IO, LedgerEventActorReq] =
         PartialFunction.fromFunction(req =>
-            connections.get.flatMap({
-                case conn: LedgerEventActor.ConnectionsLive =>
-                    this.receiveTotal(req, conn)
+            subscribers.get.flatMap({
+                case Some(subs) =>
+                    this.receiveTotal(req, subs)
                 case _ =>
                     Error("Impossible: Ledger event actor is receiving before its connections are live.").raiseError
             }))
 
-    private def receiveTotal(req: LedgerEventActorReq, conn: LedgerEventActor.ConnectionsLive): IO[Unit] =
+    private def receiveTotal(req: LedgerEventActorReq, subs: Subscribers): IO[Unit] =
         req match {
             case x: SubmitLedgerEvent =>
                 for {
@@ -74,9 +78,8 @@ final case class LedgerEventActor(config: LedgerEventActor.Config)(
                     t <- IO.monotonic
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, t, x.event)
-                    _ <- conn.persistence ? PutActorReq(newEvent)
-                    _ <- conn.blockActor ! newEvent
-                    _ <- (conn.commActors ! newEvent).parallel
+                    _ <- subs.persistence ? PutActorReq(newEvent)
+                    _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>
                 ???
