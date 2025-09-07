@@ -1,9 +1,22 @@
-<p align="center">
-  <h1 align="center">Hydrozoa</h1>
-  <p align="center">State channel L2 for Cardano</p>
-</p>
+# Hydrozoa
 
-# Getting Started
+[![spec: hydrozoa.pdf](https://img.shields.io/badge/spec-hydrozoa.pdf-blue)](https://cardano-hydrozoa.github.io/hydrozoa/hydrozoa.pdf)
+[![code license: Apache-2.0](https://img.shields.io/badge/code%20license-Apache--2.0-seagreen)](https://www.apache.org/licenses/LICENSE-2.0)
+[![docs + spec license: CC BY-SA 4.0](https://img.shields.io/badge/docs%2Fspec%20license-CC%20BY--SA%204.0-seagreen)](https://creativecommons.org/licenses/by-sa/4.0/)
+
+The Hydrozoa project provides lightweight multi-party state channels for Cardano.
+
+> [!WARNING]
+> 
+> We are currently refactoring this repository from scratch to clean up before concluding the Hydrozoa Catalyst F12 project.
+>
+> Some of the instructions below in this README may not work, currently.
+>
+> You can follow our progress in this Github PR: [#192](https://github.com/cardano-hydrozoa/hydrozoa/pull/192)
+>
+> The snapshot of the project prior to the refactor is available here: [pre-george-refactor](https://github.com/cardano-hydrozoa/hydrozoa/tree/pre-george-refactor)
+
+## Getting Started
 
 Depending on your preferences, consider the following options:
 
@@ -16,21 +29,21 @@ Depending on your preferences, consider the following options:
 * Start hacking by picking up an issue =>
   goto [issues: help wanted](https://github.com/cardano-hydrozoa/hydrozoa/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22)
 
-# Developer's Guide
+## Developer's Guide
 
-## Prerequisites
+### Prerequisites
 
 You'll need Java JDK 21+, [scala-cli](https://scala-cli.virtuslab.org/) or [sbt](https://www.scala-sbt.org/)
 of proper versions.
 The preferred way is to use `Nix`. Install a fresh version of the Nix package manager
 and run `nix develop` to drill into a dev-shell with all the dependencies needed.
 
-## Setting up IntelliJ IDEA
+### Setting up IntelliJ IDEA
 
 `File` -> `New` -> `Project from Existing Sources` -> `select the project directory`
 -> `Import project from external model` -> `BSP` -> `Sbt`
 
-## Building with `sbt`
+### Building with `sbt`
 
 Run `sbt` to enter the sbt shell.
 
@@ -38,9 +51,9 @@ Run `compile` to compile the project.
 
 Run `test` to run the tests.
 
-## Running
+### Running
 
-### Private Network
+#### Private Network
 
 Currently, Hydrozoa works against a private network backed with
 [Yaci DevKit](https://github.com/bloxbean/yaci-devkit).
@@ -54,7 +67,7 @@ devkit start
 > start
 ```
 
-#### Resetting the local Cardano node
+##### Resetting the local Cardano node
 
 If you need to reset the local testnet, run this command (in the `devkit` shell):
 
@@ -62,7 +75,7 @@ If you need to reset the local testnet, run this command (in the `devkit` shell)
 reset
 ```
 
-### Running Hydrozoa Network
+#### Running Hydrozoa Network
 
 If you use IDEA, check out configurations in `.run` folder.
 
@@ -74,13 +87,13 @@ Otherwise:
     * Bob: `Bob 8094 9401`
     * Carol: `Carol 8095 9402`
 
-### Testing
+#### Testing
 
 In addition to unit tests in the main codebase, there is also `integration` project
 which contains several test suites, including a model-based test suite.
 For now, these test suites need to be updated, please refer to issue #111.
 
-## Note on terminology
+### Note on terminology
 
 In an attempt to minimise potential confusion coming from the use of the word "reference"
 as an identifier of a utxo and for a utxo that a transaction accesses in a read-only manner
