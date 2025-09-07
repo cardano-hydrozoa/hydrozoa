@@ -6,6 +6,16 @@
 
 The Hydrozoa project provides lightweight multi-party state channels for Cardano.
 
+> [!WARNING]
+> 
+> We are currently refactoring this repository from scratch to clean up before concluding the Hydrozoa Catalyst F12 project.
+>
+> Some of the instructions below in this README may not work, currently.
+>
+> You can follow our progress in this Github PR: [#192](https://github.com/cardano-hydrozoa/hydrozoa/pull/192)
+>
+> The snapshot of the project prior to the refactor is available here: [pre-george-refactor](https://github.com/cardano-hydrozoa/hydrozoa/tree/pre-george-refactor)
+
 ## Getting Started
 
 Depending on your preferences, consider the following options:
