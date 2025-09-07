@@ -1,14 +1,15 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits.*
-import cats.effect.{Deferred, IO, Ref}
-import com.suprnation.actor.Actor.{Actor, Receive}
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
 import hydrozoa.multisig.actors.pure
 import hydrozoa.multisig.backend.cardano.pure.CardanoBackendRef
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 
-// Not sure why this is needed, but otherwise Scala doesn't allow the companion object's nested classes
-// to be used directly in the case class, and it also wrongly says that Subscribers can be private.
 import CardanoEventActor.{Config, State, ConnectionsPending, Subscribers}
 
 final case class CardanoEventActor(config: Config)(

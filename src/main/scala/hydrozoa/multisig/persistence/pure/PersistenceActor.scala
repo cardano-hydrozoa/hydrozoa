@@ -1,11 +1,22 @@
 package hydrozoa.multisig.persistence.pure
 
-import cats.implicits.*
-import cats.effect.{IO, Ref}
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.actors.pure.{AckBlock, AckId, BatchId, BlockId, ConfirmBlock, GetMsgBatch, LedgerEventId, NewBlock, NewLedgerEvent, NewMsgBatch, PersistedReq}
+import hydrozoa.multisig.actors.pure.AckBlock
+import hydrozoa.multisig.actors.pure.AckId
+import hydrozoa.multisig.actors.pure.BatchId
+import hydrozoa.multisig.actors.pure.BlockId
+import hydrozoa.multisig.actors.pure.ConfirmBlock
+import hydrozoa.multisig.actors.pure.GetMsgBatch
+import hydrozoa.multisig.actors.pure.LedgerEventId
+import hydrozoa.multisig.actors.pure.NewBlock
+import hydrozoa.multisig.actors.pure.NewLedgerEvent
+import hydrozoa.multisig.actors.pure.NewMsgBatch
+import hydrozoa.multisig.actors.pure.PersistedReq
 
 import scala.collection.immutable
 

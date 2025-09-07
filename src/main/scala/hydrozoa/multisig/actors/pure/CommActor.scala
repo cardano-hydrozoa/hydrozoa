@@ -1,15 +1,17 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits.*
-import cats.effect.{Deferred, IO, Ref}
-import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.multisig.persistence.pure.{PersistenceActorRef, PutActorReq}
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
+import hydrozoa.multisig.persistence.pure.PersistenceActorRef
+import hydrozoa.multisig.persistence.pure.PutActorReq
 
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 
-// Not sure why this is needed, but otherwise Scala doesn't allow the companion object's nested classes
-// to be used directly in the case class, and it also wrongly says that Subscribers can be private.
 import CommActor.{Config, State, ConnectionsPending, Subscribers}
 
 final case class CommActor(config: Config)(
@@ -118,9 +120,9 @@ object CommActor {
     object State {
         def create: IO[State] =
             for {
-                nAck <- Ref.of[IO, AckNum](0)
-                nBlock <- Ref.of[IO, BlockNum](0)
-                nEvent <- Ref.of[IO, LedgerEventNum](0)
+                nAck <- Ref.of[IO, AckNum](AckNum(0))
+                nBlock <- Ref.of[IO, BlockNum](BlockNum(0))
+                nEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
                 qAck <- Ref.of[IO, Queue[AckBlock]](Queue())
                 qBlock <- Ref.of[IO, Queue[NewBlock]](Queue())
                 qEvent <- Ref.of[IO, Queue[NewLedgerEvent]](Queue())
@@ -158,17 +160,17 @@ object CommActor {
           x match {
             case y: NewLedgerEvent =>
               for {
-                _ <- this.nEvent.update(_ + 1)
+                _ <- this.nEvent.update(_.increment)
                 _ <- this.qEvent.update(_ :+ y)
               } yield ()
             case y: AckBlock =>
               for {
-                _ <- this.nAck.update(_ + 1)
+                _ <- this.nAck.update(_.increment)
                 _ <- this.qAck.update(_ :+ y)
               } yield ()
             case y: NewBlock =>
               for {
-                _ <- this.nBlock.update(_ + 1)
+                _ <- this.nBlock.update(_.increment)
                 _ <- this.qBlock.update(_ :+ y)
               } yield ()
           }
@@ -196,15 +198,15 @@ object CommActor {
                 newBatch <- x match {
                     case y: NewLedgerEvent =>
                         for {
-                            nEventsNew <- this.nEvent.updateAndGet(_ + 1)
+                            nEventsNew <- this.nEvent.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
                     case y: AckBlock =>
                         for {
-                          nAckNew <- this.nAck.updateAndGet(_ + 1)
+                          nAckNew <- this.nAck.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAckNew, nBlock, nEvents, Some(y), None, List())
                     case y: NewBlock =>
                         for {
-                          nBlockNew <- this.nBlock.updateAndGet(_ + 1)
+                          nBlockNew <- this.nBlock.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAck, nBlockNew, nEvents, None, Some(y), List())
                         }
             } yield newBatch

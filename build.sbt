@@ -93,7 +93,7 @@ ThisBuild / scalacOptions ++= Seq(
   //"-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
-  //"-Wunused:all",
+  "-Wunused:all",
   "-Wall"
 )
 
@@ -113,7 +113,7 @@ addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("munit.Framework")
 val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
-val bloxbeanVersion = "0.7.0-beta3-SNAPSHOT"
+val bloxbeanVersion = "0.7.0-beta4-SNAPSHOT"
 
 inThisBuild(
   List(

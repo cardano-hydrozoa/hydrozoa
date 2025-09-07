@@ -1,12 +1,15 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits.*
-import cats.effect.{Deferred, IO, Ref}
-import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
+import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEventOutcome
-import hydrozoa.multisig.persistence.pure.{PersistenceActorRef, PutActorReq}
+import hydrozoa.multisig.persistence.pure.PersistenceActorRef
+import hydrozoa.multisig.persistence.pure.PutActorReq
 
 import scala.collection.immutable.Queue
 
@@ -44,7 +47,7 @@ final case class LedgerEventActor(config: Config)(
         req match {
             case x: SubmitLedgerEvent =>
                 for {
-                    newNum <- state.nLedgerEvent.updateAndGet(x => x + 1)
+                    newNum <- state.nLedgerEvent.updateAndGet(x => x.increment)
                     t <- IO.monotonic
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, t, x.event)
@@ -84,7 +87,7 @@ object LedgerEventActor {
     object State {
         def create: IO[State] =
             for {
-                nLedgerEvent <- Ref.of[IO, LedgerEventNum](0)
+                nLedgerEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
                 localRequests <- Ref.of[IO, Queue[(LedgerEventNum, Deferred[IO, LedgerEventOutcome])]](Queue())
             } yield State(
                 nLedgerEvent = nLedgerEvent,

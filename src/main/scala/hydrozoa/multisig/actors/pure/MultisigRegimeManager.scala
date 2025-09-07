@@ -1,11 +1,15 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.*
-import cats.implicits.*
-import cats.effect.{Deferred, IO, Ref}
-import com.suprnation.actor.Actor.{Actor, Receive}
+import cats._
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
+import com.suprnation.actor.OneForOneStrategy
+import com.suprnation.actor.SupervisionStrategy
 import com.suprnation.actor.SupervisorStrategy.Escalate
-import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.backend.cardano.pure.CardanoBackendRef
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 
