@@ -51,7 +51,11 @@ lazy val core = (project in file("."))
         "io.prometheus" % "prometheus-metrics-instrumentation-jvm" % "1.3.6",
         "io.prometheus" % "prometheus-metrics-exporter-httpserver" % "1.3.6",
         "io.bullet" %% "borer-core" % "1.12.0",
-        "io.bullet" %% "borer-derivation" % "1.12.0"
+        "io.bullet" %% "borer-derivation" % "1.12.0",
+        // cats
+        "org.typelevel" %% "cats-core" % "2.13.0",
+        "org.typelevel" %% "cats-effect" % "2.5.3" withSources() withJavadoc(),
+        "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.1.0" % Test,

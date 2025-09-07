@@ -14,8 +14,8 @@ import io.bullet.borer.Cbor
 import ox.channels.ActorRef
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
+import sttp.tapir.generic.auto.*
 import sttp.tapir.{Schema, SchemaType}
-import sttp.tapir.generic.auto._
 
 // FIXME: revise return types?
 trait HeadPeerNetwork {
@@ -47,13 +47,23 @@ trait HeadPeerNetwork {
   * ------------------------------------------------------------------------------------------
   */
 
-sealed trait Msg
+/** Broadcast messages from miniprotocol actors to their counterparts at other peers */
+sealed trait ProtocolMsg
 
-sealed trait Req extends Msg:
+sealed trait Req extends ProtocolMsg:
     type ackType <: Ack
     type resultType
 
-sealed trait Ack extends Msg
+sealed trait Ack extends ProtocolMsg
+
+given msgCodec: JsonValueCodec[ProtocolMsg] = JsonCodecMaker.make
+given Schema[ProtocolMsg] = Schema.derived[ProtocolMsg]
+
+given reqCodec: JsonValueCodec[Req] = JsonCodecMaker.make
+given Schema[Req] = Schema.derived[Req]
+
+given ackCodec: JsonValueCodec[Ack] = JsonCodecMaker.make
+given Schema[Ack] = Schema.derived[Ack]
 
 /** ------------------------------------------------------------------------------------------
   * ReqVerKey
@@ -196,7 +206,7 @@ given addressBechL2Schema: Schema[AddressL2] =
   * ------------------------------------------------------------------------------------------
   */
 
-private case class AckUnit() extends Ack
+case class AckUnit() extends Ack
 
 object AckUnit extends AckUnit
 

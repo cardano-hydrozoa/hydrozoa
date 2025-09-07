@@ -166,7 +166,7 @@ enum AnyMsg:
         case AckDeinitMsg(content, aux)      => Some(aux.replyTo, aux.replyToSeq, content)
         case _                               => None
 
-    def asMsg: Msg = this match
+    def asMsg: ProtocolMsg = this match
         case ReqVerKeyMsg(content, _)      => content
         case AckVerKeyMsg(content, _)      => content
         case ReqInitMsg(content, _)        => content
@@ -322,6 +322,7 @@ class HeadPeerNetworkTransportWS(
                 .drain()
                 .merge(outgoingFlow)
 
+    // "Client" component
     def wsConsensusClient()(ws: SyncWebSocket): Unit =
         supervised:
             val (wsSource, wsSink) = asSourceAndSink(ws)
@@ -354,8 +355,6 @@ class HeadPeerNetworkTransportWS(
                     }
                     case Missing =>
             }
-
-    // "Client" component
 
     // Creates a new channel and returns a flow from it
     private def mkOutgoingFlowCopy(): Flow[AnyMsg] =

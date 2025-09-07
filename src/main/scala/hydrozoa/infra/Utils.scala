@@ -77,6 +77,20 @@ implicit class Piper[A](val x: A) extends AnyVal {
     def |>[B](f: A => B): B = f(x)
 }
 
+// How do we do that canonically?
+object LongCompare:
+    sealed trait Result
+    case object LT extends Result
+    case object EQ extends Result
+    case object GT extends Result
+
+    extension (a: Long)
+        infix def ?(b: Long): Result =
+            val c = java.lang.Long.compare(a, b)
+            if c < 0 then LT
+            else if c == 0 then EQ
+            else GT
+
 // PS-style pair constructor
 implicit final class PSStyleAssoc[A](private val self: A) extends AnyVal {
     @inline def /\[B](y: B): (A, B) = (self, y)
