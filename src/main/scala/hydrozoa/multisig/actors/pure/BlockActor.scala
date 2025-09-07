@@ -85,7 +85,7 @@ object BlockActor {
     object State {
         def create: IO[State] =
             for {
-                nBlock <- Ref.of[IO, BlockNum](0)
+                nBlock <- Ref.of[IO, BlockNum](BlockNum(0))
             } yield State(
                 nBlock = nBlock
             )

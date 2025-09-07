@@ -44,7 +44,7 @@ final case class LedgerEventActor(config: Config)(
         req match {
             case x: SubmitLedgerEvent =>
                 for {
-                    newNum <- state.nLedgerEvent.updateAndGet(x => x + 1)
+                    newNum <- state.nLedgerEvent.updateAndGet(x => x.increment)
                     t <- IO.monotonic
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, t, x.event)
@@ -84,7 +84,7 @@ object LedgerEventActor {
     object State {
         def create: IO[State] =
             for {
-                nLedgerEvent <- Ref.of[IO, LedgerEventNum](0)
+                nLedgerEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
                 localRequests <- Ref.of[IO, Queue[(LedgerEventNum, Deferred[IO, LedgerEventOutcome])]](Queue())
             } yield State(
                 nLedgerEvent = nLedgerEvent,
