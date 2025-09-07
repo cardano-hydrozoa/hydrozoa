@@ -1,12 +1,15 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.implicits.*
-import cats.effect.{Deferred, IO, Ref}
-import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import cats.effect.Deferred
+import cats.effect.IO
+import cats.effect.Ref
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
+import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
 import hydrozoa.multisig.ledger.multi.trivial.LedgerEventOutcome
-import hydrozoa.multisig.persistence.pure.{PersistenceActorRef, PutActorReq}
+import hydrozoa.multisig.persistence.pure.PersistenceActorRef
+import hydrozoa.multisig.persistence.pure.PutActorReq
 
 import scala.collection.immutable.Queue
 

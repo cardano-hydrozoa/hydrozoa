@@ -93,7 +93,7 @@ ThisBuild / scalacOptions ++= Seq(
   //"-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
-  //"-Wunused:all",
+  "-Wunused:all",
   "-Wall"
 )
 

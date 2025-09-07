@@ -1,8 +1,9 @@
 package hydrozoa.multisig.backend.cardano.pure
 
-import cats.implicits.*
 import cats.effect.IO
-import com.suprnation.actor.Actor.{Actor, Receive}
+import cats.implicits._
+import com.suprnation.actor.Actor.Actor
+import com.suprnation.actor.Actor.Receive
 import com.suprnation.actor.ActorRef.ActorRef
 
 /**

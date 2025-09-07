@@ -1,11 +1,11 @@
 package hydrozoa.multisig.actors.pure
+import cats.effect.Deferred
+import cats.effect.IO
+import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.actor.ActorRef.NoSendActorRef
+import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
+import hydrozoa.multisig.ledger.multi.trivial.LedgerEventOutcome
 
-import cats.data.NonEmptyList
-import cats.effect.{Deferred, IO}
-import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
-import hydrozoa.multisig.ledger.multi.trivial.{LedgerEvent, LedgerEventOutcome}
-
-import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 
 /** =Multisig regime protocol= */

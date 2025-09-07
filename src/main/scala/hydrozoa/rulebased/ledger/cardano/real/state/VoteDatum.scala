@@ -1,8 +1,12 @@
 package hydrozoa.rulebased.ledger.cardano.real.state
 
-import scalus.*
-import scalus.builtin.Data.{FromData, ToData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus._
+import scalus.builtin.ByteString
+import scalus.builtin.Data
+import scalus.builtin.Data.FromData
+import scalus.builtin.Data.ToData
+import scalus.builtin.FromData
+import scalus.builtin.ToData
 import scalus.prelude.Option
 
 case class VoteDatum (

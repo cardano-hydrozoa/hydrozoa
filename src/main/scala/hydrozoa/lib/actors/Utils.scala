@@ -1,8 +1,8 @@
 package hydrozoa.lib.actors
 
-import cats.*
+import cats._
 import cats.effect.Ref
-import cats.syntax.all.*
+import cats.syntax.all._
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
@@ -35,7 +35,7 @@ object Utils {
      * @tparam Request
      * @return
      */
-   def gask[F[+_] : Monad, Request, Response](ref: Ref[F, Option[ReplyingActorRef[F, Request, Response]]], msg: Request): F[Option[Response]] =
+    def gask[F[+_] : Monad, Request, Response](ref: Ref[F, Option[ReplyingActorRef[F, Request, Response]]], msg: Request): F[Option[Response]] =
         for {
             mbActor <- ref.get
             mbMsg <- mbActor match {
