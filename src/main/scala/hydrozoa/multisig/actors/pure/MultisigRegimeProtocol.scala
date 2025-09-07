@@ -41,6 +41,9 @@ sealed trait LedgerEventActorReq extends MultisigRegimeActorReq
 
 /** ==Async requests== */
 
+/** Requests that comm actors should collectively rebroadcast to the other head peers via [[NewMsgBatch]]. */
+sealed trait RemoteBroadcastReq extends CommActorReq
+
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
 final case class SubmitLedgerEvent(
     event: LedgerEvent,
@@ -61,7 +64,7 @@ final case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
     event: LedgerEvent
-    ) extends BlockActorReq, CommActorReq, PersistedReq
+    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
 
 /**
  * The block actor announces a new block.
@@ -89,7 +92,7 @@ final case class NewBlock(
     ledgerEventsInvalid: List[LedgerEventId],
     ledgerCallbacksAccepted: List[LedgerCallbackId],
     ledgerCallbacksRejected: List[LedgerCallbackId]
-    ) extends BlockActorReq, CommActorReq, PersistedReq
+    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
 
 /**
  * A peer's block actor announces its acknowledgement of an L2 block.
@@ -100,7 +103,7 @@ final case class NewBlock(
 final case class AckBlock(
     id: AckId,
     time: FiniteDuration
-    ) extends BlockActorReq, CommActorReq, PersistedReq
+    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
 
 /** L2 block confirmations (local-only signal) */
 final case class ConfirmBlock(

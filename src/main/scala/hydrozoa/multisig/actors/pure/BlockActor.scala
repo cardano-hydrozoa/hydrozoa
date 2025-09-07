@@ -35,7 +35,7 @@ final case class BlockActor(config: Config)(
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
-                    Error("Impossible: Block actor is receiving before its connections are live.").raiseError
+                    Error("Impossible: Block actor is receiving before its preStart provided subscribers.").raiseError
             }))
 
     private def receiveTotal(req: BlockActorReq, subs: Subscribers): IO[Unit] =

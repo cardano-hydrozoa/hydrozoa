@@ -37,7 +37,7 @@ final case class LedgerEventActor(config: Config)(
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
-                    Error("Impossible: Ledger event actor is receiving before its connections are live.").raiseError
+                    Error("Impossible: Ledger event actor is receiving before its preStart provided subscribers.").raiseError
             }))
 
     private def receiveTotal(req: LedgerEventActorReq, subs: Subscribers): IO[Unit] =

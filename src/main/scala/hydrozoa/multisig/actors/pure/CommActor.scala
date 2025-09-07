@@ -39,17 +39,24 @@ final case class CommActor(config: Config)(
             case Some(subs) =>
                 this.receiveTotal(req, subs)
             case _ =>
-                IO.raiseError(Error("Impossible: Comm actor is receiving before its connections are live."))
+                IO.raiseError(Error("Impossible: Comm actor is receiving before its preStart provided subscribers."))
         }))
 
     private def receiveTotal(req: CommActorReq, subs: Subscribers): IO[Unit] =
         req match {
-            case x: NewLedgerEvent =>
-                state.:+(x)
-            case x: NewBlock =>
-                state.:+(x)
-            case x: AckBlock =>
-                state.:+(x)
+            case x: RemoteBroadcastReq =>
+                for {
+                    // Check whether the next batch must be sent immediately, and then turn off the flag regardless.
+                    mBatchId <- state.dischargeSendNextBatchImmediately
+                    _ <- mBatchId match {
+                        case None =>
+                            // Queue up the message for a future message batch
+                            state.:+(x)
+                        case Some(batchId) =>
+                            // Immediately send a batch containing only this message
+                            state.immediateNewMsgBatch(batchId, x).flatMap(subs.remoteCommActor ! _)
+                    }
+                } yield ()
             case x: GetMsgBatch =>
                 for {
                     eNewBatch <- state.extractNewMsgBatch(x, config.maxLedgerEventsPerBatch)
@@ -57,7 +64,7 @@ final case class CommActor(config: Config)(
                         case Right(newBatch) =>
                             subs.remoteCommActor ! newBatch
                         case Left(state.EmptyNewMsgBatch) =>
-                            state.sendNextBatchImmediatelyUponNewMsg()
+                            state.sendNextBatchImmediatelyUponNewMsg(x.id)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
                             IO.raiseError(Error("Incorrect bounds in GetMsgBatch."))
                     }
@@ -111,16 +118,14 @@ object CommActor {
     object State {
         def create: IO[State] =
             for {
-                nBatch <- Ref.of[IO, BatchNum](0)
                 nAck <- Ref.of[IO, AckNum](0)
                 nBlock <- Ref.of[IO, BlockNum](0)
                 nEvent <- Ref.of[IO, LedgerEventNum](0)
                 qAck <- Ref.of[IO, Queue[AckBlock]](Queue())
                 qBlock <- Ref.of[IO, Queue[NewBlock]](Queue())
                 qEvent <- Ref.of[IO, Queue[NewLedgerEvent]](Queue())
-                sendBatchImmediately <- Ref.of[IO, Boolean](false)
+                sendBatchImmediately <- Ref.of[IO, Option[BatchId]](None)
             } yield State(
-                nBatch = nBatch,
                 nAck = nAck,
                 nBlock = nBlock,
                 nEvent = nEvent,
@@ -132,17 +137,16 @@ object CommActor {
     }
 
     final case class State(
-        private val nBatch: Ref[IO, BatchNum],
         private val nAck: Ref[IO, AckNum],
         private val nBlock: Ref[IO, BlockNum],
         private val nEvent: Ref[IO, LedgerEventNum],
         private val qAck: Ref[IO, Queue[AckBlock]],
         private val qBlock: Ref[IO, Queue[NewBlock]],
         private val qEvent: Ref[IO, Queue[NewLedgerEvent]],
-        private val sendBatchImmediately: Ref[IO, Boolean],
+        private val sendBatchImmediately: Ref[IO, Option[BatchId]],
         ) {
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
-        private def areEmptyQueues(): IO[Boolean] =
+        private def areEmptyQueues: IO[Boolean] =
             for {
                 ack <- this.qAck.get.map(_.isEmpty)
                 block <- this.qBlock.get.map(_.isEmpty)
@@ -150,33 +154,60 @@ object CommActor {
             } yield ack && block && event
 
         @targetName("append")
-        infix def :+(x: AckBlock): IO[Unit] =
-            for {
-                _ <- this.nAck.update(_ + 1)
-                _ <- this.qAck.update(_ :+ x)
-            } yield ()
-
-        infix def :+(x: NewBlock): IO[Unit] =
-            for {
-                _ <- this.nBlock.update(_ + 1)
-                _ <- this.qBlock.update(_ :+ x)
-            } yield ()
-
-        infix def :+(x: NewLedgerEvent): IO[Unit] =
-            for {
+        infix def :+(x: RemoteBroadcastReq): IO[Unit] =
+          x match {
+            case y: NewLedgerEvent =>
+              for {
                 _ <- this.nEvent.update(_ + 1)
-                _ <- this.qEvent.update(_ :+ x)
-            } yield ()
+                _ <- this.qEvent.update(_ :+ y)
+              } yield ()
+            case y: AckBlock =>
+              for {
+                _ <- this.nAck.update(_ + 1)
+                _ <- this.qAck.update(_ :+ y)
+              } yield ()
+            case y: NewBlock =>
+              for {
+                _ <- this.nBlock.update(_ + 1)
+                _ <- this.qBlock.update(_ :+ y)
+              } yield ()
+          }
 
-        sealed trait ErrorNewMsgBatch extends Throwable
-        case object EmptyNewMsgBatch extends ErrorNewMsgBatch
-        case object OutOfBoundsGetMsgBatch extends ErrorNewMsgBatch
+        /** Make sure a batch is sent to the counterparty as soon as another local ack/block/event arrives. */
+        def sendNextBatchImmediatelyUponNewMsg(batchId: BatchId): IO[Unit] =
+            this.sendBatchImmediately.set(Some(batchId))
 
-        def sendNextBatchImmediatelyUponNewMsg(): IO[Unit] =
-            this.sendBatchImmediately.set(true)
+        /** Check whether a new batch must be immediately sent, deactivating the flag in the process. */
+        def dischargeSendNextBatchImmediately: IO[Option[BatchId]] =
+            this.sendBatchImmediately.getAndSet(None)
 
-        def deactivateSendBatchImmediately(): IO[Unit] =
-            this.sendBatchImmediately.set(false)
+        sealed trait ExtractNewMsgBatchError extends Throwable
+        case object EmptyNewMsgBatch extends ExtractNewMsgBatchError
+        case object OutOfBoundsGetMsgBatch extends ExtractNewMsgBatchError
+
+        /** Given a locally-sourced ack, block, or event that just arrived, assuming that the next message batch
+         *  must be sent immediately, construct that [[NewMsgBatch]]. The state's queues message queues must be
+         *  empty, and the corresponding counter is incremented depending on the arrived message's type. */
+        def immediateNewMsgBatch(batchId: BatchId, x: RemoteBroadcastReq): IO[NewMsgBatch] =
+            for {
+                nAck <- this.nAck.get
+                nBlock <- this.nBlock.get
+                nEvents <- this.nEvent.get
+                newBatch <- x match {
+                    case y: NewLedgerEvent =>
+                        for {
+                            nEventsNew <- this.nEvent.updateAndGet(_ + 1)
+                        } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
+                    case y: AckBlock =>
+                        for {
+                          nAckNew <- this.nAck.updateAndGet(_ + 1)
+                        } yield NewMsgBatch(batchId, nAckNew, nBlock, nEvents, Some(y), None, List())
+                    case y: NewBlock =>
+                        for {
+                          nBlockNew <- this.nBlock.updateAndGet(_ + 1)
+                        } yield NewMsgBatch(batchId, nAck, nBlockNew, nEvents, None, Some(y), List())
+                        }
+            } yield newBatch
 
         /** Construct a [[NewMsgBatch]] containing acks, blocks, and events starting '''after''' the numbers indicated
          * in a [[GetMsgBatch]] request, up to the configured limits. The state is modified to keep only acks, blocks,
@@ -185,7 +216,11 @@ object CommActor {
          * @param batchReq  the [[GetMsgBatch]] request
          * @param maxEvents the maximum number of ledger events to include in the [[NewMsgBatch]].
          */
-        def extractNewMsgBatch(batchReq: GetMsgBatch, maxEvents: maxEvents): IO[Either[ErrorNewMsgBatch, NewMsgBatch]] =
+        // TODO: if the [[GetMsgBatch]] bounds are lower than the queued messages, then the comm actor will need to
+        // query the database to properly respond. Currently, we just respond as if no messages are available to send.
+        def extractNewMsgBatch(batchReq: GetMsgBatch,
+                               maxEvents: maxEvents
+                              ): IO[Either[ExtractNewMsgBatchError, NewMsgBatch]] =
             (for {
                 nAck <- this.nAck.get
                 nBlock <- this.nBlock.get
@@ -197,7 +232,7 @@ object CommActor {
                         IO.pure(())
                     }
 
-                _ <- this.areEmptyQueues().ifM(IO.raiseError(EmptyNewMsgBatch), IO.pure(()))
+                _ <- this.areEmptyQueues.ifM(IO.raiseError(EmptyNewMsgBatch), IO.pure(()))
 
                 mAck <- this.qAck.modify(q =>
                     val dropped = q.dropWhile(_.id._2 <= batchReq.ackNum)

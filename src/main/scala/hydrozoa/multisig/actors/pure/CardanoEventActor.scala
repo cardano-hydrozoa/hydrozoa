@@ -33,7 +33,7 @@ final case class CardanoEventActor(config: Config)(
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
-                    Error("Impossible: Cardano event actor is receiving before its connections are live.").raiseError
+                    Error("Impossible: Cardano event actor is receiving before its preStart provided subscribers.").raiseError
             }))
 
     private def receiveTotal(req: CardanoEventActorReq, subs: Subscribers): IO[Unit] =
