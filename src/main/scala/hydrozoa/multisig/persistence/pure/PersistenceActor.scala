@@ -54,7 +54,7 @@ final case class PersistenceActor()(
                         batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
                             x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
                             x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
-                            x.events.traverse_(y => events.update(m => m ++ y.map(y => y.id -> y))) >>
+                            events.update(m => m ++ x.events.map(y => y.id -> y)) >>
                             PutSucceeded.pure
                 }
             case x: PutL1Effects => ???

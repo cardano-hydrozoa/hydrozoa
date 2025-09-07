@@ -1,8 +1,9 @@
 package hydrozoa.multisig.actors.pure
 
-import cats.effect.IO
+import cats.data.NonEmptyList
+import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
-import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
+import hydrozoa.multisig.ledger.multi.trivial.{LedgerEvent, LedgerEventOutcome}
 
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -42,8 +43,17 @@ sealed trait LedgerEventActorReq extends MultisigRegimeActorReq
 
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
 final case class SubmitLedgerEvent(
-    event: LedgerEvent
+    event: LedgerEvent,
+    eventOutcome: Deferred[IO, LedgerEventOutcome]
     ) extends LedgerEventActorReq
+
+/** Convenience method to create a SubmitLedgerEvent from a LedgerEvent. */
+object SubmitLedgerEvent {
+    def create(event: LedgerEvent): IO[SubmitLedgerEvent] =
+        for {
+            eventOutcome <- Deferred[IO, LedgerEventOutcome]
+        } yield SubmitLedgerEvent(event, eventOutcome)
+}
 
 /**
  * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a LedgerEventId. */
@@ -116,24 +126,28 @@ final case class GetMsgBatch(
  * Comm actor provides a batch in response to its remote comm-actor counterpart's request.
  *
  * @param id       Batch number matching the one from the request.
+ * @param ackNum   The latest acknowledgement number originating from the responder.
+ * @param blockNum The latest block number originating from the responder.
+ * @param eventNum The latest event number originating from the responder.
  * @param ack      If provided, a block acknowledgment originating from the responder after the requested [[AckNum]].
- *                 Otherwise, just the latest block acknowledgment number originating from the responder.
  * @param block    If provided, a block originating from the responder after the requested [[BlockNum]].
- *                 Otherwise, just the latest block number originating from the responder.
- * @param events   If provided, a non-empty list of events originating from the responder after the requested
- *                 [[LedgerEventNum]]. Otherwise, just the latest event number originating from the responder.
+ * @param events   A possibly empty list of events originating from the responder after the requested
+ *                 [[LedgerEventNum]].
  */
 final case class NewMsgBatch(
     id: BatchId,
-    ack: Either[AckNum, AckBlock],
-    block: Either[BlockNum, NewBlock],
-    events: Either[LedgerEventNum, Queue[NewLedgerEvent]]
+    ackNum: AckNum,
+    blockNum: BlockNum,
+    eventNum: LedgerEventNum,
+    ack: Option[AckBlock],
+    block: Option[NewBlock],
+    events: List[NewLedgerEvent]
     ) extends CommActorReq, PersistedReq {
     def nextGetMsgBatch = GetMsgBatch(
         id,
-        ack.fold(identity, x => x.id._2),
-        block.fold(identity, x => x.id),
-        events.fold(identity, x => x.last.id._2)
+        ackNum,
+        blockNum,
+        eventNum
     )
 }
 
