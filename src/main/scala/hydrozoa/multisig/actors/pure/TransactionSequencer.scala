@@ -7,7 +7,6 @@ import cats.implicits._
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
-import hydrozoa.multisig.ledger.multi.trivial.BlockLedger.LedgerEventOutcome
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 import hydrozoa.multisig.persistence.pure.PutActorReq
 
@@ -87,7 +86,7 @@ object TransactionSequencer {
         def create: IO[State] =
             for {
                 nLedgerEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
-                localRequests <- Ref.of[IO, Queue[(LedgerEventNum, Deferred[IO, LedgerEventOutcome])]](Queue())
+                localRequests <- Ref.of[IO, Queue[(LedgerEventNum, Deferred[IO, Unit /*LedgerEventOutcome*/])]](Queue())
             } yield State(
                 nLedgerEvent = nLedgerEvent,
                 localRequests = localRequests
@@ -96,7 +95,7 @@ object TransactionSequencer {
 
     final case class State(
         nLedgerEvent: Ref[IO, LedgerEventNum],
-        localRequests: Ref[IO, Queue[(LedgerEventNum, Deferred[IO, LedgerEventOutcome])]]
+        localRequests: Ref[IO, Queue[(LedgerEventNum, Deferred[IO, Unit /*LedgerEventOutcome*/])]]
         )
 
 }

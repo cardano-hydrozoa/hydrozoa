@@ -3,7 +3,6 @@ import cats.effect.Deferred
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import hydrozoa.multisig.ledger.multi.trivial.BlockLedger.{LedgerEvent, LedgerEventOutcome}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -46,8 +45,8 @@ sealed trait RemoteBroadcastReq extends PeerLiaisonReq
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
 final case class SubmitLedgerEvent(
     time: FiniteDuration,
-    event: LedgerEvent,
-    eventOutcome: Deferred[IO, LedgerEventOutcome]
+    event: Unit, // FIXME
+    eventOutcome: Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
     ) extends TransactionSequencerReq
 
 /** A ledger event submission is constructed by taking a ledger event, timestamping it, and creating a deferred
@@ -57,10 +56,11 @@ final case class SubmitLedgerEvent(
  */
 // TODO: for deposit txs, the tx time bounds and deposit utxo datum will need to be adjusted based on the timestamp.
 object SubmitLedgerEvent {
-    def create(event: LedgerEvent): IO[SubmitLedgerEvent] =
+    def create(event: Unit): // FIXME
+    IO[SubmitLedgerEvent] =
         for {
             time <- IO.monotonic
-            eventOutcome <- Deferred[IO, LedgerEventOutcome]
+            eventOutcome <- Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
         } yield SubmitLedgerEvent(time, event, eventOutcome)
 }
 
@@ -69,7 +69,7 @@ object SubmitLedgerEvent {
 final case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
-    event: LedgerEvent
+    event: Unit // FIXME LedgerEvent
     ) extends BlockProducerReq, RemoteBroadcastReq, PersistedReq
 
 /**

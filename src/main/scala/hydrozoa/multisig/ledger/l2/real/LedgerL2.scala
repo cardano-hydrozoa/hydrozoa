@@ -16,6 +16,7 @@ object LedgerL2 {
     final case class InnerTx() extends Transaction
     final case class WithdrawalTx() extends Transaction
     final case class GenesisTx() extends Transaction
+    final case class ApocalypseTx() extends Transaction
 }
 
 final case class LedgerL2(s: State) {
