@@ -10,14 +10,14 @@ import hydrozoa.multisig.actors.pure
 import hydrozoa.multisig.backend.cardano.pure.CardanoBackendRef
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 
-import CardanoEventActor.{Config, State, ConnectionsPending, Subscribers}
+import CardanoLiaison.{Config, State, ConnectionsPending, Subscribers}
 
-final case class CardanoEventActor(config: Config)(
+final case class CardanoLiaison(config: Config)(
     private val connections: ConnectionsPending
-    ) (
+    )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-    ) extends Actor[IO, CardanoEventActorReq]{
+    ) extends Actor[IO, CardanoLiaisonReq]{
     override def preStart: IO[Unit] =
         for {
             cardanoBackend <- connections.cardanoBackend.get
@@ -28,7 +28,7 @@ final case class CardanoEventActor(config: Config)(
             )))
         } yield ()
     
-    override def receive: Receive[IO, CardanoEventActorReq] =
+    override def receive: Receive[IO, CardanoLiaisonReq] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
@@ -37,7 +37,7 @@ final case class CardanoEventActor(config: Config)(
                     Error("Impossible: Cardano event actor is receiving before its preStart provided subscribers.").raiseError
             }))
 
-    private def receiveTotal(req: CardanoEventActorReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: CardanoLiaisonReq, subs: Subscribers): IO[Unit] =
         req match {
             case x: ConfirmBlock =>
                 ???
@@ -51,7 +51,7 @@ final case class CardanoEventActor(config: Config)(
  *   - Periodically polls the Cardano blockchain for the head's utxo state.
  *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
  */
-object CardanoEventActor {
+object CardanoLiaison {
     final case class Config()
 
     final case class ConnectionsPending(
@@ -64,11 +64,11 @@ object CardanoEventActor {
         persistence: PersistenceActorRef
         )
 
-    def create(config: Config, connections: ConnectionsPending): IO[CardanoEventActor] = {
+    def create(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
         for {
             subscribers <- Ref.of[IO, Option[Subscribers]](None)
             state <- State.create
-        } yield CardanoEventActor(config)(connections)(subscribers, state)
+        } yield CardanoLiaison(config)(connections)(subscribers, state)
     }
 
     final case class State()

@@ -47,79 +47,79 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
         for {
             pendingCardanoBackend <- Deferred[IO, CardanoBackendRef]
             pendingPersistence <- Deferred[IO, PersistenceActorRef]
-            pendingBlockActor <- Deferred[IO, BlockActorRef]
-            pendingLocalCommActors <- Deferred[IO, List[CommActorRef]]
-            pendingCardanoEventActor <- Deferred[IO, CardanoEventActorRef]
-            pendingLedgerEventActor <- Deferred[IO, LedgerEventActorRef]
+            pendingBlockProducer <- Deferred[IO, BlockProducerRef]
+            pendingLocalPeerLiaisons <- Deferred[IO, List[PeerLiaisonRef]]
+            pendingCardanoLiaison <- Deferred[IO, CardanoLiaisonRef]
+            pendingTransactionSequencer <- Deferred[IO, TransactionSequencerRef]
 
             _ <- cardanoBackend.get.flatMap(pendingCardanoBackend.complete)
             _ <- persistence.get.flatMap(pendingPersistence.complete)
 
-            blockActor <- context.actorOf(BlockActor.create(
-                BlockActor.Config(peerId),
-                BlockActor.ConnectionsPending(
-                    cardanoEventActor = pendingCardanoEventActor,
-                    commActors = pendingLocalCommActors,
-                    ledgerEventActor = pendingLedgerEventActor,
+            blockProducer <- context.actorOf(BlockProducer.create(
+                BlockProducer.Config(peerId),
+                BlockProducer.ConnectionsPending(
+                    cardanoLiaison = pendingCardanoLiaison,
+                    peerLiaisons = pendingLocalPeerLiaisons,
+                    transactionSequencer = pendingTransactionSequencer,
                     persistence = pendingPersistence
                 )
             ))
 
-            localCommActorsPendingRemoteActors <- peers.filterNot(_ == peerId).traverse(pid =>
+            localPeerLiaisonsPendingRemoteActors <- peers.filterNot(_ == peerId).traverse(pid =>
                 for {
-                    pendingRemoteCommActor <- Deferred[IO, CommActorRef]
-                    localCommActor <- context.actorOf(CommActor.create(
-                        CommActor.Config(peerId, pid),
-                        CommActor.ConnectionsPending(
-                            blockActor = pendingBlockActor,
+                    pendingRemotePeerLiaison <- Deferred[IO, PeerLiaisonRef]
+                    localPeerLiaison <- context.actorOf(PeerLiaison.create(
+                        PeerLiaison.Config(peerId, pid),
+                        PeerLiaison.ConnectionsPending(
+                            blockProducer = pendingBlockProducer,
                             persistence = pendingPersistence,
-                            remoteCommActor = pendingRemoteCommActor
+                            remotePeerLiaison = pendingRemotePeerLiaison
                         )
                     ))
-                } yield (localCommActor, pendingRemoteCommActor)
+                } yield (localPeerLiaison, pendingRemotePeerLiaison)
             )
 
-            localCommActors = localCommActorsPendingRemoteActors.map(_._1)
+            localPeerLiaisons = localPeerLiaisonsPendingRemoteActors.map(_._1)
 
-            cardanoEventActor <- context.actorOf(CardanoEventActor.create(
-                CardanoEventActor.Config(),
-                CardanoEventActor.ConnectionsPending(
+            cardanoLiaison <- context.actorOf(CardanoLiaison.create(
+                CardanoLiaison.Config(),
+                CardanoLiaison.ConnectionsPending(
                     cardanoBackend = pendingCardanoBackend,
                     persistence = pendingPersistence
                 )
             ))
 
-            ledgerEventActor <- context.actorOf(LedgerEventActor.create(
-                LedgerEventActor.Config(peerId),
-                LedgerEventActor.ConnectionsPending(
-                    blockActor = pendingBlockActor,
-                    commActors = pendingLocalCommActors,
+            transactionSequencer <- context.actorOf(TransactionSequencer.create(
+                TransactionSequencer.Config(peerId),
+                TransactionSequencer.ConnectionsPending(
+                    blockProducer = pendingBlockProducer,
+                    peerLiaisons = pendingLocalPeerLiaisons,
                     persistence = pendingPersistence
                 )
             ))
 
-            _ <- pendingBlockActor.complete(blockActor)
-            _ <- pendingLocalCommActors.complete(localCommActors)
-            _ <- pendingCardanoEventActor.complete(cardanoEventActor)
-            _ <- pendingLedgerEventActor.complete(ledgerEventActor)
+            _ <- pendingBlockProducer.complete(blockProducer)
+            _ <- pendingLocalPeerLiaisons.complete(localPeerLiaisons)
+            _ <- pendingCardanoLiaison.complete(cardanoLiaison)
+            _ <- pendingTransactionSequencer.complete(transactionSequencer)
 
-            _ <- context.watch(blockActor, TerminatedBlockActor(blockActor))
-            _ <- localCommActors.traverse(r => context.watch(r, TerminatedCommActor(r)))
-            _ <- context.watch(cardanoEventActor, TerminatedCardanoEventActor(cardanoEventActor))
-            _ <- context.watch(ledgerEventActor, TerminatedLedgerEventActor(ledgerEventActor))
+            _ <- context.watch(blockProducer, TerminatedBlockProducer(blockProducer))
+            _ <- localPeerLiaisons.traverse(r => context.watch(r, TerminatedPeerLiaison(r)))
+            _ <- context.watch(cardanoLiaison, TerminatedCardanoLiaison(cardanoLiaison))
+            _ <- context.watch(transactionSequencer, TerminatedTransactionSequencer(transactionSequencer))
 
             // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()
         
     override def receive: Receive[IO, MultisigRegimeManagerReq] =
         PartialFunction.fromFunction({
-            case TerminatedBlockActor(_) =>
+            case TerminatedBlockProducer(_) =>
                 IO.println("Terminated block actor")
-            case TerminatedCardanoEventActor(_) =>
+            case TerminatedCardanoLiaison(_) =>
                 IO.println("Terminated Cardano event actor")
-            case TerminatedCommActor(_) =>
+            case TerminatedPeerLiaison(_) =>
                 IO.println("Terminated comm actor")
-            case TerminatedLedgerEventActor(_) =>
+            case TerminatedTransactionSequencer(_) =>
                 IO.println("Terminated ledger event actor")
             case TerminatedCardanoBackend(_) =>
                 IO.println("Terminated cardano backend")

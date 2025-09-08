@@ -15,26 +15,26 @@ import scala.collection.immutable.Queue
 
 // Not sure why this is needed, but otherwise Scala doesn't allow the companion object's nested classes
 // to be used directly in the case class, and it also wrongly says that Subscribers can be private.
-import LedgerEventActor.{Config, State, ConnectionsPending, Subscribers}
+import TransactionSequencer.{Config, State, ConnectionsPending, Subscribers}
 
-final case class LedgerEventActor(config: Config)(
+final case class TransactionSequencer(config: Config)(
     private val connections: ConnectionsPending
-    ) (
+    )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-    ) extends Actor[IO, LedgerEventActorReq]{
+    ) extends Actor[IO, TransactionSequencerReq]{
     override def preStart: IO[Unit] =
         for {
-            blockActor <- connections.blockActor.get
-            commActors <- connections.commActors.get
+            blockProducer <- connections.blockProducer.get
+            peerLiaisons <- connections.peerLiaisons.get
             persistence <- connections.persistence.get
             _ <- subscribers.set(Some(Subscribers(
-                newLedgerEvent = blockActor :: commActors,
+                newLedgerEvent = blockProducer :: peerLiaisons,
                 persistence = persistence
             )))
         } yield ()
 
-    override def receive: Receive[IO, LedgerEventActorReq] =
+    override def receive: Receive[IO, TransactionSequencerReq] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
@@ -43,7 +43,7 @@ final case class LedgerEventActor(config: Config)(
                     Error("Impossible: Ledger event actor is receiving before its preStart provided subscribers.").raiseError
             }))
 
-    private def receiveTotal(req: LedgerEventActorReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: TransactionSequencerReq, subs: Subscribers): IO[Unit] =
         req match {
             case x: SubmitLedgerEvent =>
                 for {
@@ -63,12 +63,12 @@ final case class LedgerEventActor(config: Config)(
 /**
  * Event actor is the source of new L1 deposits and L2 transactions for the head.
  */
-object LedgerEventActor {
+object TransactionSequencer {
     final case class Config(peerId: PeerId)
 
     final case class ConnectionsPending(
-        blockActor: Deferred[IO, BlockActorRef],
-        commActors: Deferred[IO, List[CommActorRef]],
+        blockProducer: Deferred[IO, BlockProducerRef],
+        peerLiaisons: Deferred[IO, List[PeerLiaisonRef]],
         persistence: Deferred[IO, PersistenceActorRef],
         )
 
@@ -77,11 +77,11 @@ object LedgerEventActor {
         persistence: PersistenceActorRef,
         )
 
-    def create(config: Config, connections: ConnectionsPending): IO[LedgerEventActor] =
+    def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
         for {
             subscribers <- Ref.of[IO, Option[Subscribers]](None)
             state <- State.create
-        } yield LedgerEventActor(config)(connections)(subscribers, state)
+        } yield TransactionSequencer(config)(connections)(subscribers, state)
 
     object State {
         def create: IO[State] =

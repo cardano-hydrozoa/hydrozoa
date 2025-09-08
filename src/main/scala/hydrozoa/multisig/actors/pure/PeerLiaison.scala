@@ -12,31 +12,31 @@ import hydrozoa.multisig.persistence.pure.PutActorReq
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 
-import CommActor.{Config, State, ConnectionsPending, Subscribers}
+import PeerLiaison.{Config, State, ConnectionsPending, Subscribers}
 
-final case class CommActor(config: Config)(
+final case class PeerLiaison(config: Config)(
     private val connections: ConnectionsPending
-    ) (
+    )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-    ) extends Actor[IO, CommActorReq]{
+    ) extends Actor[IO, PeerLiaisonReq]{
     override def preStart: IO[Unit] =
         for {
-            blockActor <- connections.blockActor.get
+            blockProducer <- connections.blockProducer.get
             persistence <- connections.persistence.get
             // This means that the comm actor will not start receiving until it is connected to its
             // remote counterpart:
-            remoteCommActor <- connections.remoteCommActor.get
+            remotePeerLiaison <- connections.remotePeerLiaison.get
             _ <- subscribers.set(Some(Subscribers(
-                ackBlock = blockActor,
-                newBlock = blockActor,
-                newLedgerEvent = blockActor,
+                ackBlock = blockProducer,
+                newBlock = blockProducer,
+                newLedgerEvent = blockProducer,
                 persistence = persistence,
-                remoteCommActor = remoteCommActor
+                remotePeerLiaison = remotePeerLiaison
             )))
         } yield ()
     
-    override def receive: Receive[IO, CommActorReq] = PartialFunction.fromFunction(req =>
+    override def receive: Receive[IO, PeerLiaisonReq] = PartialFunction.fromFunction(req =>
         subscribers.get.flatMap({
             case Some(subs) =>
                 this.receiveTotal(req, subs)
@@ -44,7 +44,7 @@ final case class CommActor(config: Config)(
                 IO.raiseError(Error("Impossible: Comm actor is receiving before its preStart provided subscribers."))
         }))
 
-    private def receiveTotal(req: CommActorReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: PeerLiaisonReq, subs: Subscribers): IO[Unit] =
         req match {
             case x: RemoteBroadcastReq =>
                 for {
@@ -56,7 +56,7 @@ final case class CommActor(config: Config)(
                             state.:+(x)
                         case Some(batchId) =>
                             // Immediately send a batch containing only this message
-                            state.immediateNewMsgBatch(batchId, x).flatMap(subs.remoteCommActor ! _)
+                            state.immediateNewMsgBatch(batchId, x).flatMap(subs.remotePeerLiaison ! _)
                     }
                 } yield ()
             case x: GetMsgBatch =>
@@ -64,7 +64,7 @@ final case class CommActor(config: Config)(
                     eNewBatch <- state.extractNewMsgBatch(x, config.maxLedgerEventsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
-                            subs.remoteCommActor ! newBatch
+                            subs.remotePeerLiaison ! newBatch
                         case Left(state.EmptyNewMsgBatch) =>
                             state.sendNextBatchImmediatelyUponNewMsg(x.id)
                         case Left(state.OutOfBoundsGetMsgBatch) =>
@@ -74,7 +74,7 @@ final case class CommActor(config: Config)(
             case x: NewMsgBatch =>
                 for {
                     _ <- subs.persistence ? PutActorReq(x)
-                    _ <- subs.remoteCommActor ! x.nextGetMsgBatch
+                    _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)
                     _ <- x.events.traverse_(subs.newLedgerEvent ! _)
@@ -88,7 +88,7 @@ final case class CommActor(config: Config)(
  *   - Requests communication batches from the counterpart.
  *   - Responds to the counterpart's requests for communication batches.
  */
-object CommActor {
+object PeerLiaison {
     private type maxEvents = Int
 
     final case class Config(
@@ -98,9 +98,9 @@ object CommActor {
         )
 
     final case class ConnectionsPending(
-        blockActor: Deferred[IO, BlockActorRef],
+        blockProducer: Deferred[IO, BlockProducerRef],
         persistence: Deferred[IO, PersistenceActorRef],
-        remoteCommActor: Deferred[IO, CommActorRef]
+        remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
         )
 
     final case class Subscribers(
@@ -108,14 +108,14 @@ object CommActor {
         newBlock: NewBlockSubscriber,
         newLedgerEvent: NewLedgerEventSubscriber,
         persistence: PersistenceActorRef,
-        remoteCommActor: CommActorRef
+        remotePeerLiaison: PeerLiaisonRef
         )
 
-    def create(config: Config, connections: ConnectionsPending): IO[CommActor] =
+    def create(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
         for {
             subscribers <- Ref.of[IO, Option[Subscribers]](None)
             state <- State.create
-        } yield CommActor(config)(connections)(subscribers, state)
+        } yield PeerLiaison(config)(connections)(subscribers, state)
 
     object State {
         def create: IO[State] =

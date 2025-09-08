@@ -27,28 +27,28 @@ sealed trait MultisigRegimeActorReq extends MultisigRegimeProtocol
 sealed trait PersistedReq extends MultisigRegimeProtocol
 
 /** Requests received by the block actor. */
-sealed trait BlockActorReq extends MultisigRegimeActorReq
+sealed trait BlockProducerReq extends MultisigRegimeActorReq
 
 /** Requests received by the Cardano actor. */
-sealed trait CardanoEventActorReq extends MultisigRegimeActorReq
+sealed trait CardanoLiaisonReq extends MultisigRegimeActorReq
 
 /** Requests received by the comm actor. */
-sealed trait CommActorReq extends MultisigRegimeActorReq
+sealed trait PeerLiaisonReq extends MultisigRegimeActorReq
 
 /** Requests received by the event actor. */
-sealed trait LedgerEventActorReq extends MultisigRegimeActorReq
+sealed trait TransactionSequencerReq extends MultisigRegimeActorReq
 
 /** ==Async requests== */
 
 /** Requests that comm actors should collectively rebroadcast to the other head peers via [[NewMsgBatch]]. */
-sealed trait RemoteBroadcastReq extends CommActorReq
+sealed trait RemoteBroadcastReq extends PeerLiaisonReq
 
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
 final case class SubmitLedgerEvent(
     time: FiniteDuration,
     event: LedgerEvent,
     eventOutcome: Deferred[IO, LedgerEventOutcome]
-    ) extends LedgerEventActorReq
+    ) extends TransactionSequencerReq
 
 /** A ledger event submission is constructed by taking a ledger event, timestamping it, and creating a deferred
  *  cell where the outcome of the event can later be placed.
@@ -70,7 +70,7 @@ final case class NewLedgerEvent(
     id: LedgerEventId,
     time: FiniteDuration,
     event: LedgerEvent
-    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
+    ) extends BlockProducerReq, RemoteBroadcastReq, PersistedReq
 
 /**
  * The block actor announces a new block.
@@ -98,7 +98,7 @@ final case class NewBlock(
     ledgerEventsInvalid: List[LedgerEventId],
     ledgerCallbacksAccepted: List[LedgerCallbackId],
     ledgerCallbacksRejected: List[LedgerCallbackId]
-    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
+    ) extends BlockProducerReq, RemoteBroadcastReq, PersistedReq
 
 /**
  * A peer's block actor announces its acknowledgement of an L2 block.
@@ -109,12 +109,12 @@ final case class NewBlock(
 final case class AckBlock(
     id: AckId,
     time: FiniteDuration
-    ) extends BlockActorReq, RemoteBroadcastReq, PersistedReq
+    ) extends BlockProducerReq, RemoteBroadcastReq, PersistedReq
 
 /** L2 block confirmations (local-only signal) */
 final case class ConfirmBlock(
     id: BlockId
-    ) extends CardanoEventActorReq, LedgerEventActorReq, PersistedReq
+    ) extends CardanoLiaisonReq, TransactionSequencerReq, PersistedReq
 
 /**
  * Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
@@ -129,7 +129,7 @@ final case class GetMsgBatch(
     ackNum: AckNum,
     blockNum: BlockNum,
     eventNum: LedgerEventNum
-    ) extends CommActorReq
+    ) extends PeerLiaisonReq
 
 /**
  * Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -151,7 +151,7 @@ final case class NewMsgBatch(
     ack: Option[AckBlock],
     block: Option[NewBlock],
     events: List[NewLedgerEvent]
-    ) extends CommActorReq, PersistedReq {
+    ) extends PeerLiaisonReq, PersistedReq {
     def nextGetMsgBatch = GetMsgBatch(
         (id._1, id._2.increment),
         ackNum,
@@ -162,13 +162,13 @@ final case class NewMsgBatch(
 
 /** ==Multisig regime manager's messages== */
 
-final case class TerminatedBlockActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+final case class TerminatedBlockProducer(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
-final case class TerminatedCardanoEventActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+final case class TerminatedCardanoLiaison(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
-final case class TerminatedCommActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+final case class TerminatedPeerLiaison(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
-final case class TerminatedLedgerEventActor(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
+final case class TerminatedTransactionSequencer(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
 final case class TerminatedCardanoBackend(ref: NoSendActorRef[IO]) extends MultisigRegimeManagerReq
 
@@ -292,10 +292,10 @@ enum BlockType:
     case BlockMajor
     case BlockFinal
 
-type BlockActorRef = ActorRef[IO, BlockActorReq]
-type CommActorRef = ActorRef[IO, CommActorReq]
-type CardanoEventActorRef = ActorRef[IO, CardanoEventActorReq]
-type LedgerEventActorRef = ActorRef[IO, LedgerEventActorReq]
+type BlockProducerRef = ActorRef[IO, BlockProducerReq]
+type PeerLiaisonRef = ActorRef[IO, PeerLiaisonReq]
+type CardanoLiaisonRef = ActorRef[IO, CardanoLiaisonReq]
+type TransactionSequencerRef = ActorRef[IO, TransactionSequencerReq]
 
 type NewLedgerEventSubscriber = ActorRef[IO, NewLedgerEvent]
 type NewBlockSubscriber = ActorRef[IO, NewBlock]
