@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.cardano.real.state
+package hydrozoa.multisig.ledger.l1.real.state
 
 import scalus._
 import scalus.builtin.Data

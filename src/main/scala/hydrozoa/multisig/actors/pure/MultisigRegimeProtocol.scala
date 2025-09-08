@@ -3,8 +3,7 @@ import cats.effect.Deferred
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import hydrozoa.multisig.ledger.multi.trivial.LedgerEvent
-import hydrozoa.multisig.ledger.multi.trivial.LedgerEventOutcome
+import hydrozoa.multisig.ledger.multi.trivial.MultiLedger.{LedgerEvent, LedgerEventOutcome}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -46,16 +45,23 @@ sealed trait RemoteBroadcastReq extends CommActorReq
 
 /** Submit a new ledger event to the head via a peer's ledger event actor. */
 final case class SubmitLedgerEvent(
+    time: FiniteDuration,
     event: LedgerEvent,
     eventOutcome: Deferred[IO, LedgerEventOutcome]
     ) extends LedgerEventActorReq
 
-/** Convenience method to create a SubmitLedgerEvent from a LedgerEvent. */
+/** A ledger event submission is constructed by taking a ledger event, timestamping it, and creating a deferred
+ *  cell where the outcome of the event can later be placed.
+ *  The intention is for the fiber handling the user's event submission to construct this [[SubmitLedgerEvent]]
+ *  and send it to the ledger event actor.
+ */
+// TODO: for deposit txs, the tx time bounds and deposit utxo datum will need to be adjusted based on the timestamp.
 object SubmitLedgerEvent {
     def create(event: LedgerEvent): IO[SubmitLedgerEvent] =
         for {
+            time <- IO.monotonic
             eventOutcome <- Deferred[IO, LedgerEventOutcome]
-        } yield SubmitLedgerEvent(event, eventOutcome)
+        } yield SubmitLedgerEvent(time, event, eventOutcome)
 }
 
 /**

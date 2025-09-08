@@ -7,7 +7,7 @@ import cats.implicits._
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
-import hydrozoa.multisig.ledger.multi.trivial.LedgerEventOutcome
+import hydrozoa.multisig.ledger.multi.trivial.MultiLedger.LedgerEventOutcome
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 import hydrozoa.multisig.persistence.pure.PutActorReq
 
@@ -48,9 +48,8 @@ final case class LedgerEventActor(config: Config)(
             case x: SubmitLedgerEvent =>
                 for {
                     newNum <- state.nLedgerEvent.updateAndGet(x => x.increment)
-                    t <- IO.monotonic
                     newId = (config.peerId, newNum)
-                    newEvent = NewLedgerEvent(newId, t, x.event)
+                    newEvent = NewLedgerEvent(newId, x.time, x.event)
                     _ <- state.localRequests.update(q => q :+ (newNum -> x.eventOutcome))
                     _ <- subs.persistence ? PutActorReq(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel

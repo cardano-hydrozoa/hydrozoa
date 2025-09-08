@@ -1,22 +1,27 @@
 package hydrozoa.multisig.ledger.multi.trivial
 
-sealed trait LedgerEvent
+import hydrozoa.multisig.ledger.l1.trivial.LedgerL1
+import hydrozoa.multisig.ledger.l2.trivial.LedgerL2
 
-case class TransactionL2() extends LedgerEvent
-case class WithdrawalL2() extends LedgerEvent
-case class DepositL1() extends LedgerEvent
+object MultiLedger {
+  sealed trait LedgerEvent
 
-// Not sure exactly how to define these and how/where to map block contents to them
-sealed trait LedgerEventOutcome
+  final case class TransactionL2(tx: LedgerL2.Transaction)
 
-case class LedgerEventSuccess()
-case class LedgerEventSuccessWithEffect()
-case class LedgerEventFailure()
+  final case class WithdrawalL2(tx: LedgerL2.Withdrawal)
 
-sealed trait LedgerCallback
+  final case class DepositL1(tx: LedgerL1.DepositTx)
 
-case class DepositCallbackL1() extends LedgerCallback
+  sealed trait LedgerEventOutcome
+  sealed trait LedgerEventSuccess
+  sealed trait LedgerEventFailure
 
-class MultiLedger {
+  final case class TransactionL2Success() extends LedgerEventSuccess
+  final case class TransactionL2Failure() extends LedgerEventFailure
 
+  final case class WithdrawalL2Success() extends LedgerEventSuccess
+  final case class WithdrawalL2Failure() extends LedgerEventFailure
+
+  final case class DepositL1Success(postDatedRefund: LedgerL1.RefundTx) extends LedgerEventSuccess
+  final case class DepositL1Failure() extends LedgerEventFailure
 }
