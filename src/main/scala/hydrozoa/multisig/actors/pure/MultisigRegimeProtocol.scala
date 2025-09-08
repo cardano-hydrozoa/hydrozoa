@@ -147,7 +147,7 @@ final case class NewMsgBatch(
     events: List[NewLedgerEvent]
     ) extends CommActorReq, PersistedReq {
     def nextGetMsgBatch = GetMsgBatch(
-        id,
+        (id._1, id._2.increment),
         ackNum,
         blockNum,
         eventNum
