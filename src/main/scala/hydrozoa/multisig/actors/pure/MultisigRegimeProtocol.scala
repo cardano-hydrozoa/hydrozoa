@@ -3,7 +3,7 @@ import cats.effect.Deferred
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import hydrozoa.multisig.ledger.multi.trivial.MultiLedger.{LedgerEvent, LedgerEventOutcome}
+import hydrozoa.multisig.ledger.multi.trivial.BlockLedger.{LedgerEvent, LedgerEventOutcome}
 
 import scala.concurrent.duration.FiniteDuration
 

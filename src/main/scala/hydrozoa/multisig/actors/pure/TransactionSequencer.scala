@@ -7,7 +7,7 @@ import cats.implicits._
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
-import hydrozoa.multisig.ledger.multi.trivial.MultiLedger.LedgerEventOutcome
+import hydrozoa.multisig.ledger.multi.trivial.BlockLedger.LedgerEventOutcome
 import hydrozoa.multisig.persistence.pure.PersistenceActorRef
 import hydrozoa.multisig.persistence.pure.PutActorReq
 
