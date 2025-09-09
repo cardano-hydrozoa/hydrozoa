@@ -20,3 +20,17 @@ private type H32 = ByteString
 private type KzgCommit = ByteString
 
 private type VersionMajor = BigInt
+
+// TODO: implement hashing for params
+// TODO: implement root hash
+def mkInitMultisigTreasuryDatum: MultisigTreasuryDatum =
+    mkMultisigTreasuryDatum(0, ByteString.empty)
+
+// TODO: implement hashing for params
+// TODO: implement root hash
+def mkMultisigTreasuryDatum(major: Int, _params: H32): MultisigTreasuryDatum =
+    MultisigTreasuryDatum(
+        ByteString.empty,
+        BigInt(major),
+        ByteString.empty
+    )

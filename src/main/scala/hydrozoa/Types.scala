@@ -1,29 +1,29 @@
 package hydrozoa
 
 /** This package defines wrapped types that primarily help to distinguish between similar values
- * that can appear at both L1 and L2, but where the semantics of those values change depending on
- * the layer. The underlying types are, where possible, using the upstream scalus types.
- *
- * The mechanism to define the types was derived by a response from by Claude Sonnet 4 on
- * 2025-08-08. It is as follows:
- *   - Each wrapped type is defined as an opaque type synonym associated with an object. Use a type
- *     synonym should ensure zero runtime overhead, similar to a haskell newtype (as contrasted
- *     with a case class, which would be akin to wrapping a type using a `data` delcaration in
- *     haskell)
- *   - an `apply` method is defined for each type
- *   - a `Conversion[$type, $wrappedType]` given is defined. This allows using methods from the
- *     underlying type directly.
- *     - Note that in many circumstances, this will require enabling implicit conversions in order
- *       to avoid compiler warnings. This is intended. See
- *       https://docs.scala-lang.org/scala3/book/ca-implicit-conversions.html
- *   - Outside of the object, a type synonym is given to allow declarations like `val myTx : Tx =
- *     (...)` instead of `val myTx : Tx.Tx = (...)`
- *   - Extension methods are defined within the object on the type where appropriate, include an
- *     `untagged` method to get the wrapped value.
- *
- * The result of all of this should be that you are able to pass the newtype where you would expect
- * a value of the underlying type, but not vice versa.
- */
+  * that can appear at both L1 and L2, but where the semantics of those values change depending on
+  * the layer. The underlying types are, where possible, using the upstream scalus types.
+  *
+  * The mechanism to define the types was derived by a response from by Claude Sonnet 4 on
+  * 2025-08-08. It is as follows:
+  *   - Each wrapped type is defined as an opaque type synonym associated with an object. Use a type
+  *     synonym should ensure zero runtime overhead, similar to a haskell newtype (as contrasted
+  *     with a case class, which would be akin to wrapping a type using a `data` delcaration in
+  *     haskell)
+  *   - an `apply` method is defined for each type
+  *   - a `Conversion[$type, $wrappedType]` given is defined. This allows using methods from the
+  *     underlying type directly.
+  *     - Note that in many circumstances, this will require enabling implicit conversions in order
+  *       to avoid compiler warnings. This is intended. See
+  *       https://docs.scala-lang.org/scala3/book/ca-implicit-conversions.html
+  *   - Outside of the object, a type synonym is given to allow declarations like `val myTx : Tx =
+  *     (...)` instead of `val myTx : Tx.Tx = (...)`
+  *   - Extension methods are defined within the object on the type where appropriate, include an
+  *     `untagged` method to get the wrapped value.
+  *
+  * The result of all of this should be that you are able to pass the newtype where you would expect
+  * a value of the underlying type, but not vice versa.
+  */
 
 /* TODO/Peter's Note: Full type safety with these types would require controlling introduction of their terms.
 Right now, for example, we allow unrestricted production of a "UtxoIdL2" from any TransactionInput. The way I would
@@ -47,46 +47,15 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v3
-
+import scalus.builtin.Builtins.blake2b_224
 import scala.collection.mutable
 import scala.language.implicitConversions
 
 /** Cardano network layers.
- */
+  */
 sealed trait AnyLayer derives CanEqual
 sealed trait L1 extends AnyLayer derives CanEqual
 sealed trait L2 extends AnyLayer derives CanEqual
-
-//////////////////////////////////////////////////////////////////
-// Transaction
-
-/** @param L
- *   phantom parameter to distinguish tx level (L1, L2, Any)
- */
-object Tx:
-    opaque type Tx[+L <: AnyLayer] = Transaction
-    def apply[L <: AnyLayer](tx: Transaction): Tx[L] = tx
-
-    given [L <: AnyLayer]: Conversion[Tx[L], Transaction] = identity
-    extension [L <: AnyLayer](tx: Tx[L]) def untagged: Transaction = identity[Transaction](tx)
-
-type Tx[L <: AnyLayer] = Tx.Tx[L]
-type TxAny = Tx.Tx[AnyLayer]
-type TxL1 = Tx.Tx[L1]
-
-object TxL1:
-    inline def apply(bytes: Array[Byte]): TxL1 = {
-        given OriginalCborByteArray = OriginalCborByteArray(bytes)
-        Tx[L1](Cbor.decode(bytes).to[Transaction].value)
-    }
-
-type TxL2 = Tx.Tx[L2]
-
-object TxL2:
-    def apply(bytes: Array[Byte]): TxL2 = {
-        given OriginalCborByteArray = OriginalCborByteArray(bytes)
-        Tx[L2](Cbor.decode(bytes).to[Transaction].value)
-    }
 
 //////////////////////////////////////////////////////////
 // Address
@@ -106,6 +75,12 @@ object Address:
         Address[L](SAddress.fromBech32(addr).asInstanceOf[ShelleyAddress])
     extension [L <: AnyLayer](addr: Address[L])
         def untagged: ShelleyAddress = identity[ShelleyAddress](addr)
+
+    def fromByteString[L <: AnyLayer](bytes: ByteString): Option[Address[L]] =
+        SAddress.fromByteString(bytes) match {
+            case sa: ShelleyAddress => Some(Address[L](sa))
+            case _                  => None
+        }
 
 type Address[L <: AnyLayer] = Address.Address[L]
 type AddressL1 = Address.Address[L1]
@@ -200,29 +175,29 @@ type OutputNoTokens[L <: AnyLayer] = OutputNoTokens.OutputNoTokens[L]
  */
 
 /** A UTxO should reflect a _matching_ input and output. This condition is not presently enforced at
- * the type level.
- */
+  * the type level.
+  */
 object Utxo:
     opaque type Utxo[L <: AnyLayer] = (UtxoId[L], Output[L])
     def apply[L <: AnyLayer](io: (UtxoId[L], Output[L])): Utxo[L] = io
     def apply[L <: AnyLayer](input: UtxoId[L], output: Output[L]): Utxo[L] = (input, output)
     def apply[L <: AnyLayer](
-                                txId: TransactionHash,
-                                txIx: Int,
-                                address: Address[L],
-                                value: Value,
-                                mbInlineDatum: Option[DatumOption.Inline] = None
-                            ): Utxo[L] =
+        txId: TransactionHash,
+        txIx: Int,
+        address: Address[L],
+        value: Value,
+        mbInlineDatum: Option[DatumOption.Inline] = None
+    ): Utxo[L] =
         (
-            UtxoId[L](TransactionInput(txId, txIx)),
-            Output[L](
-                Babbage(
-                    address = address,
-                    value = value,
-                    datumOption = mbInlineDatum,
-                    scriptRef = None
-                )
+          UtxoId[L](TransactionInput(txId, txIx)),
+          Output[L](
+            Babbage(
+              address = address,
+              value = value,
+              datumOption = mbInlineDatum,
+              scriptRef = None
             )
+          )
         )
     given [L <: AnyLayer]: Conversion[Utxo[L], (UtxoId[L], Output[L])] = identity
     // Still need this conversion because scalus doesn't have a full query thing yet
@@ -233,9 +208,9 @@ object Utxo:
 type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 
 /** ---------------------------------------------------------------------------------------------
- * UTxO Set
- * ---------------------------------------------------------------------------------------------
- */
+  * UTxO Set
+  * ---------------------------------------------------------------------------------------------
+  */
 
 object UtxoSet:
     opaque type UtxoSet[L <: AnyLayer] = Map[UtxoId[L], Output[L]]
@@ -246,26 +221,26 @@ object UtxoSet:
         identity
 
     /** We can only have one implict conversion that resolves to the same runtime (type-erased)
-     * representation, otherwise the compiler gets confused.
-     */
+      * representation, otherwise the compiler gets confused.
+      */
     extension [L <: AnyLayer](
-                                 utxoSet: UtxoSet[L]
-                             )
+        utxoSet: UtxoSet[L]
+    )
         def asScalus: Map[TransactionInput, Babbage] =
             utxoSet.untagged.map((k, v) => (k.untagged, v.untagged))
     extension [L <: AnyLayer](utxoSet: UtxoSet[L])
         def untagged: Map[UtxoId[L], Output[L]] = identity(utxoSet)
 
     /** FIXME: This is a dummy value. The slot config and protocol params should be passed in
-     */
+      */
     extension (utxoSetL2: UtxoSetL2)
         def getContextAndState: (Context, State) =
             (
-                Context(fee = Coin(0L), env = UtxoEnv.default),
-                State(
-                    utxo = utxoSetL2.untagged.map((k, v) => k.untagged -> v.untagged),
-                    certState = CertState.empty
-                )
+              Context(fee = Coin(0L), env = UtxoEnv.default),
+              State(
+                utxo = utxoSetL2.untagged.map((k, v) => k.untagged -> v.untagged),
+                certState = CertState.empty
+              )
             )
 
 type UtxoSet[L <: AnyLayer] = UtxoSet.UtxoSet[L]
@@ -275,11 +250,11 @@ type UtxoSetL2 = UtxoSet.UtxoSet[L2]
 
 extension (utxo: UTxO)
     /** Unsafe because it requires the developer to check:
-     *   - That the UTxOs are indeed L2 UTxOs
-     *   - Specifically, that the transaction outputs are Babbage outputs. This function will throw
-     *     an exception if not.
-     * @return
-     */
+      *   - That the UTxOs are indeed L2 UTxOs
+      *   - Specifically, that the transaction outputs are Babbage outputs. This function will throw
+      *     an exception if not.
+      * @return
+      */
     def unsafeAsL2: UtxoSet[L2] =
         UtxoSet[L2](utxo.map((ti, to) => UtxoId[L2](ti) -> Output[L2](to.asInstanceOf[Babbage])))
 
@@ -287,7 +262,9 @@ extension (utxo: UTxO)
 // Keys
 
 // A verification key of a peer, used on both L1 and L2
-case class VerificationKeyBytes(bytes: ByteString)
+case class VerificationKeyBytes(bytes: ByteString) {
+    def verKeyHash: AddrKeyHash = Hash(blake2b_224(bytes))
+}
 
 object VerificationKeyBytes:
     def applyI(bytes: IArray[Byte]): VerificationKeyBytes =
