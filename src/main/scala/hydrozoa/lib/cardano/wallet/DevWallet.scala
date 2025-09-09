@@ -1,5 +1,3 @@
 package hydrozoa.lib.cardano.wallet
 
-object DevWallet {
-
-}
+object DevWallet {}

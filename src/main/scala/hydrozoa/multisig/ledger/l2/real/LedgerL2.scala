@@ -19,6 +19,4 @@ object LedgerL2 {
     final case class ApocalypseTx() extends Transaction
 }
 
-final case class LedgerL2(s: State) {
-
-}
+final case class LedgerL2(s: State) {}

@@ -9,12 +9,13 @@ import scalus.builtin.FromData
 import scalus.builtin.ToData
 import scalus.prelude.Option
 
-case class VoteDatum (
+case class VoteDatum(
     key: Key,
     link: Link,
     peer: Option[PubKeyHash],
     voteStatus: VoteStatus
-  ) derives FromData, ToData
+) derives FromData,
+      ToData
 
 enum VoteStatus derives FromData, ToData:
     case NoVote
@@ -22,9 +23,9 @@ enum VoteStatus derives FromData, ToData:
 
 case class VoteDetails(
     commit: KzgCommit,
-    versionMinor: VersionMinor,
-  ) derives FromData, ToData
-
+    versionMinor: VersionMinor
+) derives FromData,
+      ToData
 
 private type Key = BigInt
 

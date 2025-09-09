@@ -11,9 +11,10 @@ import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.Option
 
 case class DepositDatum(
-       address: Address,
-       datum: Option[Data],
-       deadline: PosixTime,
-       refundAddress: Address,
-       refundDatum: Option[Data]
-   ) derives FromData, ToData
+    address: Address,
+    datum: Option[Data],
+    deadline: PosixTime,
+    refundAddress: Address,
+    refundDatum: Option[Data]
+) derives FromData,
+      ToData

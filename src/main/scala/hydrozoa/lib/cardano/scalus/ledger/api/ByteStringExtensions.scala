@@ -1,5 +1,3 @@
 package hydrozoa.lib.cardano.scalus.ledger.api
 
-class ByteStringExtensions {
-
-}
+class ByteStringExtensions {}

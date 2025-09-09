@@ -8,11 +8,12 @@ import scalus.builtin.Data.ToData
 import scalus.builtin.FromData
 import scalus.builtin.ToData
 
-case class MultisigTreasuryDatum  (
-        commit: KzgCommit,
-        versionMajor: VersionMajor,
-        paramsHash: H32
-    ) derives FromData, ToData
+case class MultisigTreasuryDatum(
+    commit: KzgCommit,
+    versionMajor: VersionMajor,
+    paramsHash: H32
+) derives FromData,
+      ToData
 
 private type H32 = ByteString
 

@@ -8,18 +8,18 @@ import scalus.ledger.api.v3._
 
 enum RuleBasedTreasuryDatum derives FromData, ToData:
     case UnresolvedDatum(
-            headMp: CurrencySymbol,
-            disputeId: TokenName,
-            peers: VerificationKey,
-            peersN: BigInt,
-            deadlineVoting: PosixTime,
-            versionMajor: VersionMajor,
-            params: H32
-        )
+        headMp: CurrencySymbol,
+        disputeId: TokenName,
+        peers: VerificationKey,
+        peersN: BigInt,
+        deadlineVoting: PosixTime,
+        versionMajor: VersionMajor,
+        params: H32
+    )
     case ResolvedDatum(
-            headMp: CurrencySymbol,
-            commit: KzgCommit
-        )
+        headMp: CurrencySymbol,
+        commit: KzgCommit
+    )
 
 private type KzgCommit = ByteString
 

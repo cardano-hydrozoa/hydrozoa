@@ -1,5 +1,3 @@
 package hydrozoa.rulebased.actors
 
-object RuleBasedRegimeActor {
-
-}
+object RuleBasedRegimeActor {}

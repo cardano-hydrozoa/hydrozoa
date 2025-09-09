@@ -1,9 +1,5 @@
 package hydrozoa.rulebased.ledger.cardano.real.script.plutus
 
-object RuleBasedTreasuryValidator {
+object RuleBasedTreasuryValidator {}
 
-}
-
-object RuleBasedTreasuryScript {
-
-}
+object RuleBasedTreasuryScript {}

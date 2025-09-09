@@ -1,9 +1,5 @@
 package hydrozoa.rulebased.ledger.cardano.real.script.plutus
 
-object DisputeResolutionValidator {
+object DisputeResolutionValidator {}
 
-}
-
-object DisputeResolutionScript {
-
-}
+object DisputeResolutionScript {}

@@ -14,28 +14,35 @@ import CardanoLiaison.{Config, State, ConnectionsPending, Subscribers}
 
 final case class CardanoLiaison(config: Config)(
     private val connections: ConnectionsPending
-    )(
+)(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-    ) extends Actor[IO, CardanoLiaisonReq]{
+) extends Actor[IO, CardanoLiaisonReq] {
     override def preStart: IO[Unit] =
         for {
             cardanoBackend <- connections.cardanoBackend.get
             persistence <- connections.persistence.get
-            _ <- subscribers.set(Some(Subscribers(
-                cardanoBackend = cardanoBackend,
-                persistence = persistence
-            )))
+            _ <- subscribers.set(
+              Some(
+                Subscribers(
+                  cardanoBackend = cardanoBackend,
+                  persistence = persistence
+                )
+              )
+            )
         } yield ()
-    
+
     override def receive: Receive[IO, CardanoLiaisonReq] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
-                    Error("Impossible: Cardano event actor is receiving before its preStart provided subscribers.").raiseError
-            }))
+                    Error(
+                      "Impossible: Cardano event actor is receiving before its preStart provided subscribers."
+                    ).raiseError
+            })
+        )
 
     private def receiveTotal(req: CardanoLiaisonReq, subs: Subscribers): IO[Unit] =
         req match {
@@ -44,25 +51,24 @@ final case class CardanoLiaison(config: Config)(
         }
 }
 
-/**
- * Cardano actor:
- *
- *   - Keeps track of confirmed L1 effects of L2 blocks.
- *   - Periodically polls the Cardano blockchain for the head's utxo state.
- *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
- */
+/** Cardano actor:
+  *
+  *   - Keeps track of confirmed L1 effects of L2 blocks.
+  *   - Periodically polls the Cardano blockchain for the head's utxo state.
+  *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
+  */
 object CardanoLiaison {
     final case class Config()
 
     final case class ConnectionsPending(
         cardanoBackend: Deferred[IO, CardanoBackendRef],
         persistence: Deferred[IO, PersistenceActorRef]
-        )
+    )
 
     final case class Subscribers(
         cardanoBackend: CardanoBackendRef,
         persistence: PersistenceActorRef
-        )
+    )
 
     def create(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
         for {
