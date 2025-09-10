@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.l1.real.token
 
-import hydrozoa.{Utxo, L1}
-import scalus.cardano.ledger.AssetName
+import scalus.cardano.ledger.{AssetName, TransactionInput}
 
 object Token {
     object CIP67Tags {
@@ -10,7 +9,7 @@ object Token {
         val vote: Long = 8683L // "VOTE" (dispute) on the phone pad
     }
 
-    def mkHeadTokenName(fundingUtxos: List[Utxo[L1]]): AssetName = {
+    def mkHeadTokenName(fundingUtxos: List[(TransactionInput)]): AssetName = {
         // Concatenate the CIP-67 treasury token name prefix with the hash of the list of funding utxos
         ???
     }

@@ -1,16 +1,11 @@
 package hydrozoa.multisig.ledger.l1.real.utxo
 
-import hydrozoa.{L1, Utxo}
 import scalus.*
-import scalus.builtin.ByteString
-import scalus.builtin.Data
-import scalus.builtin.Data.FromData
-import scalus.builtin.Data.ToData
-import scalus.builtin.FromData
-import scalus.builtin.ToData
-import scalus.cardano.ledger.AssetName
+import scalus.builtin.Data.{FromData, ToData}
+import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput}
 
-final case class TreasuryUtxo(headTokenName: AssetName, utxo: Utxo[L1])
+final case class TreasuryUtxo(headTokenName: AssetName, utxo: (TransactionInput, TransactionOutput))
 
 object TreasuryUtxo {
     final case class Datum(

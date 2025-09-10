@@ -1,22 +1,20 @@
 package hydrozoa.multisig.ledger.l1.real.tx
 
 import hydrozoa.emptyTxBody
+import hydrozoa.multisig.ledger.l1.real
 import hydrozoa.multisig.ledger.l1.real.LedgerL1
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
+import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
 import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import io.bullet.borer.Cbor
-import scalus.builtin.Data.toData
+import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionMetadatum.Bytes
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
-import hydrozoa.multisig.ledger.l1.real
-import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
-import scalus.builtin.Data.{FromData, ToData, fromData}
 
-import scala.util.CommandLineParser.ParseError
 import scala.util.{Failure, Success, Try}
 
 final case class DepositTx(
@@ -38,9 +36,9 @@ object DepositTx {
     case object NoUtxoAtHeadAddress extends ParseError
     case object DepositUtxoNotBabbage extends ParseError
     case object DepositDatumNotInline extends ParseError
-    case class DepositDatumMalformed(e : Throwable) extends ParseError
-    case class TxCborDeserializationFailed(e : Throwable) extends ParseError
-    case class MultipleUtxosAtHeadAddress(numUtxos : Int) extends ParseError
+    case class DepositDatumMalformed(e: Throwable) extends ParseError
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+    case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
 
     private def extractHeadAddress(tx: Transaction): Option[ShelleyAddress] =
         tx.auxiliaryData match {
@@ -52,12 +50,12 @@ object DepositTx {
                     )
                     map <- metadataValue match {
                         case m: TransactionMetadatum.Map => Some(m.entries)
-                        case _        => None
+                        case _                           => None
                     }
                     mapValue <- map.get(TransactionMetadatum.Text("Deposit"))
                     addressBytes <- mapValue match {
-                        case b : Bytes => Some(b)
-                        case _ => None
+                        case b: Bytes => Some(b)
+                        case _        => None
                     }
                     addressParsed <- Address.fromByteString(addressBytes.value) match {
                         case sa: ShelleyAddress => Some(sa)
@@ -68,8 +66,9 @@ object DepositTx {
             case _ => None
         }
 
-    /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head address (given in the
-     * transaction metadata) with an Inline datum that parses correctly. */
+    /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
+      * address (given in the transaction metadata) with an Inline datum that parses correctly.
+      */
     def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
         Cbor.decode(txBytes).to[Transaction].valueTry match {
@@ -78,25 +77,32 @@ object DepositTx {
                     // Pull head address from metadata
                     headAddress <- extractHeadAddress(tx).toRight(HeadAddressNotFoundInMetadata)
                     // Grab the single output at the head address, along with its index/
-                    depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex.filter(_._1.value.address == headAddress) match {
+                    depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex
+                        .filter(_._1.value.address == headAddress) match {
                         case x if x.size == 1 => Right(x.head)
-                        case x if x.isEmpty => Left(NoUtxoAtHeadAddress)
-                        case x => Left(MultipleUtxosAtHeadAddress(x.size))
+                        case x if x.isEmpty   => Left(NoUtxoAtHeadAddress)
+                        case x                => Left(MultipleUtxosAtHeadAddress(x.size))
                     }
                     // Check that the output is babbage, extract and parse its inline datum
                     dutxoAndDatum <- depositUtxoWithIndex._1.value match {
-                        case b : Babbage => b.datumOption match {
-                            case Some(i : Inline) => Try(fromData[DepositUtxo.Datum](i.data)) match {
-                                case Success(d) => Right((b, d))
-                                case Failure(e) => Left(DepositDatumMalformed(e))
+                        case b: Babbage =>
+                            b.datumOption match {
+                                case Some(i: Inline) =>
+                                    Try(fromData[DepositUtxo.Datum](i.data)) match {
+                                        case Success(d) => Right((b, d))
+                                        case Failure(e) => Left(DepositDatumMalformed(e))
+                                    }
+                                case _ => Left(DepositDatumNotInline)
                             }
-                            case _ => Left(DepositDatumNotInline)
-                        }
                         case _ => Left(DepositUtxoNotBabbage)
                     }
-                } yield DepositTx(DepositUtxo(
+                } yield DepositTx(
+                  DepositUtxo(
                     utxo = (TransactionInput(tx.id, depositUtxoWithIndex._2), dutxoAndDatum._1),
-                    datum = dutxoAndDatum._2), tx)
+                    datum = dutxoAndDatum._2
+                  ),
+                  tx
+                )
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 

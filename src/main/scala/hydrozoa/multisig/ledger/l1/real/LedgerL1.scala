@@ -2,11 +2,10 @@ package hydrozoa.multisig.ledger.l1.real
 
 import cats.effect.{IO, Ref}
 import cats.implicits.catsSyntaxApplicativeError
-import hydrozoa.{Address, L1, Output}
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.{DepositDecision, ErrorAddDeposit, State, Tx}
 import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
-import hydrozoa.multisig.ledger.l1.real.tx.{DepositTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
-import hydrozoa.multisig.ledger.l1.real.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.real.tx.*
+import hydrozoa.multisig.ledger.l1.real.utxo.{DepositUtxo, TreasuryUtxo}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
@@ -68,7 +67,9 @@ final case class LedgerL1(headAddress: ShelleyAddress)(
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       * Immediate refund transactions must be constructed for every deposit in the ledger state.
       */
-    def finalizeLedger(payouts: List[TransactionOutput]): IO[(FinalizationTx, List[RefundTx.Immediate])] =
+    def finalizeLedger(
+        payouts: List[TransactionOutput]
+    ): IO[(FinalizationTx, List[RefundTx.Immediate])] =
         for {
             _ <- IO.pure(())
         } yield ???
@@ -83,7 +84,7 @@ object LedgerL1 {
         (for {
             initTx <- IO.pure(InitializationTx.build(initRecipe)).rethrow
             state <- Ref[IO].of(State(treasury = initTx.treasuryProduced))
-        } yield (LedgerL1(initRecipe.headAddress)(state), initTx)).attemptNarrow
+        } yield (LedgerL1(headAddress = initTx.headAddress)(state), initTx)).attemptNarrow
 
     final case class State(
         treasury: TreasuryUtxo,
