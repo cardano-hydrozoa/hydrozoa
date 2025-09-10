@@ -4,57 +4,27 @@ package hydrozoa
 // Eventually, we want to move exclusively to the scalus types
 // TODO: Not tests for this module yet
 
-import com.bloxbean.cardano.client.api.model.Utxo as BBUtxo
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.transaction.spec.{Transaction as BBTransaction, Value as BBValue}
 import com.bloxbean.cardano.client.util.HexUtil
+import scalus.ledger.api.v1.StakingCredential
 import scalus.|>
-
-import scala.::
 //import hydrozoa.infra.{Piper, toEither, valueTokens}
+import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import hydrozoa.{Address, *}
-import io.bullet.borer.Cbor
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.*
+import scalus.cardano.address.{Network, *}
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Transaction.given
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.*
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
-import scalus.ledger.api.v2.OutputDatum.{NoOutputDatum, OutputDatum}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude}
 
-import scala.collection.immutable.SortedMap
-import scala.jdk.CollectionConverters.ListHasAsScala
 import scala.language.implicitConversions
-
-import com.bloxbean.cardano.client.api.model.{Amount, Result, Utxo}
-import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.transaction.spec.TransactionOutput as BBTO
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.*
-import scalus.bloxbean.Interop
-import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.Data.fromData
-import scalus.builtin.FromData
-import scalus.cardano.address.Network
-import scalus.cardano.ledger.{AddrKeyHash, Hash}
-import scalus.ledger.api.v3.{TxId, TxOutRef}
-
-import scala.collection.mutable
-import scala.jdk.CollectionConverters.*
-import scala.language.implicitConversions
-import scala.util.{Failure, Success, Try}
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
@@ -109,25 +79,40 @@ val emptyTxBody: TransactionBody = TransactionBody(
 //
 //////////////////////////////////////////////////////
 //// Address
-//
-//// FIXME: This isn't a full translation. We don't care about delegation, so we drop them.
-//extension (addr: v3.Address) {
-//    def toScalusLedger[L <: AnyLayer]: Address[L] =
-//        Address[L](
-//            ShelleyAddress(
-//                // FIXME: We use the static network here
-//                network = networkL1static,
-//                payment = addr.credential match {
-//                    case PubKeyCredential(pkc) =>
-//                        ShelleyPaymentPart.Key(Hash(ByteString.fromArray(pkc.hash.bytes)))
-//                    case ScriptCredential(sc) =>
-//                        ShelleyPaymentPart.Script(Hash(ByteString.fromArray(sc.bytes)))
-//                },
-//                delegation = ShelleyDelegationPart.Null
-//            )
-//        )
-//
-//}
+extension (addr: v3.Address) {
+    def toScalusLedger(network: Network): ShelleyAddress =
+        ShelleyAddress(
+          network = network,
+          payment = addr.credential match {
+              case PubKeyCredential(pkc) =>
+                  ShelleyPaymentPart.Key(Hash(ByteString.fromArray(pkc.hash.bytes)))
+              case ScriptCredential(sc) =>
+                  ShelleyPaymentPart.Script(Hash(ByteString.fromArray(sc.bytes)))
+          },
+          delegation = addr.stakingCredential match {
+              case ScalusOption.None => Null
+              case ScalusOption.Some(sc) =>
+                  sc match {
+                      case StakingCredential.StakingHash(cred) =>
+                          cred match {
+                              case PubKeyCredential(pkHash) =>
+                                  ShelleyDelegationPart.Key(
+                                    Hash(ByteString.fromArray(pkHash.hash.bytes))
+                                  )
+                              case ScriptCredential(scHash) =>
+                                  ShelleyDelegationPart.Script(
+                                    Hash(ByteString.fromArray(scHash.bytes))
+                                  )
+                          }
+                      case StakingCredential.StakingPtr(a, b, c) =>
+                          ShelleyDelegationPart.Pointer(
+                            Pointer(Slot(a.toLong), b.toLong, c.toLong)
+                          )
+                  }
+          }
+        )
+}
+
 //
 ///** Convert scalus.ledger.api.v1.Address to scalus.cardano.address.Address .
 // *
