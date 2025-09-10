@@ -1,14 +1,13 @@
 package hydrozoa.multisig.ledger.l1.real.script.multisig
 
-import cats.data._
-import cats.syntax.all._
-import cats._
-import scalus.ledger.api
+import cats.*
+import cats.data.*
 import hydrozoa.VerificationKeyBytes
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{AddrKeyHash, Hash, Script}
+import scalus.cardano.ledger.{AddrKeyHash, Hash, PolicyId, Script}
+import scalus.ledger.api
 import scalus.ledger.api.Timelock.{AllOf, Signature}
 
 object HeadMultisigScript:
@@ -23,6 +22,7 @@ object HeadMultisigScript:
               payment = ShelleyPaymentPart.Script(script.scriptHash),
               delegation = Null
             )
+        def policyId: PolicyId = script.scriptHash
         def requiredSigners: Set[AddrKeyHash] =
             s.script
                 .asInstanceOf[api.Timelock.AllOf]
