@@ -52,7 +52,7 @@ final case class LedgerL1(headAddress: ShelleyAddress)(
     def settleLedger(
         depositDecisions: List[(DepositUtxo, DepositDecision)],
         payouts: List[TransactionOutput]
-    ): IO[(Option[(SettlementTx, FallbackTx, List[RolloutTx]]), List[RefundTx.Immediate])] =
+    ): IO[(Option[(SettlementTx, FallbackTx, List[RolloutTx])], List[RefundTx.Immediate])] =
         for {
             _ <- IO.pure(())
         } yield ???
