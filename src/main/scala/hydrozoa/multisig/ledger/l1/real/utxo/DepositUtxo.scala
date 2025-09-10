@@ -8,7 +8,7 @@ import scalus.builtin.FromData
 import scalus.builtin.ToData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
-import scalus.ledger.api.v1.Address
+import scalus.ledger.api.v3.Address
 import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.Option
 

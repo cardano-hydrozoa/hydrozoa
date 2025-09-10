@@ -1,7 +1,8 @@
 package hydrozoa.multisig.ledger.l1.real.tx
 
+import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.real.script.multisig.mkHeadNativeScript
+import hydrozoa.multisig.ledger.l1.real.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.real.token.Token.mkHeadTokenName
 import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo
 import hydrozoa.{VerificationKeyBytes, emptyTxBody}
@@ -24,7 +25,7 @@ object InitializationTx {
         network: Network,
         seedUtxo: (TransactionInput, TransactionOutput),
         coins: BigInt,
-        peers: Set[VerificationKeyBytes]
+        peers: NonEmptyList[VerificationKeyBytes]
     )
 
     sealed trait BuildError extends Throwable
@@ -34,7 +35,7 @@ object InitializationTx {
         // TODO: we set the fee to 1 ada, but this doesn't need to be
         val feeCoin = Coin(1_000_000)
         // Construct head native script directly from the list of peers
-        val headNativeScript = mkHeadNativeScript(recipe.peers)
+        val headNativeScript = HeadMultisigScript(recipe.peers)
 
         // Put the head address of the native script
         val headAddress = (

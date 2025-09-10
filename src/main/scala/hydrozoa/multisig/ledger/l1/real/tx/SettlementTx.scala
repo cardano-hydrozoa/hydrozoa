@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.l1.real.tx
 import cats.implicits.*
 import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.real.script.multisig.headAddress
+import hydrozoa.multisig.ledger.l1.real.script.multisig.HeadMultisigScript.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.l1.real.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import io.bullet.borer.Cbor
@@ -56,7 +56,7 @@ object SettlementTx {
         deposits: List[DepositUtxo],
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo,
-        headNativeScript: Native,
+        headNativeScript: HeadMultisigScript,
         network: Network
     )
 
@@ -72,7 +72,7 @@ object SettlementTx {
             recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
         // FIXME: Make this into a proper rollout utxo
         val rolloutOutput: TransactionOutput = Babbage(
-          address = headAddress(recipe.headNativeScript),
+          address = recipe.headNativeScript.address(recipe.network),
           value = withdrawnValue,
           datumOption = None,
           scriptRef = None
@@ -114,7 +114,7 @@ object SettlementTx {
 
             treasuryOutput: Sized[TransactionOutput] = Sized(
               TransactionOutput(
-                address = headAddress(recipe.headNativeScript),
+                address = recipe.headNativeScript.address(recipe.network),
                 value = treasuryValue,
                 datumOption = Some(Inline(treasuryDatum))
               )
