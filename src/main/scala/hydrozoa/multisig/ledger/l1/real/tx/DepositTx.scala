@@ -1,20 +1,22 @@
 package hydrozoa.multisig.ledger.l1.real.tx
 
+import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.l1.real.LedgerL1
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.*
 import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionMetadatum.Bytes
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.*
-
+import hydrozoa.multisig.ledger.l1.real
 import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
+import scalus.builtin.Data.{FromData, ToData, fromData}
 
+import scala.util.CommandLineParser.ParseError
 import scala.util.{Failure, Success, Try}
 
 final case class DepositTx(
@@ -24,18 +26,23 @@ final case class DepositTx(
 
 object DepositTx {
     case class Recipe(
-        deposit: UtxoIdL1, // the only UTXO with deposit funds in user's wallet
+        deposit: TransactionInput, // the only UTXO with deposit funds in user's wallet
         depositAmount: BigInt,
         datum: DepositUtxo.Datum, // datum for deposit utxo
-        headAddress: AddressL1,
+        headAddress: ShelleyAddress,
         utxoFunding: TransactionOutput
     )
 
     sealed trait ParseError extends Throwable
     case object HeadAddressNotFoundInMetadata extends ParseError
     case object NoUtxoAtHeadAddress extends ParseError
+    case object DepositUtxoNotBabbage extends ParseError
+    case object DepositDatumNotInline extends ParseError
+    case class DepositDatumMalformed(e : Throwable) extends ParseError
+    case class TxCborDeserializationFailed(e : Throwable) extends ParseError
+    case class MultipleUtxosAtHeadAddress(numUtxos : Int) extends ParseError
 
-    private def extractHeadAddress(tx: Transaction): Option[Address[L1]] =
+    private def extractHeadAddress(tx: Transaction): Option[ShelleyAddress] =
         tx.auxiliaryData match {
             case None => None
             case Some(Metadata(metadataMap)) =>
@@ -43,29 +50,54 @@ object DepositTx {
                     metadataValue <- metadataMap.get(
                       TransactionMetadatumLabel(CIP67Tags.head)
                     )
-                    addressBytes <- metadataValue match {
-                        case b: Bytes => Some(b)
+                    map <- metadataValue match {
+                        case m: TransactionMetadatum.Map => Some(m.entries)
                         case _        => None
                     }
-                    addressParsed <- Address.fromByteString[L1](addressBytes.value)
+                    mapValue <- map.get(TransactionMetadatum.Text("Deposit"))
+                    addressBytes <- mapValue match {
+                        case b : Bytes => Some(b)
+                        case _ => None
+                    }
+                    addressParsed <- Address.fromByteString(addressBytes.value) match {
+                        case sa: ShelleyAddress => Some(sa)
+                        case _                  => None
+                    }
 
                 } yield addressParsed
             case _ => None
         }
 
+    /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head address (given in the
+     * transaction metadata) with an Inline datum that parses correctly. */
     def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
         Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
                 for {
+                    // Pull head address from metadata
                     headAddress <- extractHeadAddress(tx).toRight(HeadAddressNotFoundInMetadata)
-                    depositUtxo <- tx.body.value.outputs
-                        .find(_.value.address == headAddress)
-                        .toRight(NoUtxoAtHeadAddress)
-                    // TODO: Check datum is a DepositDatum and extract it
-                    // datum <- ??? // parseDepositDatum(depositUtxo.datumOption.get.data) (...)
-                } yield DepositTx(DepositUtxo(utxo = ???, datum = ???), tx)
-            case Failure(_) => ???
+                    // Grab the single output at the head address, along with its index/
+                    depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex.filter(_._1.value.address == headAddress) match {
+                        case x if x.size == 1 => Right(x.head)
+                        case x if x.isEmpty => Left(NoUtxoAtHeadAddress)
+                        case x => Left(MultipleUtxosAtHeadAddress(x.size))
+                    }
+                    // Check that the output is babbage, extract and parse its inline datum
+                    dutxoAndDatum <- depositUtxoWithIndex._1.value match {
+                        case b : Babbage => b.datumOption match {
+                            case Some(i : Inline) => Try(fromData[DepositUtxo.Datum](i.data)) match {
+                                case Success(d) => Right((b, d))
+                                case Failure(e) => Left(DepositDatumMalformed(e))
+                            }
+                            case _ => Left(DepositDatumNotInline)
+                        }
+                        case _ => Left(DepositUtxoNotBabbage)
+                    }
+                } yield DepositTx(DepositUtxo(
+                    utxo = (TransactionInput(tx.id, depositUtxoWithIndex._2), dutxoAndDatum._1),
+                    datum = dutxoAndDatum._2), tx)
+            case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 
     }
@@ -143,7 +175,7 @@ object DepositTx {
             _ = assert(ix >= 0, s"Deposit output was not found in the tx.")
         } yield DepositTx(
           depositProduced = DepositUtxo(
-            utxo = Utxo(UtxoIdL1(TransactionInput(tx.id, ix)), Output[L1](depositOutput)),
+            utxo = (TransactionInput(tx.id, ix), depositOutput),
             datum = recipe.datum
           ),
           tx = tx
