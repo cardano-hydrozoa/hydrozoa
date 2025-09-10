@@ -2,7 +2,10 @@ package hydrozoa.multisig.ledger.l1.real.tx
 
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
 import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{Coin, Transaction}
+import hydrozoa.{Address, L1, Utxo}
+
+import hydrozoa.multisig.ledger.l1.real.token.Token.mkHeadTokenName
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -10,18 +13,13 @@ final case class InitializationTx(
 ) extends Tx
 
 object InitializationTx {
-//    sealed trait ParseError
-//
-//    def parse(txSerialized: Tx.Serialized): Either[ParseError, InitializationTx] = {
-//        val deserialized = txCborToScalus(txSerialized.txCbor)
-//        Right(
-//          InitializationTx(
-//            treasuryProduced = ???,
-//            headAddress = txSerialized.headAddress,
-//            headPolicy = txSerialized.headPolicy,
-//            txCbor = txSerialized.headPolicy,
-//            tx = deserialized
-//          )
-//        )
-//    }
+    final case class Recipe(
+        headAddress: Address[L1],
+        fundingUtxos: List[Utxo[L1]],
+        fundingToTreasury: Coin
+    )
+
+    sealed trait BuildError extends Throwable
+
+    def build(recipe: Recipe): Either[BuildError, InitializationTx] = ???
 }

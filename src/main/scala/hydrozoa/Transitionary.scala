@@ -60,9 +60,9 @@ import scala.util.{Failure, Success, Try}
 // "Empty" values used for building up real values and for testing
 
 val emptyTxBody: TransactionBody = TransactionBody(
-    inputs = Set.empty,
-    outputs = IndexedSeq.empty,
-    fee = Coin(0)
+  inputs = Set.empty,
+  outputs = IndexedSeq.empty,
+  fee = Coin(0)
 )
 //
 //val emptyTransaction: Transaction = {
@@ -296,9 +296,9 @@ val emptyTxBody: TransactionBody = TransactionBody(
 
 // Uses the bloxbean backend to query a utxo into a scalus TransactionOutput
 def bloxToScalusUtxoQuery(
-                             backendService: BackendService,
-                             input: UtxoId[L1]
-                         ): Either[String, TransactionOutput] = {
+    backendService: BackendService,
+    input: UtxoId[L1]
+): Either[String, TransactionOutput] = {
     backendService.getUtxoService
         .getTxOutput(input.transactionId.toHex, input.index)
         .toEither match {
@@ -317,9 +317,9 @@ def bloxToScalusUtxoQuery(
                     )
 
                 TransactionOutput(
-                    address = outAddress,
-                    value = outVal,
-                    datumOption = outDat
+                  address = outAddress,
+                  value = outVal,
+                  datumOption = outDat
                 )
             })
     }

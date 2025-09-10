@@ -8,8 +8,9 @@ import scalus.builtin.Data.FromData
 import scalus.builtin.Data.ToData
 import scalus.builtin.FromData
 import scalus.builtin.ToData
+import scalus.cardano.ledger.AssetName
 
-final case class TreasuryUtxo(utxo: Utxo[L1])
+final case class TreasuryUtxo(headTokenName: AssetName, utxo: Utxo[L1])
 
 object TreasuryUtxo {
     final case class Datum(
