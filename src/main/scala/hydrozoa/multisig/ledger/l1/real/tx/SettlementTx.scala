@@ -4,9 +4,11 @@ import cats.implicits.*
 import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
 import hydrozoa.multisig.ledger.l1.real.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.real.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.l1.real.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import io.bullet.borer.Cbor
+import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
@@ -31,18 +33,32 @@ object SettlementTx {
 
     sealed trait ParseError extends Throwable
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
 
     def parse(txSerialized: Tx.Serialized): Either[ParseError, SettlementTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
         Cbor.decode(txSerialized).to[Transaction].valueTry match {
             case Failure(e) => Left(TxCborDeserializationFailed(e))
             case Success(tx) =>
-                ???
                 for {
-                    _ <- Left(???)
+                    // Pull head address from metadata
+                    headAddress <- MD
+                        .parseExpected(tx, MD.L1TxTypes.Deposit)
+                        .left
+                        .map(MetadataParseError.apply)
+
                 } yield SettlementTx(
                   treasurySpent = ???,
-                  treasuryProduced = ???,
+                  treasuryProduced = TreasuryUtxo(
+                    headTokenName = ???,
+                    utxo = (
+                      TransactionInput(
+                        transactionId = Hash(blake2b_256(ByteString.fromArray(txSerialized))),
+                        index = 0
+                      ),
+                      ???
+                    )
+                  ),
                   depositsSpent = ???,
                   rolloutProduced = ???,
                   tx = tx

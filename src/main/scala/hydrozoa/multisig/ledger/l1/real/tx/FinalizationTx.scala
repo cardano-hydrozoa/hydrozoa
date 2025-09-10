@@ -1,39 +1,47 @@
 package hydrozoa.multisig.ledger.l1.real.tx
 
-import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo
-import scalus.cardano.ledger.{Transaction, TransactionInput, TransactionOutput}
-import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.emptyTxBody
+import hydrozoa.multisig.ledger.l1.real.LedgerL1
+import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
 import hydrozoa.multisig.ledger.l1.real.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.real.tx.Metadata as MD
+import hydrozoa.multisig.ledger.l1.real.utxo.TreasuryUtxo
+import io.bullet.borer.Cbor
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Babbage
 
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
+import scala.util.{Failure, Success}
 
 final case class FinalizationTx(
-    treasurySpent: TreasuryUtxo,
+    private val treasurySpent: TreasuryUtxo,
     override val tx: Transaction
 ) extends Tx
 
 object FinalizationTx {
-//    sealed trait ParseError
-//
-//    def parse(txSerialized: Tx.Serialized.Finalization): Either[ParseError, Tx.Finalization] = {
-//        val deserialized = txCborToScalus(txSerialized.txCbor)
-//        Right(
-//          Tx.Finalization(
-//            treasurySpent = ???,
-//            headAddress = txSerialized.headAddress,
-//            headPolicy = txSerialized.headPolicy,
-//            txCbor = txSerialized.headPolicy,
-//            tx = deserialized
-//          )
-//        )
-//    }
+    sealed trait ParseError
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
+
+    def parse(
+        txSerialized: Tx.Serialized,
+        state: LedgerL1.State
+    ): Either[ParseError, FinalizationTx] = {
+        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
+        Cbor.decode(txSerialized).to[Transaction].valueTry match {
+            case Success(tx) =>
+                Right(
+                  FinalizationTx(
+                    treasurySpent = ???,
+                    tx = tx
+                  )
+                )
+            case Failure(ex) => Left(TxCborDeserializationFailed(ex))
+        }
+
+    }
 
     case class Recipe(
         majorVersion: Int,

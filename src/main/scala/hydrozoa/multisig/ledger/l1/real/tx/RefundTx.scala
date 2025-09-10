@@ -2,14 +2,17 @@ package hydrozoa.multisig.ledger.l1.real.tx
 
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
 import hydrozoa.multisig.ledger.l1.real.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.l1.real.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import hydrozoa.{emptyTxBody, toScalusLedger}
+import io.bullet.borer.Cbor
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 
 import scala.language.implicitConversions
+import scala.util.{Failure, Success}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -81,18 +84,27 @@ object RefundTx {
 
     }
 
-    //    sealed trait ParseError
-//
-//    def parse(txSerialized: Tx.Serialized.Refund): Either[ParseError, Tx.Refund] = {
-//        val deserialized = txCborToScalus(txSerialized.txCbor)
-//        Right(
-//          Tx.Refund(
-//            depositSpent = ???,
-//            headAddress = txSerialized.headAddress,
-//            headPolicy = txSerialized.headPolicy,
-//            txCbor = txSerialized.headPolicy,
-//            tx = deserialized
-//          )
-//        )
-//    }
+    sealed trait ParseError
+
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
+    case object NoUtxoAtHeadAddress extends ParseError
+    case object DepositUtxoNotBabbage extends ParseError
+    case object DepositDatumNotInline extends ParseError
+    case class DepositDatumMalformed(e: Throwable) extends ParseError
+    case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
+
+    def parse(txSerialized: Tx.Serialized): Either[ParseError, RefundTx.PostDated] = {
+        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
+        Cbor.decode(txSerialized).to[Transaction].valueTry match {
+            case Success(tx) =>
+                for {
+                    headAddress <- MD
+                        .parseExpected(tx, MD.L1TxTypes.RefundPostDated)
+                        .left
+                        .map(MetadataParseError.apply)
+                } yield RefundTx.PostDated(depositSpent = ???, tx = tx)
+            case Failure(e) => Left(TxCborDeserializationFailed(e))
+        }
+    }
 }

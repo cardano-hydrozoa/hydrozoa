@@ -4,19 +4,19 @@ import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.l1.real
 import hydrozoa.multisig.ledger.l1.real.LedgerL1
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
+import hydrozoa.multisig.ledger.l1.real.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.{fromData, toData}
-import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionMetadatum.Bytes
 import scalus.cardano.ledger.TransactionOutput.Babbage
 
 import scala.util.{Failure, Success, Try}
 
+// TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
+// TODO: List out exactly the invariants we expect.
 final case class DepositTx(
     depositProduced: DepositUtxo,
     override val tx: Transaction
@@ -32,39 +32,13 @@ object DepositTx {
     )
 
     sealed trait ParseError extends Throwable
-    case object HeadAddressNotFoundInMetadata extends ParseError
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
     case object NoUtxoAtHeadAddress extends ParseError
     case object DepositUtxoNotBabbage extends ParseError
     case object DepositDatumNotInline extends ParseError
     case class DepositDatumMalformed(e: Throwable) extends ParseError
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
     case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
-
-    private def extractHeadAddress(tx: Transaction): Option[ShelleyAddress] =
-        tx.auxiliaryData match {
-            case None => None
-            case Some(Metadata(metadataMap)) =>
-                for {
-                    metadataValue <- metadataMap.get(
-                      TransactionMetadatumLabel(CIP67Tags.head)
-                    )
-                    map <- metadataValue match {
-                        case m: TransactionMetadatum.Map => Some(m.entries)
-                        case _                           => None
-                    }
-                    mapValue <- map.get(TransactionMetadatum.Text("Deposit"))
-                    addressBytes <- mapValue match {
-                        case b: Bytes => Some(b)
-                        case _        => None
-                    }
-                    addressParsed <- Address.fromByteString(addressBytes.value) match {
-                        case sa: ShelleyAddress => Some(sa)
-                        case _                  => None
-                    }
-
-                } yield addressParsed
-            case _ => None
-        }
 
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
@@ -75,7 +49,10 @@ object DepositTx {
             case Success(tx) =>
                 for {
                     // Pull head address from metadata
-                    headAddress <- extractHeadAddress(tx).toRight(HeadAddressNotFoundInMetadata)
+                    headAddress <- MD
+                        .parseExpected(tx, MD.L1TxTypes.Deposit)
+                        .left
+                        .map(MetadataParseError.apply)
                     // Grab the single output at the head address, along with its index/
                     depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex
                         .filter(_._1.value.address == headAddress) match {
@@ -162,15 +139,7 @@ object DepositTx {
               body = KeepRaw(txBody),
               witnessSet = TransactionWitnessSet.empty,
               isValid = true,
-              auxiliaryData = Some(
-                Metadata(
-                  Map(
-                    TransactionMetadatumLabel(CIP67Tags.head) -> Bytes(
-                      recipe.headAddress.toBytes
-                    )
-                  )
-                )
-              )
+              auxiliaryData = Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress))
             )
 
             // Find the deposit output index
