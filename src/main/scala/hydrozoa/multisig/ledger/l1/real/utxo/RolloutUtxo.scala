@@ -1,8 +1,7 @@
 package hydrozoa.multisig.ledger.l1.real.utxo
 
-import hydrozoa.{L1, Utxo}
-import hydrozoa.multisig.ledger.l1.real.token.Token.rolloutTokenName
+import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 
-final case class RolloutUtxo(utxo: Utxo[L1])
+final case class RolloutUtxo(utxo: (TransactionInput, TransactionOutput))
 
 object RolloutUtxo {}
