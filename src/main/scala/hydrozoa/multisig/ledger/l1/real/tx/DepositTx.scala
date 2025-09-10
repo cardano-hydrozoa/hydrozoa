@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l1.real.tx
 
 import hydrozoa.multisig.ledger.l1.real.LedgerL1
 import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.real.token.CIP67Tags
 import hydrozoa.*
 import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import io.bullet.borer.Cbor
@@ -13,6 +12,8 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionMetadatum.Bytes
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.*
+
+import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
 
 import scala.util.{Failure, Success, Try}
 
@@ -30,7 +31,7 @@ object DepositTx {
         utxoFunding: TransactionOutput
     )
 
-    sealed trait ParseError
+    sealed trait ParseError extends Throwable
     case object HeadAddressNotFoundInMetadata extends ParseError
     case object NoUtxoAtHeadAddress extends ParseError
 
@@ -39,7 +40,9 @@ object DepositTx {
             case None => None
             case Some(Metadata(metadataMap)) =>
                 for {
-                    metadataValue <- metadataMap.get(TransactionMetadatumLabel(CIP67Tags.head))
+                    metadataValue <- metadataMap.get(
+                      TransactionMetadatumLabel(CIP67Tags.head)
+                    )
                     addressBytes <- metadataValue match {
                         case b: Bytes => Some(b)
                         case _        => None
@@ -124,7 +127,9 @@ object DepositTx {
               auxiliaryData = Some(
                 Metadata(
                   Map(
-                    TransactionMetadatumLabel(CIP67Tags.head) -> Bytes(recipe.headAddress.toBytes)
+                    TransactionMetadatumLabel(CIP67Tags.head) -> Bytes(
+                      recipe.headAddress.toBytes
+                    )
                   )
                 )
               )

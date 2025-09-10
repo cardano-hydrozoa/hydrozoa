@@ -1,41 +1,24 @@
 package hydrozoa.multisig.ledger.l1.real
 
 import cats.effect.{IO, Ref}
-import co.nstant.in.cbor.model.{
-    Map,
-    UnsignedInteger,
-    Array as CborArray,
-    ByteString as CborByteString
+import cats.implicits.catsSyntaxApplicativeError
+import hydrozoa.{Address, L1, Output}
+import hydrozoa.multisig.ledger.l1.real.LedgerL1.{State, Tx, DepositDecision, ErrorAddDeposit}
+import hydrozoa.multisig.ledger.l1.real.token.Token.CIP67Tags
+import hydrozoa.multisig.ledger.l1.real.tx.{
+    DepositTx,
+    FallbackTx,
+    FinalizationTx,
+    InitializationTx,
+    RefundTx,
+    RolloutTx,
+    SettlementTx
 }
-import hydrozoa.{Address, L1, Utxo as HUtxo}
-import hydrozoa.multisig.ledger.l1.real.LedgerL1.{State, Tx}
-import hydrozoa.multisig.ledger.l1.real.token.CIP67Tags
 import hydrozoa.multisig.ledger.l1.real.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import io.bullet.borer.Cbor
-import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.ledger.TransactionMetadatum.Bytes
-import scalus.cardano.ledger.{
-    AssetName,
-    Blake2b_224,
-    Hash,
-    HashPurpose,
-    MultiAsset,
-    OriginalCborByteArray,
-    PolicyId,
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionMetadatumLabel,
-    VKeyWitness,
-    TransactionOutput as STransactionOutput,
-    Value as SValue
-}
-import scalus.ledger.api.Timelock.AllOf
+import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel}
 
-import java.math.BigInteger
-import scala.collection.immutable.SortedMap
+import scala.collection.immutable.Queue
 import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions
 
@@ -43,43 +26,100 @@ final case class LedgerL1(headAddress: Address[L1])(
     private val state: Ref[IO, State]
 ) {
 
-    /** A transaction belongs to the head if it matches on address and currency symbol */
-    def txBelongsToHead(tx: LedgerL1.Tx): Boolean =
-        tx.tx.auxiliaryData.getOrElse(false) match {
-            case Metadata(m) =>
-                m.get(TransactionMetadatumLabel(CIP67Tags.head)).fold(false)(_ == headAddress)
-            case _ => false
-        }
+    /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
+      * Return the produced deposit utxo and a post-dated refund transaction for it.
+      * @param txSerialized
+      *   a serialized deposit transaction
+      */
+    def addDeposit(
+        txSerialized: Tx.Serialized
+    ): IO[Either[ErrorAddDeposit, (DepositUtxo, RefundTx.PostDated)]] = {
+        // 1. Deserialize and parse the tx.
+        // 2. Check that the deposit tx belongs to this ledger.
+        // 3. Check that the tx satisfies ledger STS rules (assuming inputs exist).
+        // 4. Append the tx's deposit utxo to the ledger's state.deposits queue.
+        // 5. Return the produced deposit utxo and a post-dated refund transaction for it.
+        (for {
+            tx <- IO.pure(DepositTx.parse(txSerialized)).rethrow
+            refundTx <- IO.pure(???)
+        } yield (tx.depositProduced, refundTx)).attemptNarrow
+    }
 
-    trait StsError
+    /** Construct a settlement transaction, a fallback transaction, a list of rollout transactions,
+      * and a list of immediate refund transactions based on the arguments. Remove the
+      * absorbed/refunded deposits and update the treasury in the ledger state.
+      * @param depositDecisions
+      *   for each deposit, a decision about whether it should be absorbed in the settlement
+      *   transaction or immediately refunded.
+      * @param payouts
+      *   a list of payout outputs that should be produced by the settlement and rollout
+      *   transactions.
+      *
+      * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
+      */
+    def settleLedger(
+        depositDecisions: List[(DepositUtxo, DepositDecision)],
+        payouts: List[Output[L1]]
+    ): IO[(SettlementTx, FallbackTx, List[RolloutTx], List[RefundTx.Immediate])] =
+        for {
+            _ <- IO.pure(())
+        } yield ???
 
-    /** Check all L1 ledger rules except for the existence of the tx's inputs */
-    def txValidateSts(tx: Tx): Either[StsError, Unit] =
-        ???
-
-    /** If the transaction passes [[txValidateSts]], apply it to transition the L1 ledger state. */
-    def applyTx(tx: Tx): IO[Either[StsError, Unit]] =
-        ???
+    /** Construct a finalization transaction, a list of rollout transactions, and a list of
+      * immediate refund transactions based on the arguments. The [[LedgerL1]] must be discarded
+      * after this, so there's no point in updating its state.
+      * @param payouts
+      *   a list of payout outputs that should be produced by the finalization and rollout
+      *   transactions.
+      *
+      * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
+      * Immediate refund transactions must be constructed for every deposit in the ledger state.
+      */
+    def finalizeLedger(payouts: List[Output[L1]]): IO[(FinalizationTx, List[RefundTx.Immediate])] =
+        for {
+            _ <- IO.pure(())
+        } yield ???
 }
 
 object LedgerL1 {
-    def create(headAddress: Address[L1]): IO[LedgerL1] =
-        for {
-            state <- Ref[IO].of(State())
-        } yield LedgerL1(headAddress)(state)
+
+    /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
+    def create(
+        initRecipe: InitializationTx.Recipe
+    ): IO[Either[InitializationTx.BuildError, (LedgerL1, InitializationTx)]] =
+        (for {
+            initTx <- IO.pure(InitializationTx.build(initRecipe)).rethrow
+            state <- Ref[IO].of(State(treasury = initTx.treasuryProduced))
+        } yield (LedgerL1(initRecipe.headAddress)(state), initTx)).attemptNarrow
 
     final case class State(
-        treasury: Option[TreasuryUtxo] = None,
-        deposits: List[DepositUtxo] = List(),
-        rollouts: List[RolloutUtxo] = List()
-    )
+        treasury: TreasuryUtxo,
+        deposits: Queue[DepositUtxo] = Queue()
+    ) {
+        // Specialized methods for querying and updating State
+    }
+
+    sealed trait DepositDecision
+    case object AbsorbDeposit extends DepositDecision
+    case object RefundDeposit extends DepositDecision
 
     trait Tx {
         val tx: Transaction
+
+        /** A transaction belongs to a [[LedgerL1]] if it matches on address and currency symbol */
+        def txBelongsToLedger(ledger: LedgerL1): Boolean =
+            this.tx.auxiliaryData.getOrElse(false) match {
+                case Metadata(m) =>
+                    m.get(TransactionMetadatumLabel(CIP67Tags.head))
+                        .fold(false)(_ == ledger.headAddress)
+                case _ => false
+            }
     }
 
     object Tx {
         type Serialized = Array[Byte]
-
     }
+
+    // We can add some more error types to this ad-hoc union:
+    type ErrorAddDeposit = DepositTx.ParseError
 }
