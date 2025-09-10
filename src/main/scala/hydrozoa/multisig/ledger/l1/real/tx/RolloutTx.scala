@@ -15,9 +15,9 @@ object RolloutTx {
             rolloutSpent = ???,
             rolloutProduced = ???,
             headAddress = txSerialized.headAddress,
-            headCs = txSerialized.headCs,
-            txCbor = txSerialized.headCs,
-            txDeserialized = deserialized
+            headPolicy = txSerialized.headPolicy,
+            txCbor = txSerialized.headPolicy,
+            tx = deserialized
           )
         )
     }
