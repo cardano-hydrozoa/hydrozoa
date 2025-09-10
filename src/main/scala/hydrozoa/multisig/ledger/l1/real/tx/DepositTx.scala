@@ -1,10 +1,10 @@
 package hydrozoa.multisig.ledger.l1.real.tx
 
-import com.bloxbean.cardano.client.backend.api.BackendService
 import hydrozoa.multisig.ledger.l1.real.LedgerL1
-import hydrozoa.multisig.ledger.l1.real.LedgerL1.{DepositUtxo, Tx}
-import hydrozoa.multisig.ledger.l1.real.state.{CIP67Tags, DepositDatum}
+import hydrozoa.multisig.ledger.l1.real.LedgerL1.Tx
+import hydrozoa.multisig.ledger.l1.real.token.CIP67Tags
 import hydrozoa.*
+import hydrozoa.multisig.ledger.l1.real.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
@@ -16,42 +16,58 @@ import scalus.cardano.ledger.*
 
 import scala.util.{Failure, Success, Try}
 
-// TDOO: Make opaque, move to a separate module?
-case class DepositUtxo (utxo: Utxo[L1], datum : DepositDatum)
-
+final case class DepositTx(
+    depositProduced: DepositUtxo,
+    override val tx: Transaction
+) extends Tx
 
 object DepositTx {
     case class Recipe(
         deposit: UtxoIdL1, // the only UTXO with deposit funds in user's wallet
         depositAmount: BigInt,
-        datum: DepositDatum, // datum for deposit utxo
+        datum: DepositUtxo.Datum, // datum for deposit utxo
         headAddress: AddressL1,
-        backendService: BackendService,
         utxoFunding: TransactionOutput
     )
-    
-    opaque type Tx = (Transaction, DepositUtxo)
 
     sealed trait ParseError
     case object HeadAddressNotFoundInMetadata extends ParseError
     case object NoUtxoAtHeadAddress extends ParseError
-    
-    def parse(txBytes: Tx.Serialized): Either[ParseError, Tx] = {
+
+    private def extractHeadAddress(tx: Transaction): Option[Address[L1]] =
+        tx.auxiliaryData match {
+            case None => None
+            case Some(Metadata(metadataMap)) =>
+                for {
+                    metadataValue <- metadataMap.get(TransactionMetadatumLabel(CIP67Tags.head))
+                    addressBytes <- metadataValue match {
+                        case b: Bytes => Some(b)
+                        case _        => None
+                    }
+                    addressParsed <- Address.fromByteString[L1](addressBytes.value)
+
+                } yield addressParsed
+            case _ => None
+        }
+
+    def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
         Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
-            for {
-                headAddress <- Tx.extractHeadAddress(tx).toRight(HeadAddressNotFoundInMetadata)
-                depositUtxo <- tx.body.value.outputs.find(_.value.address == headAddress).toRight(NoUtxoAtHeadAddress)
-                // TODO: Check datum is a DepositDatum and extract it
-                // datum <- ??? // parseDepositDatum(depositUtxo.datumOption.get.data) (...)
-            } yield (tx, DepositUtxo(utxo = ???, datum = ???))
+                for {
+                    headAddress <- extractHeadAddress(tx).toRight(HeadAddressNotFoundInMetadata)
+                    depositUtxo <- tx.body.value.outputs
+                        .find(_.value.address == headAddress)
+                        .toRight(NoUtxoAtHeadAddress)
+                    // TODO: Check datum is a DepositDatum and extract it
+                    // datum <- ??? // parseDepositDatum(depositUtxo.datumOption.get.data) (...)
+                } yield DepositTx(DepositUtxo(utxo = ???, datum = ???), tx)
+            case Failure(_) => ???
         }
-       
+
     }
-    
-    
-    def build(recipe: Recipe): Either[String, Tx] = {
+
+    def build(recipe: Recipe): Either[String, DepositTx] = {
         // TODO: we set the fee to 1 ada, but this doesn't need to be
         val feeCoin = Coin(1_000_000)
         val depositValue: Value =
@@ -74,7 +90,7 @@ object DepositTx {
                     Left(
                       s"Malformed value equal to `utxoFunding.value - Value(feeCoin) - depositValue`" +
                           s" encountered: utxoFunding.value = ${recipe.utxoFunding.value}, " +
-                          s"depositValue = ${depositValue}, feeCoin = ${feeCoin}"
+                          s"depositValue = $depositValue, feeCoin = $feeCoin"
                     )
             }
 
@@ -120,9 +136,12 @@ object DepositTx {
             )
 
             _ = assert(ix >= 0, s"Deposit output was not found in the tx.")
-        } yield (
-          (tx, DepositUtxo(utxo = Utxo(UtxoIdL1(TransactionInput(tx.id, ix)), Output[L1](depositOutput)),
-                    datum = recipe.datum)
-        ))
+        } yield DepositTx(
+          depositProduced = DepositUtxo(
+            utxo = Utxo(UtxoIdL1(TransactionInput(tx.id, ix)), Output[L1](depositOutput)),
+            datum = recipe.datum
+          ),
+          tx = tx
+        )
     }
 }
