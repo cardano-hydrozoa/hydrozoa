@@ -29,10 +29,8 @@ final case class JointLedger()(
 
 /** ==Hydrozoa's joint ledger on Cardano in the multisig regime==
   *
-  * This joint ledger connects Hydrozoa's dapp ledger to its virtual ledger. It dispatches some
-  * state transitions to them individually, but it also reconciles some state transitions across
-  * them (sometimes in aggregate) to keep them aligned.
+  * Hydrozoa's joint ledger connects its dapp ledger to its virtual ledger. It dispatches some state
+  * transitions to them individually, but it also periodically reconciles state transitions across
+  * them to keep them aligned.
   */
-object JointLedger {
-
-}
+object JointLedger {}

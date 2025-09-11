@@ -8,16 +8,18 @@ import scalus.cardano.ledger.{Transaction, TransactionOutput}
 type KzgCommitment = String
 
 final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]) {
-    
+
     def applyInternalTx(txSerialized: Tx.Serialized): IO[Either[ErrorApplyInternalTx, Unit]] =
         ???
-        
-    def applyWithdrawalTx(txSerialized: Tx.Serialized): IO[Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]] =
+
+    def applyWithdrawalTx(
+        txSerialized: Tx.Serialized
+    ): IO[Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]] =
         ???
-        
+
     def applyGenesisTx(tx: GenesisTx): IO[Unit] =
         ???
-        
+
     def getKzgCommitment: IO[KzgCommitment] =
         ???
 }
@@ -45,12 +47,12 @@ object VirtualLedger {
     sealed trait Tx {
         val tx: Transaction
     }
-    
+
     object Tx {
         type Serialized = Array[Byte]
     }
-    
+
     sealed trait ErrorApplyInternalTx
-    
+
     sealed trait ErrorApplyWithdrawalTx
 }
