@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.l1.script.multisig
+package hydrozoa.multisig.ledger.dapp.script.multisig
 
 import cats.*
 import cats.data.*

@@ -1,7 +1,7 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.l1.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import scalus.cardano.ledger.Transaction
 
 final case class RolloutTx(

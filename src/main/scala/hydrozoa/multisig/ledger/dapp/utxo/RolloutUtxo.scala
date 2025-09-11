@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.l1.utxo
+package hydrozoa.multisig.ledger.dapp.utxo
 
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 

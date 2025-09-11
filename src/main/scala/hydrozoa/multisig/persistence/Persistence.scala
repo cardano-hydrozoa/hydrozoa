@@ -6,7 +6,19 @@ import cats.implicits._
 import com.suprnation.actor.Actor.ReplyingReceive
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.actors.{AckBlock, AckId, BatchId, BlockId, ConfirmBlock, GetMsgBatch, LedgerEventId, NewBlock, NewLedgerEvent, NewMsgBatch, PersistedReq}
+import hydrozoa.multisig.actors.{
+    AckBlock,
+    AckId,
+    BatchId,
+    BlockId,
+    ConfirmBlock,
+    GetMsgBatch,
+    LedgerEventId,
+    NewBlock,
+    NewLedgerEvent,
+    NewMsgBatch,
+    PersistedReq
+}
 
 import scala.collection.immutable
 

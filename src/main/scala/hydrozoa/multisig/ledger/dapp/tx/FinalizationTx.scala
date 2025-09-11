@@ -1,11 +1,11 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.emptyTxBody
-import hydrozoa.multisig.ledger.l1.LedgerL1
-import LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.DappLedger
+import DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import io.bullet.borer.Cbor
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -27,7 +27,7 @@ object FinalizationTx {
 
     def parse(
         txSerialized: Tx.Serialized,
-        state: LedgerL1.State
+        state: DappLedger.State
     ): Either[ParseError, FinalizationTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
         Cbor.decode(txSerialized).to[Transaction].valueTry match {

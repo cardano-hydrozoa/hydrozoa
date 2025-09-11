@@ -1,6 +1,6 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.l1.token.Token.CIP67Tags
+import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
 import Metadata.L1TxTypes.*
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
@@ -12,7 +12,7 @@ import scalus.cardano.ledger.{
 }
 
 object Metadata {
-    // NOTE (from Peter to George): I assume we have these types somewhere else? They used to be in LedgerL1.
+    // NOTE (from Peter to George): I assume we have these types somewhere else? They used to be in DappLedger.
     enum L1TxTypes:
         case Deposit
         case Fallback

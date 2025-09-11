@@ -1,10 +1,10 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.emptyTxBody
-import hydrozoa.multisig.ledger.l1.LedgerL1
-import LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.DappLedger
+import DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}

@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.l1.token
+package hydrozoa.multisig.ledger.dapp.token
 
 import scalus.cardano.ledger.{AssetName, TransactionInput}
 

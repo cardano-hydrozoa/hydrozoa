@@ -1,12 +1,12 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.emptyTxBody
-import hydrozoa.multisig.ledger.l1.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import io.bullet.borer.Cbor
 import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString

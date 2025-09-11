@@ -1,9 +1,9 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.l1.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.{emptyTxBody, toScalusLedger}
 import io.bullet.borer.Cbor
 import scalus.cardano.address.Network

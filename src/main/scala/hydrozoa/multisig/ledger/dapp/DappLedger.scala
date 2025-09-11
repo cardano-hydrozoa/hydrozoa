@@ -1,11 +1,19 @@
-package hydrozoa.multisig.ledger.l1
+package hydrozoa.multisig.ledger.dapp
 
 import cats.effect.{IO, Ref}
 import cats.implicits.catsSyntaxApplicativeError
-import LedgerL1.{DepositDecision, ErrorAddDeposit, State, Tx}
-import hydrozoa.multisig.ledger.l1.token.Token.CIP67Tags
-import hydrozoa.multisig.ledger.l1.tx.{DepositTx, FallbackTx, FinalizationTx, InitializationTx, RefundTx, RolloutTx, SettlementTx}
-import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, TreasuryUtxo}
+import DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
+import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
+import hydrozoa.multisig.ledger.dapp.tx.{
+    DepositTx,
+    FallbackTx,
+    FinalizationTx,
+    InitializationTx,
+    RefundTx,
+    RolloutTx,
+    SettlementTx
+}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
@@ -14,7 +22,7 @@ import scala.collection.immutable.Queue
 import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions
 
-final case class LedgerL1(headAddress: ShelleyAddress)(
+final case class DappLedger(headAddress: ShelleyAddress)(
     private val state: Ref[IO, State]
 ) {
 
@@ -58,8 +66,9 @@ final case class LedgerL1(headAddress: ShelleyAddress)(
         } yield ???
 
     /** Construct a finalization transaction, a list of rollout transactions, and a list of
-      * immediate refund transactions based on the arguments. The [[LedgerL1]] must be discarded
+      * immediate refund transactions based on the arguments. The [[DappLedger]] must be discarded
       * after this, so there's no point in updating its state.
+      *
       * @param payouts
       *   a list of payout outputs that should be produced by the finalization and rollout
       *   transactions.
@@ -75,16 +84,32 @@ final case class LedgerL1(headAddress: ShelleyAddress)(
         } yield ???
 }
 
-object LedgerL1 {
+/** ==Hydrozoa's detached dapp ledger on Cardano in the multisig regime==
+  *
+  * '''Dapp ledger on Cardano''' means that the ledger is domain-specific to a single decentralized
+  * application (dApp), and that its state corresponds to a subset of the utxos in the general
+  * Cardano ledger. Every state transition of the dapp ledger corresponds to a sequence of one or
+  * more Cardano transactions.
+  *
+  * '''Detached dapp ledger''' means that the ledger's state can be evolved without waiting to
+  * synchronize each state transition with Cardano. Instead, the Cardano transactions can be
+  * asynchronously submitted to drive Cardano toward the state corresponding to the dapp ledger,
+  * repeatedly re-submitting transactions as necessary until they are confirmed on Cardano.
+  *
+  * Hydrozoa's consensus protocol makes it possible for its dapp ledger to be detached by mitigating
+  * the sources of contention that might interfere with the Cardano transactions corresponding to
+  * the dapp ledger's transitions.
+  */
+object DappLedger {
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
     def create(
         initRecipe: InitializationTx.Recipe
-    ): IO[Either[InitializationTx.BuildError, (LedgerL1, InitializationTx)]] =
+    ): IO[Either[InitializationTx.BuildError, (DappLedger, InitializationTx)]] =
         (for {
             initTx <- IO.pure(InitializationTx.build(initRecipe)).rethrow
             state <- Ref[IO].of(State(treasury = initTx.treasuryProduced))
-        } yield (LedgerL1(headAddress = initTx.headAddress)(state), initTx)).attemptNarrow
+        } yield (DappLedger(headAddress = initTx.headAddress)(state), initTx)).attemptNarrow
 
     final case class State(
         treasury: TreasuryUtxo,
@@ -100,8 +125,9 @@ object LedgerL1 {
     trait Tx {
         val tx: Transaction
 
-        /** A transaction belongs to a [[LedgerL1]] if it matches on address and currency symbol */
-        def txBelongsToLedger(ledger: LedgerL1): Boolean =
+        /** A transaction belongs to a [[DappLedger]] if it matches on address and currency symbol
+          */
+        def txBelongsToLedger(ledger: DappLedger): Boolean =
             this.tx.auxiliaryData.getOrElse(false) match {
                 case Metadata(m) =>
                     m.get(TransactionMetadatumLabel(CIP67Tags.head))

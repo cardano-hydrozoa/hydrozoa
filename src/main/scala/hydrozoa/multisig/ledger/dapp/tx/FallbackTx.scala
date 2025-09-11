@@ -1,7 +1,7 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.l1.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.cardano.ledger.Transaction
 
 final case class FallbackTx(
@@ -26,6 +26,5 @@ object FallbackTx {
 //          )
 //        )
 //    }
-    
-    
+
 }

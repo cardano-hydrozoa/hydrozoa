@@ -1,12 +1,12 @@
-package hydrozoa.multisig.ledger.l1.tx
+package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.l1.LedgerL1.Tx
-import hydrozoa.multisig.ledger.l1.token.Token.mkHeadTokenName
+import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import Metadata.L1TxTypes.Initialization
-import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.{VerificationKeyBytes, emptyTxBody}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
