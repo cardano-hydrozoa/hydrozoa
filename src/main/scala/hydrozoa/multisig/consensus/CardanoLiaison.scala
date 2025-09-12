@@ -7,16 +7,17 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import CardanoLiaison.{Config, ConnectionsPending, State, Subscribers}
-import hydrozoa.multisig.backend.cardano.CardanoBackendRef
-import hydrozoa.multisig.persistence.PersistenceActorRef
-import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 
 final case class CardanoLiaison(config: Config)(
     private val connections: ConnectionsPending
 )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-) extends Actor[IO, CardanoLiaisonReq] {
+) extends Actor[IO, Request] {
     override def preStart: IO[Unit] =
         for {
             cardanoBackend <- connections.cardanoBackend.get
@@ -31,7 +32,7 @@ final case class CardanoLiaison(config: Config)(
             )
         } yield ()
 
-    override def receive: Receive[IO, CardanoLiaisonReq] =
+    override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
@@ -43,7 +44,7 @@ final case class CardanoLiaison(config: Config)(
             })
         )
 
-    private def receiveTotal(req: CardanoLiaisonReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
         req match {
             case x: ConfirmBlock =>
                 ???
@@ -60,13 +61,13 @@ object CardanoLiaison {
     final case class Config()
 
     final case class ConnectionsPending(
-        cardanoBackend: Deferred[IO, CardanoBackendRef],
-        persistence: Deferred[IO, PersistenceActorRef]
+        cardanoBackend: Deferred[IO, CardanoBackend.Ref],
+        persistence: Deferred[IO, Persistence.Ref]
     )
 
     final case class Subscribers(
-        cardanoBackend: CardanoBackendRef,
-        persistence: PersistenceActorRef
+        cardanoBackend: CardanoBackend.Ref,
+        persistence: Persistence.Ref
     )
 
     def create(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {

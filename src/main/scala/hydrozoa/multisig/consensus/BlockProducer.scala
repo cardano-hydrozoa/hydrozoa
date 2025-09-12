@@ -7,15 +7,17 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import BlockProducer.{Config, ConnectionsPending, State, Subscribers}
-import hydrozoa.multisig.persistence.PersistenceActorRef
-import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
 
 final case class BlockProducer(config: Config)(
     private val connections: ConnectionsPending
 )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-) extends Actor[IO, BlockProducerReq] {
+) extends Actor[IO, Request] {
     override def preStart: IO[Unit] =
         for {
             cardanoLiaison <- connections.cardanoLiaison.get
@@ -34,7 +36,7 @@ final case class BlockProducer(config: Config)(
             )
         } yield ()
 
-    override def receive: Receive[IO, BlockProducerReq] =
+    override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
@@ -46,7 +48,7 @@ final case class BlockProducer(config: Config)(
             })
         )
 
-    private def receiveTotal(req: BlockProducerReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
         req match {
             case x: NewLedgerEvent =>
                 ???
@@ -68,17 +70,17 @@ object BlockProducer {
     final case class Config(peerId: PeerId)
 
     final case class ConnectionsPending(
-        cardanoLiaison: Deferred[IO, CardanoLiaisonRef],
-        peerLiaisons: Deferred[IO, List[PeerLiaisonRef]],
-        transactionSequencer: Deferred[IO, TransactionSequencerRef],
-        persistence: Deferred[IO, PersistenceActorRef]
+        cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
+        transactionSequencer: Deferred[IO, TransactionSequencer.Ref],
+        persistence: Deferred[IO, Persistence.Ref]
     )
 
     final case class Subscribers(
-        ackBlock: List[AckBlockSubscriber],
-        newBlock: List[NewBlockSubscriber],
-        confirmBlock: List[ConfirmBlockSubscriber],
-        persistence: PersistenceActorRef
+        ackBlock: List[AckBlock.Subscriber],
+        newBlock: List[NewBlock.Subscriber],
+        confirmBlock: List[ConfirmBlock.Subscriber],
+        persistence: Persistence.Ref
     )
 
     def create(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {

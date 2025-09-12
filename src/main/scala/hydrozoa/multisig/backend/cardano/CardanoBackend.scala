@@ -1,10 +1,10 @@
 package hydrozoa.multisig.backend.cardano
 
 import cats.effect.IO
-import cats.implicits._
+import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
-import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
 
 /** Cardano backend actor is a mock interface to the Cardano blockchain:
   *
@@ -16,32 +16,10 @@ object CardanoBackend {
         CardanoBackend().pure
 }
 
-final case class CardanoBackend() extends Actor[IO, CardanoBackendReq] {
-    override def receive: Receive[IO, CardanoBackendReq] =
+final case class CardanoBackend() extends Actor[IO, Request] {
+    override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction({
             case x: SubmitL1Effects     => ???
             case x: GetCardanoHeadState => ???
         })
 }
-
-/** Cardano backend protocol. See diagram: [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
-  */
-sealed trait CardanoBackendProtocol
-sealed trait CardanoBackendReq extends CardanoBackendProtocol
-sealed trait CardanoBackendResp extends CardanoBackendProtocol
-
-/** Submit L1 effects to the Cardano backend. The response from the backend is ignored, so we model
-  * this as an async request in the pure model.
-  */
-final case class SubmitL1Effects(
-) extends CardanoBackendReq
-
-/** Get the head's current utxo state in Cardano. */
-final case class GetCardanoHeadState(
-) extends CardanoBackendReq
-
-/** The head's current utxo state in Cardano, provided in response to [[GetCardanoHeadState]]. */
-final case class GetCardanoHeadStateResp(
-) extends CardanoBackendResp
-
-type CardanoBackendRef = ActorRef[IO, CardanoBackendReq]

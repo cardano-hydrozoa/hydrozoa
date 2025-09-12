@@ -10,15 +10,18 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 
 import scala.collection.immutable.Queue
 import TransactionSequencer.{Config, ConnectionsPending, State, Subscribers}
-import hydrozoa.multisig.persistence.{PersistenceActorRef, PutActorReq}
 import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
 
 final case class TransactionSequencer(config: Config)(
     private val connections: ConnectionsPending
 )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-) extends Actor[IO, TransactionSequencerReq] {
+) extends Actor[IO, Request] {
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
@@ -34,7 +37,7 @@ final case class TransactionSequencer(config: Config)(
             )
         } yield ()
 
-    override def receive: Receive[IO, TransactionSequencerReq] =
+    override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
             subscribers.get.flatMap({
                 case Some(subs) =>
@@ -46,7 +49,7 @@ final case class TransactionSequencer(config: Config)(
             })
         )
 
-    private def receiveTotal(req: TransactionSequencerReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
         req match {
             case x: SubmitLedgerEvent =>
                 for {
@@ -54,7 +57,7 @@ final case class TransactionSequencer(config: Config)(
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, x.time, x.event)
                     _ <- state.localRequests.update(q => q :+ (newNum -> x.eventOutcome))
-                    _ <- subs.persistence ? PutActorReq(newEvent)
+                    _ <- subs.persistence ? Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>
@@ -69,14 +72,14 @@ object TransactionSequencer {
     final case class Config(peerId: PeerId)
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducerRef],
-        peerLiaisons: Deferred[IO, List[PeerLiaisonRef]],
-        persistence: Deferred[IO, PersistenceActorRef]
+        blockProducer: Deferred[IO, BlockProducer.Ref],
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
+        persistence: Deferred[IO, Persistence.Ref]
     )
 
     final case class Subscribers(
-        newLedgerEvent: List[NewLedgerEventSubscriber],
-        persistence: PersistenceActorRef
+        newLedgerEvent: List[NewLedgerEvent.Subscriber],
+        persistence: Persistence.Ref
     )
 
     def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
