@@ -1,12 +1,10 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.ledger.dapp.DappLedger
-import hydrozoa.multisig.ledger.dapp.DappLedger.ErrorAddDeposit
+import DappLedger.ErrorAddDeposit
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.VirtualLedger
-import hydrozoa.multisig.ledger.virtual.VirtualLedger.{ErrorApplyInternalTx, ErrorApplyWithdrawalTx}
+import VirtualLedger.{ErrorApplyInternalTx, ErrorApplyWithdrawalTx}
 import hydrozoa.multisig.ledger.virtual.tx.{InternalTx, WithdrawalTx}
 import scalus.cardano.ledger.TransactionOutput
 

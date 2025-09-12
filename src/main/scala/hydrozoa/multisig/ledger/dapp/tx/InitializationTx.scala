@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript

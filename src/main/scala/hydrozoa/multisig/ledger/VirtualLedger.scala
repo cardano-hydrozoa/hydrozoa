@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.virtual
+package hydrozoa.multisig.ledger
 
 import VirtualLedger.{Config, ErrorApplyInternalTx, ErrorApplyWithdrawalTx, State, Tx}
 import cats.effect.{IO, Ref}

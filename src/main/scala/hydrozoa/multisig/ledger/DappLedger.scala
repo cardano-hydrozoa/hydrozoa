@@ -1,18 +1,10 @@
-package hydrozoa.multisig.ledger.dapp
+package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
 import cats.implicits.catsSyntaxApplicativeError
-import DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
+import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
 import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
-import hydrozoa.multisig.ledger.dapp.tx.{
-    DepositTx,
-    FallbackTx,
-    FinalizationTx,
-    InitializationTx,
-    RefundTx,
-    RolloutTx,
-    SettlementTx
-}
+import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata

@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.emptyTxBody
-import hydrozoa.multisig.ledger.dapp.DappLedger
+import hydrozoa.multisig.ledger.DappLedger
 import DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
