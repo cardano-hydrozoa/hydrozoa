@@ -30,43 +30,6 @@ final case class SettlementTx(
 ) extends Tx
 
 object SettlementTx {
-
-    sealed trait ParseError extends Throwable
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
-
-    def parse(txSerialized: Tx.Serialized): Either[ParseError, SettlementTx] = {
-        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        Cbor.decode(txSerialized).to[Transaction].valueTry match {
-            case Failure(e) => Left(TxCborDeserializationFailed(e))
-            case Success(tx) =>
-                for {
-                    // Pull head address from metadata
-                    headAddress <- MD
-                        .parseExpected(tx, MD.L1TxTypes.Deposit)
-                        .left
-                        .map(MetadataParseError.apply)
-
-                } yield SettlementTx(
-                  treasurySpent = ???,
-                  treasuryProduced = TreasuryUtxo(
-                    headTokenName = ???,
-                    utxo = (
-                      TransactionInput(
-                        transactionId = Hash(blake2b_256(ByteString.fromArray(txSerialized))),
-                        index = 0
-                      ),
-                      ???
-                    )
-                  ),
-                  depositsSpent = ???,
-                  rolloutProduced = ???,
-                  tx = tx
-                )
-        }
-
-    }
-
     case class Recipe(
         majorVersion: Int,
         deposits: List[DepositUtxo],
