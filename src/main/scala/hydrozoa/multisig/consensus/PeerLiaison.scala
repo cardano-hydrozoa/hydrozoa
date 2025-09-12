@@ -1,17 +1,17 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig.consensus
 
 import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.Ref
-import cats.implicits._
+import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
-
-import PeerLiaison.{Config, State, ConnectionsPending, Subscribers}
+import PeerLiaison.{Config, ConnectionsPending, State, Subscribers}
 import hydrozoa.multisig.persistence.{PersistenceActorRef, PutActorReq}
+import hydrozoa.multisig.protocol.*
 
 final case class PeerLiaison(config: Config)(
     private val connections: ConnectionsPending

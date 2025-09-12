@@ -1,17 +1,17 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig.consensus
 
 import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.Ref
-import cats.implicits._
+import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
-import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
+import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 
 import scala.collection.immutable.Queue
-
-import TransactionSequencer.{Config, State, ConnectionsPending, Subscribers}
+import TransactionSequencer.{Config, ConnectionsPending, State, Subscribers}
 import hydrozoa.multisig.persistence.{PersistenceActorRef, PutActorReq}
+import hydrozoa.multisig.protocol.*
 
 final case class TransactionSequencer(config: Config)(
     private val connections: ConnectionsPending

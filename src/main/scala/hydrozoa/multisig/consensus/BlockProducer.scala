@@ -1,14 +1,14 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig.consensus
 
 import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.Ref
-import cats.implicits._
+import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
-
-import BlockProducer.{Config, State, ConnectionsPending, Subscribers}
+import BlockProducer.{Config, ConnectionsPending, State, Subscribers}
 import hydrozoa.multisig.persistence.PersistenceActorRef
+import hydrozoa.multisig.protocol.*
 
 final case class BlockProducer(config: Config)(
     private val connections: ConnectionsPending

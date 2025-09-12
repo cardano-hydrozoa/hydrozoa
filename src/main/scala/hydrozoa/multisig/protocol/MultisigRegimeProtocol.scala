@@ -1,9 +1,7 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig.protocol
 
-import cats.effect.Deferred
-import cats.effect.IO
-import com.suprnation.actor.ActorRef.ActorRef
-import com.suprnation.actor.ActorRef.NoSendActorRef
+import cats.effect.{Deferred, IO}
+import com.suprnation.actor.ActorRef.{ActorRef, NoSendActorRef}
 
 import scala.concurrent.duration.FiniteDuration
 

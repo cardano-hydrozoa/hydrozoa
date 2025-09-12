@@ -1,17 +1,15 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig
 
-import cats._
-import cats.effect.Deferred
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits._
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
-import com.suprnation.actor.OneForOneStrategy
-import com.suprnation.actor.SupervisionStrategy
+import cats.*
+import cats.effect.{Deferred, IO, Ref}
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import com.suprnation.actor.SupervisorStrategy.Escalate
+import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.backend.cardano.CardanoBackendRef
 import hydrozoa.multisig.persistence.PersistenceActorRef
+import hydrozoa.multisig.protocol.*
 
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
