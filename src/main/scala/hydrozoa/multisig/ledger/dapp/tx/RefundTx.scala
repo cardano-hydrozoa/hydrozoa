@@ -83,28 +83,4 @@ object RefundTx {
         }
 
     }
-
-    sealed trait ParseError
-
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
-    case object NoUtxoAtHeadAddress extends ParseError
-    case object DepositUtxoNotBabbage extends ParseError
-    case object DepositDatumNotInline extends ParseError
-    case class DepositDatumMalformed(e: Throwable) extends ParseError
-    case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
-
-    def parse(txSerialized: Tx.Serialized): Either[ParseError, RefundTx.PostDated] = {
-        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        Cbor.decode(txSerialized).to[Transaction].valueTry match {
-            case Success(tx) =>
-                for {
-                    headAddress <- MD
-                        .parseExpected(tx, MD.L1TxTypes.RefundPostDated)
-                        .left
-                        .map(MetadataParseError.apply)
-                } yield RefundTx.PostDated(depositSpent = ???, tx = tx)
-            case Failure(e) => Left(TxCborDeserializationFailed(e))
-        }
-    }
 }

@@ -11,19 +11,4 @@ final case class RolloutTx(
 ) extends Tx
 
 object RolloutTx {
-//    sealed trait ParseError
-//
-//    def parse(txSerialized: Tx.Serialized.Rollout): Either[ParseError, Tx.Rollout] = {
-//        val deserialized = txCborToScalus(txSerialized.txCbor)
-//        Right(
-//          Tx.Rollout(
-//            rolloutSpent = ???,
-//            rolloutProduced = ???,
-//            headAddress = txSerialized.headAddress,
-//            headPolicy = txSerialized.headPolicy,
-//            txCbor = txSerialized.headPolicy,
-//            tx = deserialized
-//          )
-//        )
-//    }
 }

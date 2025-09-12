@@ -21,28 +21,6 @@ final case class FinalizationTx(
 ) extends Tx
 
 object FinalizationTx {
-    sealed trait ParseError
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
-
-    def parse(
-        txSerialized: Tx.Serialized,
-        state: DappLedger.State
-    ): Either[ParseError, FinalizationTx] = {
-        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        Cbor.decode(txSerialized).to[Transaction].valueTry match {
-            case Success(tx) =>
-                Right(
-                  FinalizationTx(
-                    treasurySpent = ???,
-                    tx = tx
-                  )
-                )
-            case Failure(ex) => Left(TxCborDeserializationFailed(ex))
-        }
-
-    }
-
     case class Recipe(
         majorVersion: Int,
         utxosWithdrawn: Set[(TransactionInput, TransactionOutput)],

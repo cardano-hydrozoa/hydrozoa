@@ -31,29 +31,7 @@ object InitializationTx {
         coins: BigInt,
         peers: NonEmptyList[VerificationKeyBytes]
     )
-
-    sealed trait ParseError extends Throwable
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
-    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-
-    // TODO: Review and list parsing conditions
-    def parse(txBytes: Tx.Serialized): Either[ParseError, InitializationTx] = {
-        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
-        Cbor.decode(txBytes).to[Transaction].valueTry match {
-            case Success(tx) =>
-                for {
-                    // Pull head address from metadata
-                    headAddress <- MD
-                        .parseExpected(tx, MD.L1TxTypes.Initialization)
-                        .left
-                        .map(MetadataParseError.apply)
-
-                } yield InitializationTx(treasuryProduced = ???, headAddress = headAddress, tx = tx)
-            case Failure(e) => Left(TxCborDeserializationFailed(e))
-        }
-
-    }
-
+    
     sealed trait BuildError extends Throwable
     case object IllegalChangeValue extends BuildError
 

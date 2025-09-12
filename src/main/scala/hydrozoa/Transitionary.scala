@@ -7,6 +7,7 @@ package hydrozoa
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
+import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v1.StakingCredential
 import scalus.|>
 //import hydrozoa.infra.{Piper, toEither, valueTokens}
@@ -44,10 +45,10 @@ val emptyTxBody: TransactionBody = TransactionBody(
 //    )
 //}
 //
-//val emptyContext: Context =
-//    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
-//
-//val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
+val emptyContext: Context =
+    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+
+val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
 //
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 //// Conversions
