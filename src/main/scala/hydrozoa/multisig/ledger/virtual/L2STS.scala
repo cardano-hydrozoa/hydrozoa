@@ -10,7 +10,7 @@ package hydrozoa.multisig.ledger.virtual
  *   - "States" = given by the `State` associated type, in our case the
  *     `scalus.cardano.ledger.rules.State` type
  *   - "Transitions" = implementations of the `transit` method on instances of STSL2.Mutator.
- *   - "Signals" = given by the `Event` associated type, in our case `L2Event`` (as defined in
+ *   - "Signals" = given by the `Event` associated type, in our case `L2Event` (as defined in
  *     `Event.scala`)
  *   - "Rules" = roughly, a set of calls to implementations of the `validate` method on instances
  *     of STSL2.Validator (the antecedents), followed by a calls to `transit` functions (the
@@ -34,6 +34,7 @@ package hydrozoa.multisig.ledger.virtual
  */
 
 import hydrozoa.*
+import hydrozoa.multisig.ledger.infG2Point
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}

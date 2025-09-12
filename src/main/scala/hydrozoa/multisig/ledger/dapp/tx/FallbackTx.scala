@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.dapp.DappLedger.Tx
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.cardano.ledger.Transaction
 

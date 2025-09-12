@@ -1,17 +1,18 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig
 
-import cats._
-import cats.effect.Deferred
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits._
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
-import com.suprnation.actor.OneForOneStrategy
-import com.suprnation.actor.SupervisionStrategy
+import cats.*
+import cats.effect.{Deferred, IO, Ref}
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import com.suprnation.actor.SupervisorStrategy.Escalate
-import hydrozoa.multisig.backend.cardano.CardanoBackendRef
-import hydrozoa.multisig.persistence.PersistenceActorRef
+import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
+import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.protocol.ConsensusProtocol
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
 
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
@@ -22,8 +23,8 @@ object MultisigRegimeManager {
     def create(
         peerId: PeerId,
         peers: List[PeerId],
-        cba: CardanoBackendRef,
-        per: PersistenceActorRef
+        cba: CardanoBackend.Ref,
+        per: Persistence.Ref
     ): IO[MultisigRegimeManager] =
         for {
             cardanoBackend <- Ref[IO].of(cba)
@@ -32,9 +33,9 @@ object MultisigRegimeManager {
 }
 
 final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
-    private val cardanoBackend: Ref[IO, CardanoBackendRef],
-    private val persistence: Ref[IO, PersistenceActorRef]
-) extends Actor[IO, MultisigRegimeManagerReq] {
+    private val cardanoBackendRef: Ref[IO, CardanoBackend.Ref],
+    private val persistenceRef: Ref[IO, Persistence.Ref]
+) extends Actor[IO, Request] {
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -47,15 +48,27 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
 
     override def preStart: IO[Unit] =
         for {
-            pendingCardanoBackend <- Deferred[IO, CardanoBackendRef]
-            pendingPersistence <- Deferred[IO, PersistenceActorRef]
-            pendingBlockProducer <- Deferred[IO, BlockProducerRef]
-            pendingLocalPeerLiaisons <- Deferred[IO, List[PeerLiaisonRef]]
-            pendingCardanoLiaison <- Deferred[IO, CardanoLiaisonRef]
-            pendingTransactionSequencer <- Deferred[IO, TransactionSequencerRef]
+            cardanoBackend <- cardanoBackendRef.get
+            persistence <- persistenceRef.get
 
-            _ <- cardanoBackend.get.flatMap(pendingCardanoBackend.complete)
-            _ <- persistence.get.flatMap(pendingPersistence.complete)
+            _ <- context.watch(
+              cardanoBackend,
+              TerminatedDependency(Dependencies.CardanoBackend, cardanoBackend)
+            )
+            _ <- context.watch(
+              persistence,
+              TerminatedDependency(Dependencies.Persistence, persistence)
+            )
+
+            pendingCardanoBackend <- Deferred[IO, CardanoBackend.Ref]
+            pendingPersistence <- Deferred[IO, Persistence.Ref]
+            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockProducer.Ref]
+            pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
+            pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
+            pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
+
+            _ <- pendingCardanoBackend.complete(cardanoBackend)
+            _ <- pendingPersistence.complete(persistence)
 
             blockProducer <- context.actorOf(
               BlockProducer.create(
@@ -73,7 +86,7 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
                 .filterNot(_ == peerId)
                 .traverse(pid =>
                     for {
-                        pendingRemotePeerLiaison <- Deferred[IO, PeerLiaisonRef]
+                        pendingRemotePeerLiaison <- Deferred[IO, ConsensusProtocol.PeerLiaison.Ref]
                         localPeerLiaison <- context.actorOf(
                           PeerLiaison.create(
                             PeerLiaison.Config(peerId, pid),
@@ -115,31 +128,42 @@ final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
             _ <- pendingCardanoLiaison.complete(cardanoLiaison)
             _ <- pendingTransactionSequencer.complete(transactionSequencer)
 
-            _ <- context.watch(blockProducer, TerminatedBlockProducer(blockProducer))
-            _ <- localPeerLiaisons.traverse(r => context.watch(r, TerminatedPeerLiaison(r)))
-            _ <- context.watch(cardanoLiaison, TerminatedCardanoLiaison(cardanoLiaison))
+            _ <- context.watch(blockProducer, TerminatedChild(Actors.BlockProducer, blockProducer))
+            _ <- localPeerLiaisons.traverse(r =>
+                context.watch(r, TerminatedChild(Actors.PeerLiaison, r))
+            )
+            _ <- context.watch(
+              cardanoLiaison,
+              TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)
+            )
             _ <- context.watch(
               transactionSequencer,
-              TerminatedTransactionSequencer(transactionSequencer)
+              TerminatedChild(Actors.TransactionSequencer, transactionSequencer)
             )
 
             // TODO: Store the deferred remote comm actor refs (cas._2) for later
         } yield ()
 
-    override def receive: Receive[IO, MultisigRegimeManagerReq] =
+    override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction({
-            case TerminatedBlockProducer(_) =>
-                IO.println("Terminated block actor")
-            case TerminatedCardanoLiaison(_) =>
-                IO.println("Terminated Cardano event actor")
-            case TerminatedPeerLiaison(_) =>
-                IO.println("Terminated comm actor")
-            case TerminatedTransactionSequencer(_) =>
-                IO.println("Terminated ledger event actor")
-            case TerminatedCardanoBackend(_) =>
-                IO.println("Terminated cardano backend")
-            case TerminatedPersistenceActor(_) =>
-                IO.println("Terminated persistence")
+            case TerminatedChild(childType, _) =>
+                childType match {
+                    case Actors.BlockProducer =>
+                        IO.println("Terminated block actor")
+                    case Actors.CardanoLiaison =>
+                        IO.println("Terminated Cardano event actor")
+                    case Actors.PeerLiaison =>
+                        IO.println("Terminated comm actor")
+                    case Actors.TransactionSequencer =>
+                        IO.println("Terminated ledger event actor")
+                }
+            case TerminatedDependency(dependencyType, _) =>
+                dependencyType match {
+                    case Dependencies.CardanoBackend =>
+                        IO.println("Terminated cardano backend")
+                    case Dependencies.Persistence =>
+                        IO.println("Terminated persistence")
+                }
             // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
         })
 

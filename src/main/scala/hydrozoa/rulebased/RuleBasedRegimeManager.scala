@@ -1,3 +1,3 @@
-package hydrozoa.rulebased.actors
+package hydrozoa.rulebased
 
 object RuleBasedRegimeManager {}

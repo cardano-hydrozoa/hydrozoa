@@ -1,24 +1,26 @@
-package hydrozoa.multisig.actors
+package hydrozoa.multisig.consensus
 
 import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.Ref
-import cats.implicits._
+import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
-
-import PeerLiaison.{Config, State, ConnectionsPending, Subscribers}
-import hydrozoa.multisig.persistence.{PersistenceActorRef, PutActorReq}
+import PeerLiaison.{Config, ConnectionsPending, State, Subscribers}
+import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 
 final case class PeerLiaison(config: Config)(
     private val connections: ConnectionsPending
 )(
     private val subscribers: Ref[IO, Option[Subscribers]],
     private val state: State
-) extends Actor[IO, PeerLiaisonReq] {
+) extends Actor[IO, Request] {
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
@@ -39,7 +41,7 @@ final case class PeerLiaison(config: Config)(
             )
         } yield ()
 
-    override def receive: Receive[IO, PeerLiaisonReq] = PartialFunction.fromFunction(req =>
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(req =>
         subscribers.get.flatMap({
             case Some(subs) =>
                 this.receiveTotal(req, subs)
@@ -52,9 +54,9 @@ final case class PeerLiaison(config: Config)(
         })
     )
 
-    private def receiveTotal(req: PeerLiaisonReq, subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
         req match {
-            case x: RemoteBroadcastReq =>
+            case x: RemoteBroadcast.Request =>
                 for {
                     // Check whether the next batch must be sent immediately, and then turn off the flag regardless.
                     mBatchId <- state.dischargeSendNextBatchImmediately
@@ -83,7 +85,7 @@ final case class PeerLiaison(config: Config)(
                 } yield ()
             case x: NewMsgBatch =>
                 for {
-                    _ <- subs.persistence ? PutActorReq(x)
+                    _ <- subs.persistence ? Persistence.PersistRequest(x)
                     _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)
@@ -107,16 +109,16 @@ object PeerLiaison {
     )
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducerRef],
-        persistence: Deferred[IO, PersistenceActorRef],
+        blockProducer: Deferred[IO, BlockProducer.Ref],
+        persistence: Deferred[IO, Persistence.Ref],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
     final case class Subscribers(
-        ackBlock: AckBlockSubscriber,
-        newBlock: NewBlockSubscriber,
-        newLedgerEvent: NewLedgerEventSubscriber,
-        persistence: PersistenceActorRef,
+        ackBlock: AckBlock.Subscriber,
+        newBlock: NewBlock.Subscriber,
+        newLedgerEvent: NewLedgerEvent.Subscriber,
+        persistence: Persistence.Ref,
         remotePeerLiaison: PeerLiaisonRef
     )
 
@@ -166,7 +168,7 @@ object PeerLiaison {
             } yield ack && block && event
 
         @targetName("append")
-        infix def :+(x: RemoteBroadcastReq): IO[Unit] =
+        infix def :+(x: RemoteBroadcast.Request): IO[Unit] =
             x match {
                 case y: NewLedgerEvent =>
                     for {
@@ -206,7 +208,7 @@ object PeerLiaison {
           * queues message queues must be empty, and the corresponding counter is incremented
           * depending on the arrived message's type.
           */
-        def immediateNewMsgBatch(batchId: BatchId, x: RemoteBroadcastReq): IO[NewMsgBatch] =
+        def immediateNewMsgBatch(batchId: BatchId, x: RemoteBroadcast.Request): IO[NewMsgBatch] =
             for {
                 nAck <- this.nAck.get
                 nBlock <- this.nBlock.get
