@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.*
-import hydrozoa.multisig.ledger.virtual.VirtualLedger.*
+
 import hydrozoa.{emptyContext, emptyState}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
@@ -10,6 +10,9 @@ import scalus.cardano.ledger.rules.State as ScalusState
 import supranational.blst.P2
 
 import scala.util.{Failure, Success}
+
+import hydrozoa.multisig.ledger.virtual.*
+import VirtualLedger.*
 
 type KzgCommitment = String
 
