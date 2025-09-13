@@ -19,12 +19,12 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
   *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
   */
 object CardanoLiaison {
-    final case class Config()
-
-    final case class ConnectionsPending(
-        cardanoBackend: Deferred[IO, CardanoBackend.Ref],
-        persistence: Deferred[IO, Persistence.Ref]
+    final case class Config(
+        cardanoBackend: CardanoBackend.Ref,
+        persistence: Persistence.Ref
     )
+
+    final case class ConnectionsPending()
 
     def create(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
         IO(CardanoLiaison(config, connections))
@@ -36,20 +36,13 @@ final class CardanoLiaison private (config: Config, private val connections: Con
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 
-    private final case class Subscribers(
-        cardanoBackend: CardanoBackend.Ref,
-        persistence: Persistence.Ref
-    )
+    private final case class Subscribers()
 
     override def preStart: IO[Unit] =
         for {
-            cardanoBackend <- connections.cardanoBackend.get
-            persistence <- connections.persistence.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  cardanoBackend = cardanoBackend,
-                  persistence = persistence
                 )
               )
             )

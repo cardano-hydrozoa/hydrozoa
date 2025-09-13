@@ -26,12 +26,12 @@ object PeerLiaison {
     final case class Config(
         peerId: PeerId,
         remotePeerId: PeerId,
-        maxLedgerEventsPerBatch: MaxEvents = 25
+        maxLedgerEventsPerBatch: MaxEvents = 25,
+        persistence: Persistence.Ref
     )
 
     final case class ConnectionsPending(
         blockProducer: Deferred[IO, BlockProducer.Ref],
-        persistence: Deferred[IO, Persistence.Ref],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
@@ -48,14 +48,12 @@ final class PeerLiaison private (config: Config, connections: ConnectionsPending
         ackBlock: AckBlock.Subscriber,
         newBlock: NewBlock.Subscriber,
         newLedgerEvent: NewLedgerEvent.Subscriber,
-        persistence: Persistence.Ref,
         remotePeerLiaison: PeerLiaisonRef
     )
 
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
-            persistence <- connections.persistence.get
             // This means that the comm actor will not start receiving until it is connected to its
             // remote counterpart:
             remotePeerLiaison <- connections.remotePeerLiaison.get
@@ -65,7 +63,6 @@ final class PeerLiaison private (config: Config, connections: ConnectionsPending
                   ackBlock = blockProducer,
                   newBlock = blockProducer,
                   newLedgerEvent = blockProducer,
-                  persistence = persistence,
                   remotePeerLiaison = remotePeerLiaison
                 )
               )
@@ -116,7 +113,7 @@ final class PeerLiaison private (config: Config, connections: ConnectionsPending
                 } yield ()
             case x: NewMsgBatch =>
                 for {
-                    _ <- subs.persistence ? Persistence.PersistRequest(x)
+                    _ <- config.persistence ? Persistence.PersistRequest(x)
                     _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)

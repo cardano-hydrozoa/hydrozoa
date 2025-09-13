@@ -20,13 +20,12 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
   *     leader/follower switch.
   */
 object BlockProducer {
-    final case class Config(peerId: PeerId)
+    final case class Config(peerId: PeerId, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
         cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
-        transactionSequencer: Deferred[IO, TransactionSequencer.Ref],
-        persistence: Deferred[IO, Persistence.Ref]
+        transactionSequencer: Deferred[IO, TransactionSequencer.Ref]
     )
 
     def create(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {
@@ -42,8 +41,7 @@ final class BlockProducer private (config: Config, private val connections: Conn
     private final case class Subscribers(
         ackBlock: List[AckBlock.Subscriber],
         newBlock: List[NewBlock.Subscriber],
-        confirmBlock: List[ConfirmBlock.Subscriber],
-        persistence: Persistence.Ref
+        confirmBlock: List[ConfirmBlock.Subscriber]
     )
 
     override def preStart: IO[Unit] =
@@ -51,14 +49,12 @@ final class BlockProducer private (config: Config, private val connections: Conn
             cardanoLiaison <- connections.cardanoLiaison.get
             peerLiaisons <- connections.peerLiaisons.get
             transactionSequencer <- connections.transactionSequencer.get
-            persistence <- connections.persistence.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
                   ackBlock = peerLiaisons,
                   newBlock = peerLiaisons,
-                  confirmBlock = List(cardanoLiaison, transactionSequencer),
-                  persistence = persistence
+                  confirmBlock = List(cardanoLiaison, transactionSequencer)
                 )
               )
             )

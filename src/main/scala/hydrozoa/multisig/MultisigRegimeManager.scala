@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{Deferred, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
@@ -17,26 +17,27 @@ import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
+import MultisigRegimeManager.Config
+
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
 object MultisigRegimeManager {
-    def create(
+    final case class Config(
         peerId: PeerId,
         peers: List[PeerId],
         cardanoBackend: CardanoBackend.Ref,
         persistence: Persistence.Ref
+    )
+
+    def create(
+        config: Config
     ): IO[MultisigRegimeManager] =
-        IO(MultisigRegimeManager(peerId, peers, cardanoBackend, persistence))
+        IO(MultisigRegimeManager(config))
 }
 
 final class MultisigRegimeManager private (
-    peerId: PeerId,
-    peers: List[PeerId],
-    cardanoBackend0: CardanoBackend.Ref,
-    persistence0: Persistence.Ref
+    config: Config
 ) extends Actor[IO, Request] {
-    private val cardanoBackendRef = Ref.unsafe[IO, CardanoBackend.Ref](cardanoBackend0)
-    private val persistenceRef = Ref.unsafe[IO, Persistence.Ref](persistence0)
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -49,51 +50,45 @@ final class MultisigRegimeManager private (
 
     override def preStart: IO[Unit] =
         for {
-            cardanoBackend <- cardanoBackendRef.get
-            persistence <- persistenceRef.get
-
             _ <- context.watch(
-              cardanoBackend,
-              TerminatedDependency(Dependencies.CardanoBackend, cardanoBackend)
+              config.cardanoBackend,
+              TerminatedDependency(Dependencies.CardanoBackend, config.cardanoBackend)
             )
             _ <- context.watch(
-              persistence,
-              TerminatedDependency(Dependencies.Persistence, persistence)
+              config.persistence,
+              TerminatedDependency(Dependencies.Persistence, config.persistence)
             )
 
-            pendingCardanoBackend <- Deferred[IO, CardanoBackend.Ref]
-            pendingPersistence <- Deferred[IO, Persistence.Ref]
             pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockProducer.Ref]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
             pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
             pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
 
-            _ <- pendingCardanoBackend.complete(cardanoBackend)
-            _ <- pendingPersistence.complete(persistence)
-
             blockProducer <- context.actorOf(
               BlockProducer.create(
-                BlockProducer.Config(peerId),
+                BlockProducer.Config(peerId = config.peerId, persistence = config.persistence),
                 BlockProducer.ConnectionsPending(
                   cardanoLiaison = pendingCardanoLiaison,
                   peerLiaisons = pendingLocalPeerLiaisons,
-                  transactionSequencer = pendingTransactionSequencer,
-                  persistence = pendingPersistence
+                  transactionSequencer = pendingTransactionSequencer
                 )
               )
             )
 
-            localPeerLiaisonsPendingRemoteActors <- peers
-                .filterNot(_ == peerId)
+            localPeerLiaisonsPendingRemoteActors <- config.peers
+                .filterNot(_ == config.peerId)
                 .traverse(pid =>
                     for {
                         pendingRemotePeerLiaison <- Deferred[IO, ConsensusProtocol.PeerLiaison.Ref]
                         localPeerLiaison <- context.actorOf(
                           PeerLiaison.create(
-                            PeerLiaison.Config(peerId, pid),
+                            PeerLiaison.Config(
+                              peerId = config.peerId,
+                              remotePeerId = pid,
+                              persistence = config.persistence
+                            ),
                             PeerLiaison.ConnectionsPending(
                               blockProducer = pendingBlockProducer,
-                              persistence = pendingPersistence,
                               remotePeerLiaison = pendingRemotePeerLiaison
                             )
                           )
@@ -105,21 +100,22 @@ final class MultisigRegimeManager private (
 
             cardanoLiaison <- context.actorOf(
               CardanoLiaison.create(
-                CardanoLiaison.Config(),
+                CardanoLiaison.Config(
+                  persistence = config.persistence,
+                  cardanoBackend = config.cardanoBackend
+                ),
                 CardanoLiaison.ConnectionsPending(
-                  cardanoBackend = pendingCardanoBackend,
-                  persistence = pendingPersistence
                 )
               )
             )
 
             transactionSequencer <- context.actorOf(
               TransactionSequencer.create(
-                TransactionSequencer.Config(peerId),
+                TransactionSequencer
+                    .Config(peerId = config.peerId, persistence = config.persistence),
                 TransactionSequencer.ConnectionsPending(
                   blockProducer = pendingBlockProducer,
-                  peerLiaisons = pendingLocalPeerLiaisons,
-                  persistence = pendingPersistence
+                  peerLiaisons = pendingLocalPeerLiaisons
                 )
               )
             )

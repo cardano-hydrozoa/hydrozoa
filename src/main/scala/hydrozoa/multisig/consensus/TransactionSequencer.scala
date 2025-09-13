@@ -20,12 +20,11 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
   * sequentially into the consensus system.
   */
 object TransactionSequencer {
-    final case class Config(peerId: PeerId)
+    final case class Config(peerId: PeerId, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
         blockProducer: Deferred[IO, BlockProducer.Ref],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
-        persistence: Deferred[IO, Persistence.Ref]
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
     def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
@@ -40,20 +39,17 @@ final class TransactionSequencer private (
     private val state = State()
 
     private final case class Subscribers(
-        newLedgerEvent: List[NewLedgerEvent.Subscriber],
-        persistence: Persistence.Ref
+        newLedgerEvent: List[NewLedgerEvent.Subscriber]
     )
 
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
             peerLiaisons <- connections.peerLiaisons.get
-            persistence <- connections.persistence.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  newLedgerEvent = blockProducer :: peerLiaisons,
-                  persistence = persistence
+                  newLedgerEvent = blockProducer :: peerLiaisons
                 )
               )
             )
@@ -78,7 +74,7 @@ final class TransactionSequencer private (
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, x.time, x.event)
-                    _ <- subs.persistence ? Persistence.PersistRequest(newEvent)
+                    _ <- config.persistence ? Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>
