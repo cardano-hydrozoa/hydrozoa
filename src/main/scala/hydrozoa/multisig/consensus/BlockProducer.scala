@@ -6,18 +6,46 @@ import cats.effect.Ref
 import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
-import BlockProducer.{Config, ConnectionsPending, State, Subscribers}
+import BlockProducer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
 
-final case class BlockProducer(config: Config)(
-    private val connections: ConnectionsPending
-)(
-    private val subscribers: Ref[IO, Option[Subscribers]],
-    private val state: State
-) extends Actor[IO, Request] {
+/** Block actor:
+  *
+  *   - When leader, receives L1 deposits + L2 txs and packages them into a new block.
+  *   - When follower, receives L2 blocks and broadcasts L2 block acks for valid blocks.
+  *   - When leader or follower, collects L2 block acks to confirm block effects and trigger
+  *     leader/follower switch.
+  */
+object BlockProducer {
+    final case class Config(peerId: PeerId)
+
+    final case class ConnectionsPending(
+        cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
+        transactionSequencer: Deferred[IO, TransactionSequencer.Ref],
+        persistence: Deferred[IO, Persistence.Ref]
+    )
+
+    def create(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {
+        IO(BlockProducer(config, connections))
+    }
+}
+
+final class BlockProducer private (config: Config, private val connections: ConnectionsPending)
+    extends Actor[IO, Request] {
+    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+    private val state = State()
+
+    private final case class Subscribers(
+        ackBlock: List[AckBlock.Subscriber],
+        newBlock: List[NewBlock.Subscriber],
+        confirmBlock: List[ConfirmBlock.Subscriber],
+        persistence: Persistence.Ref
+    )
+
     override def preStart: IO[Unit] =
         for {
             cardanoLiaison <- connections.cardanoLiaison.get
@@ -57,47 +85,8 @@ final case class BlockProducer(config: Config)(
             case x: AckBlock =>
                 ???
         }
-}
 
-/** Block actor:
-  *
-  *   - When leader, receives L1 deposits + L2 txs and packages them into a new block.
-  *   - When follower, receives L2 blocks and broadcasts L2 block acks for valid blocks.
-  *   - When leader or follower, collects L2 block acks to confirm block effects and trigger
-  *     leader/follower switch.
-  */
-object BlockProducer {
-    final case class Config(peerId: PeerId)
-
-    final case class ConnectionsPending(
-        cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
-        transactionSequencer: Deferred[IO, TransactionSequencer.Ref],
-        persistence: Deferred[IO, Persistence.Ref]
-    )
-
-    final case class Subscribers(
-        ackBlock: List[AckBlock.Subscriber],
-        newBlock: List[NewBlock.Subscriber],
-        confirmBlock: List[ConfirmBlock.Subscriber],
-        persistence: Persistence.Ref
-    )
-
-    def create(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {
-        for {
-            subscribers <- Ref.of[IO, Option[Subscribers]](None)
-            state <- State.create
-        } yield BlockProducer(config)(connections)(subscribers, state)
-    }
-
-    final case class State(nBlock: Ref[IO, BlockNum])
-
-    object State {
-        def create: IO[State] =
-            for {
-                nBlock <- Ref.of[IO, BlockNum](BlockNum(0))
-            } yield State(
-              nBlock = nBlock
-            )
+    private final class State {
+        private val nBlock = Ref.unsafe[IO, BlockNum](BlockNum(0))
     }
 }

@@ -9,19 +9,41 @@ import com.suprnation.actor.Actor.Receive
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 
 import scala.collection.immutable.Queue
-import TransactionSequencer.{Config, ConnectionsPending, State, Subscribers}
+import TransactionSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
 
-final case class TransactionSequencer(config: Config)(
+/** Transaction sequencer receives local submissions of new ledger events and emits them
+  * sequentially into the consensus system.
+  */
+object TransactionSequencer {
+    final case class Config(peerId: PeerId)
+
+    final case class ConnectionsPending(
+        blockProducer: Deferred[IO, BlockProducer.Ref],
+        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
+        persistence: Deferred[IO, Persistence.Ref]
+    )
+
+    def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
+        IO(TransactionSequencer(config, connections))
+}
+
+final class TransactionSequencer private (
+    config: Config,
     private val connections: ConnectionsPending
-)(
-    private val subscribers: Ref[IO, Option[Subscribers]],
-    private val state: State
 ) extends Actor[IO, Request] {
+    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+    private val state = State()
+
+    private final case class Subscribers(
+        newLedgerEvent: List[NewLedgerEvent.Subscriber],
+        persistence: Persistence.Ref
+    )
+
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
@@ -53,10 +75,9 @@ final case class TransactionSequencer(config: Config)(
         req match {
             case x: SubmitLedgerEvent =>
                 for {
-                    newNum <- state.nLedgerEvent.updateAndGet(x => x.increment)
+                    newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
                     newId = (config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, x.time, x.event)
-                    _ <- state.localRequests.update(q => q :+ (newNum -> x.eventOutcome))
                     _ <- subs.persistence ? Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
@@ -64,47 +85,21 @@ final case class TransactionSequencer(config: Config)(
                 // Complete the deferred ledger event outcomes confirmed by the block and remove them from queue
                 ???
         }
-}
 
-/** Event actor is the source of new L1 deposits and L2 transactions for the head.
-  */
-object TransactionSequencer {
-    final case class Config(peerId: PeerId)
-
-    final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducer.Ref],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
-        persistence: Deferred[IO, Persistence.Ref]
-    )
-
-    final case class Subscribers(
-        newLedgerEvent: List[NewLedgerEvent.Subscriber],
-        persistence: Persistence.Ref
-    )
-
-    def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
-        for {
-            subscribers <- Ref.of[IO, Option[Subscribers]](None)
-            state <- State.create
-        } yield TransactionSequencer(config)(connections)(subscribers, state)
-
-    object State {
-        def create: IO[State] =
-            for {
-                nLedgerEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
-                localRequests <- Ref
-                    .of[IO, Queue[(LedgerEventNum, Deferred[IO, Unit /*LedgerEventOutcome*/ ])]](
-                      Queue()
-                    )
-            } yield State(
-              nLedgerEvent = nLedgerEvent,
-              localRequests = localRequests
+    private final class State {
+        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
+        private val localRequests =
+            Ref.unsafe[IO, Queue[(LedgerEventNum, Deferred[IO, Unit])]](
+              Queue()
             )
+
+        def enqueueDeferredEventOutcome(eventOutcome: Deferred[IO, Unit]): IO[LedgerEventNum] =
+            for {
+                newNum <- nLedgerEvent.updateAndGet(x => x.increment)
+                _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
+            } yield newNum
+
+        def completeDeferredEventOutcomes(eventOutcomes: List[(LedgerEventNum, Unit)]): IO[Unit] =
+            ???
     }
-
-    final case class State(
-        nLedgerEvent: Ref[IO, LedgerEventNum],
-        localRequests: Ref[IO, Queue[(LedgerEventNum, Deferred[IO, Unit /*LedgerEventOutcome*/ ])]]
-    )
-
 }

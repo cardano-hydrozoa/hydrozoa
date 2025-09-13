@@ -23,19 +23,20 @@ object MultisigRegimeManager {
     def create(
         peerId: PeerId,
         peers: List[PeerId],
-        cba: CardanoBackend.Ref,
-        per: Persistence.Ref
+        cardanoBackend: CardanoBackend.Ref,
+        persistence: Persistence.Ref
     ): IO[MultisigRegimeManager] =
-        for {
-            cardanoBackend <- Ref[IO].of(cba)
-            persistence <- Ref[IO].of(per)
-        } yield MultisigRegimeManager(peerId, peers)(cardanoBackend, persistence)
+        IO(MultisigRegimeManager(peerId, peers, cardanoBackend, persistence))
 }
 
-final case class MultisigRegimeManager(peerId: PeerId, peers: List[PeerId])(
-    private val cardanoBackendRef: Ref[IO, CardanoBackend.Ref],
-    private val persistenceRef: Ref[IO, Persistence.Ref]
+final class MultisigRegimeManager private (
+    peerId: PeerId,
+    peers: List[PeerId],
+    cardanoBackend0: CardanoBackend.Ref,
+    persistence0: Persistence.Ref
 ) extends Actor[IO, Request] {
+    private val cardanoBackendRef = Ref.unsafe[IO, CardanoBackend.Ref](cardanoBackend0)
+    private val persistenceRef = Ref.unsafe[IO, Persistence.Ref](persistence0)
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {

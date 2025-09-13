@@ -58,7 +58,7 @@ object ConsensusProtocol {
     final case class SubmitLedgerEvent(
         time: FiniteDuration,
         event: Unit, // FIXME
-        eventOutcome: Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
+        deferredEventOutcome: Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
     )
 
     /** A ledger event submission is constructed by taking a ledger event, timestamping it, and

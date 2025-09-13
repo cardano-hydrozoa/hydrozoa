@@ -9,18 +9,49 @@ import com.suprnation.actor.Actor.Receive
 
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
-import PeerLiaison.{Config, ConnectionsPending, State, Subscribers}
+import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 
-final case class PeerLiaison(config: Config)(
-    private val connections: ConnectionsPending
-)(
-    private val subscribers: Ref[IO, Option[Subscribers]],
-    private val state: State
-) extends Actor[IO, Request] {
+/** Communication actor is connected to its counterpart at another peer:
+  *
+  *   - Requests communication batches from the counterpart.
+  *   - Responds to the counterpart's requests for communication batches.
+  */
+object PeerLiaison {
+    type MaxEvents = Int
+
+    final case class Config(
+        peerId: PeerId,
+        remotePeerId: PeerId,
+        maxLedgerEventsPerBatch: MaxEvents = 25
+    )
+
+    final case class ConnectionsPending(
+        blockProducer: Deferred[IO, BlockProducer.Ref],
+        persistence: Deferred[IO, Persistence.Ref],
+        remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
+    )
+
+    def create(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
+        IO(PeerLiaison(config, connections))
+}
+
+final class PeerLiaison private (config: Config, connections: ConnectionsPending)
+    extends Actor[IO, Request] {
+    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
+    private val state = State()
+
+    private final case class Subscribers(
+        ackBlock: AckBlock.Subscriber,
+        newBlock: NewBlock.Subscriber,
+        newLedgerEvent: NewLedgerEvent.Subscriber,
+        persistence: Persistence.Ref,
+        remotePeerLiaison: PeerLiaisonRef
+    )
+
     override def preStart: IO[Unit] =
         for {
             blockProducer <- connections.blockProducer.get
@@ -92,72 +123,15 @@ final case class PeerLiaison(config: Config)(
                     _ <- x.events.traverse_(subs.newLedgerEvent ! _)
                 } yield ()
         }
-}
 
-/** Communication actor is connected to its counterpart at another peer:
-  *
-  *   - Requests communication batches from the counterpart.
-  *   - Responds to the counterpart's requests for communication batches.
-  */
-object PeerLiaison {
-    private type maxEvents = Int
-
-    final case class Config(
-        peerId: PeerId,
-        remotePeerId: PeerId,
-        maxLedgerEventsPerBatch: maxEvents = 25
-    )
-
-    final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducer.Ref],
-        persistence: Deferred[IO, Persistence.Ref],
-        remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
-    )
-
-    final case class Subscribers(
-        ackBlock: AckBlock.Subscriber,
-        newBlock: NewBlock.Subscriber,
-        newLedgerEvent: NewLedgerEvent.Subscriber,
-        persistence: Persistence.Ref,
-        remotePeerLiaison: PeerLiaisonRef
-    )
-
-    def create(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
-        for {
-            subscribers <- Ref.of[IO, Option[Subscribers]](None)
-            state <- State.create
-        } yield PeerLiaison(config)(connections)(subscribers, state)
-
-    object State {
-        def create: IO[State] =
-            for {
-                nAck <- Ref.of[IO, AckNum](AckNum(0))
-                nBlock <- Ref.of[IO, BlockNum](BlockNum(0))
-                nEvent <- Ref.of[IO, LedgerEventNum](LedgerEventNum(0))
-                qAck <- Ref.of[IO, Queue[AckBlock]](Queue())
-                qBlock <- Ref.of[IO, Queue[NewBlock]](Queue())
-                qEvent <- Ref.of[IO, Queue[NewLedgerEvent]](Queue())
-                sendBatchImmediately <- Ref.of[IO, Option[BatchId]](None)
-            } yield State(
-              nAck = nAck,
-              nBlock = nBlock,
-              nEvent = nEvent,
-              qAck = qAck,
-              qBlock = qBlock,
-              qEvent = qEvent,
-              sendBatchImmediately = sendBatchImmediately
-            )
-    }
-
-    final case class State(
-        private val nAck: Ref[IO, AckNum],
-        private val nBlock: Ref[IO, BlockNum],
-        private val nEvent: Ref[IO, LedgerEventNum],
-        private val qAck: Ref[IO, Queue[AckBlock]],
-        private val qBlock: Ref[IO, Queue[NewBlock]],
-        private val qEvent: Ref[IO, Queue[NewLedgerEvent]],
-        private val sendBatchImmediately: Ref[IO, Option[BatchId]]
-    ) {
+    private final class State {
+        private val nAck = Ref.unsafe[IO, AckNum](AckNum(0))
+        private val nBlock = Ref.unsafe[IO, BlockNum](BlockNum(0))
+        private val nEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
+        private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
+        private val qBlock = Ref.unsafe[IO, Queue[NewBlock]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
+        private val sendBatchImmediately = Ref.unsafe[IO, Option[BatchId]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
         private def areEmptyQueues: IO[Boolean] =
@@ -200,7 +174,9 @@ object PeerLiaison {
             this.sendBatchImmediately.getAndSet(None)
 
         sealed trait ExtractNewMsgBatchError extends Throwable
+
         case object EmptyNewMsgBatch extends ExtractNewMsgBatchError
+
         case object OutOfBoundsGetMsgBatch extends ExtractNewMsgBatchError
 
         /** Given a locally-sourced ack, block, or event that just arrived, assuming that the next
@@ -259,7 +235,7 @@ object PeerLiaison {
         // query the database to properly respond. Currently, we just respond as if no messages are available to send.
         def extractNewMsgBatch(
             batchReq: GetMsgBatch,
-            maxEvents: maxEvents
+            maxEvents: MaxEvents
         ): IO[Either[ExtractNewMsgBatchError, NewMsgBatch]] =
             (for {
                 nAck <- this.nAck.get
