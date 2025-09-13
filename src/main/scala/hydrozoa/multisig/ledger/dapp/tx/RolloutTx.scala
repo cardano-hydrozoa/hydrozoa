@@ -10,5 +10,4 @@ final case class RolloutTx(
     override val tx: Transaction
 ) extends Tx
 
-object RolloutTx {
-}
+object RolloutTx {}
