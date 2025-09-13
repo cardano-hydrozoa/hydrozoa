@@ -1,37 +1,37 @@
 package hydrozoa.multisig.ledger.virtual
 
-/** This module defines the "L2 STS". It is almost a direct clone of scalus's upstream "STS"
- * (state transition system), which is in turn modeled after the `IntersectMBO/cardano-ledger`
- * haskell repository.
- *
- * For a more formal treatment, see
- * https://github.com/intersectmbo/cardano-ledger/releases/latest/download/small-step-semantics.pdf.
- * The mapping from this document to our types is:
- *   - "States" = given by the `State` associated type, in our case the
- *     `scalus.cardano.ledger.rules.State` type
- *   - "Transitions" = implementations of the `transit` method on instances of STSL2.Mutator.
- *   - "Signals" = given by the `Event` associated type, in our case `L2Event` (as defined in
- *     `Event.scala`)
- *   - "Rules" = roughly, a set of calls to implementations of the `validate` method on instances
- *     of STSL2.Validator (the antecedents), followed by a calls to `transit` functions (the
- *     consequent).
- *   - "Environment" = the `Context` associated type, in our case the
- *     `scalus.cardano.ledger.rules.Context` type
- *
- * The overall principle is simple: `validate` checks a `(context, state, event)` tuple for
- * validity, `transit` takes `(context, state, event)` to a new `state`.
- *
- * Where possible, we use the upstream types for representing our own STS. This means that our
- * State, Context, and Transition types are "too big" -- for instance, our State type contains
- * information about the UTxO Map, which the L2 Ledger indeed makes use of, but ALSO contains
- * information about Certificate state, which the L2 Ledger does not support. We do this because we
- * want to re-use L1 ledger rules directly where possible without having to convert possibly large
- * data structures (such as the entire utxo map) each time; this is a performance vs type-safety
- * trade-off that we felt was worth it.
- *
- * The validation rules for our STSL2 that are native to hydrozoa (i.e., that do not apply to L1)
- * can be found in `L2ConformanceValidator.scala`.
- */
+/** This module defines the "L2 STS". It is almost a direct clone of scalus's upstream "STS" (state
+  * transition system), which is in turn modeled after the `IntersectMBO/cardano-ledger` haskell
+  * repository.
+  *
+  * For a more formal treatment, see
+  * https://github.com/intersectmbo/cardano-ledger/releases/latest/download/small-step-semantics.pdf.
+  * The mapping from this document to our types is:
+  *   - "States" = given by the `State` associated type, in our case the
+  *     `scalus.cardano.ledger.rules.State` type
+  *   - "Transitions" = implementations of the `transit` method on instances of STSL2.Mutator.
+  *   - "Signals" = given by the `Event` associated type, in our case `L2Event` (as defined in
+  *     `Event.scala`)
+  *   - "Rules" = roughly, a set of calls to implementations of the `validate` method on instances
+  *     of STSL2.Validator (the antecedents), followed by a calls to `transit` functions (the
+  *     consequent).
+  *   - "Environment" = the `Context` associated type, in our case the
+  *     `scalus.cardano.ledger.rules.Context` type
+  *
+  * The overall principle is simple: `validate` checks a `(context, state, event)` tuple for
+  * validity, `transit` takes `(context, state, event)` to a new `state`.
+  *
+  * Where possible, we use the upstream types for representing our own STS. This means that our
+  * State, Context, and Transition types are "too big" -- for instance, our State type contains
+  * information about the UTxO Map, which the L2 Ledger indeed makes use of, but ALSO contains
+  * information about Certificate state, which the L2 Ledger does not support. We do this because we
+  * want to re-use L1 ledger rules directly where possible without having to convert possibly large
+  * data structures (such as the entire utxo map) each time; this is a performance vs type-safety
+  * trade-off that we felt was worth it.
+  *
+  * The validation rules for our STSL2 that are native to hydrozoa (i.e., that do not apply to L1)
+  * can be found in `L2ConformanceValidator.scala`.
+  */
 
 import hydrozoa.*
 import hydrozoa.multisig.ledger.infG2Point
@@ -62,7 +62,6 @@ sealed trait STSL2 {
     def apply(context: Context, state: State, event: Event): Result
 
     protected final def failure(error: Error): Result = Left(error)
-    
 
 }
 
@@ -155,9 +154,9 @@ def getFinalPoly(binomial_poly: SList[Scalar]): SList[Scalar] = {
 
 // TODO: use multi-scalar multiplication
 def getG2Commitment(
-                       setup: SList[P2],
-                       subset: SList[Scalar]
-                   ): P2 = {
+    setup: SList[P2],
+    subset: SList[Scalar]
+): P2 = {
     val subsetInG2 =
         SList.map2(getFinalPoly(subset), setup): (sb, st) =>
             st.mult(sb)

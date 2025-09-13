@@ -9,5 +9,4 @@ final case class FallbackTx(
     override val tx: Transaction
 ) extends Tx
 
-object FallbackTx {
-}
+object FallbackTx {}

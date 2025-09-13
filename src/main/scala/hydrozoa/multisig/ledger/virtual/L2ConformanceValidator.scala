@@ -27,10 +27,10 @@ object L2ConformanceValidator extends STSL2.Validator {
         case L2EventWithdrawal(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
         case L2EventGenesis(resolvedSeq) =>
             mapLeft(_.toString)(
-                resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
-                    if acc.isLeft then acc
-                    else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
-                )
+              resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
+                  if acc.isLeft then acc
+                  else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
+              )
             )
     }
 }
@@ -40,8 +40,8 @@ object L2ConformanceValidator extends STSL2.Validator {
 
 /** Passes validation if the Option is None, or if the underlying value of the Some validates. */
 def validateIfPresent[T](
-                            value: Option[T]
-                        )(using v: L2ConformanceValidator[T]): Either[String, Unit] =
+    value: Option[T]
+)(using v: L2ConformanceValidator[T]): Either[String, Unit] =
     value match {
         case Some(s) => v.l2Validate(s)
         case None    => Right(())
@@ -74,9 +74,9 @@ given L2ConformanceValidator[DatumOption] with
 given L2ConformanceValidator[TransactionOutput] with
 
     /** Differs from the L1 Transaction Output in that: \- Only babbage-style outputs are allowed \-
-     * L2 transaction outputs can only contain Ada \- Datums, if present, must be inline \- Only
-     * native scripts or v3 plutus scripts allowed in the script ref
-     */
+      * L2 transaction outputs can only contain Ada \- Datums, if present, must be inline \- Only
+      * native scripts or v3 plutus scripts allowed in the script ref
+      */
     def l2Validate(l1: TransactionOutput): Either[String, Unit] = {
         for
             _ <- l1 match {
@@ -127,15 +127,15 @@ given L2ConformanceValidator[Transaction] with
 
 given L2ConformanceValidator[TransactionBody] with
     /** Differs from the L1 Tx Body as follows: \- The following omissions from the current spec
-     * (commit e2ef186, 2025-07-08 version): \- No certificates, withdrawals, mints,
-     * voting_procedures, proposal_procedures, current_treasury_value, or treasury_donation \-
-     * Omitting fields related to fees and collateral (see private discussion at
-     * https://discord.com/channels/@me/1387084765173121175/1389956276208926852; rationale being
-     * that someone can quit consensus if scripts keep failing)
-     */
+      * (commit e2ef186, 2025-07-08 version): \- No certificates, withdrawals, mints,
+      * voting_procedures, proposal_procedures, current_treasury_value, or treasury_donation \-
+      * Omitting fields related to fees and collateral (see private discussion at
+      * https://discord.com/channels/@me/1387084765173121175/1389956276208926852; rationale being
+      * that someone can quit consensus if scripts keep failing)
+      */
     def l2Validate(
-                      l1: TransactionBody
-                  ): Either[String, Unit] =
+        l1: TransactionBody
+    ): Either[String, Unit] =
         for
             // Validate prohibited fields from L1 transaction
             _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
@@ -160,8 +160,8 @@ given L2ConformanceValidator[TransactionBody] with
 given L2ConformanceValidator[TransactionWitnessSet] with
     /** Bootstrap witnesses, and plutus scripts < V3 are not allowed */
     def l2Validate(
-                      l1: TransactionWitnessSet
-                  ): Either[String, Unit] =
+        l1: TransactionWitnessSet
+    ): Either[String, Unit] =
         for
             // Validate empty fields
             _ <- validateEquals("Bootstrap Witnesses")(l1.bootstrapWitnesses)(Set.empty)

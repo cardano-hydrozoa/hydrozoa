@@ -31,7 +31,7 @@ object InitializationTx {
         coins: BigInt,
         peers: NonEmptyList[VerificationKeyBytes]
     )
-    
+
     sealed trait BuildError extends Throwable
     case object IllegalChangeValue extends BuildError
 

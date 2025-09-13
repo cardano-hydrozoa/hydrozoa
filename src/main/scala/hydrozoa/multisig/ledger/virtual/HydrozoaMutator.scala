@@ -11,12 +11,12 @@ Then, finally, we define a mutator that both validates and processes any L2Event
 
 object HydrozoaGenesisMutator extends STSL2.Mutator {
     override def transit(context: Context, state: State, event: Event): Result = event match {
-        case g: L2EventGenesis => 
-          for {
-            _ <- L2ConformanceValidator.validate(context, state, event)
+        case g: L2EventGenesis =>
+            for {
+                _ <- L2ConformanceValidator.validate(context, state, event)
 
-          } yield(addGenesisUtxosToState(g, state))
-        case _                 => Right(state)
+            } yield (addGenesisUtxosToState(g, state))
+        case _ => Right(state)
     }
 
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
@@ -58,8 +58,8 @@ object HydrozoaTransactionMutator extends STSL2.Mutator {
                  */
                 // Upstream mutators
                 state <- (
-                    RemoveInputsFromUtxoMutator.transit(context, state, event)
-                    )
+                  RemoveInputsFromUtxoMutator.transit(context, state, event)
+                )
                 state <- (AddOutputsToUtxoMutator.transit(context, state, event))
             yield state
         }
@@ -80,7 +80,7 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                     if event.body.value.outputs.nonEmpty then
                         Left("Withdrawals cannot have outputs")
                     else Right(())
-                _ <- L2ConformanceValidator.validate(context, state, l2Event)    
+                _ <- L2ConformanceValidator.validate(context, state, l2Event)
 
                 // Upstream validators (applied alphabetically for ease of comparison in a file browser
                 // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
@@ -109,8 +109,8 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                  */
                 // Upstream mutators
                 state <- (
-                    RemoveInputsFromUtxoMutator.transit(context, state, event)
-                    )
+                  RemoveInputsFromUtxoMutator.transit(context, state, event)
+                )
             yield state
         }
         case _ => Right(state)
