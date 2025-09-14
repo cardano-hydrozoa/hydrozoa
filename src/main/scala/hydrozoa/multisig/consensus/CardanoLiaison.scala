@@ -26,13 +26,12 @@ object CardanoLiaison {
 
     final case class ConnectionsPending()
 
-    def create(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
-        IO(CardanoLiaison(config, connections))
+    def apply(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
+        IO(new CardanoLiaison(config, connections) {})
     }
 }
 
-final class CardanoLiaison private (config: Config, private val connections: ConnectionsPending)
-    extends Actor[IO, Request] {
+trait CardanoLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 

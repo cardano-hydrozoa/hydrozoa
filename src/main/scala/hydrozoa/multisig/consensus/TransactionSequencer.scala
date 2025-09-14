@@ -27,14 +27,12 @@ object TransactionSequencer {
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
-    def create(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
-        IO(TransactionSequencer(config, connections))
+    def apply(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
+        IO(new TransactionSequencer(config, connections) {})
 }
 
-final class TransactionSequencer private (
-    config: Config,
-    private val connections: ConnectionsPending
-) extends Actor[IO, Request] {
+trait TransactionSequencer(config: Config, connections: ConnectionsPending)
+    extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 

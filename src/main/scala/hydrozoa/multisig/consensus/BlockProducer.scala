@@ -28,13 +28,12 @@ object BlockProducer {
         transactionSequencer: Deferred[IO, TransactionSequencer.Ref]
     )
 
-    def create(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {
-        IO(BlockProducer(config, connections))
+    def apply(config: Config, connections: ConnectionsPending): IO[BlockProducer] = {
+        IO(new BlockProducer(config = config, connections = connections) {})
     }
 }
 
-final class BlockProducer private (config: Config, private val connections: ConnectionsPending)
-    extends Actor[IO, Request] {
+trait BlockProducer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 

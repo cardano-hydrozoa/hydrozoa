@@ -35,12 +35,11 @@ object PeerLiaison {
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
-    def create(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
-        IO(PeerLiaison(config, connections))
+    def apply(config: Config, connections: ConnectionsPending): IO[PeerLiaison] =
+        IO(new PeerLiaison(config, connections) {})
 }
 
-final class PeerLiaison private (config: Config, connections: ConnectionsPending)
-    extends Actor[IO, Request] {
+trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 
