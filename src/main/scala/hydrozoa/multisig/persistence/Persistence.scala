@@ -11,7 +11,7 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
 
-import scala.collection.immutable
+import scala.collection.immutable.TreeMap
 
 /** Persistence actor is a mock interface to a key-value store (e.g. RocksDB):
   *
@@ -19,24 +19,17 @@ import scala.collection.immutable
   *   - Gets data that was put into the store (i.e. read/retrieve)
   */
 object Persistence {
-    def create(): IO[Persistence] = {
-        for {
-            acks <- Ref[IO].of(immutable.TreeMap[AckId, AckBlock]())
-            batches <- Ref[IO].of(immutable.TreeMap[BatchId, GetMsgBatch]())
-            blocks <- Ref[IO].of(immutable.TreeMap[BlockId, NewBlock]())
-            events <- Ref[IO].of(immutable.TreeMap[LedgerEventId, NewLedgerEvent]())
-            confirmedBlock <- Ref[IO].of(Option.empty)
-        } yield Persistence()(acks, batches, blocks, events, confirmedBlock)
-    }
+    def apply(): IO[Persistence] =
+        IO(new Persistence {})
 }
 
-final case class Persistence()(
-    private val acks: Ref[IO, immutable.TreeMap[AckId, AckBlock]],
-    private val batches: Ref[IO, immutable.TreeMap[BatchId, GetMsgBatch]],
-    private val blocks: Ref[IO, immutable.TreeMap[BlockId, NewBlock]],
-    private val events: Ref[IO, immutable.TreeMap[LedgerEventId, NewLedgerEvent]],
-    private val confirmedBlock: Ref[IO, Option[BlockId]]
-) extends ReplyingActor[IO, Request, Response] {
+trait Persistence extends ReplyingActor[IO, Request, Response] {
+    private val acks = Ref.unsafe[IO, TreeMap[AckId, AckBlock]](TreeMap())
+    private val batches = Ref.unsafe[IO, TreeMap[BatchId, GetMsgBatch]](TreeMap())
+    private val blocks = Ref.unsafe[IO, TreeMap[BlockId, NewBlock]](TreeMap())
+    private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, NewLedgerEvent]](TreeMap())
+    private val confirmedBlock = Ref.unsafe[IO, Option[BlockId]](None)
+    
     override def receive: ReplyingReceive[IO, Request, Response] =
         PartialFunction.fromFunction({
             case PersistRequest(data) =>

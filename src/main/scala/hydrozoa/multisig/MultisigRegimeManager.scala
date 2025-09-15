@@ -29,15 +29,11 @@ object MultisigRegimeManager {
         persistence: Persistence.Ref
     )
 
-    def create(
-        config: Config
-    ): IO[MultisigRegimeManager] =
-        IO(MultisigRegimeManager(config))
+    def apply(config: Config): IO[MultisigRegimeManager] =
+        IO(new MultisigRegimeManager(config) {})
 }
 
-final class MultisigRegimeManager private (
-    config: Config
-) extends Actor[IO, Request] {
+trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
 
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1 minute) {
@@ -64,61 +60,75 @@ final class MultisigRegimeManager private (
             pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
             pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
 
-            blockProducer <- context.actorOf(
-              BlockProducer.create(
-                BlockProducer.Config(peerId = config.peerId, persistence = config.persistence),
-                BlockProducer.ConnectionsPending(
-                  cardanoLiaison = pendingCardanoLiaison,
-                  peerLiaisons = pendingLocalPeerLiaisons,
-                  transactionSequencer = pendingTransactionSequencer
+            blockProducer <- {
+                import BlockProducer.{Config, ConnectionsPending}
+                context.actorOf(
+                  BlockProducer(
+                    Config(peerId = config.peerId, persistence = config.persistence),
+                    ConnectionsPending(
+                      cardanoLiaison = pendingCardanoLiaison,
+                      peerLiaisons = pendingLocalPeerLiaisons,
+                      transactionSequencer = pendingTransactionSequencer
+                    )
+                  )
                 )
-              )
-            )
+            }
 
-            localPeerLiaisonsPendingRemoteActors <- config.peers
-                .filterNot(_ == config.peerId)
-                .traverse(pid =>
-                    for {
-                        pendingRemotePeerLiaison <- Deferred[IO, ConsensusProtocol.PeerLiaison.Ref]
-                        localPeerLiaison <- context.actorOf(
-                          PeerLiaison.create(
-                            PeerLiaison.Config(
-                              peerId = config.peerId,
-                              remotePeerId = pid,
-                              persistence = config.persistence
-                            ),
-                            PeerLiaison.ConnectionsPending(
-                              blockProducer = pendingBlockProducer,
-                              remotePeerLiaison = pendingRemotePeerLiaison
+            localPeerLiaisonsPendingRemoteActors <- {
+                import PeerLiaison.{Config, ConnectionsPending}
+                config.peers
+                    .filterNot(_ == config.peerId)
+                    .traverse(pid =>
+                        for {
+                            pendingRemotePeerLiaison <- Deferred[
+                              IO,
+                              ConsensusProtocol.PeerLiaison.Ref
+                            ]
+                            localPeerLiaison <- context.actorOf(
+                              PeerLiaison(
+                                Config(
+                                  peerId = config.peerId,
+                                  remotePeerId = pid,
+                                  persistence = config.persistence
+                                ),
+                                ConnectionsPending(
+                                  blockProducer = pendingBlockProducer,
+                                  remotePeerLiaison = pendingRemotePeerLiaison
+                                )
+                              )
                             )
-                          )
-                        )
-                    } yield (localPeerLiaison, pendingRemotePeerLiaison)
-                )
+                        } yield (localPeerLiaison, pendingRemotePeerLiaison)
+                    )
+            }
 
             localPeerLiaisons = localPeerLiaisonsPendingRemoteActors.map(_._1)
 
-            cardanoLiaison <- context.actorOf(
-              CardanoLiaison.create(
-                CardanoLiaison.Config(
-                  persistence = config.persistence,
-                  cardanoBackend = config.cardanoBackend
-                ),
-                CardanoLiaison.ConnectionsPending(
+            cardanoLiaison <- {
+                import CardanoLiaison.{Config, ConnectionsPending}
+                context.actorOf(
+                  CardanoLiaison(
+                    Config(
+                      persistence = config.persistence,
+                      cardanoBackend = config.cardanoBackend
+                    ),
+                    ConnectionsPending(
+                    )
+                  )
                 )
-              )
-            )
+            }
 
-            transactionSequencer <- context.actorOf(
-              TransactionSequencer.create(
-                TransactionSequencer
-                    .Config(peerId = config.peerId, persistence = config.persistence),
-                TransactionSequencer.ConnectionsPending(
-                  blockProducer = pendingBlockProducer,
-                  peerLiaisons = pendingLocalPeerLiaisons
+            transactionSequencer <- {
+                import TransactionSequencer.{Config, ConnectionsPending}
+                context.actorOf(
+                  TransactionSequencer(
+                    Config(peerId = config.peerId, persistence = config.persistence),
+                    ConnectionsPending(
+                      blockProducer = pendingBlockProducer,
+                      peerLiaisons = pendingLocalPeerLiaisons
+                    )
+                  )
                 )
-              )
-            )
+            }
 
             _ <- pendingBlockProducer.complete(blockProducer)
             _ <- pendingLocalPeerLiaisons.complete(localPeerLiaisons)

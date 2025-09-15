@@ -12,11 +12,11 @@ import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
   *   - Responds to queries about utxo state.
   */
 object CardanoBackend {
-    def create(): IO[CardanoBackend] =
-        CardanoBackend().pure
+    def apply(): IO[CardanoBackend] =
+        IO.pure(new CardanoBackend {})
 }
 
-final case class CardanoBackend() extends Actor[IO, Request] {
+trait CardanoBackend extends Actor[IO, Request] {
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction({
             case x: SubmitL1Effects     => ???
