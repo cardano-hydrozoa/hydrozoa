@@ -28,6 +28,9 @@ object ActorHandle {
             deferredResponse: Deferred[F, Either[Throwable, request.Response]]
         )(implicit F: MonadError[F, Throwable]): ActorRequestSync[F, RequestS] =
             new ActorRequestSync(request, deferredResponse) {}
+            
+        def unapply[F[+_], RequestS <: RequestSync](a: ActorRequestSync[F, RequestS]): RequestS =
+            a.request
     }
 
     sealed trait ActorHandleAsync[F[+_], -RequestA <: RequestAsync]
