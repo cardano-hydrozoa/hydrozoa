@@ -23,23 +23,23 @@ object Persistence {
         IO(new Persistence {})
 }
 
-trait Persistence extends Actor[IO, Request] {
+trait Persistence extends Actor[IO, ActorRequest] {
     private val acks = Ref.unsafe[IO, TreeMap[AckId, AckBlock]](TreeMap())
     private val batches = Ref.unsafe[IO, TreeMap[BatchId, GetMsgBatch]](TreeMap())
     private val blocks = Ref.unsafe[IO, TreeMap[BlockId, NewBlock]](TreeMap())
     private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, NewLedgerEvent]](TreeMap())
     private val confirmedBlock = Ref.unsafe[IO, Option[BlockId]](None)
-    
-    override def receive: Receive[IO, Request] =
+
+    override def receive: Receive[IO, ActorRequest] =
         PartialFunction.fromFunction(this.receiveTotal)
 
-    private def receiveTotal(req: Request): IO[Unit] =
+    private def receiveTotal(req: ActorRequest): IO[Unit] =
         req match {
-            case r: ActorRequestSync[IO, PersistRequest] => r.receiveSync(handlePersist)
-            case r: ActorRequestSync[IO, PutL1Effects] => ???
-            case r: ActorRequestSync[IO, PutCardanoHeadState] => ???
-            case r: ActorRequestSync[IO, GetBlockData] => ???
-            case r: ActorRequestSync[IO, GetConfirmedL1Effects] => ???
+            case r: ActorRequestSync[IO, PersistRequest]          => r.receiveSync(handlePersist)
+            case r: ActorRequestSync[IO, PutL1Effects]            => ???
+            case r: ActorRequestSync[IO, PutCardanoHeadState]     => ???
+            case r: ActorRequestSync[IO, GetBlockData]            => ???
+            case r: ActorRequestSync[IO, GetConfirmedL1Effects]   => ???
             case r: ActorRequestSync[IO, GetConfirmedLocalEvents] => ???
         }
 

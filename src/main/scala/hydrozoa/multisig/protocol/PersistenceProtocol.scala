@@ -3,20 +3,21 @@ package hydrozoa.multisig.protocol
 import cats.effect.IO
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.handle.Handle.RequestSync
-import hydrozoa.lib.handle.actor.ActorHandle.ActorRequestSync
+import hydrozoa.lib.handle.actor.ActorHandle.{ActorHandleSyncOnly, ActorRequestSync}
 import hydrozoa.multisig.protocol.ConsensusProtocol.Persisted
 
 object PersistenceProtocol {
     object Persistence {
+        type Handle = ActorHandleSyncOnly[IO, Request, ActorRequest]
         type PersistenceRef = Ref
-        type Ref = ActorRef[IO, Request]
-        type Request =
-            ActorRequestSync[IO, PersistRequest] |
-            ActorRequestSync[IO, PutL1Effects] |
-            ActorRequestSync[IO, PutCardanoHeadState] |
-            ActorRequestSync[IO, GetBlockData] |
-            ActorRequestSync[IO, GetConfirmedL1Effects] |
-            ActorRequestSync[IO, GetConfirmedLocalEvents]
+        type Ref = ActorRef[IO, ActorRequest]
+        type ActorRequest =
+            ActorRequestSync[IO, PersistRequest] | ActorRequestSync[IO, PutL1Effects] |
+                ActorRequestSync[IO, PutCardanoHeadState] | ActorRequestSync[IO, GetBlockData] |
+                ActorRequestSync[IO, GetConfirmedL1Effects] |
+                ActorRequestSync[IO, GetConfirmedLocalEvents]
+        
+        type Request = PersistRequest | PutL1Effects | PutCardanoHeadState| GetBlockData | GetConfirmedL1Effects | GetConfirmedLocalEvents
 
         /** ==Put/write data into the persistence system== */
         final case class PersistRequest(

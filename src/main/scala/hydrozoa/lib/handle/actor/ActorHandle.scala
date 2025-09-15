@@ -28,7 +28,15 @@ object ActorHandle {
             deferredResponse: Deferred[F, Either[Throwable, request.Response]]
         )(implicit F: MonadError[F, Throwable]): ActorRequestSync[F, RequestS] =
             new ActorRequestSync(request, deferredResponse) {}
-            
+
+        def fromRequestSync[F[+_], RequestS <: RequestSync](request: RequestS)(implicit
+            F: GenConcurrent[F, Throwable]
+        ): F[(ActorRequestSync[F, RequestS], Deferred[F, Either[Throwable, request.Response]])] =
+            for {
+                deferredResponse <- Deferred[F, Either[Throwable, request.Response]]
+                actorRequest = new ActorRequestSync(request, deferredResponse) {}
+            } yield (actorRequest, deferredResponse)
+
         def unapply[F[+_], RequestS <: RequestSync](a: ActorRequestSync[F, RequestS]): RequestS =
             a.request
     }
@@ -50,57 +58,45 @@ object ActorHandle {
             }
     }
 
-    sealed trait ActorHandleSyncOnly[F[+_], -RequestS <: RequestSync](implicit
+    sealed trait ActorHandleSyncOnly[F[+_], -RequestS <: RequestSync, -ActorRequestS >: ActorRequestSync[F, RequestS]](implicit
         F: GenConcurrent[F, Throwable]
     ) extends HandleOnlySync[F, RequestS] {
-        def syncActorRef: ActorHandleSyncOnly.Ref[F, RequestS]
+        def syncActorRef: ActorRef[F, ActorRequestS]
 
         override def ?(request: RequestS): F[request.Response] =
             for {
-                deferredResponse <- Deferred[F, Either[Throwable, request.Response]]
-                actorRequest = ActorRequestSync(request, deferredResponse)
-                _ <- this.syncActorRef ! actorRequest
-                response <- deferredResponse.get.rethrow
+                x <- ActorRequestSync.fromRequestSync(request)
+                _ <- this.syncActorRef ! x._1
+                response <- x._2.get.rethrow
             } yield response
     }
 
     object ActorHandleSyncOnly {
-        type Ref[F[+_], -RequestS <: RequestSync] = ActorRef[F, Request[F, RequestS]]
-        type Request[F[+_], +RequestS <: RequestSync] = ActorRequestSync[F, RequestS]
-
-        def apply[F[+_], RequestS <: RequestSync](
-            a: Ref[F, RequestS]
-        )(implicit F: GenConcurrent[F, Throwable]): ActorHandleSyncOnly[F, RequestS] =
+        def apply[F[+_], RequestS <: RequestSync, ActorRequestS >: ActorRequestSync[F, RequestS]](
+            a: ActorRef[F, ActorRequestS]
+        )(implicit F: GenConcurrent[F, Throwable]): ActorHandleSyncOnly[F, RequestS, ActorRequestS] =
             new ActorHandleSyncOnly {
-                override val syncActorRef: ActorRef[F, ActorRequestSync[F, RequestS]] = a
+                override val syncActorRef: ActorRef[F, ActorRequestS] = a
             }
     }
 
-    sealed trait ActorHandle[F[+_], -RequestA <: RequestAsync, -RequestS <: RequestSync]
+    sealed trait ActorHandle[F[+_], -RequestA <: RequestAsync, -RequestS <: RequestSync, -ActorRequestS >: ActorRequestSync[F, RequestS]]
         extends Handle[F, RequestA, RequestS],
           ActorHandleAsync[F, RequestA],
-          ActorHandleSyncOnly[F, RequestS] {
-        def actorRef: ActorHandle.Ref[F, RequestA, RequestS]
+          ActorHandleSyncOnly[F, RequestS, ActorRequestS] {
+        def actorRef: ActorRef[F, RequestA | ActorRequestS]
 
         override def asyncActorRef: ActorRef[F, RequestA] = actorRef
 
-        override def syncActorRef: ActorRef[F, ActorRequestSync[F, RequestS]] = actorRef
+        override def syncActorRef: ActorRef[F, ActorRequestS] = actorRef
     }
 
     object ActorHandle {
-        type Ref2[F[+_], -RequestS <: RequestSync] = Ref[F, RequestS, RequestS]
-
-        type Ref[F[+_], -RequestA <: RequestAsync, -RequestS <: RequestSync] =
-            ActorRef[F, Request[F, RequestA, RequestS]]
-
-        type Request[F[+_], +RequestA <: RequestAsync, +RequestS <: RequestSync] =
-            RequestA | ActorRequestSync[F, RequestS]
-
-        def apply[F[+_], RequestA <: RequestSync, RequestS <: RequestSync](
-            a: Ref[F, RequestA, RequestS]
-        )(implicit F: GenConcurrent[F, Throwable]): ActorHandle[F, RequestA, RequestS] =
+        def apply[F[+_], RequestA <: RequestAsync, RequestS <: RequestSync, ActorRequestS >: ActorRequestSync[F, RequestS]](
+            a: ActorRef[F, RequestA | ActorRequestS]
+        )(implicit F: GenConcurrent[F, Throwable]): ActorHandle[F, RequestA, RequestS, ActorRequestS] =
             new ActorHandle {
-                override val actorRef: Ref[F, RequestA, RequestS] = a
+                override val actorRef: ActorRef[F, RequestA | ActorRequestS] = a
             }
     }
 }
