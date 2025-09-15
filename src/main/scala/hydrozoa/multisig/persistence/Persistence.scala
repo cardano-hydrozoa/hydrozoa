@@ -29,7 +29,7 @@ trait Persistence extends ReplyingActor[IO, Request, Response] {
     private val blocks = Ref.unsafe[IO, TreeMap[BlockId, NewBlock]](TreeMap())
     private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, NewLedgerEvent]](TreeMap())
     private val confirmedBlock = Ref.unsafe[IO, Option[BlockId]](None)
-    
+
     override def receive: ReplyingReceive[IO, Request, Response] =
         PartialFunction.fromFunction({
             case PersistRequest(data) =>

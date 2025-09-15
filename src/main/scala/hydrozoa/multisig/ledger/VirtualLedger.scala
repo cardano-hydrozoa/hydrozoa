@@ -11,7 +11,8 @@ import supranational.blst.P2
 import scala.util.{Failure, Success}
 import hydrozoa.multisig.ledger.virtual.*
 import VirtualLedger.*
-import hydrozoa.multisig.ledger.virtual.commitment.Commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 private def toScalusState(state: State): ScalusState =
     emptyState.copy(utxo = state.activeUtxos)
@@ -83,11 +84,12 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
             }
         } yield res
 
-    def getKzgCommitment: IO[KzgCommitment] =
+    def makeUtxosCommitment: IO[KzgCommitment] =
         for {
             s <- state.get
-            // s.activeUtxos
-        } yield ???
+            // FIXME: or just commitment = KzgCommitment.getUtxosActiveCommitment(s.activeUtxos) ?
+            commitment <- IO(KzgCommitment.getUtxosActiveCommitment(s.activeUtxos))
+        } yield commitment
 }
 
 /** ==Hydrozoa's open virtual ledger in the multisig regime==
