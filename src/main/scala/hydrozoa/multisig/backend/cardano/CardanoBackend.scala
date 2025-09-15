@@ -12,7 +12,7 @@ import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
   *   - Responds to queries about utxo state.
   */
 object CardanoBackend {
-    def create(): IO[CardanoBackend] =
+    def apply(): IO[CardanoBackend] =
         IO.pure(new CardanoBackend {})
 }
 

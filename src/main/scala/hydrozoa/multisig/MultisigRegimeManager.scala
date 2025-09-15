@@ -29,7 +29,7 @@ object MultisigRegimeManager {
         persistence: Persistence.Ref
     )
 
-    def create(config: Config): IO[MultisigRegimeManager] =
+    def apply(config: Config): IO[MultisigRegimeManager] =
         IO(new MultisigRegimeManager(config) {})
 }
 

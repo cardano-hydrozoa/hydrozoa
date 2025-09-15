@@ -19,7 +19,7 @@ import scala.collection.immutable.TreeMap
   *   - Gets data that was put into the store (i.e. read/retrieve)
   */
 object Persistence {
-    def create(): IO[Persistence] =
+    def apply(): IO[Persistence] =
         IO(new Persistence {})
 }
 
