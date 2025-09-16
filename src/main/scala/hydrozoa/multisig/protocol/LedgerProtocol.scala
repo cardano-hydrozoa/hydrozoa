@@ -7,28 +7,7 @@ import hydrozoa.multisig.ledger
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
 
-class LedgerProtocol {
-    type UserRequest = RegisterDeposit | VirtualTransaction
-    
-    object UserRequest {
-        type Number = Number.Number
-        
-        object Number {
-            opaque type Number = Int
-
-            def apply(i: Int): Number = i
-
-            given Conversion[Number, Int] = identity
-
-            given Ordering[Number] with {
-                override def compare(x: Number, y: Number): Int =
-                    x.compare(y)
-            }
-
-            extension (self: Number) def increment: Number = Number(self + 1)   
-        }
-    }
-
+object LedgerProtocol {
     object DappLedger {
         type DappLedgerRef = Ref
         type Ref = ActorRef[IO, Request]

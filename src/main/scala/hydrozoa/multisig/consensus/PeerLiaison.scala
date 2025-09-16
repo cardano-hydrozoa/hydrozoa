@@ -11,13 +11,13 @@ import scala.annotation.targetName
 import scala.collection.immutable.Queue
 import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.consensus.block.Block
-import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.consensus.ack.Ack
 import hydrozoa.multisig.consensus.batch.Batch
+import hydrozoa.multisig.ledger.event.LedgerEvent
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -128,7 +128,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
     private final class State {
         private val nAck = Ref.unsafe[IO, Ack.Number](Ack.Number(0))
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
-        private val nEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
+        private val nEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[NewBlock]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
@@ -269,7 +269,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
                 ackNum = mAck.fold(nAck)(_.id.ackNum)
                 blockNum = mBlock.fold(nBlock)(_.id)
-                eventNum = events.lastOption.fold(nEvents)(_.id._2)
+                eventNum = events.lastOption.fold(nEvents)(_.id.eventNum)
             } yield NewMsgBatch(
               id = batchReq.id,
               ackNum = ackNum,

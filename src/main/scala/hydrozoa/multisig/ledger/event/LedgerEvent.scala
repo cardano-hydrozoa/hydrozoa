@@ -1,17 +1,16 @@
-package hydrozoa.multisig.consensus.batch
+package hydrozoa.multisig.ledger.event
 
 import hydrozoa.multisig.consensus.peer.Peer
-
 import cats.syntax.all.*
 
-object Batch {
+object LedgerEvent {
     type Id = Id.Id
     type Number = Number.Number
 
     object Id {
         opaque type Id = (Int, Int)
 
-        def apply(peerId: Int, batchNum: Int): Id = (peerId, batchNum)
+        def apply(peerId: Int, eventNum: Int): Id = (peerId, eventNum)
 
         def unapply(self: Id): (Peer.Number, Number) = (Peer.Number(self._1), Number(self._2))
 
@@ -25,9 +24,9 @@ object Batch {
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
             def peerNum: Peer.Number = Peer.Number(self._1)
-            def batchNum: Number = Number(self._2)
+            def eventNum: Number = Number(self._2)
     }
-    
+
     object Number {
         opaque type Number = Int
 

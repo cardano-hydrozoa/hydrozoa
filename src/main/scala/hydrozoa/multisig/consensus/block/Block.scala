@@ -3,7 +3,7 @@ package hydrozoa.multisig.consensus.block
 import hydrozoa.multisig.ledger.KzgCommitment
 
 import scala.concurrent.duration.FiniteDuration
-import scala.math.Ordered.orderingToOrdered
+import cats.syntax.all.*
 
 enum Block {
     def header: Block.Header

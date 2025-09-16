@@ -5,9 +5,9 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.consensus.block.Block
 import Block.*
 import hydrozoa.multisig.consensus.peer.Peer
-import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.consensus.ack.Ack
 import hydrozoa.multisig.consensus.batch.Batch
+import hydrozoa.multisig.ledger.event.LedgerEvent
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -85,7 +85,7 @@ object ConsensusProtocol {
       * LedgerEventId.
       */
     final case class NewLedgerEvent(
-        id: LedgerEventId,
+        id: LedgerEvent.Id,
         time: FiniteDuration,
         event: Unit // FIXME LedgerEvent
     )
@@ -119,9 +119,9 @@ object ConsensusProtocol {
         time: FiniteDuration,
         blockType: Block.Type,
         blockVersion: Block.Version.Full,
-        ledgerEventIdsRequired: Map[Peer.Number, LedgerEventNum],
-        ledgerEventsValid: List[LedgerEventId],
-        ledgerEventsInvalid: List[LedgerEventId],
+        ledgerEventIdsRequired: Map[Peer.Number, LedgerEvent.Number],
+        ledgerEventsValid: List[LedgerEvent.Id],
+        ledgerEventsInvalid: List[LedgerEvent.Id],
     )
 
     object NewBlock {
@@ -167,7 +167,7 @@ object ConsensusProtocol {
                                     id: Batch.Id,
                                     ackNum: Ack.Number,
                                     blockNum: Block.Number,
-                                    eventNum: LedgerEventNum
+                                    eventNum: LedgerEvent.Number
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -193,7 +193,7 @@ object ConsensusProtocol {
                                     id: Batch.Id,
                                     ackNum: Ack.Number,
                                     blockNum: Block.Number,
-                                    eventNum: LedgerEventNum,
+                                    eventNum: LedgerEvent.Number,
                                     ack: Option[AckBlock],
                                     block: Option[NewBlock],
                                     events: List[NewLedgerEvent]

@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.peer.Peer
 
-import scala.math.Ordered.orderingToOrdered
+import cats.syntax.all.*
 
 object Ack {
     type Id = Id.Id
