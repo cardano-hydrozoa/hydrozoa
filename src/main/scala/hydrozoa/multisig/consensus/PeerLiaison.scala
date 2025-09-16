@@ -10,14 +10,10 @@ import com.suprnation.actor.Actor.Receive
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
-import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
-import hydrozoa.multisig.consensus.peer.Peer
-import hydrozoa.multisig.consensus.ack.Ack
-import hydrozoa.multisig.consensus.batch.Batch
-import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent, Peer}
 
 /** Communication actor is connected to its counterpart at another peer:
   *

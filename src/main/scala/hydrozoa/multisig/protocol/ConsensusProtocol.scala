@@ -2,12 +2,8 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.consensus.block.Block
-import Block.*
-import hydrozoa.multisig.consensus.peer.Peer
-import hydrozoa.multisig.consensus.ack.Ack
-import hydrozoa.multisig.consensus.batch.Batch
-import hydrozoa.multisig.ledger.event.LedgerEvent
+import hydrozoa.multisig.protocol.types.Block.*
+import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent, Peer}
 
 import scala.concurrent.duration.FiniteDuration
 

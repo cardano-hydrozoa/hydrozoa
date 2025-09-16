@@ -177,12 +177,14 @@ object VirtualLedger {
 
     sealed trait ErrorApplyGenesisTx
 
-    private case class CborParseError(e: Throwable)
-        extends ErrorApplyInternalTx,
+    final case class CborParseError(e: Throwable)
+        extends Throwable,
+          ErrorApplyInternalTx,
           ErrorApplyWithdrawalTx,
           ErrorApplyGenesisTx
-    private case class TransactionInvalidError(e: String | TransactionException)
-        extends ErrorApplyInternalTx,
+    final case class TransactionInvalidError(e: String | TransactionException)
+        extends Throwable,
+          ErrorApplyInternalTx,
           ErrorApplyWithdrawalTx,
           ErrorApplyGenesisTx
 }

@@ -7,11 +7,10 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import BlockProducer.{Config, ConnectionsPending}
-import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
-import hydrozoa.multisig.consensus.peer.Peer
+import hydrozoa.multisig.protocol.types.{Block, Peer}
 
 /** Block actor:
   *

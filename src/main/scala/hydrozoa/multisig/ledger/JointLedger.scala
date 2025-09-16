@@ -31,4 +31,9 @@ final case class JointLedger()(
   * transitions to them individually, but it also periodically reconciles state transitions across
   * them to keep them aligned.
   */
-object JointLedger {}
+object JointLedger {
+    type GenesisObligation
+    type PayoutObligation
+
+    final case class CompleteBlockError() extends Throwable
+}

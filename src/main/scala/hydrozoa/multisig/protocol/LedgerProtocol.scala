@@ -8,6 +8,8 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
 
 object LedgerProtocol {
+    type LedgerEvent = VirtualTransaction | RegisterDeposit
+
     object DappLedger {
         type DappLedgerRef = Ref
         type Ref = ActorRef[IO, Request]

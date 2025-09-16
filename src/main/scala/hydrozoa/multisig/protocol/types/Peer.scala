@@ -1,4 +1,4 @@
-package hydrozoa.multisig.consensus.peer
+package hydrozoa.multisig.protocol.types
 
 object Peer {
     type Number = Number.Number

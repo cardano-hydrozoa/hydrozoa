@@ -1,17 +1,15 @@
-package hydrozoa.multisig.consensus.batch
-
-import hydrozoa.multisig.consensus.peer.Peer
+package hydrozoa.multisig.protocol.types
 
 import cats.syntax.all.*
 
-object Batch {
+object Ack {
     type Id = Id.Id
     type Number = Number.Number
 
     object Id {
         opaque type Id = (Int, Int)
 
-        def apply(peerId: Int, batchNum: Int): Id = (peerId, batchNum)
+        def apply(peerId: Int, ackNum: Int): Id = (peerId, ackNum)
 
         def unapply(self: Id): (Peer.Number, Number) = (Peer.Number(self._1), Number(self._2))
 
@@ -25,21 +23,22 @@ object Batch {
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
             def peerNum: Peer.Number = Peer.Number(self._1)
-            def batchNum: Number = Number(self._2)
+            def ackNum: Number = Number(self._2)
     }
     
     object Number {
-        opaque type Number = Int
+      opaque type Number = Int
 
-        def apply(i: Int): Number = i
+      def apply(i: Int): Number = i
 
-        given Conversion[Number, Int] = identity
+      given Conversion[Number, Int] = identity
 
-        given Ordering[Number] with {
-            override def compare(x: Number, y: Number): Int =
-                x.compare(y)
-        }
+      given Ordering[Number] with {
+        override def compare(x: Number, y: Number): Int =
+          x.compare(y)
+      }
 
-        extension (self: Number) def increment: Number = Number(self + 1)
+      extension (self: Number)
+        def increment: Number = Number(self + 1)
     }
 }

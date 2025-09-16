@@ -1,9 +1,9 @@
-package hydrozoa.multisig.consensus.block
+package hydrozoa.multisig.protocol.types
 
+import cats.syntax.all.*
 import hydrozoa.multisig.ledger.KzgCommitment
 
 import scala.concurrent.duration.FiniteDuration
-import cats.syntax.all.*
 
 enum Block {
     def header: Block.Header

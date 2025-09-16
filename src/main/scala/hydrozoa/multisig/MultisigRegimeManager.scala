@@ -12,12 +12,12 @@ import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.consensus.peer.Peer
 
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
 import MultisigRegimeManager.Config
+import hydrozoa.multisig.protocol.types.Peer
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */

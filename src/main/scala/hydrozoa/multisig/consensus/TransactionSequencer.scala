@@ -10,12 +10,11 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 
 import scala.collection.immutable.Queue
 import TransactionSequencer.{Config, ConnectionsPending}
-import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
+import hydrozoa.multisig.protocol.types.{LedgerEvent, Peer}
 
 /** Transaction sequencer receives local submissions of new ledger events and emits them
   * sequentially into the consensus system.
@@ -71,7 +70,7 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
             case x: SubmitLedgerEvent =>
                 for {
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
-                    newId = (config.peerId, newNum)
+                    newId = LedgerEvent.Id(config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, x.time, x.event)
                     persistenceRequest <- Persistence.PersistRequest(newEvent)
                     _ <- config.persistence ?: persistenceRequest
@@ -83,19 +82,19 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
         }
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
+        private val nLedgerEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
         private val localRequests =
-            Ref.unsafe[IO, Queue[(LedgerEventNum, Deferred[IO, Unit])]](
+            Ref.unsafe[IO, Queue[(LedgerEvent.Number, Deferred[IO, Unit])]](
               Queue()
             )
 
-        def enqueueDeferredEventOutcome(eventOutcome: Deferred[IO, Unit]): IO[LedgerEventNum] =
+        def enqueueDeferredEventOutcome(eventOutcome: Deferred[IO, Unit]): IO[LedgerEvent.Number] =
             for {
                 newNum <- nLedgerEvent.updateAndGet(x => x.increment)
                 _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
             } yield newNum
 
-        def completeDeferredEventOutcomes(eventOutcomes: List[(LedgerEventNum, Unit)]): IO[Unit] =
+        def completeDeferredEventOutcomes(eventOutcomes: List[(LedgerEvent.Number, Unit)]): IO[Unit] =
             ???
     }
 }

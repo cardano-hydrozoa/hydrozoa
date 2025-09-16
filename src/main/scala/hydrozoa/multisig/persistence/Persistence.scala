@@ -5,14 +5,11 @@ import cats.effect.Ref
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.consensus.ack.Ack
-import hydrozoa.multisig.consensus.batch.Batch
-import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.ledger.event.LedgerEvent
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
+import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent}
 
 import scala.collection.immutable.TreeMap
 
