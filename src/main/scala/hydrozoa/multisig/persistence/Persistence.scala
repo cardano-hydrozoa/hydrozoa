@@ -26,7 +26,7 @@ object Persistence {
 trait Persistence extends Actor[IO, Request] {
     private val acks = Ref.unsafe[IO, TreeMap[Ack.Id, AckBlock]](TreeMap())
     private val batches = Ref.unsafe[IO, TreeMap[Batch.Id, GetMsgBatch]](TreeMap())
-    private val blocks = Ref.unsafe[IO, TreeMap[Block.Number, NewBlock]](TreeMap())
+    private val blocks = Ref.unsafe[IO, TreeMap[Block.Number, Block]](TreeMap())
     private val events = Ref.unsafe[IO, TreeMap[LedgerEvent.Id, NewLedgerEvent]](TreeMap())
     private val confirmedBlock = Ref.unsafe[IO, Option[Block.Number]](None)
 
@@ -38,7 +38,7 @@ trait Persistence extends Actor[IO, Request] {
                         _ <- data match {
                             case x: NewLedgerEvent =>
                                 events.update(m => m + (x.id -> x))
-                            case x: NewBlock =>
+                            case x: Block =>
                                 blocks.update(m => m + (x.id -> x))
                             case x: AckBlock =>
                                 acks.update(m => m + (x.id -> x))

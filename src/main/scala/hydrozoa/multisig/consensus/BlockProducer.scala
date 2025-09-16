@@ -39,7 +39,7 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
 
     private final case class Subscribers(
         ackBlock: List[AckBlock.Subscriber],
-        newBlock: List[NewBlock.Subscriber],
+        newBlock: List[Block.Subscriber],
         confirmBlock: List[ConfirmBlock.Subscriber]
     )
 
@@ -75,7 +75,7 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
         req match {
             case x: NewLedgerEvent =>
                 ???
-            case x: NewBlock =>
+            case x: Block =>
                 ???
             case x: AckBlock =>
                 ???

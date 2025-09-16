@@ -1,11 +1,14 @@
 package hydrozoa.multisig.protocol.types
 
+import cats.effect.IO
 import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.KzgCommitment
 
 import scala.concurrent.duration.FiniteDuration
 
 enum Block {
+    def id: Block.Number = this.header.blockNum
     def header: Block.Header
 
     case Initial(
@@ -36,6 +39,8 @@ enum Block {
 }
 
 object Block {
+    type Subscriber = ActorRef[IO, Block]
+    
     type Next = Block.Minor | Block.Major | Block.Final
 
     type Number = Number.Number
@@ -145,27 +150,30 @@ object Block {
         case Initial extends Body
 
         case Minor(
-            override val transactionsValid: List[Unit],
-            override val transactionsInvalid: List[Unit],
-            override val depositsRegistered: List[Unit],
-            override val depositsRejected: List[Unit],
-            override val depositsRefunded: List[Unit]
+            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
+            override val transactionsValid: List[LedgerEvent.Id],
+            override val transactionsInvalid: List[LedgerEvent.Id],
+            override val depositsRegistered: List[LedgerEvent.Id],
+            override val depositsRejected: List[LedgerEvent.Id],
+            override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Minor
 
         case Major(
-            override val transactionsValid: List[Unit],
-            override val transactionsInvalid: List[Unit],
-            override val depositsRegistered: List[Unit],
-            override val depositsRejected: List[Unit],
-            override val depositsAbsorbed: List[Unit],
-            override val depositsRefunded: List[Unit]
+            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
+            override val transactionsValid: List[LedgerEvent.Id],
+            override val transactionsInvalid: List[LedgerEvent.Id],
+            override val depositsRegistered: List[LedgerEvent.Id],
+            override val depositsRejected: List[LedgerEvent.Id],
+            override val depositsAbsorbed: List[LedgerEvent.Id],
+            override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Major
 
         case Final(
-            override val transactionsValid: List[Unit],
-            override val transactionsInvalid: List[Unit],
-            override val depositsRejected: List[Unit],
-            override val depositsRefunded: List[Unit]
+            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
+            override val transactionsValid: List[LedgerEvent.Id],
+            override val transactionsInvalid: List[LedgerEvent.Id],
+            override val depositsRejected: List[LedgerEvent.Id],
+            override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Final
     }
 
@@ -178,40 +186,44 @@ object Block {
 
     object BodyFields {
         sealed trait Minor
-            extends Transactions,
+            extends LedgerEventsRequired, Transactions,
               Deposits.Registered,
               Deposits.Rejected,
               Deposits.Refunded
 
         sealed trait Major
-            extends Transactions,
+            extends LedgerEventsRequired, Transactions,
               Deposits.Registered,
               Deposits.Rejected,
               Deposits.Absorbed,
               Deposits.Refunded
 
-        sealed trait Final extends Transactions, Deposits.Rejected, Deposits.Refunded
+        sealed trait Final extends LedgerEventsRequired, Transactions, Deposits.Rejected, Deposits.Refunded
 
+        sealed trait LedgerEventsRequired {
+            def ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number]
+        }
+        
         sealed trait Transactions {
-            def transactionsValid: List[Unit]
-            def transactionsInvalid: List[Unit]
+            def transactionsValid: List[LedgerEvent.Id]
+            def transactionsInvalid: List[LedgerEvent.Id]
         }
 
         object Deposits {
             sealed trait Registered {
-                def depositsRegistered: List[Unit]
+                def depositsRegistered: List[LedgerEvent.Id]
             }
 
             sealed trait Rejected {
-                def depositsRejected: List[Unit]
+                def depositsRejected: List[LedgerEvent.Id]
             }
 
             sealed trait Absorbed {
-                def depositsAbsorbed: List[Unit]
+                def depositsAbsorbed: List[LedgerEvent.Id]
             }
 
             sealed trait Refunded {
-                def depositsRefunded: List[Unit]
+                def depositsRefunded: List[LedgerEvent.Id]
             }
         }
     }

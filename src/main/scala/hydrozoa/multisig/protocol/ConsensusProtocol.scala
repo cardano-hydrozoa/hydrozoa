@@ -3,7 +3,7 @@ package hydrozoa.multisig.protocol
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent, Peer}
+import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -21,7 +21,7 @@ object ConsensusProtocol {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
         type Request =
-            NewLedgerEvent | NewBlock | AckBlock
+            NewLedgerEvent | Block | AckBlock
     }
 
     object CardanoLiaison {
@@ -47,7 +47,7 @@ object ConsensusProtocol {
 
     object Persisted {
         type Request =
-            NewLedgerEvent | NewBlock | AckBlock | ConfirmBlock | NewMsgBatch
+            NewLedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
     }
 
     object RemoteBroadcast {
@@ -88,40 +88,6 @@ object ConsensusProtocol {
 
     object NewLedgerEvent {
         type Subscriber = ActorRef[IO, NewLedgerEvent]
-    }
-
-    /** The block actor announces a new block.
-      *
-      * @param id
-      *   The block ID, increasing by one for every consecutive new block.
-      * @param time
-      *   The creation time of the block.
-      * @param blockType
-      *   The block's type: initial, minor, major, or final.
-      * @param ledgerEventIdsRequired
-      *   The event number for each peer that the block creator had processed at the moment the
-      *   block was created. Every follower must reach the same event numbers for each peer before
-      *   attempting to verify the block.
-      * @param ledgerEventsValid
-      *   The sequence of valid events that the block creator has applied to transition the previous
-      *   block's multi-ledger state. Every follower must apply these events in the same order when
-      *   verifying the block.
-      * @param ledgerEventsInvalid
-      *   The set of deposits that will never be absorbed into the head's treasury because they do
-      *   not fulfill the absorption criteria.
-      */
-    final case class NewBlock(
-        id: Block.Number,
-        time: FiniteDuration,
-        blockType: Block.Type,
-        blockVersion: Block.Version.Full,
-        ledgerEventIdsRequired: Map[Peer.Number, LedgerEvent.Number],
-        ledgerEventsValid: List[LedgerEvent.Id],
-        ledgerEventsInvalid: List[LedgerEvent.Id],
-    )
-
-    object NewBlock {
-        type Subscriber = ActorRef[IO, NewBlock]
     }
 
     /** A peer's block actor announces its acknowledgement of an L2 block. When a peer's block actor
@@ -191,7 +157,7 @@ object ConsensusProtocol {
                                     blockNum: Block.Number,
                                     eventNum: LedgerEvent.Number,
                                     ack: Option[AckBlock],
-                                    block: Option[NewBlock],
+                                    block: Option[Block],
                                     events: List[NewLedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(

@@ -45,7 +45,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
     private final case class Subscribers(
         ackBlock: AckBlock.Subscriber,
-        newBlock: NewBlock.Subscriber,
+        newBlock: Block.Subscriber,
         newLedgerEvent: NewLedgerEvent.Subscriber,
         remotePeerLiaison: PeerLiaisonRef
     )
@@ -126,7 +126,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
-        private val qBlock = Ref.unsafe[IO, Queue[NewBlock]](Queue())
+        private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
@@ -151,7 +151,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         _ <- this.nAck.update(_.increment)
                         _ <- this.qAck.update(_ :+ y)
                     } yield ()
-                case y: NewBlock =>
+                case y: Block =>
                     for {
                         _ <- this.nBlock.update(_.increment)
                         _ <- this.qBlock.update(_ :+ y)
@@ -203,7 +203,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                           None,
                           List()
                         )
-                    case y: NewBlock =>
+                    case y: Block =>
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
                         } yield NewMsgBatch(
