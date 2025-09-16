@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, St
 import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
@@ -25,23 +26,19 @@ final case class DappLedger(headAddress: ShelleyAddress)(
       */
     def registerDeposit(
         txSerialized: Tx.Serialized
-    ): IO[Either[ErrorAddDeposit, (GenesisObligation, RefundTx.PostDated)]] = {
+    ): IO[Either[ErrorAddDeposit, (DepositUtxo, RefundTx.PostDated)]] = {
         // 1. Deserialize and parse the tx.
         // 2. Check that the deposit tx belongs to this ledger.
         // 3. Check that the tx satisfies ledger STS rules (assuming inputs exist).
         // 4. Append the tx's deposit utxo to the ledger's state.deposits queue.
         // 5. Return the produced deposit utxo and a post-dated refund transaction for it.
-        
+
         IO.pure(
           // Either Monad
           for {
               tx <- DepositTx.parse(txSerialized)
               refundTx: RefundTx.PostDated = ???
-              genesisObligation: GenesisObligation <- GenesisObligation.fromUtxo(
-                tx.depositProduced.utxo
-              )
-
-          } yield (genesisObligation, refundTx)
+          } yield (tx.depositProduced, refundTx)
         )
     }
 
@@ -146,5 +143,5 @@ object DappLedger {
     }
 
     // We can add some more error types to this ad-hoc union:
-    type ErrorAddDeposit = DepositTx.ParseError | GenesisObligation.UtxoToGenesisError
+    type ErrorAddDeposit = DepositTx.ParseError
 }

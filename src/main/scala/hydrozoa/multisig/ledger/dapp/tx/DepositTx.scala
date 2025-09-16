@@ -2,11 +2,11 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.DappLedger
-import DappLedger.Tx
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
-import scalus.builtin.Data.{fromData, toData}
+import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -31,11 +31,10 @@ object DepositTx {
     )
 
     sealed trait ParseError extends Throwable
-    case class MetadataParseError(e: MD.ParseError) extends ParseError
+    private case class MetadataParseError(e: MD.ParseError) extends ParseError
     case object NoUtxoAtHeadAddress extends ParseError
-    case object DepositUtxoNotBabbage extends ParseError
-    case object DepositDatumNotInline extends ParseError
-    case class DepositDatumMalformed(e: Throwable) extends ParseError
+    private case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
+        extends ParseError
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
     case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
 
@@ -60,23 +59,17 @@ object DepositTx {
                         case x                => Left(MultipleUtxosAtHeadAddress(x.size))
                     }
                     // Check that the output is babbage, extract and parse its inline datum
-                    dutxoAndDatum <- depositUtxoWithIndex._1.value match {
-                        case b: Babbage =>
-                            b.datumOption match {
-                                case Some(i: Inline) =>
-                                    Try(fromData[DepositUtxo.Datum](i.data)) match {
-                                        case Success(d) => Right((b, d))
-                                        case Failure(e) => Left(DepositDatumMalformed(e))
-                                    }
-                                case _ => Left(DepositDatumNotInline)
-                            }
-                        case _ => Left(DepositUtxoNotBabbage)
-                    }
+                    dutxo <- DepositUtxo
+                        .fromUtxo(
+                          (
+                            TransactionInput(tx.id, depositUtxoWithIndex._2),
+                            depositUtxoWithIndex._1.value
+                          )
+                        )
+                        .left
+                        .map(DepositUtxoError(_))
                 } yield DepositTx(
-                  DepositUtxo(
-                    utxo = (TransactionInput(tx.id, depositUtxoWithIndex._2), dutxoAndDatum._1),
-                    datum = dutxoAndDatum._2
-                  ),
+                  dutxo,
                   tx
                 )
             case Failure(e) => Left(TxCborDeserializationFailed(e))
@@ -149,8 +142,11 @@ object DepositTx {
             _ = assert(ix >= 0, s"Deposit output was not found in the tx.")
         } yield DepositTx(
           depositProduced = DepositUtxo(
-            utxo = (TransactionInput(tx.id, ix), depositOutput),
-            datum = recipe.datum
+            l1Input = recipe.deposit,
+            l1OutputAddress = recipe.headAddress,
+            l1OutputDatum = recipe.datum,
+            l1OutputValue = depositValue.coin,
+            l1RefScript = None
           ),
           tx = tx
         )
