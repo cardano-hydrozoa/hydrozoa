@@ -15,6 +15,7 @@ import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
+import hydrozoa.multisig.consensus.peer.Peer
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -25,8 +26,8 @@ object PeerLiaison {
     type MaxEvents = Int
 
     final case class Config(
-        peerId: PeerId,
-        remotePeerId: PeerId,
+        peerId: Peer.Number,
+        remotePeerId: Peer.Number,
         maxLedgerEventsPerBatch: MaxEvents = 25,
         persistence: Persistence.Ref
     )

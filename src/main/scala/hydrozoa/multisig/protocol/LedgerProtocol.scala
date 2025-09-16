@@ -1,0 +1,102 @@
+package hydrozoa.multisig.protocol
+
+import cats.effect.{Deferred, IO}
+import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.ledger
+import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
+
+class LedgerProtocol {
+    type UserRequest = RegisterDeposit | VirtualTransaction
+    
+    object UserRequest {
+        type Number = Number.Number
+        
+        object Number {
+            opaque type Number = Int
+
+            def apply(i: Int): Number = i
+
+            given Conversion[Number, Int] = identity
+
+            given Ordering[Number] with {
+                override def compare(x: Number, y: Number): Int =
+                    x.compare(y)
+            }
+
+            extension (self: Number) def increment: Number = Number(self + 1)   
+        }
+    }
+
+    object DappLedger {
+        type DappLedgerRef = Ref
+        type Ref = ActorRef[IO, Request]
+        type Request = RegisterDeposit
+    }
+
+    object VirtualLedger {
+        type VirtualLedgerRef = Ref
+        type Ref = ActorRef[IO, Request]
+        type Request = VirtualTransaction
+    }
+
+    object JointLedger {
+        type JointLedgerRef = Ref
+        type Ref = ActorRef[IO, Request]
+        type Request = RegisterDeposit | VirtualTransaction | CompleteBlock
+    }
+
+    final case class RegisterDeposit(
+        txSerialized: ledger.DappLedger.Tx.Serialized,
+        override val dResponse: Deferred[IO, Either[RegisterDeposit.Error, RegisterDeposit.Success]]
+    ) extends SyncRequest[IO, RegisterDeposit.Error, RegisterDeposit.Success]
+
+    object RegisterDeposit {
+        def apply(txSerialized: ledger.DappLedger.Tx.Serialized): IO[RegisterDeposit] = for {
+            deferredResponse <- Deferred[IO, Either[Error, Success]]
+        } yield RegisterDeposit(txSerialized, deferredResponse)
+
+        final case class Success(
+            genesisObligations: List[ledger.JointLedger.GenesisObligation],
+            refundTxs: List[RefundTx.PostDated]
+        )
+
+        type Error = DepositTx.ParseError
+    }
+
+    final case class VirtualTransaction(
+        txSerialized: ledger.VirtualLedger.Tx.Serialized,
+        override val dResponse: Deferred[
+          IO,
+          Either[VirtualTransaction.Error, VirtualTransaction.Success]
+        ]
+    ) extends SyncRequest[IO, VirtualTransaction.Error, VirtualTransaction.Success]
+
+    object VirtualTransaction {
+        def apply(txSerialized: ledger.VirtualLedger.Tx.Serialized): IO[VirtualTransaction] = for {
+            deferredResponse <- Deferred[IO, Either[Error, Success]]
+        } yield VirtualTransaction(txSerialized, deferredResponse)
+
+        final case class Success(
+            payoutObligations: List[ledger.JointLedger.PayoutObligation]
+        )
+
+        type Error = ledger.VirtualLedger.CborParseError |
+            ledger.VirtualLedger.TransactionInvalidError
+    }
+
+    final case class CompleteBlock(
+        override val dResponse: Deferred[IO, Either[CompleteBlock.Error, CompleteBlock.Success]]
+    ) extends SyncRequest[IO, CompleteBlock.Error, CompleteBlock.Success]
+
+    object CompleteBlock {
+        def apply(): IO[CompleteBlock] = for {
+            deferredResponse <- Deferred[IO, Either[Error, Success]]
+        } yield CompleteBlock(deferredResponse)
+
+        type Success
+
+        type Error = ledger.JointLedger.CompleteBlockError
+    }
+}

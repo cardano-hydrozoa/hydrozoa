@@ -8,10 +8,10 @@ import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import BlockProducer.{Config, ConnectionsPending}
 import hydrozoa.multisig.consensus.block.Block
-import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
+import hydrozoa.multisig.consensus.peer.Peer
 
 /** Block actor:
   *
@@ -21,7 +21,7 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
   *     leader/follower switch.
   */
 object BlockProducer {
-    final case class Config(peerId: PeerId, persistence: Persistence.Ref)
+    final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
         cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],

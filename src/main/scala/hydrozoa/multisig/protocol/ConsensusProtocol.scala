@@ -4,6 +4,7 @@ import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.consensus.block.Block
 import Block.*
+import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.protocol.Identifiers.*
 
 import scala.concurrent.duration.FiniteDuration
@@ -120,7 +121,7 @@ object ConsensusProtocol {
         time: FiniteDuration,
         blockType: Block.Type,
         blockVersion: Block.Version.Full,
-        ledgerEventIdsRequired: Map[PeerId, LedgerEventNum],
+        ledgerEventIdsRequired: Map[Peer.Number, LedgerEventNum],
         ledgerEventsValid: List[LedgerEventId],
         ledgerEventsInvalid: List[LedgerEventId],
         ledgerCallbacksAccepted: List[LedgerCallbackId],

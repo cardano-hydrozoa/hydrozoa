@@ -10,6 +10,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 
 import scala.collection.immutable.Queue
 import TransactionSequencer.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
@@ -20,7 +21,7 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
   * sequentially into the consensus system.
   */
 object TransactionSequencer {
-    final case class Config(peerId: PeerId, persistence: Persistence.Ref)
+    final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
         blockProducer: Deferred[IO, BlockProducer.Ref],
