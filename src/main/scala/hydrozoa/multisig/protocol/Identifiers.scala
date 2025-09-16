@@ -1,5 +1,7 @@
 package hydrozoa.multisig.protocol
 
+import hydrozoa.multisig.consensus.block.Block
+
 object Identifiers {
     object AckNum:
         opaque type AckNum = Int
@@ -16,22 +18,6 @@ object Identifiers {
         extension (self: AckNum) def increment: AckNum = AckNum(self + 1)
 
     type AckNum = AckNum.AckNum
-
-    object BlockNum:
-        opaque type BlockNum = Int
-
-        def apply(i: Int): BlockNum = i
-
-        given Conversion[BlockNum, Int] = identity
-
-        given Ordering[BlockNum] with {
-            override def compare(x: BlockNum, y: BlockNum): Int =
-                x.compare(y)
-        }
-
-        extension (self: BlockNum) def increment: BlockNum = BlockNum(self + 1)
-
-    type BlockNum = BlockNum.BlockNum
 
     object BatchNum:
         opaque type BatchNum = Int
@@ -97,36 +83,11 @@ object Identifiers {
         extension (self: PeerNum) def increment: PeerNum = PeerNum(self + 1)
 
     type PeerNum = PeerNum.PeerNum
-
-    type BlockId = BlockNum
+    
     type PeerId = PeerNum
     type AckId = (PeerId, AckNum)
     type BatchId = (PeerId, BatchNum)
     type LedgerEventId = (PeerId, LedgerEventNum)
-    type LedgerCallbackId = (BlockId, LedgerCallbackNum)
-
-    object BlockVersionMajor:
-        opaque type BlockVersionMajor = Int
-
-        def apply(i: Int): BlockVersionMajor = i
-
-        given Conversion[BlockVersionMajor, Int] = identity
-
-    type BlockVersionMajor = BlockVersionMajor.BlockVersionMajor
-
-    object BlockVersionMinor:
-        opaque type BlockVersionMinor = Int
-
-        def apply(i: Int): BlockVersionMinor = i
-
-        given Conversion[BlockVersionMinor, Int] = identity
-
-    type BlockVersionMinor = BlockVersionMinor.BlockVersionMinor
-
-    enum BlockType:
-        case BlockInit
-        case BlockMinor
-        case BlockMajor
-        case BlockFinal
+    type LedgerCallbackId = (Block.Number, LedgerCallbackNum)
 
 }

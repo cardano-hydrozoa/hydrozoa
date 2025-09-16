@@ -7,6 +7,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.Actor
 import com.suprnation.actor.Actor.Receive
 import BlockProducer.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
@@ -82,6 +83,6 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
         }
 
     private final class State {
-        private val nBlock = Ref.unsafe[IO, BlockNum](BlockNum(0))
+        private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
     }
 }

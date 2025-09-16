@@ -2,6 +2,8 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.consensus.block.Block
+import Block.*
 import hydrozoa.multisig.protocol.Identifiers.*
 
 import scala.concurrent.duration.FiniteDuration
@@ -114,9 +116,10 @@ object ConsensusProtocol {
       *   not fulfill the absorption criteria.
       */
     final case class NewBlock(
-        id: BlockId,
+        id: Block.Number,
         time: FiniteDuration,
-        blockType: BlockType,
+        blockType: Block.Type,
+        blockVersion: Block.Version.Full,
         ledgerEventIdsRequired: Map[PeerId, LedgerEventNum],
         ledgerEventsValid: List[LedgerEventId],
         ledgerEventsInvalid: List[LedgerEventId],
@@ -144,7 +147,7 @@ object ConsensusProtocol {
 
     /** L2 block confirmations (local-only signal) */
     final case class ConfirmBlock(
-        id: BlockId
+        id: Block.Number
     )
 
     object ConfirmBlock {
@@ -166,7 +169,7 @@ object ConsensusProtocol {
     final case class GetMsgBatch(
         id: BatchId,
         ackNum: AckNum,
-        blockNum: BlockNum,
+        blockNum: Block.Number,
         eventNum: LedgerEventNum
     )
 
@@ -184,7 +187,7 @@ object ConsensusProtocol {
       *   If provided, a block acknowledgment originating from the responder after the requested
       *   [[AckNum]].
       * @param block
-      *   If provided, a block originating from the responder after the requested [[BlockNum]].
+      *   If provided, a block originating from the responder after the requested [[Number]].
       * @param events
       *   A possibly empty list of events originating from the responder after the requested
       *   [[LedgerEventNum]].
@@ -192,7 +195,7 @@ object ConsensusProtocol {
     final case class NewMsgBatch(
         id: BatchId,
         ackNum: AckNum,
-        blockNum: BlockNum,
+        blockNum: Block.Number,
         eventNum: LedgerEventNum,
         ack: Option[AckBlock],
         block: Option[NewBlock],

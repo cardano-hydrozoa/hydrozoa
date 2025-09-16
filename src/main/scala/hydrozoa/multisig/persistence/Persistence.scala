@@ -5,6 +5,7 @@ import cats.effect.Ref
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
+import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
@@ -26,9 +27,9 @@ object Persistence {
 trait Persistence extends Actor[IO, Request] {
     private val acks = Ref.unsafe[IO, TreeMap[AckId, AckBlock]](TreeMap())
     private val batches = Ref.unsafe[IO, TreeMap[BatchId, GetMsgBatch]](TreeMap())
-    private val blocks = Ref.unsafe[IO, TreeMap[BlockId, NewBlock]](TreeMap())
+    private val blocks = Ref.unsafe[IO, TreeMap[Block.Number, NewBlock]](TreeMap())
     private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, NewLedgerEvent]](TreeMap())
-    private val confirmedBlock = Ref.unsafe[IO, Option[BlockId]](None)
+    private val confirmedBlock = Ref.unsafe[IO, Option[Block.Number]](None)
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction({

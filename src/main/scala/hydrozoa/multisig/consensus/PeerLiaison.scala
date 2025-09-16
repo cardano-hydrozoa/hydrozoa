@@ -10,6 +10,7 @@ import com.suprnation.actor.Actor.Receive
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
+import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
@@ -123,7 +124,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
     private final class State {
         private val nAck = Ref.unsafe[IO, AckNum](AckNum(0))
-        private val nBlock = Ref.unsafe[IO, BlockNum](BlockNum(0))
+        private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[NewBlock]](Queue())
