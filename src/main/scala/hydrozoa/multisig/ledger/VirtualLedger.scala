@@ -1,38 +1,16 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.*
-
+import hydrozoa.multisig.ledger.VirtualLedger.*
+import hydrozoa.multisig.ledger.virtual.*
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.{emptyContext, emptyState}
 import io.bullet.borer.Cbor
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.State as ScalusState
-import supranational.blst.P2
 
 import scala.util.{Failure, Success}
-
-import hydrozoa.multisig.ledger.virtual.*
-import VirtualLedger.*
-
-type KzgCommitment = String
-
-// The point at infinity AKA zero point in G2.
-val infG2Point: P2 =
-    P2(
-      ByteString
-          .fromHex(
-            "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-          )
-          .bytes
-    )
-
-val infG2: IArray[Byte] =
-    IArray.unsafeFromArray(infG2Point.compress())
-
-// Hex-encoded IArray[Byte]
-type UtxoSetCommitment = String
-
-val infG2hex: UtxoSetCommitment = ByteString.fromArray(infG2.toArray).toHex
 
 private def toScalusState(state: State): ScalusState =
     emptyState.copy(utxo = state.activeUtxos)
@@ -104,8 +82,12 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
             }
         } yield res
 
-    def getKzgCommitment: IO[KzgCommitment] =
-        ???
+    def makeUtxosCommitment: IO[KzgCommitment] =
+        for {
+            s <- state.get
+            // FIXME: or just commitment = KzgCommitment.getUtxosActiveCommitment(s.activeUtxos) ?
+            commitment <- IO(KzgCommitment.calculateCommitment(s.activeUtxos))
+        } yield commitment
 }
 
 /** ==Hydrozoa's open virtual ledger in the multisig regime==
