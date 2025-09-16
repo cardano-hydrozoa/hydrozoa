@@ -3,10 +3,10 @@ package hydrozoa.multisig.protocol
 import cats.effect.{Deferred, IO}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.ledger.KzgCommitment
+import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
+import hydrozoa.multisig.ledger.{GenesisObligation, KzgCommitment}
 import hydrozoa.multisig.protocol.types.Block
 
 import scala.concurrent.duration.FiniteDuration
@@ -43,7 +43,7 @@ object LedgerProtocol {
         } yield RegisterDeposit(txSerialized, deferredResponse)
 
         final case class Success(
-            genesisObligations: List[ledger.JointLedger.GenesisObligation],
+            genesisObligations: List[GenesisObligation],
             refundTxs: List[RefundTx.PostDated]
         )
 

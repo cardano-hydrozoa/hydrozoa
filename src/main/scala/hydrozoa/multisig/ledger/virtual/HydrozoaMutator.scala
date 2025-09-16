@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
+import hydrozoa.multisig.ledger.GenesisObligation
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 
@@ -15,14 +16,14 @@ object HydrozoaGenesisMutator extends STSL2.Mutator {
             for {
                 _ <- L2ConformanceValidator.validate(context, state, event)
 
-            } yield (addGenesisUtxosToState(g, state))
+            } yield (addGenesisUtxosToState(g._1, state))
         case _ => Right(state)
     }
 
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
-    private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
-        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs.map((x, y) => x.untagged -> y.untagged))
+    private def addGenesisUtxosToState(g: Seq[GenesisObligation], state: State): State = {
+        state.copy(utxo = state.utxo ++ g.map(_.toUtxo))
     }
 }
 
