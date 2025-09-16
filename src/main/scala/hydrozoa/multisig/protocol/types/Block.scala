@@ -33,9 +33,9 @@ enum Block {
     def nextBlock(
         newBody: Block.Body.Next,
         newTime: FiniteDuration,
-        newVirtualUtxos: KzgCommitment
+        newCommitment: KzgCommitment
     ): Block =
-        header.nextBlock(newBody, newTime, newVirtualUtxos)
+        header.nextBlock(newBody, newTime, newCommitment)
 }
 
 object Block {
@@ -54,22 +54,22 @@ object Block {
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial (
             override val timeCreation: FiniteDuration,
-            override val virtualUtxos: KzgCommitment
-        ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.VirtualUtxos
+            override val commitment: KzgCommitment
+        ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
 
         case Minor(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
             override val timeCreation: FiniteDuration,
-            override val virtualUtxos: KzgCommitment
-        ) extends Header(Type.Minor), HeaderFields.VirtualUtxos
+            override val commitment: KzgCommitment
+        ) extends Header(Type.Minor), HeaderFields.Commitment
 
         case Major(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
             override val timeCreation: FiniteDuration,
-            override val virtualUtxos: KzgCommitment
-        ) extends Header(Type.Major), HeaderFields.VirtualUtxos
+            override val commitment: KzgCommitment
+        ) extends Header(Type.Major), HeaderFields.Commitment
 
         case Final(
             override val blockNum: Number,
@@ -80,43 +80,43 @@ object Block {
         def nextHeader(
             newBlockType: Type.Next,
             newTime: FiniteDuration,
-            newVirtualUtxos: KzgCommitment
+            newCommitment: KzgCommitment
         ): Header = newBlockType match {
-            case Type.Minor => nextHeaderMinor(newTime, newVirtualUtxos)
-            case Type.Major => nextHeaderMajor(newTime, newVirtualUtxos)
+            case Type.Minor => nextHeaderMinor(newTime, newCommitment)
+            case Type.Major => nextHeaderMajor(newTime, newCommitment)
             case Type.Final => nextHeaderFinal(newTime)
         }
 
-        def nextBlock(body: Body.Next, newTime: FiniteDuration, newVirtualUtxos: KzgCommitment): Block =
+        def nextBlock(body: Body.Next, newTime: FiniteDuration, newCommitment: KzgCommitment): Block =
             body match {
                 case b: Body.Minor =>
-                    Block.Minor(header = nextHeaderMinor(newTime, newVirtualUtxos), body = b)
+                    Block.Minor(header = nextHeaderMinor(newTime, newCommitment), body = b)
                 case b: Body.Major =>
-                    Block.Major(header = nextHeaderMajor(newTime, newVirtualUtxos), body = b)
+                    Block.Major(header = nextHeaderMajor(newTime, newCommitment), body = b)
                 case b: Body.Final =>
                     Block.Final(header = nextHeaderFinal(newTime), body = b)
             }
 
         private def nextHeaderMinor(
             newTime: FiniteDuration,
-            newVirtualUtxos: KzgCommitment
+            newCommitment: KzgCommitment
         ): Header.Minor =
             Header.Minor(
               blockNum = blockNum.increment,
               blockVersion = blockVersion.incrementMinor,
               timeCreation = newTime,
-              virtualUtxos = newVirtualUtxos
+              commitment = newCommitment
             )
 
         private def nextHeaderMajor(
             newTime: FiniteDuration,
-            newVirtualUtxos: KzgCommitment
+            newCommitment: KzgCommitment
         ): Header.Major =
             Header.Major(
               blockNum = blockNum.increment,
               blockVersion = blockVersion.incrementMajor,
               timeCreation = newTime,
-              virtualUtxos = newVirtualUtxos
+              commitment = newCommitment
             )
 
         private def nextHeaderFinal(
@@ -136,8 +136,8 @@ object Block {
             def timeCreation: FiniteDuration
         }
 
-        sealed trait VirtualUtxos {
-            def virtualUtxos: KzgCommitment
+        sealed trait Commitment {
+            def commitment: KzgCommitment
         }
 
         sealed trait InitialHeaderFields extends Mandatory {

@@ -5,7 +5,11 @@ import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.ledger.KzgCommitment
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
+import hydrozoa.multisig.protocol.types.Block
+
+import scala.concurrent.duration.FiniteDuration
 
 object LedgerProtocol {
     type LedgerEvent = VirtualTransaction | RegisterDeposit
@@ -68,15 +72,19 @@ object LedgerProtocol {
     }
 
     final case class CompleteBlock(
+        timeCreation: FiniteDuration,
         override val dResponse: Deferred[IO, Either[CompleteBlock.Error, CompleteBlock.Success]]
     ) extends SyncRequest[IO, CompleteBlock.Error, CompleteBlock.Success]
 
     object CompleteBlock {
-        def apply(): IO[CompleteBlock] = for {
+        def apply(timeCreation: FiniteDuration): IO[CompleteBlock] = for {
             deferredResponse <- Deferred[IO, Either[Error, Success]]
-        } yield CompleteBlock(deferredResponse)
+        } yield CompleteBlock(timeCreation, deferredResponse)
 
-        type Success
+        final case class Success (
+            newBody: Block.Body,
+            newCommitment: KzgCommitment
+        )
 
         type Error = ledger.JointLedger.CompleteBlockError
     }

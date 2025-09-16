@@ -35,6 +35,8 @@ enum BlockEffects(val blockType: Block.Type) {
 }
 
 object BlockEffects {
+    type Next = BlockEffects.Minor | BlockEffects.Major | BlockEffects.Final
+    
     object Fields {
         sealed trait Initial extends Initialization
 
