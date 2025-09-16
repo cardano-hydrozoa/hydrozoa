@@ -7,6 +7,7 @@ import Block.*
 import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.consensus.ack.Ack
+import hydrozoa.multisig.consensus.batch.Batch
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -169,7 +170,7 @@ object ConsensusProtocol {
       *   The requester's last seen event number from the remote peer.
       */
     final case class GetMsgBatch(
-                                    id: BatchId,
+                                    id: Batch.Id,
                                     ackNum: Ack.Number,
                                     blockNum: Block.Number,
                                     eventNum: LedgerEventNum
@@ -195,7 +196,7 @@ object ConsensusProtocol {
       *   [[LedgerEventNum]].
       */
     final case class NewMsgBatch(
-                                    id: BatchId,
+                                    id: Batch.Id,
                                     ackNum: Ack.Number,
                                     blockNum: Block.Number,
                                     eventNum: LedgerEventNum,
@@ -204,7 +205,7 @@ object ConsensusProtocol {
                                     events: List[NewLedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
-          (id._1, id._2.increment),
+          id.increment,
           ackNum,
           blockNum,
           eventNum

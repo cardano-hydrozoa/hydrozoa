@@ -4,24 +4,6 @@ import hydrozoa.multisig.consensus.block.Block
 import hydrozoa.multisig.consensus.peer.Peer
 
 object Identifiers {
-
-
-    object BatchNum:
-        opaque type BatchNum = Int
-
-        def apply(i: Int): BatchNum = i
-
-        given Conversion[BatchNum, Int] = identity
-
-        given Ordering[BatchNum] with {
-            override def compare(x: BatchNum, y: BatchNum): Int =
-                x.compare(y)
-        }
-
-        extension (self: BatchNum) def increment: BatchNum = BatchNum(self + 1)
-
-    type BatchNum = BatchNum.BatchNum
-
     object LedgerEventNum:
         opaque type LedgerEventNum = Int
 
@@ -55,7 +37,7 @@ object Identifiers {
 
     type LedgerCallbackNum = LedgerCallbackNum.LedgerCallbackNum
     
-    type BatchId = (Peer.Number, BatchNum)
+
     type LedgerEventId = (Peer.Number, LedgerEventNum)
     type LedgerCallbackId = (Block.Number, LedgerCallbackNum)
 

@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus.peer
 
 object Peer {
     type Number = Number.Number
+    
     object Number:
         opaque type Number = Int
 

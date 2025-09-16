@@ -17,6 +17,7 @@ import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.consensus.ack.Ack
+import hydrozoa.multisig.consensus.batch.Batch
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -131,7 +132,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[NewBlock]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
-        private val sendBatchImmediately = Ref.unsafe[IO, Option[BatchId]](None)
+        private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
         private def areEmptyQueues: IO[Boolean] =
@@ -164,13 +165,13 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         /** Make sure a batch is sent to the counterparty as soon as another local ack/block/event
           * arrives.
           */
-        def sendNextBatchImmediatelyUponNewMsg(batchId: BatchId): IO[Unit] =
+        def sendNextBatchImmediatelyUponNewMsg(batchId: Batch.Id): IO[Unit] =
             this.sendBatchImmediately.set(Some(batchId))
 
         /** Check whether a new batch must be immediately sent, deactivating the flag in the
           * process.
           */
-        def dischargeSendNextBatchImmediately: IO[Option[BatchId]] =
+        def dischargeSendNextBatchImmediately: IO[Option[Batch.Id]] =
             this.sendBatchImmediately.getAndSet(None)
 
         sealed trait ExtractNewMsgBatchError extends Throwable
@@ -184,7 +185,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
           * queues message queues must be empty, and the corresponding counter is incremented
           * depending on the arrived message's type.
           */
-        def immediateNewMsgBatch(batchId: BatchId, x: RemoteBroadcast.Request): IO[NewMsgBatch] =
+        def immediateNewMsgBatch(batchId: Batch.Id, x: RemoteBroadcast.Request): IO[NewMsgBatch] =
             for {
                 nAck <- this.nAck.get
                 nBlock <- this.nBlock.get
