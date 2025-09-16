@@ -8,35 +8,49 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
     readFromStream
 }
 import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
-import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.prelude.List as SList
-import scalus.prelude.crypto.bls12_381.{G1, G2}
 import supranational.blst.{P1, P2}
 
-import java.io.InputStream
-
-/** @param g1Monomial
-  *   `g1 ^ tau * n`
-  * @param g2Monomial
-  *   `g2 ^ tau* n`
-  * @tparam G1
-  *   supported values: P1 and BLS12_381_G1_Element
-  * @tparam G2
-  *   supported values: P2 and BLS12_381_G2_Element
+/** Cached trusted setup.
   */
-case class TrustedSetup[G1, G2](
+object TrustedSetup:
+
+    private def readFromResource[G1, G2](using
+        JsonValueCodec[TrustedSetup[G1, G2]]
+    ): TrustedSetup[G1, G2] = {
+        println("reading trusted setup from resource")
+        val input = getClass.getResourceAsStream("/trusted_setup_32768.json")
+        readFromStream[TrustedSetup[G1, G2]](input)
+    }
+
+    /** For building commitments, we use the P1 types since P1 is smaller and because `blst` is
+      * fast. Reading the setup from a file is slow, so we cache it. For treasury datum we need a
+      * limited number of values of type BLS12_381_G2_Element which can be obtained from P2 values
+      * when needed.
+      */
+    lazy val setup: TrustedSetup[P1, P2] = readFromResource[P1, P2]
+
+    def takeSrsG1(n: Int): SList[P1] = SList.from(setup.g1Monomial.take(n))
+
+    def takeSrsG2(n: Int): SList[P2] = SList.from(setup.g2Monomial.take(n))
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  JSON  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+/** JSON representation of the trusted setup.
+  *
+  * @param g1Monomial
+  *   `g1 ^ tau * n`, this is the name of the field in the setup
+  * @param g2Monomial
+  *   `g2 ^ tau* n`, this is the name of the field in the setup
+  * @tparam G1
+  *   supported values: P1 (blst)
+  * @tparam G2
+  *   supported values: P2 (blst)
+  */
+private case class TrustedSetup[G1, G2](
     g1Monomial: List[G1],
     g2Monomial: List[G2]
 )
-
-given JsonValueCodec[BLS12_381_G1_Element] = new JsonValueCodec[BLS12_381_G1_Element] {
-    def decodeValue(in: JsonReader, default: BLS12_381_G1_Element): BLS12_381_G1_Element =
-        BLS12_381_G1_Element.apply(ByteString.fromHex(in.readString("").substring(2)))
-
-    def encodeValue(x: BLS12_381_G1_Element, out: JsonWriter): Unit = ???
-
-    def nullValue: BLS12_381_G1_Element = G1.zero
-}
 
 given JsonValueCodec[P1] = new JsonValueCodec[P1] {
     def decodeValue(in: JsonReader, default: P1): P1 =
@@ -44,16 +58,8 @@ given JsonValueCodec[P1] = new JsonValueCodec[P1] {
 
     def encodeValue(x: P1, out: JsonWriter): Unit = ???
 
-    def nullValue: P1 = ???
-}
-
-given JsonValueCodec[BLS12_381_G2_Element] = new JsonValueCodec[BLS12_381_G2_Element] {
-    def decodeValue(in: JsonReader, default: BLS12_381_G2_Element): BLS12_381_G2_Element =
-        BLS12_381_G2_Element.apply(ByteString.fromHex(in.readString("").substring(2)))
-
-    def encodeValue(x: BLS12_381_G2_Element, out: JsonWriter): Unit = ???
-
-    def nullValue: BLS12_381_G2_Element = G2.zero
+    // This is needed for jsoniter-scala to work, but it's not used
+    def nullValue: P1 = P1.generator()
 }
 
 given JsonValueCodec[P2] = new JsonValueCodec[P2] {
@@ -62,29 +68,13 @@ given JsonValueCodec[P2] = new JsonValueCodec[P2] {
 
     def encodeValue(x: P2, out: JsonWriter): Unit = ???
 
-    def nullValue: P2 = ???
+    // This is needed for jsoniter-scala to work, but it's not used
+    def nullValue: P2 = P2.generator()
 }
 
 given [G1, G2](using JsonValueCodec[G1], JsonValueCodec[G2]): JsonValueCodec[TrustedSetup[G1, G2]] =
-    JsonCodecMaker.make(CodecMakerConfig.withFieldNameMapper(JsonCodecMaker.enforce_snake_case2))
-
-object TrustedSetup:
-    def readFromResource[G1, G2](using JsonValueCodec[TrustedSetup[G1, G2]]): TrustedSetup[G1, G2] =
-        val is: InputStream = getClass.getResourceAsStream("/trusted_setup_32768.json")
-        readFromStream[TrustedSetup[G1, G2]](is)
-
-    def g1Monomials(n: Int): SList[P1] = {
-        SList.from(readFromResource[P1, P2].g1Monomial.take(n))
-    }
-
-    def g1Monomials1(n: Int): SList[BLS12_381_G1_Element] =
-        SList.from(readFromResource[BLS12_381_G1_Element, BLS12_381_G2_Element].g1Monomial.take(n))
-
-    val g2Monomials: SList[BLS12_381_G2_Element] =
-        SList.from(readFromResource[BLS12_381_G1_Element, BLS12_381_G2_Element].g2Monomial)
-
-@main
-def main =
-    val setup = TrustedSetup.readFromResource[BLS12_381_G1_Element, BLS12_381_G2_Element]
-    println(setup.g1Monomial.head)
-    println(setup.g2Monomial.head)
+    JsonCodecMaker.make(
+      CodecMakerConfig
+          .withFieldNameMapper(JsonCodecMaker.enforce_snake_case2)
+          .withSkipUnexpectedFields(false)
+    )

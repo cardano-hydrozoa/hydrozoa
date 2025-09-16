@@ -1,18 +1,16 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.*
-import hydrozoa.{emptyContext, emptyState}
-import io.bullet.borer.Cbor
-import scalus.builtin.ByteString
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.State as ScalusState
-import supranational.blst.P2
-
-import scala.util.{Failure, Success}
+import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
-import VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.{emptyContext, emptyState}
+import io.bullet.borer.Cbor
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.rules.State as ScalusState
+
+import scala.util.{Failure, Success}
 
 private def toScalusState(state: State): ScalusState =
     emptyState.copy(utxo = state.activeUtxos)
@@ -88,7 +86,7 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
         for {
             s <- state.get
             // FIXME: or just commitment = KzgCommitment.getUtxosActiveCommitment(s.activeUtxos) ?
-            commitment <- IO(KzgCommitment.getUtxosActiveCommitment(s.activeUtxos))
+            commitment <- IO(KzgCommitment.calculateCommitment(s.activeUtxos))
         } yield commitment
 }
 
