@@ -6,6 +6,7 @@ import hydrozoa.multisig.consensus.block.Block
 import Block.*
 import hydrozoa.multisig.consensus.peer.Peer
 import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.consensus.ack.Ack
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -138,8 +139,8 @@ object ConsensusProtocol {
       * final blocks, two rounds of acknowledgements are needed to confirm.
       */
     final case class AckBlock(
-        id: AckId,
-        time: FiniteDuration
+                                 id: Ack.Id,
+                                 time: FiniteDuration
     )
 
     object AckBlock {
@@ -168,10 +169,10 @@ object ConsensusProtocol {
       *   The requester's last seen event number from the remote peer.
       */
     final case class GetMsgBatch(
-        id: BatchId,
-        ackNum: AckNum,
-        blockNum: Block.Number,
-        eventNum: LedgerEventNum
+                                    id: BatchId,
+                                    ackNum: Ack.Number,
+                                    blockNum: Block.Number,
+                                    eventNum: LedgerEventNum
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -194,13 +195,13 @@ object ConsensusProtocol {
       *   [[LedgerEventNum]].
       */
     final case class NewMsgBatch(
-        id: BatchId,
-        ackNum: AckNum,
-        blockNum: Block.Number,
-        eventNum: LedgerEventNum,
-        ack: Option[AckBlock],
-        block: Option[NewBlock],
-        events: List[NewLedgerEvent]
+                                    id: BatchId,
+                                    ackNum: Ack.Number,
+                                    blockNum: Block.Number,
+                                    eventNum: LedgerEventNum,
+                                    ack: Option[AckBlock],
+                                    block: Option[NewBlock],
+                                    events: List[NewLedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
           (id._1, id._2.increment),

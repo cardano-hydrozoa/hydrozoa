@@ -16,6 +16,7 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 import hydrozoa.multisig.consensus.peer.Peer
+import hydrozoa.multisig.consensus.ack.Ack
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -124,7 +125,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         }
 
     private final class State {
-        private val nAck = Ref.unsafe[IO, AckNum](AckNum(0))
+        private val nAck = Ref.unsafe[IO, Ack.Number](Ack.Number(0))
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEventNum](LedgerEventNum(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
@@ -265,7 +266,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     dropped.splitAt(maxEvents).swap
                 )
 
-                ackNum = mAck.fold(nAck)(_.id._2)
+                ackNum = mAck.fold(nAck)(_.id.ackNum)
                 blockNum = mBlock.fold(nBlock)(_.id)
                 eventNum = events.lastOption.fold(nEvents)(_.id._2)
             } yield NewMsgBatch(

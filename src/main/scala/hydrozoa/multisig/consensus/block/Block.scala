@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus.block
 import hydrozoa.multisig.ledger.KzgCommitment
 
 import scala.concurrent.duration.FiniteDuration
+import scala.math.Ordered.orderingToOrdered
 
 enum Block {
     def header: Block.Header
@@ -240,11 +241,18 @@ object Block {
 
             def apply(i: Int, j: Int): Full = (i, j)
 
-            def unapply(v: Full): (Major, Minor) = (Major(v._1), Minor(v._2))
+            def unapply(self: Full): (Major, Minor) = (Major(self._1), Minor(self._2))
 
             given Conversion[Full, (Int, Int)] = identity
 
+            given Ordering[Full] with {
+                override def compare(x: Full, y: Full): Int =
+                    x.compare(y)
+            }
+
             extension (self: Full)
+                def major: Major = Major(self._1)
+                def minor: Minor = Minor(self._2)
                 def incrementMajor: Full = Full(self._1 + 1, self._2)
                 def incrementMinor: Full = Full(self._1, self._2 + 1)
         }
@@ -256,6 +264,11 @@ object Block {
 
             given Conversion[Major, Int] = identity
 
+            given Ordering[Major] with {
+                override def compare(x: Major, y: Major): Int =
+                    x.compare(y)
+            }
+
             extension (self: Major) def increment: Major = Major(self + 1)
         }
 
@@ -265,6 +278,11 @@ object Block {
             def apply(i: Int): Minor = i
 
             given Conversion[Minor, Int] = identity
+
+            given Ordering[Minor] with {
+                override def compare(x: Minor, y: Minor): Int =
+                    x.compare(y)
+            }
 
             extension (self: Minor) def increment: Minor = Minor(self + 1)
         }
