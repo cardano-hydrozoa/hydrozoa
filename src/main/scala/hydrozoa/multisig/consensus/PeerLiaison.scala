@@ -112,7 +112,8 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 } yield ()
             case x: NewMsgBatch =>
                 for {
-                    _ <- config.persistence ? Persistence.PersistRequest(x)
+                    persistenceRequest <- Persistence.PersistRequest(x)
+                    _ <- config.persistence ?: persistenceRequest
                     _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)
