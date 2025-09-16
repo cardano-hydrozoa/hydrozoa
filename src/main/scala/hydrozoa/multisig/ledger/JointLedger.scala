@@ -2,20 +2,11 @@ package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
 import hydrozoa.multisig.ledger.DappLedger.ErrorAddDeposit
-
 import hydrozoa.multisig.ledger.VirtualLedger.{ErrorApplyInternalTx, ErrorApplyWithdrawalTx}
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.tx.{InternalTx, WithdrawalTx}
-import scalus.builtin.Data
-import scalus.builtin.Data.{fromData, toData}
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.*
-
-import scala.util.{Failure, Success, Try}
 
 final case class JointLedger()(
     private val dappLedger: DappLedger,
