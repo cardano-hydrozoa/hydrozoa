@@ -1,6 +1,5 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.Ref
 import cats.implicits.*
