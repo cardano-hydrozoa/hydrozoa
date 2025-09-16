@@ -111,10 +111,6 @@ object ConsensusProtocol {
       *   block's multi-ledger state. Every follower must apply these events in the same order when
       *   verifying the block.
       * @param ledgerEventsInvalid
-      *   The sequence of events that must be invalid when applied after [[ledgerEventsValid]].
-      * @param ledgerCallbacksAccepted
-      *   The set of mature deposits that are absorbed by this block into the head's treasury.
-      * @param ledgerCallbacksRejected
       *   The set of deposits that will never be absorbed into the head's treasury because they do
       *   not fulfill the absorption criteria.
       */
@@ -126,8 +122,6 @@ object ConsensusProtocol {
         ledgerEventIdsRequired: Map[Peer.Number, LedgerEventNum],
         ledgerEventsValid: List[LedgerEventId],
         ledgerEventsInvalid: List[LedgerEventId],
-        ledgerCallbacksAccepted: List[LedgerCallbackId],
-        ledgerCallbacksRejected: List[LedgerCallbackId]
     )
 
     object NewBlock {
