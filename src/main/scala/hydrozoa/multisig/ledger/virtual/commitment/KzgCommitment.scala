@@ -41,7 +41,7 @@ object KzgCommitment {
             )
             .asScalus
 
-        println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+//        println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
 
         // Get as much from the setup as we need: n + 1 elements
         val size = scalars.length.toInt + 1
@@ -54,7 +54,7 @@ object KzgCommitment {
 
         val finalPoly = mkFinalPoly(scalars)
         val commitment = evaluateFinalPoly(srs, finalPoly).compress()
-        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
+//        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
         IArray.unsafeFromArray(commitment)
     }
 

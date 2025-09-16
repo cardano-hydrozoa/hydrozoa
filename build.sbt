@@ -119,3 +119,23 @@ inThisBuild(
     semanticdbVersion := scalafixSemanticdb.revision
   )
 )
+
+// Benchmark subproject
+lazy val benchmarks = (project in file("benchmarks"))
+    .enablePlugins(JmhPlugin)
+    .dependsOn(core) // access to your main code
+    .settings(
+      name := "hydrozoa-benchmarks",
+      publish / skip := true,
+      fork := true,
+      // optional: set JVM args for benchmarking
+      javaOptions ++= Seq(
+        "-Xms2G",
+        "-Xmx2G",
+        "-XX:+UseG1GC"
+      ),
+      libraryDependencies ++= Seq(
+        "org.scalacheck" %% "scalacheck" % "1.18.1",
+        "org.scalus" %% "scalus-testkit" % scalusVersion
+      )
+    )
