@@ -3,7 +3,7 @@ package hydrozoa.multisig.protocol
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -90,20 +90,6 @@ object ConsensusProtocol {
         type Subscriber = ActorRef[IO, NewLedgerEvent]
     }
 
-    /** A peer's block actor announces its acknowledgement of an L2 block. When a peer's block actor
-      * acknowledges a block and receives all other peers' acknowledgement of the block, then the
-      * peer can consider the block to be confirmed by multisig consensus. Note that for major and
-      * final blocks, two rounds of acknowledgements are needed to confirm.
-      */
-    final case class AckBlock(
-                                 id: Ack.Id,
-                                 time: FiniteDuration
-    )
-
-    object AckBlock {
-        type Subscriber = ActorRef[IO, AckBlock]
-    }
-
     /** L2 block confirmations (local-only signal) */
     final case class ConfirmBlock(
         id: Block.Number
@@ -127,7 +113,7 @@ object ConsensusProtocol {
       */
     final case class GetMsgBatch(
                                     id: Batch.Id,
-                                    ackNum: Ack.Number,
+                                    ackNum: AckBlock.Number,
                                     blockNum: Block.Number,
                                     eventNum: LedgerEvent.Number
     )
@@ -153,7 +139,7 @@ object ConsensusProtocol {
       */
     final case class NewMsgBatch(
                                     id: Batch.Id,
-                                    ackNum: Ack.Number,
+                                    ackNum: AckBlock.Number,
                                     blockNum: Block.Number,
                                     eventNum: LedgerEvent.Number,
                                     ack: Option[AckBlock],

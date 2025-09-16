@@ -9,7 +9,7 @@ import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
-import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
 
 import scala.collection.immutable.TreeMap
 
@@ -24,7 +24,7 @@ object Persistence {
 }
 
 trait Persistence extends Actor[IO, Request] {
-    private val acks = Ref.unsafe[IO, TreeMap[Ack.Id, AckBlock]](TreeMap())
+    private val acks = Ref.unsafe[IO, TreeMap[AckBlock.Id, AckBlock]](TreeMap())
     private val batches = Ref.unsafe[IO, TreeMap[Batch.Id, GetMsgBatch]](TreeMap())
     private val blocks = Ref.unsafe[IO, TreeMap[Block.Number, Block]](TreeMap())
     private val events = Ref.unsafe[IO, TreeMap[LedgerEvent.Id, NewLedgerEvent]](TreeMap())

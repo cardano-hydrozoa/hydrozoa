@@ -13,7 +13,7 @@ import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
-import hydrozoa.multisig.protocol.types.{Ack, Batch, Block, LedgerEvent, Peer}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -122,7 +122,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         }
 
     private final class State {
-        private val nAck = Ref.unsafe[IO, Ack.Number](Ack.Number(0))
+        private val nAck = Ref.unsafe[IO, AckBlock.Number](AckBlock.Number(0))
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())

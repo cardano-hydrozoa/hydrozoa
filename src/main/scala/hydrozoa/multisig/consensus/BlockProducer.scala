@@ -10,7 +10,7 @@ import BlockProducer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
-import hydrozoa.multisig.protocol.types.{Block, Peer}
+import hydrozoa.multisig.protocol.types.{AckBlock, Block, Peer}
 
 /** Block actor:
   *
