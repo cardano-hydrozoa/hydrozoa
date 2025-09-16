@@ -94,7 +94,9 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
                 _ <- localRequests.update(q => q :+ (newNum -> eventOutcome))
             } yield newNum
 
-        def completeDeferredEventOutcomes(eventOutcomes: List[(LedgerEvent.Number, Unit)]): IO[Unit] =
+        def completeDeferredEventOutcomes(
+            eventOutcomes: List[(LedgerEvent.Number, Unit)]
+        ): IO[Unit] =
             ???
     }
 }

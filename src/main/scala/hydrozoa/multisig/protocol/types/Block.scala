@@ -40,7 +40,7 @@ enum Block {
 
 object Block {
     type Subscriber = ActorRef[IO, Block]
-    
+
     type Next = Block.Minor | Block.Major | Block.Final
 
     type Number = Number.Number
@@ -52,7 +52,7 @@ object Block {
     }
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
-        case Initial (
+        case Initial(
             override val timeCreation: FiniteDuration,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
@@ -87,7 +87,11 @@ object Block {
             case Type.Final => nextHeaderFinal(newTime)
         }
 
-        def nextBlock(body: Body.Next, newTime: FiniteDuration, newCommitment: KzgCommitment): Block =
+        def nextBlock(
+            body: Body.Next,
+            newTime: FiniteDuration,
+            newCommitment: KzgCommitment
+        ): Block =
             body match {
                 case b: Body.Minor =>
                     Block.Minor(header = nextHeaderMinor(newTime, newCommitment), body = b)
@@ -186,24 +190,30 @@ object Block {
 
     object BodyFields {
         sealed trait Minor
-            extends LedgerEventsRequired, Transactions,
+            extends LedgerEventsRequired,
+              Transactions,
               Deposits.Registered,
               Deposits.Rejected,
               Deposits.Refunded
 
         sealed trait Major
-            extends LedgerEventsRequired, Transactions,
+            extends LedgerEventsRequired,
+              Transactions,
               Deposits.Registered,
               Deposits.Rejected,
               Deposits.Absorbed,
               Deposits.Refunded
 
-        sealed trait Final extends LedgerEventsRequired, Transactions, Deposits.Rejected, Deposits.Refunded
+        sealed trait Final
+            extends LedgerEventsRequired,
+              Transactions,
+              Deposits.Rejected,
+              Deposits.Refunded
 
         sealed trait LedgerEventsRequired {
             def ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number]
         }
-        
+
         sealed trait Transactions {
             def transactionsValid: List[LedgerEvent.Id]
             def transactionsInvalid: List[LedgerEvent.Id]

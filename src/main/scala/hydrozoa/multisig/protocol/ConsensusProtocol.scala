@@ -112,10 +112,10 @@ object ConsensusProtocol {
       *   The requester's last seen event number from the remote peer.
       */
     final case class GetMsgBatch(
-                                    id: Batch.Id,
-                                    ackNum: AckBlock.Number,
-                                    blockNum: Block.Number,
-                                    eventNum: LedgerEvent.Number
+        id: Batch.Id,
+        ackNum: AckBlock.Number,
+        blockNum: Block.Number,
+        eventNum: LedgerEvent.Number
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -138,13 +138,13 @@ object ConsensusProtocol {
       *   [[LedgerEventNum]].
       */
     final case class NewMsgBatch(
-                                    id: Batch.Id,
-                                    ackNum: AckBlock.Number,
-                                    blockNum: Block.Number,
-                                    eventNum: LedgerEvent.Number,
-                                    ack: Option[AckBlock],
-                                    block: Option[Block],
-                                    events: List[NewLedgerEvent]
+        id: Batch.Id,
+        ackNum: AckBlock.Number,
+        blockNum: Block.Number,
+        eventNum: LedgerEvent.Number,
+        ack: Option[AckBlock],
+        block: Option[Block],
+        events: List[NewLedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
           id.increment,

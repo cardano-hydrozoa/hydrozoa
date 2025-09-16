@@ -25,7 +25,7 @@ object Batch {
             def peerNum: Peer.Number = Peer.Number(self._1)
             def batchNum: Number = Number(self._2)
     }
-    
+
     object Number {
         opaque type Number = Int
 

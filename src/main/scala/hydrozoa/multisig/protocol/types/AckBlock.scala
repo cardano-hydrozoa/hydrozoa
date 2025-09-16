@@ -10,45 +10,45 @@ enum AckBlock:
     def blockNum: Block.Number
 
     case Initial(
-                    override val id: AckBlock.Id,
-                    override val blockNum: Block.Number,
-                    override val initialization: BlockEffect.Signature
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val initialization: BlockEffect.Signature
     ) extends AckBlock, Initialization
 
     case Minor(
-                  override val id: AckBlock.Id,
-                  override val blockNum: Block.Number,
-                  override val headerSignature: String,
-                  override val immediateRefunds: List[BlockEffect.Signature],
-                  override val postDatedRefunds: List[BlockEffect.Signature]
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val headerSignature: String,
+        override val immediateRefunds: List[BlockEffect.Signature],
+        override val postDatedRefunds: List[BlockEffect.Signature]
     ) extends AckBlock, MinorHeaderSignature, Refunds.Immediate, Refunds.PostDated
 
     case Major1(
-                   override val id: AckBlock.Id,
-                   override val blockNum: Block.Number,
-                   override val fallback: BlockEffect.Signature,
-                   override val rollouts: List[BlockEffect.Signature],
-                   override val immediateRefunds: List[BlockEffect.Signature],
-                   override val postDatedRefunds: List[BlockEffect.Signature]
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val fallback: BlockEffect.Signature,
+        override val rollouts: List[BlockEffect.Signature],
+        override val immediateRefunds: List[BlockEffect.Signature],
+        override val postDatedRefunds: List[BlockEffect.Signature]
     ) extends AckBlock, Rollouts, Fallback, Refunds.Immediate, Refunds.PostDated
 
     case Major2(
-                   override val id: AckBlock.Id,
-                   override val blockNum: Block.Number,
-                   override val settlement: BlockEffect.Signature
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val settlement: BlockEffect.Signature
     ) extends AckBlock, Settlement
 
     case Final1(
-                   override val id: AckBlock.Id,
-                   override val blockNum: Block.Number,
-                   override val rollouts: List[BlockEffect.Signature],
-                   override val immediateRefunds: List[BlockEffect.Signature]
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val rollouts: List[BlockEffect.Signature],
+        override val immediateRefunds: List[BlockEffect.Signature]
     ) extends AckBlock, Rollouts, Refunds.Immediate
 
     case Final2(
-                   override val id: AckBlock.Id,
-                   override val blockNum: Block.Number,
-                   override val finalization: BlockEffect.Signature
+        override val id: AckBlock.Id,
+        override val blockNum: Block.Number,
+        override val finalization: BlockEffect.Signature
     ) extends AckBlock, Finalization
 
 object AckBlock {
@@ -113,18 +113,17 @@ object AckBlock {
     }
 
     object Number {
-      opaque type Number = Int
+        opaque type Number = Int
 
-      def apply(i: Int): Number = i
+        def apply(i: Int): Number = i
 
-      given Conversion[Number, Int] = identity
+        given Conversion[Number, Int] = identity
 
-      given Ordering[Number] with {
-        override def compare(x: Number, y: Number): Int =
-          x.compare(y)
-      }
+        given Ordering[Number] with {
+            override def compare(x: Number, y: Number): Int =
+                x.compare(y)
+        }
 
-      extension (self: Number)
-        def increment: Number = Number(self + 1)
+        extension (self: Number) def increment: Number = Number(self + 1)
     }
 }

@@ -81,7 +81,7 @@ object LedgerProtocol {
             deferredResponse <- Deferred[IO, Either[Error, Success]]
         } yield CompleteBlock(timeCreation, deferredResponse)
 
-        final case class Success (
+        final case class Success(
             newBody: Block.Body,
             newCommitment: KzgCommitment
         )
