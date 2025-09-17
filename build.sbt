@@ -3,7 +3,7 @@
 //  DockerPlugin
 //)
 
-val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
+val scalusVersion = "0.11.0+266-d1b23894-SNAPSHOT"
 val bloxbeanVersion = "0.7.0-beta4"
 
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")
