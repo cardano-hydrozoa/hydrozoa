@@ -131,7 +131,8 @@ lazy val benchmarks = (project in file("benchmarks"))
       // optional: set JVM args for benchmarking
       javaOptions ++= Seq(
         "-Xms2G",
-        "-Xmx2G",
+        "-Xmx16G",
+        "-Xss16m",
         "-XX:+UseG1GC"
       ),
       libraryDependencies ++= Seq(

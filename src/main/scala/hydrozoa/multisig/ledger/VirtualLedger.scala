@@ -85,8 +85,8 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
     def makeUtxosCommitment: IO[KzgCommitment] =
         for {
             s <- state.get
-            // FIXME: or just commitment = KzgCommitment.getUtxosActiveCommitment(s.activeUtxos) ?
-            commitment <- IO(KzgCommitment.calculateCommitment(s.activeUtxos))
+            utxoHashed <- IO(KzgCommitment.hashToScalar(s.activeUtxos))
+            commitment <- IO(KzgCommitment.calculateCommitment(utxoHashed))
         } yield commitment
 }
 

@@ -1,13 +1,12 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
-import com.bloxbean.cardano.client.util.HexUtil
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.TxInInfo
+import scalus.prelude.List as SList
 import scalus.prelude.crypto.bls12_381.G1
-import scalus.prelude.{asScalus, List as SList}
 import scalus.|>
 import supranational.blst.{P1, Scalar}
 
@@ -17,6 +16,25 @@ object KzgCommitment {
 
     type KzgCommitment = IArray[Byte]
 
+    def hashToScalar(utxo: UTxO): SList[Scalar] =
+        def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
+            LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
+
+        // Calculate hashes
+        SList.from(
+          utxo.toList
+              .map(e =>
+                  toPlutus(e._1, e._2)
+                      |> (_.toData)
+                      |> serialiseData
+                      |> blake2b_224
+                      |> (_.bytes)
+                      |> Scalar().from_bendian
+              )
+        )
+
+        // println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+
     /** Calculates the commitment for the pairing-based accumulator.
       *
       * @param utxo
@@ -24,24 +42,7 @@ object KzgCommitment {
       * @return
       *   G1 point that corresponds to the commitment
       */
-    def calculateCommitment(utxo: UTxO): KzgCommitment = {
-
-        def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
-            LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
-
-        // Calculate hashes
-        val scalars = utxo.toList
-            .map(e =>
-                toPlutus(e._1, e._2)
-                    |> (_.toData)
-                    |> serialiseData
-                    |> blake2b_224
-                    |> (_.bytes)
-                    |> Scalar().from_bendian
-            )
-            .asScalus
-
-//        println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+    def calculateCommitment(scalars: SList[Scalar]): KzgCommitment = {
 
         // Get as much from the setup as we need: n + 1 elements
         val size = scalars.length.toInt + 1
@@ -54,7 +55,7 @@ object KzgCommitment {
 
         val finalPoly = mkFinalPoly(scalars)
         val commitment = evaluateFinalPoly(srs, finalPoly).compress()
-//        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
+        // println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
         IArray.unsafeFromArray(commitment)
     }
 
@@ -70,7 +71,7 @@ object KzgCommitment {
       * @return
       *   the coefficients for the final polynomial, with the lowest-degree coefficient coming first
       */
-    private def mkFinalPoly(binomials: SList[Scalar]): SList[Scalar] =
+    def mkFinalPoly(binomials: SList[Scalar]): SList[Scalar] =
         val zero = Scalar(BigInteger("0"))
         val one = new Scalar(BigInteger("1"))
 
@@ -91,8 +92,7 @@ object KzgCommitment {
       * @return
       *   commitment, a point in G1
       */
-    //
-    private def evaluateFinalPoly(
+    def evaluateFinalPoly(
         srsG1: SList[P1],
         finalPoly: SList[Scalar]
     ): P1 =
