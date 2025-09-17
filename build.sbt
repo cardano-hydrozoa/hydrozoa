@@ -3,6 +3,9 @@
 //  DockerPlugin
 //)
 
+val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
+val bloxbeanVersion = "0.7.0-beta4"
+
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")
 // Docker / packageName := "cardano-hydrozoa/hydrozoa"
 // dockerBaseImage := "openjdk:21-jdk"
@@ -15,10 +18,6 @@ lazy val core = (project in file("."))
     .settings(
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
-      resolvers +=
-          "Sonatype OSS01 Snapshots" at "https://s01.oss.sonatype.org/content/repositories/snapshots",
-      resolvers +=
-          "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots",
       resolvers += "jitpack" at "https://jitpack.io",
       libraryDependencies ++= Seq(
         // Scalus
@@ -90,7 +89,7 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
-  //"-Werror",
+  // "-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
@@ -112,8 +111,6 @@ addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("munit.Framework")
-val scalusVersion = "0.11.0+35-d2c991bc-SNAPSHOT"
-val bloxbeanVersion = "0.7.0-beta4-SNAPSHOT"
 
 inThisBuild(
   List(
