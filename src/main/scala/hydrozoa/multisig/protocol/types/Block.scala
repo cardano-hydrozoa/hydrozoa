@@ -3,7 +3,7 @@ package hydrozoa.multisig.protocol.types
 import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 
 import scala.concurrent.duration.FiniteDuration
 
