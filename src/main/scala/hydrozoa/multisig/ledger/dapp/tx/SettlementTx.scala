@@ -5,10 +5,7 @@ import hydrozoa.emptyTxBody
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import io.bullet.borer.Cbor
-import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
@@ -45,7 +42,7 @@ object SettlementTx {
     def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
         val feeCoin = Coin(10000000)
         val utxos =
-            recipe.deposits.map(_.utxo).toBuffer.append(recipe.treasuryUtxo._2)
+            recipe.deposits.map(_.toUtxo).toBuffer.append(recipe.treasuryUtxo._2)
 
         val withdrawnValue: Value =
             recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)

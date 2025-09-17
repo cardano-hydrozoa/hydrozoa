@@ -1,6 +1,11 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.*
+import cats.implicits.catsSyntaxFlatMapOps
+import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.ledger.VirtualLedger.*
+import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -18,9 +23,18 @@ private def toScalusState(state: State): ScalusState =
 private def fromScalusState(sstate: ScalusState): State =
     State(sstate.utxo)
 
-final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]) {
+trait VirtualLedger(config: Config) extends Actor[IO, Request] {
+    private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
-    def applyInternalTx(txSerialized: Tx.Serialized): IO[Either[ErrorApplyInternalTx, Unit]] =
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction({
+        case ApplyInternalTx(tx, d)   => applyInternalTx(tx) >>= (res => d.complete(res))
+        case ApplyWithdrawalTx(tx, d) => applyWithdrawalTx(tx) >>= (res => d.complete(res))
+        case ApplyGenesis(go)         => applyGenesisTx(go)
+    })
+
+    private def applyInternalTx(
+        txSerialized: Tx.Serialized
+    ): IO[Either[ErrorApplyInternalTx, Unit]] =
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
@@ -43,7 +57,7 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
                 } yield res
         }
 
-    def applyWithdrawalTx(
+    private def applyWithdrawalTx(
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]] =
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
@@ -72,15 +86,8 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
                 )
         }
 
-    // Question: Should we do parsing from a Byte[Array] here, as above?
-    def applyGenesisTx(tx: L2EventGenesis): IO[Either[ErrorApplyGenesisTx, Unit]] =
-        for {
-            s <- state.get
-            res <- HydrozoaGenesisMutator(emptyContext, toScalusState(s), tx) match {
-                case Left(e)  => IO.pure(Left(TransactionInvalidError(e)))
-                case Right(v) => state.set(fromScalusState(v)).map(Right(_))
-            }
-        } yield res
+    private def applyGenesisTx(tx: L2EventGenesis): IO[Unit] =
+        state.get >>= (s => state.set(HydrozoaGenesisMutator.addGenesisUtxosToState(g = tx._1, s)))
 
     def makeUtxosCommitment: IO[KzgCommitment] =
         for {
@@ -137,6 +144,49 @@ final case class VirtualLedger(config: Config)(private val state: Ref[IO, State]
   * design. Virtuality and L1/L2 are independent properties in the general case.)
   */
 object VirtualLedger {
+    def apply(config: Config): IO[VirtualLedger] =
+        IO(new VirtualLedger(config) {})
+
+    ///////////////////////////////////////////
+    // Requests
+    type Request = ApplyInternalTx | ApplyWithdrawalTx | ApplyGenesis
+
+    // Internal Tx
+    final case class ApplyInternalTx(
+        tx: Tx.Serialized,
+        override val dResponse: Deferred[IO, Either[ErrorApplyInternalTx, Unit]]
+    ) extends SyncRequest[IO, ErrorApplyInternalTx, Unit]
+
+    object ApplyInternalTx {
+
+        def apply(tx: Tx.Serialized): IO[ApplyInternalTx] = for {
+            deferredResponse <- Deferred[IO, Either[ErrorApplyInternalTx, Unit]]
+        } yield (ApplyInternalTx(tx, deferredResponse))
+    }
+
+    // Withdrawal Tx
+    final case class ApplyWithdrawalTx(
+        tx: Tx.Serialized,
+        override val dResponse: Deferred[
+          IO,
+          Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]
+        ]
+    ) extends SyncRequest[IO, ErrorApplyWithdrawalTx, List[TransactionOutput]]
+
+    object ApplyWithdrawalTx {
+
+        def apply(tx: Tx.Serialized): IO[ApplyWithdrawalTx] = for {
+            deferredResponse <- Deferred[IO, Either[ErrorApplyWithdrawalTx, List[
+              TransactionOutput
+            ]]]
+        } yield (ApplyWithdrawalTx(tx, deferredResponse))
+    }
+
+    // Genesis Tx
+    final case class ApplyGenesis(go: L2EventGenesis)
+
+    //////////////////////////////////////////////
+    // Other Types
     final case class Config(
         protocolParams: Unit
     )
@@ -153,11 +203,11 @@ object VirtualLedger {
         type Serialized = Array[Byte]
     }
 
-    sealed trait ErrorApplyInternalTx
+    sealed trait ErrorApplyInternalTx extends Throwable
 
-    sealed trait ErrorApplyWithdrawalTx
+    sealed trait ErrorApplyWithdrawalTx extends Throwable
 
-    sealed trait ErrorApplyGenesisTx
+    sealed trait ErrorApplyGenesisTx extends Throwable
 
     final case class CborParseError(e: Throwable)
         extends Throwable,

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
+import hydrozoa.multisig.ledger.VirtualLedger
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 
@@ -9,20 +10,14 @@ We define three mutators for the three L2 event types (Genesis, Transaction, Wit
 Then, finally, we define a mutator that both validates and processes any L2Event
  */
 
-object HydrozoaGenesisMutator extends STSL2.Mutator {
-    override def transit(context: Context, state: State, event: Event): Result = event match {
-        case g: L2EventGenesis =>
-            for {
-                _ <- L2ConformanceValidator.validate(context, state, event)
-
-            } yield (addGenesisUtxosToState(g, state))
-        case _ => Right(state)
-    }
-
+object HydrozoaGenesisMutator {
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
-    private def addGenesisUtxosToState(g: L2EventGenesis, state: State): State = {
-        state.copy(utxo = state.utxo ++ g.resolvedL2UTxOs.map((x, y) => x.untagged -> y.untagged))
+    def addGenesisUtxosToState(
+        g: Seq[GenesisObligation],
+        state: VirtualLedger.State
+    ): VirtualLedger.State = {
+        state.copy(activeUtxos = state.activeUtxos ++ g.map(go => go.toUtxo))
     }
 }
 

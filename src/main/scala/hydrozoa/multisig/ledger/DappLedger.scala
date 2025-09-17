@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, St
 import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
@@ -23,7 +24,7 @@ final case class DappLedger(headAddress: ShelleyAddress)(
       * @param txSerialized
       *   a serialized deposit transaction
       */
-    def addDeposit(
+    def registerDeposit(
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorAddDeposit, (DepositUtxo, RefundTx.PostDated)]] = {
         // 1. Deserialize and parse the tx.
@@ -31,10 +32,14 @@ final case class DappLedger(headAddress: ShelleyAddress)(
         // 3. Check that the tx satisfies ledger STS rules (assuming inputs exist).
         // 4. Append the tx's deposit utxo to the ledger's state.deposits queue.
         // 5. Return the produced deposit utxo and a post-dated refund transaction for it.
-        (for {
-            tx <- IO.pure(DepositTx.parse(txSerialized)).rethrow
-            refundTx <- IO.pure(???)
-        } yield (tx.depositProduced, refundTx)).attemptNarrow
+
+        IO.pure(
+          // Either Monad
+          for {
+              tx <- DepositTx.parse(txSerialized)
+              refundTx: RefundTx.PostDated = ???
+          } yield (tx.depositProduced, refundTx)
+        )
     }
 
     /** Construct a settlement transaction, a fallback transaction, a list of rollout transactions,
@@ -52,7 +57,12 @@ final case class DappLedger(headAddress: ShelleyAddress)(
     def settleLedger(
         depositDecisions: List[(DepositUtxo, DepositDecision)],
         payouts: List[TransactionOutput]
-    ): IO[(Option[(SettlementTx, FallbackTx, List[RolloutTx])], List[RefundTx.Immediate])] =
+    ): IO[
+      (
+          Option[(SettlementTx, FallbackTx, List[RolloutTx], List[GenesisObligation])],
+          List[RefundTx.Immediate]
+      )
+    ] =
         for {
             _ <- IO.pure(())
         } yield ???
@@ -111,7 +121,7 @@ object DappLedger {
     }
 
     sealed trait DepositDecision
-    case object AbsorbDeposit extends DepositDecision
+    case class AbsorbDeposit(genesisObligation: GenesisObligation) extends DepositDecision
     case object RefundDeposit extends DepositDecision
 
     trait Tx {

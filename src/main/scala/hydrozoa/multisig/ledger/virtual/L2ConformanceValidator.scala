@@ -23,15 +23,9 @@ trait L2ConformanceValidator[L1]:
 
 object L2ConformanceValidator extends STSL2.Validator {
     override def validate(context: Context, state: State, event: Event): Result = event match {
-        case L2EventTransaction(tx) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-        case L2EventWithdrawal(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-        case L2EventGenesis(resolvedSeq) =>
-            mapLeft(_.toString)(
-              resolvedSeq.foldLeft[Either[Error, Unit]](Right(()))((acc, resolved) =>
-                  if acc.isLeft then acc
-                  else given_L2ConformanceValidator_TransactionOutput.l2Validate(resolved._2)
-              )
-            )
+        case L2EventTransaction(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+        case L2EventWithdrawal(tx)   => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+        case L2EventGenesis(_, _, _) => Right(()) // Correct by construction
     }
 }
 

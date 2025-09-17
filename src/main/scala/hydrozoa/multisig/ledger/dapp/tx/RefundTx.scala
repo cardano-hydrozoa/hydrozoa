@@ -2,17 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.{emptyTxBody, toScalusLedger}
-import io.bullet.borer.Cbor
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 
 import scala.language.implicitConversions
-import scala.util.{Failure, Success}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -48,11 +45,11 @@ object RefundTx {
             val deposit = recipe.depositTx.depositProduced
             // NB: Fee is paid from deposit itself
             val feeCoin = Coin(1_000_000)
-            val depositDatum = deposit.datum
+            val depositDatum = deposit._3
             val refundOutput: TransactionOutput =
                 TransactionOutput(
                   address = depositDatum.refundAddress.toScalusLedger(network = recipe.network),
-                  value = deposit.utxo._2.value - Value(feeCoin),
+                  value = Value(deposit._4 - feeCoin),
                   datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
                 )
             val requiredSigners = recipe.headScript.requiredSigners
