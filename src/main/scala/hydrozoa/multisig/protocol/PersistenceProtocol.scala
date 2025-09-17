@@ -4,7 +4,6 @@ import cats.effect.{Deferred, IO}
 import cats.syntax.all.*
 import com.suprnation.actor.ReplyingActorRef
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.actor.SyncRequest.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.Persisted
 
 object PersistenceProtocol {
@@ -21,8 +20,8 @@ object PersistenceProtocol {
         /** ==Put/write data into the persistence system== */
         final case class PersistRequest(
             data: Persisted.Request,
-            override val dResponse: DeferredResponse[IO, PutResponse]
-        ) extends SyncRequest[IO, PutResponse]
+            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
+        ) extends SyncRequest[IO, Throwable, PutResponse]
 
         object PersistRequest {
             def apply(data: Persisted.Request): IO[PersistRequest] = for {
@@ -37,8 +36,8 @@ object PersistenceProtocol {
 
         /** Persist L1 effects of L2 blocks */
         final case class PutL1Effects(
-            override val dResponse: DeferredResponse[IO, PutResponse]
-        ) extends SyncRequest[IO, PutResponse]
+            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
+        ) extends SyncRequest[IO, Throwable, PutResponse]
 
         object PutL1Effects {
             def apply(): IO[PutL1Effects] = for {
@@ -48,8 +47,8 @@ object PersistenceProtocol {
 
         /** Persist the head's latest utxo state in Cardano */
         final case class PutCardanoHeadState(
-            override val dResponse: DeferredResponse[IO, PutResponse]
-        ) extends SyncRequest[IO, PutResponse]
+            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
+        ) extends SyncRequest[IO, Throwable, PutResponse]
 
         object PutCardanoHeadState {
             def apply(): IO[PutCardanoHeadState] = for {
@@ -63,8 +62,8 @@ object PersistenceProtocol {
           * deposits).
           */
         final case class GetBlockData(
-            override val dResponse: DeferredResponse[IO, GetBlockDataResp]
-        ) extends SyncRequest[IO, GetBlockDataResp]
+            override val dResponse: Deferred[IO, Either[Throwable, GetBlockDataResp]]
+        ) extends SyncRequest[IO, Throwable, GetBlockDataResp]
 
         /** Response to [[GetBlockData]]. */
         final case class GetBlockDataResp(
@@ -83,8 +82,8 @@ object PersistenceProtocol {
           *     referenced by the block.
           */
         final case class GetConfirmedLocalEvents(
-            override val dResponse: DeferredResponse[IO, GetConfirmedLocalEventsResp]
-        ) extends SyncRequest[IO, GetConfirmedLocalEventsResp]
+            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedLocalEventsResp]]
+        ) extends SyncRequest[IO, Throwable, GetConfirmedLocalEventsResp]
 
         /** Response to [[GetConfirmedLocalEvents]]. */
         final case class GetConfirmedLocalEventsResp(
@@ -98,8 +97,8 @@ object PersistenceProtocol {
 
         /** Retrieve L1 effects of confirmed L2 blocks. */
         final case class GetConfirmedL1Effects(
-            override val dResponse: DeferredResponse[IO, GetConfirmedL1EffectsResp]
-        ) extends SyncRequest[IO, GetConfirmedL1EffectsResp]
+            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedL1EffectsResp]]
+        ) extends SyncRequest[IO, Throwable, GetConfirmedL1EffectsResp]
 
         /** Response to [[GetConfirmedL1Effects]]. */
         final case class GetConfirmedL1EffectsResp(

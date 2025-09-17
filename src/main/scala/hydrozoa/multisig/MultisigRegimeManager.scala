@@ -8,7 +8,6 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
-import hydrozoa.multisig.protocol.Identifiers.*
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
@@ -18,13 +17,14 @@ import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
 import MultisigRegimeManager.Config
+import hydrozoa.multisig.protocol.types.Peer
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
 object MultisigRegimeManager {
     final case class Config(
-        peerId: PeerId,
-        peers: List[PeerId],
+        peerId: Peer.Number,
+        peers: List[Peer.Number],
         cardanoBackend: CardanoBackend.Ref,
         persistence: Persistence.Ref
     )

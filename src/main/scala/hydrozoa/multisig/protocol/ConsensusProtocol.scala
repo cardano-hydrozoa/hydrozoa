@@ -2,7 +2,8 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.protocol.Identifiers.*
+import hydrozoa.multisig.protocol.types.Block.*
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -20,7 +21,7 @@ object ConsensusProtocol {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
         type Request =
-            NewLedgerEvent | NewBlock | AckBlock
+            NewLedgerEvent | Block | AckBlock
     }
 
     object CardanoLiaison {
@@ -46,7 +47,7 @@ object ConsensusProtocol {
 
     object Persisted {
         type Request =
-            NewLedgerEvent | NewBlock | AckBlock | ConfirmBlock | NewMsgBatch
+            NewLedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
     }
 
     object RemoteBroadcast {
@@ -80,7 +81,7 @@ object ConsensusProtocol {
       * LedgerEventId.
       */
     final case class NewLedgerEvent(
-        id: LedgerEventId,
+        id: LedgerEvent.Id,
         time: FiniteDuration,
         event: Unit // FIXME LedgerEvent
     )
@@ -89,62 +90,9 @@ object ConsensusProtocol {
         type Subscriber = ActorRef[IO, NewLedgerEvent]
     }
 
-    /** The block actor announces a new block.
-      *
-      * @param id
-      *   The block ID, increasing by one for every consecutive new block.
-      * @param time
-      *   The creation time of the block.
-      * @param blockType
-      *   The block's type: initial, minor, major, or final.
-      * @param ledgerEventIdsRequired
-      *   The event number for each peer that the block creator had processed at the moment the
-      *   block was created. Every follower must reach the same event numbers for each peer before
-      *   attempting to verify the block.
-      * @param ledgerEventsValid
-      *   The sequence of valid events that the block creator has applied to transition the previous
-      *   block's multi-ledger state. Every follower must apply these events in the same order when
-      *   verifying the block.
-      * @param ledgerEventsInvalid
-      *   The sequence of events that must be invalid when applied after [[ledgerEventsValid]].
-      * @param ledgerCallbacksAccepted
-      *   The set of mature deposits that are absorbed by this block into the head's treasury.
-      * @param ledgerCallbacksRejected
-      *   The set of deposits that will never be absorbed into the head's treasury because they do
-      *   not fulfill the absorption criteria.
-      */
-    final case class NewBlock(
-        id: BlockId,
-        time: FiniteDuration,
-        blockType: BlockType,
-        ledgerEventIdsRequired: Map[PeerId, LedgerEventNum],
-        ledgerEventsValid: List[LedgerEventId],
-        ledgerEventsInvalid: List[LedgerEventId],
-        ledgerCallbacksAccepted: List[LedgerCallbackId],
-        ledgerCallbacksRejected: List[LedgerCallbackId]
-    )
-
-    object NewBlock {
-        type Subscriber = ActorRef[IO, NewBlock]
-    }
-
-    /** A peer's block actor announces its acknowledgement of an L2 block. When a peer's block actor
-      * acknowledges a block and receives all other peers' acknowledgement of the block, then the
-      * peer can consider the block to be confirmed by multisig consensus. Note that for major and
-      * final blocks, two rounds of acknowledgements are needed to confirm.
-      */
-    final case class AckBlock(
-        id: AckId,
-        time: FiniteDuration
-    )
-
-    object AckBlock {
-        type Subscriber = ActorRef[IO, AckBlock]
-    }
-
     /** L2 block confirmations (local-only signal) */
     final case class ConfirmBlock(
-        id: BlockId
+        id: Block.Number
     )
 
     object ConfirmBlock {
@@ -164,10 +112,10 @@ object ConsensusProtocol {
       *   The requester's last seen event number from the remote peer.
       */
     final case class GetMsgBatch(
-        id: BatchId,
-        ackNum: AckNum,
-        blockNum: BlockNum,
-        eventNum: LedgerEventNum
+        id: Batch.Id,
+        ackNum: AckBlock.Number,
+        blockNum: Block.Number,
+        eventNum: LedgerEvent.Number
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -184,22 +132,22 @@ object ConsensusProtocol {
       *   If provided, a block acknowledgment originating from the responder after the requested
       *   [[AckNum]].
       * @param block
-      *   If provided, a block originating from the responder after the requested [[BlockNum]].
+      *   If provided, a block originating from the responder after the requested [[Number]].
       * @param events
       *   A possibly empty list of events originating from the responder after the requested
       *   [[LedgerEventNum]].
       */
     final case class NewMsgBatch(
-        id: BatchId,
-        ackNum: AckNum,
-        blockNum: BlockNum,
-        eventNum: LedgerEventNum,
+        id: Batch.Id,
+        ackNum: AckBlock.Number,
+        blockNum: Block.Number,
+        eventNum: LedgerEvent.Number,
         ack: Option[AckBlock],
-        block: Option[NewBlock],
+        block: Option[Block],
         events: List[NewLedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
-          (id._1, id._2.increment),
+          id.increment,
           ackNum,
           blockNum,
           eventNum

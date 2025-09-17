@@ -5,21 +5,22 @@ import cats.effect.Deferred
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 
-trait SyncRequest[F[+_], Response](implicit F: MonadError[F, Throwable]) {
-    def dResponse: Deferred[F, Either[Throwable, Response]]
+import scala.reflect.ClassTag
+
+trait SyncRequest[F[+_], E <: Throwable, Response](implicit
+    F: MonadError[F, Throwable],
+    tag: ClassTag[E]
+) {
+    def dResponse: Deferred[F, Either[E, Response]]
     def handleRequest(f: this.type => F[Response]): F[Unit] =
         for {
-            eResult <- f(this).attempt
+            eResult <- f(this).attemptNarrow
             _ <- dResponse.complete(eResult)
         } yield ()
 
-    def ?:(actorRef: ActorRef[F, this.type]): F[Either[Throwable, Response]] =
+    def ?:(actorRef: ActorRef[F, this.type]): F[Either[E, Response]] =
         for {
             _ <- actorRef ! this
             eResponse <- this.dResponse.get
         } yield eResponse
-}
-
-object SyncRequest {
-    type DeferredResponse[F[+_], R] = Deferred[F, Either[Throwable, R]]
 }
