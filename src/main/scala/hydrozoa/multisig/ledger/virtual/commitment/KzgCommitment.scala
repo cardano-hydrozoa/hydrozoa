@@ -17,6 +17,7 @@ object KzgCommitment {
     type KzgCommitment = IArray[Byte]
 
     def hashToScalar(utxo: UTxO): SList[Scalar] =
+
         def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
             LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
 
@@ -54,7 +55,7 @@ object KzgCommitment {
         )
 
         val finalPoly = mkFinalPoly(scalars)
-        val commitment = evaluateFinalPoly(srs, finalPoly).compress()
+        val commitment = evalFinalPoly(srs, finalPoly).compress()
         // println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
         IArray.unsafeFromArray(commitment)
     }
@@ -88,11 +89,13 @@ object KzgCommitment {
       * TODO: use multi-scalar multiplication, once we have it in the java-blst
       *
       * @param srsG1
+      *   setup, should be big enough, controlled by the caller
       * @param finalPoly
+      *   coefficients of the final polynimial
       * @return
       *   commitment, a point in G1
       */
-    def evaluateFinalPoly(
+    def evalFinalPoly(
         srsG1: SList[P1],
         finalPoly: SList[Scalar]
     ): P1 =

@@ -37,20 +37,43 @@ The naive approach is to rebuild the commitment for every block from scratch.
 
 ### Current results
 
-Steps 2-5 are measured by multiple runs, these are the average values in _microseconds_: 
+Steps 2-5 are measured by multiple runs, these are the average values in _microseconds_.
+Here we obviously have some contamination related to the benchmark itself, though
+the relative proportional should be preserved:
 
 ```
-Benchmark                           (size)  Mode  Cnt    Score   Error  Units
-(2) UtxoToPlutusBenchmark              N/A  avgt        53.397          us/op
-(3) UtxoToDataBenchmark                N/A  avgt       320.622          us/op
-(4) UtxoSerializationBenchmark         N/A  avgt       287.210          us/op
-(5) HashByteStringBenchmark            N/A  avgt       389.961          us/op
+Benchmark                         (size)  Mode  Cnt    Score        Error  Units
+(2) UtxoToPlutusBenchmark          N/A  avgt    5      63.532 ±    86.232  us/op
+(3) UtxoToDataBenchmark            N/A  avgt    5     264.225 ±    23.477  us/op
+(4) UtxoSerializationBenchmark     N/A  avgt    5     314.866 ±    71.879  us/op
+(5) HashByteStringBenchmark        N/A  avgt    5     315.852 ±   107.597  us/op
 ```
 
-The whole naive approach for different-sized sets of utxo, _milliseconds_ by 
-running them 5 times:
-          
-Hashing (steps 2-6):
+The benchmarks for the naive approach for different-sized sets of utxo, 
+in  _milliseconds_ are presented in the following tables for three
+parts:
+1. Hashing as a whole (steps 2-6)
+2. Making the final polynomial (step 7)
+3. Evaluating the final polynomial (step 8)
+
+We ran them 5 times with 5 warm-ups.
+Hashing (steps 2-6) turn to be out rather sensitive to warm-ups/multiple iterations
+which significantly improve the time:
+
+```
+Benchmark            (size)  Mode  Cnt       Score     Error     Units   
+HashUtxoBenchmark       10    ss    5       3.119 ±     2.940  ms/op
+HashUtxoBenchmark       50    ss    5       8.704 ±    31.060  ms/op
+HashUtxoBenchmark      100    ss    5       9.701 ±     8.614  ms/op
+HashUtxoBenchmark     1000    ss    5      50.825 ±    78.942  ms/op
+HashUtxoBenchmark    10000    ss    5     307.066 ±   150.699  ms/op
+HashUtxoBenchmark    20000    ss    5     608.358 ±   273.100  ms/op
+HashUtxoBenchmark    25000    ss    5     767.171 ±   475.551  ms/op
+HashUtxoBenchmark    32767    ss    5    1116.495 ±   640.233  ms/op
+```
+
+Without warm-ups and repetitions the scores are notably bigger, which
+probably should be taken as the worst-case bottom line:
 
 ```
 Benchmark                  (size)  Mode  Cnt    Score   Error  Units   
@@ -64,41 +87,40 @@ HashUtxoBenchmark        25000    ss         1697.658          ms/op
 HashUtxoBenchmark        32767    ss         1803.217          ms/op
 ```
 
-Making the final polynomial, step (7) - the bottleneck for big sets:
+Making the final polynomial, step (7) - is the main bottleneck for big sets:
                                                
 ```
-Benchmark                  (size)  Mode  Cnt    Score   Error  Units   
-MkFinalPolyBenchmark        10    ss            2.312          ms/op
-MkFinalPolyBenchmark        50    ss            5.907          ms/op
-MkFinalPolyBenchmark       100    ss            6.157          ms/op
-MkFinalPolyBenchmark      1000    ss          260.102          ms/op
-MkFinalPolyBenchmark     10000    ss        21045.077          ms/op
-MkFinalPolyBenchmark     20000    ss        84924.395          ms/op
-MkFinalPolyBenchmark     25000    ss       132028.882          ms/op
-MkFinalPolyBenchmark     32767    ss       217247.202          ms/op
+Benchmark               (size)  Mode  Cnt       Score   Error      Units   
+MkFinalPolyBenchmark        10    ss    5       0.324 ±     0.487  ms/op
+MkFinalPolyBenchmark        50    ss    5       1.397 ±     2.984  ms/op
+MkFinalPolyBenchmark       100    ss    5       3.351 ±     3.513  ms/op
+MkFinalPolyBenchmark      1000    ss    5     264.676 ±   137.168  ms/op
+MkFinalPolyBenchmark     10000    ss    5   23217.525 ± 10620.817  ms/op
+MkFinalPolyBenchmark     20000    ss    5   92874.975 ± 22759.743  ms/op
+MkFinalPolyBenchmark     25000    ss    5  135918.499 ± 36441.148  ms/op
+MkFinalPolyBenchmark     32767    ss    5  221983.493 ± 27740.261  ms/op
 ```
 
 Evaluating the polynomial, step (8):
 
 ```
-Benchmark                  (size)  Mode  Cnt    Score   Error  Units   
-EvalFinalPolyBenchmark      10    ss            6.262          ms/op
-EvalFinalPolyBenchmark      50    ss           10.135          ms/op
-EvalFinalPolyBenchmark     100    ss           20.161          ms/op
-EvalFinalPolyBenchmark    1000    ss          178.678          ms/op
-EvalFinalPolyBenchmark   10000    ss         1070.223          ms/op
-EvalFinalPolyBenchmark   20000    ss         2546.657          ms/op
-EvalFinalPolyBenchmark   25000    ss         2471.935          ms/op
-EvalFinalPolyBenchmark   32767    ss         4256.330          ms/op
+Benchmark                 (size)  Mode  Cnt       Score       Error  Units
+EvalFinalPolyBenchmark       10    ss    5       3.609 ±     2.007  ms/op
+EvalFinalPolyBenchmark       50    ss    5      15.042 ±     4.505  ms/op
+EvalFinalPolyBenchmark      100    ss    5      13.849 ±     9.113  ms/op
+EvalFinalPolyBenchmark     1000    ss    5     103.785 ±    55.638  ms/op
+EvalFinalPolyBenchmark    10000    ss    5    1288.369 ±  1231.850  ms/op
+EvalFinalPolyBenchmark    20000    ss    5    2246.406 ±  1732.693  ms/op
+EvalFinalPolyBenchmark    25000    ss    5    2608.767 ±  1137.854  ms/op
+EvalFinalPolyBenchmark    32767    ss    5    3777.109 ±  2309.763  ms/op
 ```
 
 ### Implementation plan
 
-For sizes we are targeting within the scope of the MVP, 
-the bottleneck is _hashing_ (steps 2-5). This can be easily fixed by calculating them upfront 
+Potential slow-downs with hashing (steps 2-6) can be easily fixed by calculating them upfront 
 during the initial L2 transaction handling. The L2 ledger is to store those hashes so 
 they can act as the inputs to the naive procedure.
-This measure will allow us to calculate the commitment in **500ms** for **1000** utxos.
+This measure will allow us to calculate the commitment in **350ms** for **1000** utxos.
 
 If we need to improve this quickly, we can:
 * Utilize the _divide-and-conquer_ method to improve step (6), still $O(N^2)$ but with better constant.

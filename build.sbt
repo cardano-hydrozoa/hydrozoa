@@ -121,11 +121,11 @@ inThisBuild(
 )
 
 // Benchmark subproject
-lazy val benchmarks = (project in file("benchmarks"))
+lazy val benchmark = (project in file("benchmark"))
     .enablePlugins(JmhPlugin)
     .dependsOn(core) // access to your main code
     .settings(
-      name := "hydrozoa-benchmarks",
+      name := "hydrozoa-benchmark",
       publish / skip := true,
       fork := true,
       // optional: set JVM args for benchmarking
