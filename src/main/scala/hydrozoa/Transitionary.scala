@@ -9,7 +9,6 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
-import org.w3c.dom.css.Counter
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -18,7 +17,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.*
-import scalus.cardano.ledger.txbuilder.TxBuilder.{dummyVkey, modifyBody, modifyWs}
+import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
@@ -26,9 +25,8 @@ import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
 
-import scala.annotation.tailrec
+import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
-import scala.util.Random
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
@@ -163,15 +161,15 @@ extension (addr: v3.Address) {
 //        IArray.from(hash.bytes)
 //}
 //
-//def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
-//    Hash(ByteString.fromArray(cs.bytes))
-//}
-//
+def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
+    Hash(ByteString.fromArray(cs.bytes))
+}
+
 ////////////////////////////////////////////////////
 //// Token Name
-//
-//def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
-//
+
+def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
+
 /////////////////////////////////////////
 //// Value/MultiAsset Map
 //
@@ -198,26 +196,26 @@ extension (addr: v3.Address) {
 //    }
 //}
 //
-//extension (v: v3.Value) {
-//    def toScalusLedger: Value = {
-//        val coins: Coin = Coin(v.flatten.head._3.toLong)
-//        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
-//            v.toSortedMap.toList.tail.map((cs, assocMap) =>
-//                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
-//            )
-//
-//        // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
-//        // about ambiguous instances. Doing it in the definition of ma1 helps inference.
-//        def listToSeq[A](l: prelude.List[A]): Seq[A] =
-//            l.foldLeft(Seq.empty)(_.appended(_))
-//
-//        val ma1 = MultiAsset(
-//            SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
-//        )
-//
-//        Value(coin = coins, multiAsset = ma1)
-//    }
-//}
+extension (v: v3.Value) {
+    def toScalusLedger: Value = {
+        val coins: Coin = Coin(v.flatten.head._3.toLong)
+        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
+            v.toSortedMap.toList.tail.map((cs, assocMap) =>
+                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
+            )
+
+        // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
+        // about ambiguous instances. Doing it in the definition of ma1 helps inference.
+        def listToSeq[A](l: prelude.List[A]): Seq[A] =
+            l.foldLeft(Seq.empty)(_.appended(_))
+
+        val ma1 = MultiAsset(
+          SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
+        )
+
+        Value(coin = coins, multiAsset = ma1)
+    }
+}
 //
 //extension (tx: BBTransaction) {
 //    def toScalus: Transaction = {

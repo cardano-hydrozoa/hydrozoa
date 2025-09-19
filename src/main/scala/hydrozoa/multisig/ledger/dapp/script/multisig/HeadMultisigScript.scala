@@ -21,7 +21,7 @@ case class HeadMultisigScript(private val script0: Script.Native) {
     val policyId: PolicyId = script.scriptHash
     val requiredSigners: TaggedOrderedSet[AddrKeyHash] =
         TaggedOrderedSet.from(
-          script
+          script.script
               .asInstanceOf[api.Timelock.AllOf]
               .scripts
               .map(_.asInstanceOf[Signature].keyHash)
