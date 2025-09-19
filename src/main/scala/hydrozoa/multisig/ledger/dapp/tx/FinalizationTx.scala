@@ -1,19 +1,23 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.emptyTxBody
+import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger
-import DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import io.bullet.borer.Cbor
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Script.Native
+import scalus.cardano.ledger.txbuilder.{
+    BuilderContext,
+    LowLevelTxBuilder,
+    SelectInputs,
+    TxBalancingError
+}
 
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
-import scala.util.{Failure, Success}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,
@@ -25,76 +29,61 @@ object FinalizationTx {
         majorVersion: Int,
         utxosWithdrawn: Set[(TransactionInput, TransactionOutput)],
         headNativeScript: HeadMultisigScript,
-        headTokenName: AssetName,
         treasuryUtxo: TreasuryUtxo,
-        changeAddress: ShelleyAddress
+        changeAddress: ShelleyAddress,
+        headTokenName: AssetName,
+        context: BuilderContext
     )
 
-    sealed trait BuildError extends Throwable
-    case object IllegalChangeValue extends BuildError
-
-    def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
-        val feeCoin: Coin = Coin(1000000)
-        val beaconTokenBurn = Mint(
-          MultiAsset(
-            SortedMap.from(
-              Seq(
-                (
-                  recipe.headNativeScript.policyId,
-                  SortedMap.from(Seq((recipe.headTokenName, -1.toLong)))
+    def build(recipe: Recipe): Either[TxBalancingError, FinalizationTx] = {
+        val beaconTokenBurn =
+            MultiAsset(
+              SortedMap.from(
+                Seq(
+                  (
+                    recipe.headNativeScript.policyId,
+                    SortedMap.from(Seq((recipe.headTokenName, -1.toLong)))
+                  )
                 )
               )
             )
-          )
-        )
 
         val valueWithdrawn: Value =
             recipe.utxosWithdrawn.foldLeft(Value.zero)((s, w) => s + w._2.value)
 
-        // Change output value is:
-        // The treasury value,
-        //    minus the ADA value of all withdrawn UTxOs,
-        //    minus the beacon token from the treasury (which is burned),
-        //    minus the fee)
-        // Note that we have to explicitly set the "assets" field to empty, because
-        // we will get a runtime exception if any of the multiassets are 0.
-        // We can't just subtract the beacon token
-        val changeValue =
-            try {
-                (recipe.treasuryUtxo._2._2.value
-                    - valueWithdrawn
-                    - Value(feeCoin))
-                    .copy(assets = MultiAsset.empty)
-            } catch {
-                case _: IllegalArgumentException => return Left(IllegalChangeValue)
-            }
+        lazy val builder = {
+            val b1 = recipe.context.buildNewTx
+                .attachNativeScript(recipe.headNativeScript.script, index = 0)
+                // change output
+                .payTo(
+                  address = recipe.headNativeScript.address(recipe.context.network),
+                  value = Value.zero
+                )
+                .selectInputs(selectInputs =
+                    SelectInputs.particular(Set(recipe.treasuryUtxo.utxo._1))
+                )
+                .addMint(beaconTokenBurn)
+                .addOutputs(recipe.utxosWithdrawn.toSeq.map(_._2))
+                .setAuxData(
+                  MD(
+                    MD.L1TxTypes.Finalization,
+                    recipe.headNativeScript.address(recipe.context.network)
+                  )
+                )
+                .addDummyVKeys(recipe.headNativeScript.numSigners)
 
-        val changeOutput: TransactionOutput = TransactionOutput(
-          address = recipe.changeAddress,
-          value = changeValue,
-          datumOption = None
-        )
+            LowLevelTxBuilder
+                .balanceFeeAndChange(
+                  initial = b1.tx,
+                  changeOutputIdx = 0,
+                  protocolParams = recipe.context.protocolParams,
+                  resolvedUtxo = recipe.context.utxo,
+                  evaluator = recipe.context.evaluator
+                )
+                .map(tx => removeDummyVKeys(recipe.headNativeScript.numSigners, tx))
+        }
 
-        val txBody =
-            emptyTxBody.copy(
-              inputs = Set(recipe.treasuryUtxo.utxo._1),
-              outputs = recipe.utxosWithdrawn.toIndexedSeq
-                  .map(_._2)
-                  .map(b => Sized(b))
-                  .appended(Sized(changeOutput)),
-              // TODO: we set the fee to 1 ada, but this doesn't need to be
-              fee = feeCoin,
-              mint = Some(beaconTokenBurn)
-            )
-
-        val scalusTransaction: Transaction = Transaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet(nativeScripts = Set(recipe.headNativeScript)),
-          isValid = true,
-          auxiliaryData = None
-        )
-
-        Right(FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = scalusTransaction))
+        builder.map(tx => FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = tx))
     }
 
 }

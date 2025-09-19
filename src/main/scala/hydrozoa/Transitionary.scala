@@ -4,14 +4,10 @@ package hydrozoa
 // Eventually, we want to move exclusively to the scalus types
 // TODO: Not tests for this module yet
 
+import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
-import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.ledger.api.v1.StakingCredential
-import scalus.|>
-//import hydrozoa.infra.{Piper, toEither, valueTokens}
-import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import hydrozoa.{Address, *}
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
@@ -19,19 +15,24 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
+import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
+import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
-import scalus.{ledger, prelude}
+import scalus.{ledger, prelude, |>}
 
+import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
 
 val emptyTxBody: TransactionBody = TransactionBody(
-  inputs = Set.empty,
+  inputs = TaggedOrderedSet.empty,
   outputs = IndexedSeq.empty,
   fee = Coin(0)
 )
@@ -160,15 +161,15 @@ extension (addr: v3.Address) {
 //        IArray.from(hash.bytes)
 //}
 //
-//def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
-//    Hash(ByteString.fromArray(cs.bytes))
-//}
-//
+def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
+    Hash(ByteString.fromArray(cs.bytes))
+}
+
 ////////////////////////////////////////////////////
 //// Token Name
-//
-//def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
-//
+
+def tnToAssetName(tn: v3.TokenName): AssetName = AssetName.fromHex(tn.toHex)
+
 /////////////////////////////////////////
 //// Value/MultiAsset Map
 //
@@ -195,26 +196,26 @@ extension (addr: v3.Address) {
 //    }
 //}
 //
-//extension (v: v3.Value) {
-//    def toScalusLedger: Value = {
-//        val coins: Coin = Coin(v.flatten.head._3.toLong)
-//        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
-//            v.toSortedMap.toList.tail.map((cs, assocMap) =>
-//                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
-//            )
-//
-//        // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
-//        // about ambiguous instances. Doing it in the definition of ma1 helps inference.
-//        def listToSeq[A](l: prelude.List[A]): Seq[A] =
-//            l.foldLeft(Seq.empty)(_.appended(_))
-//
-//        val ma1 = MultiAsset(
-//            SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
-//        )
-//
-//        Value(coin = coins, multiAsset = ma1)
-//    }
-//}
+extension (v: v3.Value) {
+    def toScalusLedger: Value = {
+        val coins: Coin = Coin(v.flatten.head._3.toLong)
+        val ma0: prelude.List[(PolicyId, prelude.List[(AssetName, Long)])] =
+            v.toSortedMap.toList.tail.map((cs, assocMap) =>
+                (csToPolicyId(cs), assocMap.toList.map((tn, bi) => (tnToAssetName(tn), bi.toLong)))
+            )
+
+        // Note: The reason I don't go directly to a SortedMap here is because the compiler gets confused
+        // about ambiguous instances. Doing it in the definition of ma1 helps inference.
+        def listToSeq[A](l: prelude.List[A]): Seq[A] =
+            l.foldLeft(Seq.empty)(_.appended(_))
+
+        val ma1 = MultiAsset(
+          SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
+        )
+
+        Value(coin = coins, multiAsset = ma1)
+    }
+}
 //
 //extension (tx: BBTransaction) {
 //    def toScalus: Transaction = {
@@ -434,3 +435,64 @@ extension [A](result: Result[A])
 //                )
 //        }
 //    yield (utxo, datum)
+
+extension (txBuilder: TxBuilder)
+    def addMint(assets: MultiAsset): TxBuilder = {
+        txBuilder.copy(tx =
+            modifyBody(
+              txBuilder.tx,
+              b =>
+                  b.copy(mint = b.mint match {
+                      case None    => Some(Mint(assets))
+                      case Some(m) => Some(Mint(m + assets))
+                  })
+            )
+        )
+    }
+
+    def addOutputs(outputs: Seq[TransactionOutput]): TxBuilder = {
+        txBuilder.copy(tx =
+            modifyBody(txBuilder.tx, b => b.copy(outputs = b.outputs ++ outputs.map(Sized(_))))
+        )
+    }
+
+    def setAuxData(aux: AuxiliaryData): TxBuilder = {
+        txBuilder.copy(tx = modifyAuxiliaryData(txBuilder.tx, _ => Some(aux)))
+    }
+
+    def modifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData]): TxBuilder = {
+        txBuilder.copy(tx = modifyAuxiliaryData(txBuilder.tx, f))
+    }
+
+    /** add at most 256 keys */
+    def addDummyVKeys(numberOfKeys: Int): TxBuilder = {
+        txBuilder.copy(tx =
+            modifyWs(
+              txBuilder.tx,
+              ws => ws.copy(vkeyWitnesses = ws.vkeyWitnesses ++ generateUniqueKeys(numberOfKeys))
+            )
+        )
+    }
+
+/** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
+def removeDummyVKeys(numberOfKeys: Int, tx: Transaction): Transaction = {
+    modifyWs(
+      tx,
+      ws => ws.copy(vkeyWitnesses = ws.vkeyWitnesses -- generateUniqueKeys(numberOfKeys))
+    )
+}
+
+private def generateVKeyWitness(counter: Int): VKeyWitness = {
+    val value1 = ByteString.fromArray(Array.fill(32)(counter.toByte)) // 32 bytes
+    val value2 = ByteString.fromArray(Array.fill(64)(counter.toByte)) // 64 bytes
+    VKeyWitness(value1, value2)
+}
+
+private def generateUniqueKeys(n: Int): Set[VKeyWitness] = {
+    (0 until n).map(i => generateVKeyWitness(i)).toSet
+}
+
+def modifyAuxiliaryData(tx: Transaction, f: Option[AuxiliaryData] => Option[AuxiliaryData]) = {
+    val newAuxData = f(tx.auxiliaryData)
+    tx.copy(auxiliaryData = newAuxData)
+}

@@ -1,22 +1,23 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
+import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
+    OtherScalusBalancingError,
+    OtherScalusTransactionException
+}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import hydrozoa.{VerificationKeyBytes, emptyTxBody}
-import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.{txbuilder, *}
 
 import scala.collection.immutable.SortedMap
-import scala.util.{Failure, Success}
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -26,100 +27,82 @@ final case class InitializationTx(
 
 object InitializationTx {
     final case class Recipe(
-        network: Network,
-        seedUtxo: (TransactionInput, TransactionOutput),
-        coins: BigInt,
-        peers: NonEmptyList[VerificationKeyBytes]
+        seedUtxos: NonEmptyList[(TransactionInput, TransactionOutput)],
+        initialDeposit: Coin,
+        peers: NonEmptyList[VerificationKeyBytes],
+        context: BuilderContext,
+        changeAddress: ShelleyAddress
     )
 
-    sealed trait BuildError extends Throwable
-    case object IllegalChangeValue extends BuildError
+    enum BuildError:
+        case OtherScalusBalancingError(e: TxBalancingError)
+
+        /** Thrown when initial deposit does not contain minAda */
+        case InitialDepositTooSmall(initialDeposit: Coin)
+        case OtherScalusTransactionException(e: TransactionException)
 
     def build(recipe: Recipe): Either[BuildError, InitializationTx] = {
-        // TODO: we set the fee to 1 ada, but this doesn't need to be
-        val feeCoin = Coin(1_000_000)
         // Construct head native script directly from the list of peers
         val headNativeScript = HeadMultisigScript(recipe.peers)
 
-        // Put the head address of the native script
-        val headAddress = (
-          ShelleyAddress(
-            network = recipe.network,
-            payment = ShelleyPaymentPart.Script(headNativeScript.scriptHash),
-            delegation = Null
-          )
-        )
-
         // singleton beacon token minted by the native script with the TN being the hash of the
         // seed utxo
-        // TODO: factor out "mkSingleToken"
-        val headTokenName = mkHeadTokenName(List(recipe.seedUtxo._1))
-        val headTokenToken: MultiAsset = MultiAsset(
+        val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
+        val headToken: MultiAsset = MultiAsset(
           SortedMap(
-            headNativeScript.scriptHash -> SortedMap(headTokenName -> 1L)
+            headNativeScript.script.scriptHash -> SortedMap(headTokenName -> 1L)
           )
         )
-
+        val headAddress: ShelleyAddress = headNativeScript.address(recipe.context.network)
         // Head output (L1) sits at the head address with the initial deposit from the seed utxo
         // and beacon, as well as the initial datum.
         val headValue: Value =
-            Value(coin = Coin(recipe.coins.toLong), multiAsset = headTokenToken)
-        val headOutput: TransactionOutput =
-            TransactionOutput(
+            Value(coin = recipe.initialDeposit, multiAsset = headToken)
+
+        val b = recipe.context.buildNewTx
+            // Treasury Output
+            .payToScript(
               address = headAddress,
               value = headValue,
-              datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
+              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum.toData
             )
+            // Change Output
+            .payTo(address = recipe.changeAddress, value = Value.zero)
+            .selectInputs(SelectInputs.particular(recipe.seedUtxos.toList.toSet.map(_._1)))
+            .addMint(headToken)
+            .attachNativeScript(headNativeScript.script, 0)
+            .setAuxData(MD.apply(Initialization, headAddress))
+            .addDummyVKeys(headNativeScript.numSigners)
 
-        val changeOutput: TransactionOutput = TransactionOutput(
-          address = recipe.seedUtxo._2.address,
-          // Change is calculated manually here as the seed output's value, minus the
-          // ada put into the head, minus the fee.
-          value =
-              try {
-                  recipe.seedUtxo._2.value -
-                      Value(coin = Coin(recipe.coins.toLong)) -
-                      Value(
-                        coin = feeCoin
-                      )
-              } catch {
-                  case _: IllegalArgumentException =>
-                      return Left(IllegalChangeValue)
-              },
-          datumOption = None
-        )
-
-        val ourBody =
-            emptyTxBody.copy(
-              inputs = Set(recipe.seedUtxo._1),
-              outputs = IndexedSeq(headOutput, changeOutput).map(Sized(_)),
-              // TODO: we set the fee to 1 ada, but this doesn't need to be
-              fee = feeCoin,
-              mint = Some(Mint(headTokenToken))
+        for {
+            balanced <- LowLevelTxBuilder
+                .balanceFeeAndChange(
+                  initial = b.tx,
+                  changeOutputIdx = 1,
+                  protocolParams = recipe.context.protocolParams,
+                  resolvedUtxo = recipe.context.utxo,
+                  evaluator = recipe.context.evaluator
+                )
+                .map(removeDummyVKeys(headNativeScript.numSigners, _))
+                .left
+                .map(OtherScalusBalancingError(_))
+            validated <- recipe.context
+                .validate(balanced)
+                .left
+                .map(OtherScalusTransactionException(_))
+        } yield (InitializationTx(
+          headAddress = headAddress,
+          treasuryProduced = TreasuryUtxo(
+            headTokenName = headTokenName,
+            utxo = (
+              TransactionInput(
+                transactionId = validated.id,
+                index = 0
+              ),
+              validated.body.value.outputs.head.value
             )
-
-        val scalusTransaction: Transaction = Transaction(
-          body = KeepRaw(ourBody),
-          witnessSet = TransactionWitnessSet(nativeScripts = Set(headNativeScript)),
-          isValid = true,
-          auxiliaryData = Some(MD.apply(Initialization, headAddress))
-        )
-
-        Right(
-          InitializationTx(
-            headAddress = headAddress,
-            treasuryProduced = TreasuryUtxo(
-              headTokenName = headTokenName,
-              utxo = (
-                TransactionInput(
-                  transactionId = scalusTransaction.id,
-                  index = 0
-                ),
-                headOutput
-              )
-            ),
-            tx = scalusTransaction
-          )
-        )
+          ),
+          tx = validated
+        ))
     }
 }

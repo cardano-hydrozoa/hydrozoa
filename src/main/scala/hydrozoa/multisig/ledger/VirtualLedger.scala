@@ -6,8 +6,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
-import hydrozoa.multisig.ledger.VirtualLedger.*
-import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.{emptyContext, emptyState}
@@ -77,7 +75,7 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
                     }
 
                 } yield Right(
-                  tx.body.value.inputs.foldLeft(List.empty)((acc, ti) =>
+                  tx.body.value.inputs.toSeq.foldLeft(List.empty)((acc, ti) =>
                       // N.B.: s.activeUtxos(ti) is technically partial, but this SHOULD be caught
                       // at the hydrozoa withdrawal mutator. If this branch is run, it should
                       // mean that all the transaction inputs existed in the active utxo set.
