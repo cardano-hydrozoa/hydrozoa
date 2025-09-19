@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
+import com.bloxbean.cardano.client.util.HexUtil
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
@@ -55,8 +56,10 @@ object KzgCommitment {
         )
 
         val finalPoly = mkFinalPoly(scalars)
+        println(s"finalPoly: ${finalPoly.map(e => BigInt.apply(e.to_bendian()))}")
+
         val commitment = evalFinalPoly(srs, finalPoly).compress()
-        // println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
+        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
         IArray.unsafeFromArray(commitment)
     }
 
@@ -74,14 +77,14 @@ object KzgCommitment {
       */
     def mkFinalPoly(binomials: SList[Scalar]): SList[Scalar] =
         val zero = Scalar(BigInteger("0"))
-        val one = new Scalar(BigInteger("1"))
+        val one = Scalar(BigInteger("1"))
 
         binomials
-            .foldLeft(SList.single(one)): (acc, term) =>
+            .foldLeft(SList.single(one.dup())): (acc, term) =>
                 // We need to clone the whole `acc` since `mul` mutates it
                 // and the final adding gets mutated `shiftedPoly`
-                val shiftedPoly: SList[Scalar] = SList.Cons(zero, acc.map(_.dup))
-                val multipliedPoly = acc.map(s => s.mul(term)).appended(zero)
+                val shiftedPoly: SList[Scalar] = SList.Cons((zero.dup()), acc.map(_.dup))
+                val multipliedPoly = acc.map(s => s.mul(term)).appended(zero.dup())
                 SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
 
     /** Evaluates the commitment to the final polynomial using the given SRS.
