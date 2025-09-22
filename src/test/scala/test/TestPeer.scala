@@ -2,7 +2,7 @@ package test
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.common.model.Network
+import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
@@ -10,10 +10,10 @@ import hydrozoa.multisig.ledger.virtual.{L2EventTransaction, L2EventWithdrawal}
 import org.scalacheck.Gen
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Testnet
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{
     Coin,
@@ -65,7 +65,7 @@ object TestPeer:
     private val accountCache: mutable.Map[TestPeer, Account] = mutable.Map.empty
         .withDefault(peer =>
             Account.createFromMnemonic(
-              Network(0, 42),
+              BBNetwork(0, 42),
               mnemonic,
               createExternalAddressDerivationPathForAccount(peer.ordinal)
             )
@@ -81,13 +81,11 @@ object TestPeer:
             )
         )
 
-    private val addressCache: mutable.Map[TestPeer, ShelleyAddress] =
+    private val addressCache: mutable.Map[TestPeer, (ShelleyPaymentPart, ShelleyDelegationPart)] =
         mutable.Map.empty.withDefault(peer =>
-            ShelleyAddress(
-              network = Testnet,
-              payment =
-                  Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
-              delegation = Null
+            (
+              Key(Hash(blake2b_224(ByteString.fromArray(account(peer).publicKeyBytes())))),
+              Null
             )
         )
 
@@ -97,7 +95,10 @@ object TestPeer:
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
 
-    def address(peer: TestPeer): ShelleyAddress = addressCache.cache(peer)
+    def address(peer: TestPeer, network: Network = Mainnet): ShelleyAddress = {
+        val (payment, delegation) = addressCache.cache(peer)
+        ShelleyAddress(network, payment, delegation)
+    }
 
 extension [K, V](map: mutable.Map[K, V])
     def cache(key: K): V = map.get(key) match {
@@ -175,22 +176,21 @@ def l2EventTransactionFromInputsAndPeer(
     L2EventTransaction(signTx(inPeer, txUnsigned))
 }
 
-
-///////////////////////////// 
+/////////////////////////////
 // Generators
 
 val genTestPeer: Gen[TestPeer] =
     Gen.oneOf(
-        TestPeer.Alice,
-        TestPeer.Bob,
-        TestPeer.Carol,
-        TestPeer.Daniella,
-        TestPeer.Erin,
-        TestPeer.Frank,
-        TestPeer.Gustavo,
-        TestPeer.Hector,
-        TestPeer.Isabel,
-        TestPeer.Julia
+      TestPeer.Alice,
+      TestPeer.Bob,
+      TestPeer.Carol,
+      TestPeer.Daniella,
+      TestPeer.Erin,
+      TestPeer.Frank,
+      TestPeer.Gustavo,
+      TestPeer.Hector,
+      TestPeer.Isabel,
+      TestPeer.Julia
     )
 
 /** Choose betweeen 2 and 10 peers */
@@ -198,15 +198,15 @@ val genTestPeers: Gen[NonEmptyList[TestPeer]] =
     for {
         numPeers <- Gen.choose(2, 10)
         peersList = List(
-            TestPeer.Alice,
-            TestPeer.Bob,
-            TestPeer.Carol,
-            TestPeer.Daniella,
-            TestPeer.Erin,
-            TestPeer.Frank,
-            TestPeer.Gustavo,
-            TestPeer.Hector,
-            TestPeer.Isabel,
-            TestPeer.Julia
+          TestPeer.Alice,
+          TestPeer.Bob,
+          TestPeer.Carol,
+          TestPeer.Daniella,
+          TestPeer.Erin,
+          TestPeer.Frank,
+          TestPeer.Gustavo,
+          TestPeer.Hector,
+          TestPeer.Isabel,
+          TestPeer.Julia
         )
     } yield NonEmptyList.fromList(peersList.take(numPeers)).get

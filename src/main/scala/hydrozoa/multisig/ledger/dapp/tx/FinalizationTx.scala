@@ -8,7 +8,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.txbuilder.{
     BuilderContext,
     LowLevelTxBuilder,
@@ -60,7 +59,7 @@ object FinalizationTx {
                   value = Value.zero
                 )
                 .selectInputs(selectInputs =
-                    SelectInputs.particular(Set(recipe.treasuryUtxo.utxo._1))
+                    SelectInputs.particular(Set(recipe.treasuryUtxo.toUtxo._1))
                 )
                 .addMint(beaconTokenBurn)
                 .addOutputs(recipe.utxosWithdrawn.toSeq.map(_._2))

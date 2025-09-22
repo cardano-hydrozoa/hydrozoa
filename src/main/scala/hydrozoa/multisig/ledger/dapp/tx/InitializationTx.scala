@@ -21,7 +21,6 @@ import scala.collection.immutable.SortedMap
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
-    headAddress: ShelleyAddress,
     override val tx: Transaction
 ) extends Tx
 
@@ -36,9 +35,6 @@ object InitializationTx {
 
     enum BuildError:
         case OtherScalusBalancingError(e: TxBalancingError)
-
-        /** Thrown when initial deposit does not contain minAda */
-        case InitialDepositTooSmall(initialDeposit: Coin)
         case OtherScalusTransactionException(e: TransactionException)
 
     def build(recipe: Recipe): Either[BuildError, InitializationTx] = {
@@ -59,12 +55,14 @@ object InitializationTx {
         val headValue: Value =
             Value(coin = recipe.initialDeposit, multiAsset = headToken)
 
+        val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
+
         val b = recipe.context.buildNewTx
             // Treasury Output
             .payToScript(
               address = headAddress,
               value = headValue,
-              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum.toData
+              datum = datum.toData
             )
             // Change Output
             .payTo(address = recipe.changeAddress, value = Value.zero)
@@ -91,16 +89,15 @@ object InitializationTx {
                 .left
                 .map(OtherScalusTransactionException(_))
         } yield (InitializationTx(
-          headAddress = headAddress,
           treasuryProduced = TreasuryUtxo(
             headTokenName = headTokenName,
-            utxo = (
-              TransactionInput(
-                transactionId = validated.id,
-                index = 0
-              ),
-              validated.body.value.outputs.head.value
-            )
+            txId = TransactionInput(
+              transactionId = validated.id,
+              index = 0
+            ),
+            addr = headAddress,
+            datum = datum,
+            value = headValue
           ),
           tx = validated
         ))

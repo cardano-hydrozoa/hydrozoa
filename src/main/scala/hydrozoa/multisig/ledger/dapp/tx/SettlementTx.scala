@@ -6,18 +6,14 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import hydrozoa.{addDummyVKeys, emptyTxBody, removeDummyVKeys, setAuxData}
+import hydrozoa.{addDummyVKeys, removeDummyVKeys, setAuxData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
 
 import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
-import scala.util.{Failure, Success, Try}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -42,7 +38,9 @@ object SettlementTx {
         val headAddress = recipe.headNativeScript.address(recipe.context.network)
 
         val utxos =
-            recipe.deposits.map(_.toUtxo).toBuffer.append(recipe.treasuryUtxo._2)
+            recipe.deposits
+                .map(_.toUtxo)
+                .toBuffer
 
         val withdrawnValue: Value =
             recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
@@ -50,9 +48,8 @@ object SettlementTx {
         //////////////
         // Datum
         // TODO: Pass the hash of the protocol parameters in the datum
-        val treasuryDatum = toData(
-          mkMultisigTreasuryDatum(recipe.majorVersion, ByteString.empty).toData
-        )
+        val treasuryDatum =
+            mkMultisigTreasuryDatum(recipe.majorVersion, ByteString.empty)
 
         // The new treasury value should be the sum of all inputs minus withdrawals minus fee
         // -- the inputs will be the deposits and the old treasury utxo
@@ -69,7 +66,11 @@ object SettlementTx {
             val b1 = recipe.context.buildNewTx
                 .attachNativeScript(script = recipe.headNativeScript.script, index = 0)
                 // Treasury output
-                .payToScript(address = headAddress, value = treasuryValue, datum = treasuryDatum)
+                .payToScript(
+                  address = headAddress,
+                  value = treasuryValue,
+                  datum = treasuryDatum.toData
+                )
                 // Deposits and treasury
                 .selectInputs(SelectInputs.particular(utxos.map(_._1).toSet))
                 .setAuxData(MD(MD.L1TxTypes.Settlement, headAddress))
@@ -94,11 +95,10 @@ object SettlementTx {
         builder.map(tx =>
             SettlementTx(
               treasurySpent = recipe.treasuryUtxo,
-              treasuryProduced = recipe.treasuryUtxo.copy(utxo =
-                  (
-                    TransactionInput(transactionId = tx.id, index = 0),
-                    tx.body.value.outputs.head.value
-                  )
+              treasuryProduced = recipe.treasuryUtxo.copy(
+                txId = TransactionInput(transactionId = tx.id, index = 0),
+                value = treasuryValue,
+                datum = treasuryDatum
               ),
               depositsSpent = recipe.deposits,
               rolloutProduced =

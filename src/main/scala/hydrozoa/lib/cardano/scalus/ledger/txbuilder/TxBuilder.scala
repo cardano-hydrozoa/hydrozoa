@@ -1,10 +1,10 @@
 package hydrozoa.lib.cardano.scalus.ledger.txbuilder
 
-import scalus.cardano.ledger.{Coin, Sized}
+import monocle.syntax.all.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.ledger.{Coin, Sized, TransactionOutput}
 import scalus.ledger.babbage.ProtocolParams
-import monocle.syntax.all._
 
 import scala.annotation.tailrec
 
@@ -30,9 +30,9 @@ def setMinAda(
     update: (Coin, Babbage) => Babbage = replaceAdaUpdate
 ): Babbage = {
     val minAda = MinCoinSizedTransactionOutput(Sized(candidateOutput), params)
-    //                println(minAda)
-    //                println(candidateOutput.value.coin)
-    //                println(Sized(candidateOutput.asInstanceOf[TransactionOutput]).size)
+//    println(s"Current candidate output value: ${candidateOutput.value.coin};" +
+//        s" minAda required for current candidate output: $minAda; " +
+//        s" size of current candidate output: ${Sized(candidateOutput.asInstanceOf[TransactionOutput]).size}")
     if minAda <= candidateOutput.value.coin
     then candidateOutput
     else setMinAda(update(minAda, candidateOutput), params, update)

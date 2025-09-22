@@ -216,6 +216,15 @@ extension (v: v3.Value) {
         Value(coin = coins, multiAsset = ma1)
     }
 }
+
+/** Create a value with the specified policy id, asset name, and quantity (default 1) */
+def singleton(policyId: PolicyId, assetName: AssetName, quantity: Int = 1): Value = {
+    Value(
+      coin = Coin(0L),
+      multiAsset = MultiAsset(assets = SortedMap((policyId, SortedMap((assetName, quantity)))))
+    )
+}
+
 //
 //extension (tx: BBTransaction) {
 //    def toScalus: Transaction = {

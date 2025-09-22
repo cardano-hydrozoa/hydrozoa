@@ -44,42 +44,38 @@ val minInitTreasuryAda: Coin = {
     setMinAda(mockTreasury, blockfrost544Params).value.coin
 }
 
-// Get the minAda for an Ada only pubkey utxo
-val minPubkeyAda = {
-    val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get.focus(_._2.value.coin.value).replace(0L)
-    setMinAda(utxo._2, blockfrost544Params).value.coin
-}
+def genInitTxRecipe(
+    estimatedFee: Coin =
+        // Experimentally verified
+        Coin(292_223L)
+): Gen[InitializationTx.Recipe] =
+    for {
+        peers <- genTestPeers
+        // Seed UTxOs all belong to the first peer. Each utxo has minAda; the sum of their values must
+        // exceed the minInitTreasuryAda value + an estimated fee, plus minAda for the change output.
+        seedUtxos <- Gen
+            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(peers.head))
+            .map(NonEmptyList.fromList(_).get)
+            .suchThat(x =>
+                sumUtxoValues(
+                  x.toList
+                ).coin.value > minInitTreasuryAda.value + estimatedFee.value + minPubkeyAda().value
+            )
 
-def genInitTxRecipe(estimatedFee: Coin = Coin(5_000_000L)): Gen[InitializationTx.Recipe] =
-    Gen.sized(size =>
-        for {
-            peers <- genTestPeers
-            // Seed UTxOs all belong to the first peer. Each utxo has minAda; the sum of their values must
-            // exceed the minInitTreasuryAda value + an estimated fee, plus minAda for the change output.
-            seedUtxos <- Gen
-                .nonEmptyListOf(genAdaOnlyPubKeyUtxo(peers.head))
-                .map(NonEmptyList.fromList(_).get)
-                .suchThat(x =>
-                    sumUtxoValues(
-                      x.toList
-                    ).coin.value > minInitTreasuryAda.value + estimatedFee.value + minPubkeyAda.value
-                )
+        // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
+        // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
+        // output
+        initialDeposit <- choose(
+          minInitTreasuryAda.value,
+          sumUtxoValues(seedUtxos.toList).coin.value - estimatedFee.value - minPubkeyAda().value
+        ).map(Coin(_))
 
-            // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
-            // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
-            // output
-            initialDeposit <- choose(
-              minInitTreasuryAda.value,
-              sumUtxoValues(seedUtxos.toList).coin.value - estimatedFee.value - minPubkeyAda.value
-            ).map(Coin(_))
-
-        } yield InitializationTx.Recipe(
-          seedUtxos = seedUtxos,
-          initialDeposit = initialDeposit,
-          peers = peers.map(_.wallet.exportVerificationKeyBytes),
-          context = unsignedTxBuilderContext(Map.from(seedUtxos.toList)),
-          changeAddress = peers.head.address
-        )
+    } yield InitializationTx.Recipe(
+      seedUtxos = seedUtxos,
+      initialDeposit = initialDeposit,
+      peers = peers.map(_.wallet.exportVerificationKeyBytes),
+      context = unsignedTxBuilderContext(Map.from(seedUtxos.toList)),
+      changeAddress = peers.head.address
     )
 
 // NOTE: This was just for practice with scalacheck shrinkers. Don't use this -- it is not a good shrinker.
@@ -95,7 +91,7 @@ def genInitTxRecipe(estimatedFee: Coin = Coin(5_000_000L)): Gen[InitializationTx
 //
 //}
 
-class Tx extends munit.ScalaCheckSuite {
+class InitializationTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
@@ -153,7 +149,7 @@ class Tx extends munit.ScalaCheckSuite {
     test("Enough ada for minAda in treasury and change utxo, but insufficient ada to pay for fee") {
         val seedUtxo = {
             val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
-            utxo.focus(_._2.value.coin).replace(minPubkeyAda + minInitTreasuryAda)
+            utxo.focus(_._2.value.coin).replace(minPubkeyAda() + minInitTreasuryAda)
         }
 
         val recipe = InitializationTx.Recipe(
@@ -183,25 +179,26 @@ class Tx extends munit.ScalaCheckSuite {
               case Right(tx) =>
                   val headMultisigScript = HeadMultisigScript(recipe.peers)
                   val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
+                  val treasuryUtxo = tx.treasuryProduced.toUtxo
 
                   (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
                   && (tx.tx.body.value.outputs.size == 2) :| "Initialization tx should have a treasury output and" +
                       "change output"
                       &&
-                      (tx.treasuryProduced.utxo._2 ==
+                      (tx.treasuryProduced.toUtxo._2 ==
                           tx.tx.body.value.outputs.head.value) :|
                       "treasury output in InitializationTx value not coherent with actual transaction produced"
                       && (
                         tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script
                       ) :| "Head multisig script not as expected"
                       && (tx.treasuryProduced.headTokenName == headTokenName) :| "Unexpected head token name in treasury output"
-                      && (tx.treasuryProduced.utxo._2.value.assets.assets
+                      && (tx.treasuryProduced.toUtxo._2.value.assets.assets
                           .get(headMultisigScript.policyId)
                           .get(
                             headTokenName
                           ) == 1L) :| "treasury output does not contain correct head token"
                       && {
-                          val actual = tx.treasuryProduced.utxo._2.value
+                          val actual = tx.treasuryProduced.toUtxo._2.value
                           val expected = Value(
                             coin = recipe.initialDeposit,
                             multiAsset = MultiAsset(assets =
