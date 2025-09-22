@@ -9,24 +9,21 @@ import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.txbuilder.{BuilderContext, UtxoProvider}
-import scalus.ledger.api.MajorProtocolVersion
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.ledger.babbage.ProtocolParams
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
-import upickle.default.read
 
 import scala.language.postfixOps
 
-val blockfrost544Params: ProtocolParams = read[ProtocolParams](
+val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
-)(using ProtocolParams.blockfrostParamsRW)
+)
 
 val costModels = CostModels.fromProtocolParams(blockfrost544Params)
 
@@ -61,7 +58,7 @@ def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
             OutsideValidityIntervalValidator,
             OutsideForecastValidator
           ),
-      signingKeys = Map.empty
+      backendService = null
     )
 }
 

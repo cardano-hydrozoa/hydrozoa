@@ -54,12 +54,10 @@ object FinalizationTx {
             val b1 = recipe.context.buildNewTx
                 .attachNativeScript(recipe.headNativeScript.script, index = 0)
                 // change output
-                .payTo(
+                .addEmptyOutput(
                   address = recipe.headNativeScript.address(recipe.context.network),
-                  value = Value.zero
                 )
-                .selectInputs(selectInputs =
-                    SelectInputs.particular(Set(recipe.treasuryUtxo.toUtxo._1))
+                .withInputs((Set(recipe.treasuryUtxo.toUtxo._1))
                 )
                 .addMint(beaconTokenBurn)
                 .addOutputs(recipe.utxosWithdrawn.toSeq.map(_._2))

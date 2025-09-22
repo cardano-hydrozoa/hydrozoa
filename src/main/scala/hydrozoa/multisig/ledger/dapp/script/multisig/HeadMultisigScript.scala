@@ -7,8 +7,8 @@ import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.ledger.api
-import scalus.ledger.api.Timelock.{AllOf, Signature}
+
+import scalus.cardano.ledger.Timelock.{AllOf, Signature}
 
 case class HeadMultisigScript(private val script0: Script.Native) {
     val script: Script.Native = script0
@@ -22,7 +22,7 @@ case class HeadMultisigScript(private val script0: Script.Native) {
     val requiredSigners: TaggedOrderedSet[AddrKeyHash] =
         TaggedOrderedSet.from(
           script.script
-              .asInstanceOf[api.Timelock.AllOf]
+              .asInstanceOf[Timelock.AllOf]
               .scripts
               .map(_.asInstanceOf[Signature].keyHash)
         )

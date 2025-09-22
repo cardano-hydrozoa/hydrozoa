@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import hydrozoa.{addDummyVKeys, removeDummyVKeys, setAuxData}
+import hydrozoa.{addDummyVKeys, addOutputs, removeDummyVKeys, setAuxData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
@@ -79,7 +79,7 @@ object SettlementTx {
                 if recipe.utxosWithdrawn.isEmpty then b1
                 else
                     // FIXEME: make this into proper payouts/rollouts utxo
-                    b1.payTo(address = headAddress, value = withdrawnValue)
+                    b1.addOutputs(List(TransactionOutput.Babbage(address = headAddress, value = withdrawnValue)))
 
             LowLevelTxBuilder
                 .balanceFeeAndChange(

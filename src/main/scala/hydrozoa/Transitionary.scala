@@ -15,11 +15,12 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
-import scalus.ledger.api.v1.StakingCredential
+import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
@@ -161,7 +162,7 @@ extension (addr: v3.Address) {
 //        IArray.from(hash.bytes)
 //}
 //
-def csToPolicyId(cs: v3.CurrencySymbol): PolicyId = {
+def csToPolicyId(cs: CurrencySymbol): PolicyId = {
     Hash(ByteString.fromArray(cs.bytes))
 }
 
@@ -463,6 +464,11 @@ extension (txBuilder: TxBuilder)
         txBuilder.copy(tx =
             modifyBody(txBuilder.tx, b => b.copy(outputs = b.outputs ++ outputs.map(Sized(_))))
         )
+    }
+    
+    /** Useful for mock or change utxos, 0 value, no datum, no script ref */
+    def addEmptyOutput(address : ShelleyAddress) : TxBuilder = {
+        addOutputs(List(Babbage(address = address, value = Value.zero)))
     }
 
     def setAuxData(aux: AuxiliaryData): TxBuilder = {

@@ -12,10 +12,10 @@ object Token {
         val vote: Long = 8683L // "VOTE" (dispute) on the phone pad
     }
 
-    def mkHeadTokenName(fundingUtxos: NonEmptyList[(TransactionInput)]): AssetName = {
-        // Concatenate the CIP-67 treasury token name prefix with the hash of the list of funding utxos
+    def mkHeadTokenName(seedUtxos: NonEmptyList[(TransactionInput)]): AssetName = {
+        // Concatenate the CIP-67 treasury token name prefix with the hash of the list of seed utxos
         val utxoBytes = ByteString.fromArray(
-          fundingUtxos.toList
+          seedUtxos.toList
               .flatMap(ti => ti.transactionId.bytes ++ BigInt(ti.index).toByteArray)
               .toArray
         )

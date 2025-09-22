@@ -10,11 +10,12 @@ import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.{
 }
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{addDummyVKeys, removeDummyVKeys, setAuxData}
+import hydrozoa.{addDummyVKeys, addOutputs, removeDummyVKeys, setAuxData}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
 
 import scala.util.{Failure, Success}
@@ -99,8 +100,17 @@ object DepositTx {
               datum = toData(recipe.datum)
             )
             // Change output
-            .payTo(address = recipe.changeAddress, value = Value.zero)
-            .selectInputs(SelectInputs.particular(recipe.utxosFunding.toList.toSet.map(_._1)))
+            .addOutputs(
+              List(
+                Babbage(
+                  address = recipe.changeAddress,
+                  value = Value.zero,
+                  datumOption = None,
+                  scriptRef = None
+                )
+              )
+            )
+            .withInputs((recipe.utxosFunding.toList.toSet.map(_._1)))
             .setAuxData(MD(MD.L1TxTypes.Deposit, recipe.headAddress))
             .addDummyVKeys(1)
 

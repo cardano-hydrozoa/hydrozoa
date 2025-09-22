@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import cats.data.NonEmptyList
+import cats.*
+import cats.data.*
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -16,7 +17,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.ledger.babbage.ProtocolParams
 import scalus.prelude.Option as SOption
 import test.*
 
@@ -41,16 +41,17 @@ def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
 
 def genDepositUtxo(
     network: Network = Mainnet,
-    params: ProtocolParams = blockfrost544Params
+    params: ProtocolParams = blockfrost544Params,
+    headAddr : Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
         txId <- genTxId
-        headAddr <- genScriptAddr(network)
+        headAddr_ = headAddr.getOrElse(genScriptAddr(network).sample.get)
         dd <- genDepositDatum(network)
 
         // Mock utxo to calculate minAda
         mockUtxo = Babbage(
-          address = headAddr,
+          address = headAddr_,
           value = Value.zero,
           datumOption = Some(Inline(dd.toData)),
           scriptRef = None
@@ -62,7 +63,7 @@ def genDepositUtxo(
 
     } yield DepositUtxo(
       l1Input = txId,
-      l1OutputAddress = headAddr,
+      l1OutputAddress = headAddr_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
       l1RefScript = None
@@ -87,16 +88,19 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 /** Generate a treasury utxo with at least minAda */
 def genTreasuryUtxo(
     network: Network = Mainnet,
-    params: ProtocolParams = blockfrost544Params
+    params: ProtocolParams = blockfrost544Params,
+    headAddr : Option[ShelleyAddress]
 ): Gen[TreasuryUtxo] =
     for {
         txId <- genTxId
         headTn <- genHeadTokenName
-        scriptHash <- genScriptHash
-        scriptAddr = ShelleyAddress(network, ShelleyPaymentPart.Script(scriptHash), Null)
+
+        scriptAddr = headAddr.getOrElse({
+            ShelleyAddress(network, ShelleyPaymentPart.Script(genScriptHash.sample.get), Null)
+        })
         datum <- genTreasuryDatum
 
-        treasuryToken = singleton(scriptHash, headTn)
+        treasuryToken = singleton(scriptAddr.payment.asInstanceOf[ShelleyPaymentPart.Script].hash, headTn)
 
         treasuryMinAda = setMinAda(
           TreasuryUtxo(
@@ -123,33 +127,40 @@ def genSettlementRecipe(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = Mainnet
-): Gen[SettlementTx.Recipe] =
-    for {
-
-        majorVersion <- Gen.posNum[Int]
-        deposits <- Gen.listOf(genDepositUtxo(network = network, params = params))
-        withdrawalPeers <- Gen.listOf(genTestPeer)
-        withdrawals = Map.from(withdrawalPeers.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
-        utxo <- genTreasuryUtxo(network = network)
+): Gen[SettlementTx.Recipe] = {
+    (for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
+        majorVersion <- Gen.posNum[Int]
+        deposits <- Gen.listOf(genDepositUtxo(network = network, params = params, headAddr = Some(hns.address(network))))
+
+        utxo <- genTreasuryUtxo(headAddr = Some(hns.address(network)), network = network)
+        treasuryInputAda = utxo.value.coin
+
+        withdrawals <- Gen
+            .listOf(genTestPeer)
+            .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
 
     } yield SettlementTx.Recipe(
       majorVersion = majorVersion,
       deposits = deposits,
-      utxosWithdrawn = withdrawals,
+      utxosWithdrawn = Map.from(withdrawals),
       treasuryUtxo = utxo,
       headNativeScript = hns,
       context =
           unsignedTxBuilderContext(utxo = Map.from(deposits.map(_.toUtxo).appended(utxo.toUtxo)))
-    )
+    )).suchThat(r => {
+        val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
+        val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
+        val treasuryInputAda = r.treasuryUtxo.value.coin
+        withdrawnCoin + estimatedFee < treasuryInputAda + depositedCoin
+    })
+}
 
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
-
-    // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="
 
     property("Build settlement tx")(
       Prop.forAll(genSettlementRecipe()) { recipe =>

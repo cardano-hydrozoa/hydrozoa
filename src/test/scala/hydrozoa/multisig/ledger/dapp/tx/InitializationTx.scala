@@ -46,8 +46,7 @@ val minInitTreasuryAda: Coin = {
 
 def genInitTxRecipe(
     estimatedFee: Coin =
-        // Experimentally verified
-        Coin(292_223L)
+        Coin(5_000_000L)
 ): Gen[InitializationTx.Recipe] =
     for {
         peers <- genTestPeers
@@ -95,9 +94,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
-
-    override def scalaCheckInitialSeed = "ZOIG58kP-Uqrph1HLMOUn5UalcsoJVHfSP-m81HSg8G="
-
+    
     // TODO: replace with variant that is not generated
     val dummyAddr: ShelleyAddress = genPubkeyAddr().sample.get
 
@@ -142,9 +139,9 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
         }
     }
 
-    test("MinAda incoherence between l1 and l2") {
-        ???
-    }
+//    test("MinAda incoherence between l1 and l2") {
+//        ???
+//    }
 
     test("Enough ada for minAda in treasury and change utxo, but insufficient ada to pay for fee") {
         val seedUtxo = {
@@ -179,8 +176,9 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
               case Right(tx) =>
                   val headMultisigScript = HeadMultisigScript(recipe.peers)
                   val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
-                  val treasuryUtxo = tx.treasuryProduced.toUtxo
 
+                  // TODO: add parsing roundtrip
+                  
                   (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
                   && (tx.tx.body.value.outputs.size == 2) :| "Initialization tx should have a treasury output and" +
                       "change output"

@@ -5,10 +5,9 @@ import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import org.scalacheck.{Test as ScalaCheckTest, *}
 import scalus.builtin.Data.toData
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.babbage.ProtocolParams
 import scalus.prelude.Option as SOption
 import test.*
 
@@ -22,7 +21,6 @@ def genDepositRecipe(
 ): Gen[DepositTx.Recipe] =
     for {
         depositor <- genTestPeer
-        _ = println(counter.incrementAndGet())
         headAddress <- genScriptAddr()
         genData = Gen.frequency(
           (99, genByteStringData.map(data => SOption.Some((data)))),
