@@ -450,13 +450,23 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
             )
             _ <- useSpendWitness(utxo, spendWitness)
         } yield ()
-    case TransactionBuilderStep.Pay(output)                                           => ??? /* do
-assertNetworkId $ output ^._address
-_transaction <<< _body <<< _outputs
--- intentionally not using pushUnique: we can
--- create multiple outputs of the same shape
-%= flip append[output]
-         */
+    /*
+  Pay output -> do
+    assertNetworkId $ output ^. _address
+    _transaction <<< _body <<< _outputs
+      -- intentionally not using pushUnique: we can
+      -- create multiple outputs of the same shape
+      %= flip append [ output ]
+     */
+    case TransactionBuilderStep.Pay(output) =>
+        for {
+            _ <- assertNetworkId(output.address)
+            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                ctx.focus(_.transaction.body.value.outputs)
+                    // Intentionally not using pushUnique: we can create multiple outputs of the same shape
+                    .modify(outputs => outputs.toSeq :+ Sized(output))
+            )
+        } yield ()
     case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) => ??? /*
 useMintAssetWitness scriptHash assetName amount mintWitness*/
     case TransactionBuilderStep.IssueCertificate(cert, witness)                       => ??? /* do
