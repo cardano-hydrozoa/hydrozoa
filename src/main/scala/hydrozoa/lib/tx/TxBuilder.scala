@@ -579,29 +579,55 @@ def assertOutputType(
             else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
     } yield res
 
+/*
+assertScriptHashMatchesOutputWitness scriptHash witness =
+  traverse_ (assertScriptHashMatchesScript scriptHash) $
+    case witness of
+      PlutusScriptOutput (ScriptValue plutusScript) _ _ -> Just
+        (Right plutusScript)
+      NativeScriptOutput (ScriptValue nativeScript) -> Just
+        (Left nativeScript)
+      _ -> Nothing
+
+ */
 def assertScriptHashMatchesOutputWitness(
     scriptHash: ScriptHash,
     witness: OutputWitness
-): BuilderM[Unit] = ???
-/*
-    traverse_ (assertScriptHashMatchesScript scriptHash) $
-    case witness of
-    PlutusScriptOutput (ScriptValue plutusScript) _ _ -> Just
-        (Right plutusScript)
-    NativeScriptOutput (ScriptValue nativeScript) -> Just
-        (Left nativeScript)
-    _ -> Nothing
- */
+): BuilderM[Unit] =
+    for {
+        _ <- witness match {
+            case OutputWitness.PlutusScriptOutput(ScriptWitness.ScriptValue(plutusScript), _, _) =>
+                assertScriptHashMatchesScript(scriptHash, Right(plutusScript))
+            case OutputWitness.NativeScriptOutput(ScriptWitness.ScriptValue(nativeScript)) =>
+                assertScriptHashMatchesScript(scriptHash, Left(nativeScript))
+            case _ =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+        }
+    } yield ()
 
+/*
+assertScriptHashMatchesScript scriptHash eiScript = do
+  let hash = either NativeScript.hash PlutusScript.hash eiScript
+  unless (scriptHash == hash) do
+    throwError $ IncorrectScriptHash eiScript scriptHash
+ */
 def assertScriptHashMatchesScript(
     scriptHash: ScriptHash,
     eiScript: Either[Script.Native, PlutusScript]
-): BuilderM[Unit] = ???
-//        assertScriptHashMatchesScript scriptHash eiScript = do
-//        let hash = either NativeScript.hash PlutusScript.hash eiScript
-//    unless (scriptHash == hash) do
-//    throwError $ IncorrectScriptHash eiScript scriptHash
-//
+): BuilderM[Unit] = {
+    val computedHash = eiScript match {
+        case Left(nativeScript) => nativeScript.scriptHash
+        case Right(plutusScript) => plutusScript.scriptHash
+    }
+    
+    if (scriptHash != computedHash) {
+        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+            Left(TxBuildError.IncorrectScriptHash(eiScript, scriptHash))
+        )
+    } else {
+        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+    }
+}
 
 def useNativeScriptWitness(scriptWitness: ScriptWitness[Script.Native]): BuilderM[Unit] =
     scriptWitness match {
