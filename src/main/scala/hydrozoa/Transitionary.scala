@@ -37,16 +37,16 @@ val emptyTxBody: TransactionBody = TransactionBody(
   outputs = IndexedSeq.empty,
   fee = Coin(0)
 )
-//
-//val emptyTransaction: Transaction = {
-//    Transaction(
-//        body = KeepRaw(emptyTxBody),
-//        witnessSet = TransactionWitnessSet.empty,
-//        isValid = false,
-//        auxiliaryData = None
-//    )
-//}
-//
+
+val emptyTransaction: Transaction = {
+    Transaction(
+        body = KeepRaw(emptyTxBody),
+        witnessSet = TransactionWitnessSet.empty,
+        isValid = false,
+        auxiliaryData = None
+    )
+}
+
 val emptyContext: Context =
     Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
 
