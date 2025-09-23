@@ -484,10 +484,16 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
         } yield ()
     case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) =>
         useWithdrawRewardsWitness(StakeCredential(stakeCredential), amount, witness)
-    case TransactionBuilderStep.SubmitProposal(proposal, witness)            => ??? /* do
-_transaction <<< _body <<< _votingProposals
-%= pushUnique proposal
-useProposalWitness proposal witness*/
+    case TransactionBuilderStep.SubmitProposal(proposal, witness) =>
+        for {
+            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                ctx.focus(_.transaction.body.value.proposalProcedures)
+                    .modify(proposals => 
+                        TaggedOrderedSet.from(pushUnique(proposal, proposals.toSeq))
+                    )
+            )
+            _ <- useProposalWitness(proposal, witness)
+        } yield ()
     case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) => ??? /* do
 _transaction <<< _body <<< _votingProcedures <<< _Newtype
 %= Map.insert voter votes
@@ -1146,6 +1152,52 @@ def useWithdrawRewardsWitness(
           witness
         )
     } yield ()
+
+// ============================================================================
+// SubmitProposal
+// ============================================================================
+
+/*
+useProposalWitness :: VotingProposal -> Maybe CredentialWitness -> BuilderM Unit
+useProposalWitness proposal mbWitness =
+  case getPolicyHash (unwrap proposal).govAction, mbWitness of
+    Nothing, Just witness ->
+      throwError $ UnneededProposalPolicyWitness proposal witness
+    Just policyHash, witness ->
+      useCredentialWitness (Proposing proposal)
+        (ScriptHashCredential policyHash)
+        witness
+    Nothing, Nothing ->
+      pure unit
+  where
+  getPolicyHash :: GovernanceAction -> Maybe ScriptHash
+  getPolicyHash = case _ of
+    ChangePParams action -> (unwrap action).policyHash
+    TreasuryWdrl action -> (unwrap action).policyHash
+    _ -> Nothing
+ */
+def useProposalWitness(proposal: ProposalProcedure, mbWitness: Option[CredentialWitness]): BuilderM[Unit] = {
+    def getPolicyHash(govAction: GovAction): Option[ScriptHash] = govAction match {
+        case GovAction.ParameterChange(_, _, policyHash) => policyHash
+        case GovAction.TreasuryWithdrawals(_, policyHash) => policyHash
+        case _ => None
+    }
+
+    (getPolicyHash(proposal.govAction), mbWitness) match {
+        case (None, Some(witness)) =>
+            StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                Left(TxBuildError.UnneededProposalPolicyWitness(proposal, witness))
+            )
+        case (Some(policyHash), witness) =>
+            useCredentialWitness(
+                CredentialAction.Proposing(proposal),
+                Credential.ScriptHash(policyHash),
+                witness
+            )
+        case (None, None) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+    }
+}
 
 /*
 assertCredentialType
