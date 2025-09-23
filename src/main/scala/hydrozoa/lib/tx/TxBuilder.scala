@@ -19,6 +19,8 @@ import scalus.cardano.address
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
 
+import scala.collection.immutable.SortedMap
+
 // ============================================================================
 // TransactionBuilderStep
 // ============================================================================
@@ -474,18 +476,19 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
         for {
             _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
                 ctx.focus(_.transaction.body.value.certificates)
-                    .modify(certificates => TaggedSet.from(pushUnique(cert, certificates.toIndexedSeq)))
+                    .modify(certificates =>
+                        TaggedSet.from(pushUnique(cert, certificates.toIndexedSeq))
+                    )
             )
             _ <- useCertificateWitness(cert, witness)
         } yield ()
-    case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) => ??? /*
-useWithdrawRewardsWitness stakeCredential amount witness
-         */
-    case TransactionBuilderStep.SubmitProposal(proposal, witness)                 => ??? /* do
+    case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) =>
+        useWithdrawRewardsWitness(StakeCredential(stakeCredential), amount, witness)
+    case TransactionBuilderStep.SubmitProposal(proposal, witness)            => ??? /* do
 _transaction <<< _body <<< _votingProposals
 %= pushUnique proposal
 useProposalWitness proposal witness*/
-    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness)      => ??? /* do
+    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) => ??? /* do
 _transaction <<< _body <<< _votingProcedures <<< _Newtype
 %= Map.insert voter votes
 useVotingProcedureWitness voter witness
@@ -1077,6 +1080,72 @@ def useCertificateWitness(cert: Certificate, mbWitness: Option[CredentialWitness
         case Certificate.UpdateDRepCert(credential, _) =>
             useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
     }
+
+// ============================================================================
+// WithdrawRewards
+// ============================================================================
+
+/*
+useWithdrawRewardsWitness
+  :: StakeCredential -> Coin -> Maybe CredentialWitness -> BuilderM Unit
+useWithdrawRewardsWitness stakeCredential amount witness = do
+  networkId <- gets _.networkId >>=
+    maybe (throwError NoTransactionNetworkId) pure
+  let
+    rewardAddress =
+      { networkId
+      , stakeCredential
+      }
+  _transaction <<< _body <<< _withdrawals %=
+    Map.insert rewardAddress amount
+  useCredentialWitness (Withdrawal rewardAddress) (unwrap stakeCredential)
+    witness
+ */
+def useWithdrawRewardsWitness(
+    stakeCredential: StakeCredential,
+    amount: Coin,
+    witness: Option[CredentialWitness]
+): BuilderM[Unit] =
+    for {
+        networkId <- StateT.get[[X] =>> Either[TxBuildError, X], Context].flatMap { ctx =>
+            ctx.networkId match {
+                case Some(netId) =>
+                    StateT.pure[[X] =>> Either[TxBuildError, X], Context, Int](netId)
+                case None =>
+                    StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Int](
+                      Left(TxBuildError.NoTransactionNetworkId)
+                    )
+            }
+        }
+        // Convert Int to Network and Credential to StakePayload
+        network = if (networkId == 0) Network.Testnet else Network.Mainnet
+        rewardAccount = stakeCredential.credential match {
+            case Credential.KeyHash(keyHash) =>
+                // Convert AddrKeyHash to StakeKeyHash - they're likely the same underlying type?
+                val stakeKeyHash = keyHash.asInstanceOf[StakeKeyHash]
+                val stakeAddress = StakeAddress(network, StakePayload.Stake(stakeKeyHash))
+                RewardAccount(stakeAddress)
+            case Credential.ScriptHash(scriptHash) =>
+                val stakeAddress = StakeAddress(network, StakePayload.Script(scriptHash))
+                RewardAccount(stakeAddress)
+        }
+
+        _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+            ctx.focus(_.transaction.body.value.withdrawals)
+                .modify(withdrawals => {
+                    val currentWithdrawals = withdrawals.map(_.withdrawals).getOrElse(Map.empty)
+                    Some(
+                      Withdrawals(SortedMap.from(currentWithdrawals + (rewardAccount -> amount)))
+                    )
+                })
+        )
+
+        _ <- useCredentialWitness(
+          CredentialAction.Withdrawal(rewardAccount.address),
+          stakeCredential.credential,
+          witness
+        )
+    } yield ()
 
 /*
 assertCredentialType
