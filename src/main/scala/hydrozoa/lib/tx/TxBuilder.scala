@@ -163,7 +163,7 @@ object ScriptWitness {
 }
 
 // ============================================================================
-// RefInputAction
+// InputAction
 // ============================================================================
 
 /*
@@ -172,22 +172,14 @@ object ScriptWitness {
 -- | transaction outputs become visible to the script context of the
 -- | transaction, regardless of whether the output is spent or just
 -- | referenced. This data type lets the developer to specify, which
--- | action to perform with a referenced input.
-data RefInputAction
-  = ReferenceInput
-  | SpendInput
+-- | action to perform with an input.
+*/
 
-derive instance Generic RefInputAction _
-derive instance Eq RefInputAction
-instance Show RefInputAction where
-  show = genericShow
- */
+sealed trait InputAction
 
-sealed trait RefInputAction
-
-object RefInputAction {
-    case object ReferenceInput extends RefInputAction
-    case object SpendInput extends RefInputAction
+object InputAction {
+    case object ReferenceInput extends InputAction
+    case object SpendInput extends InputAction
 }
 
 // ============================================================================
