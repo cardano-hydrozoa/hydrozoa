@@ -488,17 +488,31 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
         for {
             _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
                 ctx.focus(_.transaction.body.value.proposalProcedures)
-                    .modify(proposals => 
+                    .modify(proposals =>
                         TaggedOrderedSet.from(pushUnique(proposal, proposals.toSeq))
                     )
             )
             _ <- useProposalWitness(proposal, witness)
         } yield ()
-    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) => ??? /* do
-_transaction <<< _body <<< _votingProcedures <<< _Newtype
-%= Map.insert voter votes
-useVotingProcedureWitness voter witness
-         */
+    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) =>
+        for {
+            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                ctx.focus(_.transaction.body.value.votingProcedures)
+                    .modify(procedures => {
+                        val currentProcedures = procedures
+                            .map(_.procedures)
+                            .getOrElse(
+                              SortedMap.empty[Voter, SortedMap[GovActionId, VotingProcedure]]
+                            )
+                        Some(
+                          VotingProcedures(
+                            currentProcedures + (voter -> SortedMap.from(votes))
+                          )
+                        )
+                    })
+            )
+            _ <- useVotingProcedureWitness(voter, witness)
+        } yield ()
 }
 
 def pushUnique[A](elem: A, seq: Seq[A]): Seq[A] =
@@ -1176,28 +1190,79 @@ useProposalWitness proposal mbWitness =
     TreasuryWdrl action -> (unwrap action).policyHash
     _ -> Nothing
  */
-def useProposalWitness(proposal: ProposalProcedure, mbWitness: Option[CredentialWitness]): BuilderM[Unit] = {
+def useProposalWitness(
+    proposal: ProposalProcedure,
+    mbWitness: Option[CredentialWitness]
+): BuilderM[Unit] = {
     def getPolicyHash(govAction: GovAction): Option[ScriptHash] = govAction match {
-        case GovAction.ParameterChange(_, _, policyHash) => policyHash
+        case GovAction.ParameterChange(_, _, policyHash)  => policyHash
         case GovAction.TreasuryWithdrawals(_, policyHash) => policyHash
-        case _ => None
+        case _                                            => None
     }
 
     (getPolicyHash(proposal.govAction), mbWitness) match {
         case (None, Some(witness)) =>
             StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                Left(TxBuildError.UnneededProposalPolicyWitness(proposal, witness))
+              Left(TxBuildError.UnneededProposalPolicyWitness(proposal, witness))
             )
         case (Some(policyHash), witness) =>
             useCredentialWitness(
-                CredentialAction.Proposing(proposal),
-                Credential.ScriptHash(policyHash),
-                witness
+              CredentialAction.Proposing(proposal),
+              Credential.ScriptHash(policyHash),
+              witness
             )
         case (None, None) =>
             StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
     }
 }
+
+/*
+useVotingProcedureWitness :: Voter -> Maybe CredentialWitness -> BuilderM Unit
+useVotingProcedureWitness voter mbWitness = do
+  cred <- case voter of
+    Spo poolKeyHash -> do
+      let cred = PubKeyHashCredential poolKeyHash
+      case mbWitness of
+        Just witness -> throwError $ UnneededSpoVoteWitness cred witness
+        Nothing -> pure cred
+    Cc cred -> pure cred
+    Drep cred -> pure cred
+  useCredentialWitness (Voting voter) cred mbWitness
+ */
+def useVotingProcedureWitness(voter: Voter, mbWitness: Option[CredentialWitness]): BuilderM[Unit] =
+    for {
+        cred <- voter match {
+            case Voter.StakingPoolKey(poolKeyHash) =>
+                val credential = Credential.KeyHash(poolKeyHash)
+                mbWitness match {
+                    case Some(witness) =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Credential](
+                          Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
+                        )
+                    case None =>
+                        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Credential](
+                          credential
+                        )
+                }
+            case Voter.ConstitutionalCommitteeHotKey(credential) =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Credential](
+                  Credential.KeyHash(credential)
+                )
+            case Voter.ConstitutionalCommitteeHotScript(scriptHash) =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Credential](
+                  Credential.ScriptHash(scriptHash)
+                )
+            case Voter.DRepKey(credential) =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Credential](
+                  Credential.KeyHash(credential)
+                )
+            case Voter.DRepScript(scriptHash) =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Credential](
+                  Credential.ScriptHash(scriptHash)
+                )
+        }
+        _ <- useCredentialWitness(CredentialAction.Voting(voter), cred, mbWitness)
+    } yield ()
 
 /*
 assertCredentialType
