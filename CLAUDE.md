@@ -140,6 +140,57 @@ nix develop
 - **Property-based testing**: Using ScalaCheck for testing protocol invariants
 - **Benchmarks**: JMH-based performance testing in `benchmark/` subproject
 
+## Transaction Builder Implementation
+
+### Declarative Transaction Building
+The project includes a declarative transaction builder ported from `purescript-cardano-transaction-builder`, located in `src/main/scala/hydrozoa/lib/tx/`:
+
+#### Core Components
+- **`TxBuilder.scala`**: Main transaction building types and operations
+  - `TransactionBuilderStep`: ADT for declarative transaction operations (SpendOutput, Pay, MintAsset, etc.)
+  - `OutputWitness`, `CredentialWitness`, `ScriptWitness`: Type-safe witness management
+  
+- **`TxEditor.scala`**: Automatic redeemer re-indexing utilities
+  - `DetachedRedeemer`: Redeemers detached from transaction indices
+  - `RedeemerPurpose`: Maps redeemers to transaction components by content, not index
+  - `EditableTransaction`: Transaction with detached redeemers for safe editing
+  - `TransactionEditor.editTransaction()`: Main function for index-safe transaction modification
+
+#### Key Innovation: Automatic Redeemer Management
+Traditional Cardano transaction building requires manual management of redeemer indices:
+```scala
+// Manual approach - fragile to changes
+Redeemer(tag = Spend, index = 2, data = myRedeemer) // Points to 3rd input
+```
+
+The declarative approach uses content-based references:
+```scala
+// Declarative approach - automatically finds the correct index
+DetachedRedeemer(data = myRedeemer, purpose = ForSpend(specificInput))
+```
+
+#### Usage Pattern
+```scala
+// Edit transaction safely - redeemers automatically re-indexed
+val editedTx = TransactionEditor.editTransaction { tx =>
+  // Add inputs, outputs, mints - indices handled automatically
+  tx.addInput(newInput).addOutput(newOutput)
+}(originalTx)
+```
+
+#### Current Status
+- Core types and redeemer management: ✅ Complete
+- Transaction conversion utilities: ✅ Implemented
+- Integration with existing TxBuilder: 🔄 In progress
+- Full PureScript feature parity: ⏳ Planned
+
+#### Type Mappings from PureScript to Scalus
+- `RewardAddress` → `RewardAccount`
+- `VotingProposal` → `ProposalProcedure`
+- `GovernanceActionId` → `GovActionId`
+- `NativeScript` → `Script.Native`
+- `RedeemerTag.Propose/Vote` → `RedeemerTag.Proposing/Voting`
+
 ## Important Notes
 
 - The project is currently undergoing refactoring (expected completion: October 2025)
