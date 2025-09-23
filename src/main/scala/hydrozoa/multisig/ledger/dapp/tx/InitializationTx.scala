@@ -5,7 +5,10 @@ import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{OtherScalusBalancingError, OtherScalusTransactionException}
+import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
+    OtherScalusBalancingError,
+    OtherScalusTransactionException
+}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
@@ -104,10 +107,16 @@ object InitializationTx {
             // TODO: let x be the imbalace of the transaction
             // if 0 <= x < minAda, then we should pay to treasury
             // if minAda <= x, then we should use a change output
-            .addOutputs(List(Babbage(address = recipe.changeAddress, 
-                value = Value.zero, 
-                datumOption = None, 
-                scriptRef = None)))
+            .addOutputs(
+              List(
+                Babbage(
+                  address = recipe.changeAddress,
+                  value = Value.zero,
+                  datumOption = None,
+                  scriptRef = None
+                )
+              )
+            )
 
         for {
             balanced <- LowLevelTxBuilder
@@ -121,12 +130,12 @@ object InitializationTx {
                 .map(removeDummyVKeys(headNativeScript.numSigners, _))
                 .left
                 .map(OtherScalusBalancingError(_))
-            
+
             validated <- recipe.context
                 .validate(balanced)
                 .left
                 .map(OtherScalusTransactionException(_))
-            
+
         } yield (InitializationTx(
           treasuryProduced = TreasuryUtxo(
             headTokenName = headTokenName,
@@ -142,3 +151,67 @@ object InitializationTx {
         ))
     }
 }
+
+/*
+
+This is the sketch of what we want to have:
+
+```scala
+
+// Everything is resolved
+case class Recipe(
+                   // The only seed utxo that affects the beacon token name
+                   seedUtxo: SpendOutput,
+                   // Other utxo to fund the treasury, maybe empty
+                   otherFundingUtxos: List[SpendOutput],
+                   // NB: currently the balancing of tokens is NOT supported
+                   utxosL2Value: Value,
+                   utxosL2Commitment: UtxoCommitment,
+                   peers: NonEmptyList[VerificationKeyBytes],
+                   // TODO: should be gone somewhere else
+                   context: BuilderContext,
+                   // If absent, the rest should go to the treasury utxo
+                   changeAddress: Option[ShelleyAddress]
+                 )
+
+val collateral = ???
+val fallbackFees = ???
+
+val outputsToSpend = seedUtxo :: otherFundingUtxos
+
+val headNativeScript = HeadMultisigScript(recipe.peers)
+val beaconTokenName = mkBeaconTokenName(recipe.seedUtxos.map(_._1))
+val multisigTokenName = mkMultisigTokenName(recipe.seedUtxos.map(_._1))
+val beaconToken, multisigToken: MultiAsset = ???
+
+val minTreasuryValue = utxosL2Value + beaconToken
+val minMultisigValue = multisigToken + collateral + fallbackFees
+
+val headAddress = ???
+val treasuryDatum = ??? // utxosL2Commitment
+
+
+// Pure building
+val (unbalancedTx, vkeys: Set[VerificationKeyBytes]) = buildTransaction(
+  outputsToSpend ++
+  List(
+    Pay(TrasactionOutput(headAddress, minTreasuryValue, treasuryDatum)),
+    Pay(TrasactionOutput(headAddress, minMultisigValue, None)),
+    Mint(beaconToken, headScriptCredentialWitness),
+    Mint(multisigToken, headScriptCredentialWitness),
+    Metadata() // additive
+  ))
+)
+
+// TODO: bake it into a separate builder constructor Endo[Transaction]?
+unbalancedTx = unbalancedTx.editTransaction(List(
+  _.focus(_.metadata).replace(???),
+  if changeAddress then _.focus(_.budy.outputs).add(???)
+)
+
+// Should handle the corner case when the change is smaller than minAda
+// Should add and then remove all fake signatures under the hood
+balancedTx = balanceFeeAndChange___(vkeys, changeOutputIdx = treasuryOutput | changeOutput)
+
+```
+ */
