@@ -1,5 +1,17 @@
 package hydrozoa.lib.tx
 
+/*
+ TODO: Add file-level documentation
+
+ This module contains declarative transaction building types and utilities
+ ported from purescript-cardano-transaction-builder.
+
+ Key concepts:
+ - TransactionBuilderStep: Declarative operations for building transactions
+ - Automatic redeemer management without manual index tracking
+ - Type-safe transaction construction
+ */
+
 import cats.*
 import cats.data.*
 import cats.implicits.*
