@@ -145,15 +145,17 @@ object CredentialWitness {
 // ============================================================================
 
 /*
--- | Gives the user options for specifying everything needed to spend an UTxO
--- | located at an address with a ScriptHash payment credential.
--- |
+-- | Gives the user options for specifying everything needed to unlock an action guarded by a script, including
+-- | - Spending a UTxO located at an address with a ScriptHash payment credential.
+-- | - Witnessing credential operations requiring a script hash
+-- | - Witnessing  a mint 
+-- | - Witnessing a rewards withdrawal for a script hash credential
+-- | 
+-- |  The two constructors behave as follows:
 -- | - `ScriptValue` contains a script for the witness set.
 -- |
 -- | - `ScriptReference` contains a CIP-31 reference input where the inline script should be available at, and a flag to either spend the referenced input or just reference it.
-data ScriptWitness a
-  = ScriptValue a
-  | ScriptReference TransactionInput RefInputAction
+
 
 derive instance Show a => Generic (ScriptWitness a) _
 derive instance Eq a => Eq (ScriptWitness a)
