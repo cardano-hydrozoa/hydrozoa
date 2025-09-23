@@ -8,11 +8,12 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import hydrozoa.emptyTransaction
 import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
+import hydrozoa.{datumOption, emptyTransaction}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
+import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address
 import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
@@ -366,6 +367,8 @@ object TxBuildError {
                         .mkString(", ")}"
     }
 
+    val bugTrackerUrl: String = "https://github.com/cardano-hydrozoa/hydrozoa/issues"
+
     case class WrongNetworkId(address: Address) extends TxBuildError {
         override def explain: String =
             s"The following `Address` that was specified in one of the UTxOs has a `NetworkId`" +
@@ -616,13 +619,13 @@ def assertScriptHashMatchesScript(
     eiScript: Either[Script.Native, PlutusScript]
 ): BuilderM[Unit] = {
     val computedHash = eiScript match {
-        case Left(nativeScript) => nativeScript.scriptHash
+        case Left(nativeScript)  => nativeScript.scriptHash
         case Right(plutusScript) => plutusScript.scriptHash
     }
-    
+
     if (scriptHash != computedHash) {
         StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-            Left(TxBuildError.IncorrectScriptHash(eiScript, scriptHash))
+          Left(TxBuildError.IncorrectScriptHash(eiScript, scriptHash))
         )
     } else {
         StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
@@ -681,52 +684,142 @@ def usePlutusScriptWitness(
             )
     }
 
+// FIXME: Is that the case indeed?
+// NOTE, from dragospe 2025-09-23: we have a wider variety of options here than purescript, since we
+// have both Shelley and Babbage outputs
+
+/*
+-- | Tries to modify the transaction state to make it consume a given script output.
+-- | Uses a `DatumWitness` if the UTxO datum is provided as a hash.
+useDatumWitnessForUtxo
+  :: TransactionUnspentOutput -> Maybe DatumWitness -> BuilderM Unit
+useDatumWitnessForUtxo utxo mbDatumWitness = do
+  case utxo ^. _output <<< _datum of
+    -- script outputs must have a datum
+    Nothing -> throwError $ WrongSpendWitnessType utxo
+    -- if the datum is inline, we don't need to attach it as witness
+    Just (OutputDatum _providedDatum) -> do
+      case mbDatumWitness of
+        Just datumWitness ->
+          throwError $ UnneededDatumWitness utxo datumWitness
+        Nothing -> pure unit
+    -- if the datum is provided as hash,
+    Just (OutputDatumHash datumHash) ->
+      case mbDatumWitness of
+        -- if the datum witness was not provided, look the datum up
+        Nothing -> do
+          throwError $ DatumWitnessNotProvided utxo
+        -- if the datum was provided, check it's hash. if it matches the one
+        -- specified in the output, use that datum.
+        Just (DatumValue providedDatum)
+          | datumHash == PlutusData.hashPlutusData providedDatum -> do
+              _transaction <<< _witnessSet <<< _plutusData
+                %= pushUnique `providedDatum`
+        -- otherwise, fail
+        Just (DatumValue providedDatum) -> do
+          throwError $ IncorrectDatumHash utxo providedDatum datumHash
+        -- If a reference input is provided, we just attach it without
+        -- checking (doing that would require looking up the utxo)
+        --
+        -- We COULD require the user to provide the output to do an additional
+        -- check, but we don't, because otherwise the contents of the ref output
+        -- do not matter (i.e. they are not needed for balancing).
+        -- UTxO lookups are quite expensive, so it's best to not require more
+        -- of them than strictly necessary.
+        Just (DatumReference datumWitnessRef refInputAction) -> do
+          _transaction <<< _body <<< refInputActionToLens refInputAction
+            %= pushUnique datumWitnessRef
+ */
+
 /** Tries to modify the transaction state to make it consume a given script output. Uses a
   * `DatumWitness` if the UTxO datum is provided as a hash.
   */
-// NOTE, from dragospe 2025-09-23: we have a wider variety of options here than purescript, since we
-// have both Shelley and Babbage outputs
 def useDatumWitnessForUtxo(
     utxo: TransactionUnspentOutput,
     mbDatumWitness: Option[DatumWitness]
-): BuilderM[Unit] = ???
-//    for {
-//        res <- utxo.output.datumOption match {
-//            case None => ??? /// throwError $ WrongSpendWitnessType utxo
-//            case Some(Inline(datum)) => for
-//                {
-//                    res <- mbDatumWitness match {
-//                        case Some(datumWitness) => ??? //          throwError $ UnneededDatumWitness utxo datumWitness
-//                        case None => ??? // pure unit
-//                    }
-//                } yield res
-//            case Some(DatumHash(datumHash) =>
-//                mbDatumWitness match {
-//                    // If the datum witness was not provided, look the datum up
-//                    case None => ??? // throwError $ DatumWitnessNotProvided utxo
-//                    // if the datum was provided, check it's hash. if it matches the one
-//                    // specified in the output, use that datum.
-//                    case Some(DatumValue(providedDatum)) if datumHash == PlutusData.hashPlutusData(providedDatum) => ???
-//                        /*  _transaction <<< _witnessSet <<< _plutusData
-//                             %= pushUnique providedDatum */
-//                    // Otherwise, fail
-//                    case Some(DatumValue(providedDatum)) => ???
-//                    /*
-//                          throwError $ IncorrectDatumHash utxo providedDatum datumHash
-//                    -- If a reference input is provided, we just attach it without
-//                    -- checking (doing that would require looking up the utxo)
-//                    --
-//                    -- We COULD require the user to provide the output to do an additional
-//                    -- check, but we don't, because otherwise the contents of the ref output
-//                    -- do not matter (i.e. they are not needed for balancing).
-//                    -- UTxO lookups are quite expensive, so it's best to not require more
-//                    -- of them than strictly necessary.
-//                     */
-//                    case Some(DatumReference(datumWitnessRef, inputAction)) => ???
-//                }
-//        }
-//
-//    } yield res
+): BuilderM[Unit] =
+    for {
+        _ <- utxo.output.datumOption match {
+            // script outputs must have a datum
+            case None =>
+                StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                  Left(TxBuildError.WrongSpendWitnessType(utxo))
+                )
+            // if the datum is inline, we don't need to attach it as witness
+            case Some(DatumOption.Inline(_)) =>
+                mbDatumWitness match {
+                    case Some(datumWitness) =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                          Left(TxBuildError.UnneededDatumWitness(utxo, datumWitness))
+                        )
+                    case None =>
+                        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+                }
+            // if the datum is provided as hash
+            case Some(DatumOption.Hash(datumHash)) =>
+                mbDatumWitness match {
+                    // Error if the datum witness was not provided
+                    case None =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                          Left(TxBuildError.DatumWitnessNotProvided(utxo))
+                        )
+                    // Datum as a value
+                    //
+                    // Check if the provided datum hash matches the output datum hash and if so
+                    // add the datum to the witness set.
+                    case Some(DatumWitness.DatumValue(providedDatum)) =>
+                        // TODO: is that correct? Upstream Data.dataHash extension?
+                        val computedHash: DataHash =
+                            DataHash.fromByteString(blake2b_224(serialiseData(providedDatum)))
+                        if (datumHash == computedHash) {
+                            //
+                            StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                                ctx.focus(_.transaction.witnessSet.plutusData)
+                                    .modify(plutusData =>
+                                        KeepRaw.apply(
+                                          TaggedSet.from(
+                                            pushUnique(
+                                              KeepRaw.apply(providedDatum),
+                                              plutusData.value.toIndexedSeq
+                                            )
+                                          )
+                                        )
+                                    )
+                            )
+                        } else {
+                            StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                              Left(TxBuildError.IncorrectDatumHash(utxo, providedDatum, datumHash))
+                            )
+                        }
+                    // Add reference input without checking (expensive UTxO lookup).
+                    //
+                    // If a reference input is provided, we just attach it without
+                    // checking (doing that would require looking up the utxo).
+                    //
+                    // We COULD require the user to provide the output to do an additional
+                    // check, but we don't, because otherwise the contents of the ref output
+                    // do not matter (i.e., they are not needed for balancing).
+                    //
+                    // UTxO lookups are quite expensive, so it's best to not require more
+                    // of them than strictly necessary.
+                    case Some(DatumWitness.DatumReference(input, inputAction)) =>
+                        StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                            inputAction match {
+                                case InputAction.ReferenceInput =>
+                                    ctx.focus(_.transaction.body.value.referenceInputs)
+                                        .modify(s =>
+                                            TaggedOrderedSet.from(pushUnique(input, s.toSeq))
+                                        )
+                                case InputAction.SpendInput =>
+                                    ctx.focus(_.transaction.body.value.inputs)
+                                        .modify(s =>
+                                            TaggedOrderedSet.from(pushUnique(input, s.toSeq))
+                                        )
+                            }
+                        )
+                }
+        }
+    } yield ()
 
 /*
 module Cardano.Transaction.Builder
@@ -1490,4 +1583,3 @@ refInputActionToLens =
 pushUnique :: forall a. Ord a => a -> Array a -> Array a
 pushUnique x xs = nub $ xs <> [ x ]
  */
-val bugTrackerUrl: String = "https://github.com/cardano-hydrozoa/hydrozoa/issues"
