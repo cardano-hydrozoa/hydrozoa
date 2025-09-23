@@ -148,9 +148,9 @@ object CredentialWitness {
 -- | Gives the user options for specifying everything needed to unlock an action guarded by a script, including
 -- | - Spending a UTxO located at an address with a ScriptHash payment credential.
 -- | - Witnessing credential operations requiring a script hash
--- | - Witnessing  a mint 
+-- | - Witnessing  a mint
 -- | - Witnessing a rewards withdrawal for a script hash credential
--- | 
+-- |
 -- |  The two constructors behave as follows:
 -- | - `ScriptValue` contains a script for the witness set.
 -- |
@@ -182,9 +182,9 @@ object ScriptWitness {
 -- | Inline datums (CIP-32) and reference scripts (CIP-33) contained within
 -- | transaction outputs become visible to the script context of the
 -- | transaction, regardless of whether the output is spent or just
--- | referenced. This data type lets the developer to specify, which
+-- | referenced. This data type lets the developer specify, which
 -- | action to perform with an input.
-*/
+ */
 
 sealed trait InputAction
 
@@ -415,7 +415,7 @@ def modifyTransaction(
         )
         eiCtx <- processConstraints(steps).run(context).map(_._1)
         res <- TransactionConversion.fromEditableTransactionSafe(
-          EditableTransaction(transaction = eiCtx.transaction, redeemers = eiCtx.redeemers)
+          EditableTransaction(transaction = eiCtx.transaction, redeemers = eiCtx.redeemers.toVector)
         ) match {
             case None    => Left(RedeemerIndexingInternalError(tx, steps))
             case Some(x) => Right(x)
@@ -529,7 +529,6 @@ def useSpendWitness(
     }
 }
 
-
 def assertOutputType(
     expectedType: ExpectedWitnessType[OutputWitness],
     utxo: TransactionUnspentOutput
@@ -573,7 +572,6 @@ def assertOutputType(
                 )
             else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
     } yield res
-
 
 def assertScriptHashMatchesOutputWitness(
     scriptHash: ScriptHash,
@@ -651,12 +649,15 @@ def usePlutusScriptWitness(
             )
     }
 
-
-/** Tries to modify the transaction state to make it consume a given script output.
-    Uses a `DatumWitness` if the UTxO datum is provided as a hash. */
+/** Tries to modify the transaction state to make it consume a given script output. Uses a
+  * `DatumWitness` if the UTxO datum is provided as a hash.
+  */
 // NOTE, from dragospe 2025-09-23: we have a wider variety of options here than purescript, since we
 // have both Shelley and Babbage outputs
-def useDatumWitnessForUtxo( utxo : TransactionUnspentOutput, mbDatumWitness: Option[DatumWitness]): BuilderM[Unit] = ???
+def useDatumWitnessForUtxo(
+    utxo: TransactionUnspentOutput,
+    mbDatumWitness: Option[DatumWitness]
+): BuilderM[Unit] = ???
 //    for {
 //        res <- utxo.output.datumOption match {
 //            case None => ??? /// throwError $ WrongSpendWitnessType utxo
@@ -694,8 +695,6 @@ def useDatumWitnessForUtxo( utxo : TransactionUnspentOutput, mbDatumWitness: Opt
 //        }
 //
 //    } yield res
-
-
 
 /*
 module Cardano.Transaction.Builder
