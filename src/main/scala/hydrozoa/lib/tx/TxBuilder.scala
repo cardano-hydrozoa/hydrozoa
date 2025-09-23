@@ -16,7 +16,7 @@ import monocle.syntax.all.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address
-import scalus.cardano.address.{Address, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.*
 import scalus.cardano.ledger.*
 
 // ============================================================================
@@ -388,6 +388,7 @@ sealed trait CredentialAction:
 object CredentialAction {
     case class StakeCert(cert: Certificate) extends CredentialAction:
         override def explain: String = "This stake certificate"
+    // TODO: should be address: StakeAddress?
     case class Withdrawal(address: Address) extends CredentialAction:
         override def explain: String = "This stake rewards withdrawal"
     case class Minting(scriptHash: PolicyId) extends CredentialAction:
@@ -467,8 +468,8 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
                     .modify(outputs => outputs.toSeq :+ Sized(output))
             )
         } yield ()
-    case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) => ??? /*
-useMintAssetWitness scriptHash assetName amount mintWitness*/
+    case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) =>
+        useMintAssetWitness(scriptHash, assetName, amount, mintWitness)
     case TransactionBuilderStep.IssueCertificate(cert, witness)                       => ??? /* do
 _transaction <<< _body <<< _certs %= pushUnique cert
 useCertificateWitness cert witness */
@@ -828,6 +829,226 @@ def useDatumWitnessForUtxo(
                             }
                         )
                 }
+        }
+    } yield ()
+
+// ============================================================================
+// Minting
+// ============================================================================
+
+/*
+useMintAssetWitness scriptHash assetName amount witness = do
+  useCredentialWitness
+    (Minting scriptHash)
+    (ScriptHashCredential scriptHash)
+    (Just witness)
+  mbMint <- gets $ view $ _transaction <<< _body <<< _mint
+  let
+    thisMint = Mint.singleton scriptHash assetName amount
+  newMint <- case mbMint of
+    Nothing -> pure $ Just thisMint
+    Just mint -> pure $ Mint.union mint thisMint
+  modify_ $ _transaction <<< _body <<< _mint .~ newMint
+ */
+def useMintAssetWitness(
+    scriptHash: ScriptHash,
+    assetName: AssetName,
+    amount: Long,
+    witness: CredentialWitness
+): BuilderM[Unit] =
+    for {
+        _ <- useCredentialWitness(
+          CredentialAction.Minting(scriptHash),
+          Credential.ScriptHash(scriptHash),
+          Some(witness)
+        )
+        _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx => {
+            val currentMint = ctx.transaction.body.value.mint
+            val thisMint = MultiAsset.asset(scriptHash, assetName, amount)
+
+            val newMint = currentMint match {
+                case None           => Some(thisMint)
+                case Some(existing) => Some(existing + thisMint)
+            }
+            ctx.focus(_.transaction.body.value.mint).replace(newMint.map(Mint.apply))
+        })
+    } yield ()
+
+// ============================================================================
+// useCredentialWitness
+// ============================================================================
+
+/*
+useCredentialWitness credAction cred mbWitness =
+  case mbWitness of
+    Nothing ->
+      assertCredentialType credAction PubKeyHashWitness cred
+    Just witness@(NativeScriptCredential nsWitness) -> do
+      assertCredentialType credAction (ScriptHashWitness witness) cred
+      useNativeScriptWitness nsWitness
+    Just witness@(PlutusScriptCredential plutusScriptWitness redeemerDatum) ->
+      do
+        assertCredentialType credAction (ScriptHashWitness witness) cred
+        usePlutusScriptWitness plutusScriptWitness
+        let
+          redeemer =
+            { purpose: case credAction of
+                Withdrawal rewardAddress -> ForReward rewardAddress
+                StakeCert cert -> ForCert cert
+                Minting scriptHash -> ForMint scriptHash
+                Voting voter -> ForVote voter
+                Proposing proposal -> ForPropose proposal
+            -- ForSpend is not possible: for that we use OutputWitness
+            , datum: redeemerDatum
+            }
+        _redeemers %= pushUnique redeemer
+ */
+def useCredentialWitness(
+    credAction: CredentialAction,
+    cred: Credential,
+    mbWitness: Option[CredentialWitness]
+): BuilderM[Unit] =
+    for {
+        _ <- mbWitness match {
+            case None =>
+                assertCredentialType(credAction, ExpectedWitnessType.PubKeyHashWitness(), cred)
+            case Some(witness @ CredentialWitness.NativeScriptCredential(nsWitness)) =>
+                for {
+                    _ <- assertCredentialType(
+                      credAction,
+                      ExpectedWitnessType.ScriptHashWitness(witness),
+                      cred
+                    )
+                    _ <- useNativeScriptWitness(nsWitness)
+                } yield ()
+            case Some(
+                  witness @ CredentialWitness.PlutusScriptCredential(
+                    plutusScriptWitness,
+                    redeemerDatum
+                  )
+                ) =>
+                for {
+                    _ <- assertCredentialType(
+                      credAction,
+                      ExpectedWitnessType.ScriptHashWitness(witness),
+                      cred
+                    )
+                    _ <- usePlutusScriptWitness(plutusScriptWitness)
+                    _ <- {
+                        val redeemer = DetachedRedeemer(
+                          datum = redeemerDatum,
+                          purpose = credAction match {
+                              case CredentialAction.Withdrawal(address) =>
+                                  val stakeAddress = address match {
+                                      case ShelleyAddress(_, _, _)           => ??? // FIXME:
+                                      case stakeAddress @ StakeAddress(_, _) => stakeAddress
+                                      case ByronAddress(_)                   => ??? // FIXME:
+                                  }
+                                  RedeemerPurpose.ForReward(
+                                    RewardAccount(stakeAddress)
+                                  )
+                              case CredentialAction.StakeCert(cert) =>
+                                  RedeemerPurpose.ForCert(cert)
+                              case CredentialAction.Minting(scriptHash) =>
+                                  RedeemerPurpose.ForMint(scriptHash)
+                              case CredentialAction.Voting(voter) =>
+                                  RedeemerPurpose.ForVote(voter)
+                              case CredentialAction.Proposing(proposal) =>
+                                  RedeemerPurpose.ForPropose(proposal)
+                          }
+                        )
+                        StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                            ctx.focus(_.redeemers)
+                                .modify(redeemers => pushUnique(redeemer, redeemers))
+                        )
+                    }
+                } yield ()
+        }
+    } yield ()
+
+/*
+assertCredentialType
+  :: CredentialAction
+  -> ExpectedWitnessType CredentialWitness
+  -> Credential
+  -> BuilderM Unit
+assertCredentialType action expectedType cred = do
+  let wrongCredErr = WrongCredentialType action expectedType cred
+  case expectedType of
+    ScriptHashWitness witness -> do
+      scriptHash <- liftMaybe wrongCredErr $ Credential.asScriptHash cred
+      assertScriptHashMatchesCredentialWitness scriptHash witness
+    PubKeyHashWitness ->
+      maybe (throwError wrongCredErr) (const (pure unit)) $
+        Credential.asPubKeyHash cred
+ */
+def assertCredentialType(
+    action: CredentialAction,
+    expectedType: ExpectedWitnessType[CredentialWitness],
+    cred: Credential
+): BuilderM[Unit] =
+    for {
+        _ <- {
+            val wrongCredErr = TxBuildError.WrongCredentialType(action, expectedType, cred)
+            expectedType match {
+                case ExpectedWitnessType.ScriptHashWitness(witness) =>
+                    for {
+                        scriptHash <- cred.scriptHashOption match {
+                            case Some(hash) =>
+                                StateT.pure[[X] =>> Either[TxBuildError, X], Context, ScriptHash](
+                                  hash
+                                )
+                            case None =>
+                                StateT.liftF[[X] =>> Either[TxBuildError, X], Context, ScriptHash](
+                                  Left(wrongCredErr)
+                                )
+                        }
+                        _ <- assertScriptHashMatchesCredentialWitness(scriptHash, witness)
+                    } yield ()
+                case ExpectedWitnessType.PubKeyHashWitness() =>
+                    cred.keyHashOption match {
+                        case Some(_) =>
+                            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+                        case None =>
+                            StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                              Left(wrongCredErr)
+                            )
+                    }
+            }
+        }
+    } yield ()
+
+/*
+assertScriptHashMatchesCredentialWitness
+  :: ScriptHash
+  -> CredentialWitness
+  -> BuilderM Unit
+assertScriptHashMatchesCredentialWitness scriptHash witness =
+  traverse_ (assertScriptHashMatchesScript scriptHash) $
+    case witness of
+      PlutusScriptCredential (ScriptValue plutusScript) _ -> Just
+        (Right plutusScript)
+      NativeScriptCredential (ScriptValue nativeScript) -> Just
+        (Left nativeScript)
+      _ -> Nothing
+ */
+def assertScriptHashMatchesCredentialWitness(
+    scriptHash: ScriptHash,
+    witness: CredentialWitness
+): BuilderM[Unit] =
+    for {
+        _ <- witness match {
+            case CredentialWitness.NativeScriptCredential(
+                  ScriptWitness.ScriptValue(nativeScript)
+                ) =>
+                assertScriptHashMatchesScript(scriptHash, Left(nativeScript))
+            case CredentialWitness.PlutusScriptCredential(
+                  ScriptWitness.ScriptValue(plutusScript),
+                  _
+                ) =>
+                assertScriptHashMatchesScript(scriptHash, Right(plutusScript))
+            case _ =>
+                StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
         }
     } yield ()
 
