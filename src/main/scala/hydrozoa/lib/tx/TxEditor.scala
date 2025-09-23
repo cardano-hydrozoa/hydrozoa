@@ -239,9 +239,9 @@ object TransactionConversion {
             case Left(_) => None
             case Right(attachedRedeemers) =>
                 val currentWitnessSet = editable.transaction.witnessSet
-                val invalidReedemers =
-                    currentWitnessSet.redeemers.map(_.value.toSeq).getOrElse(Seq.empty)
-                val allRedeemers = (invalidReedemers ++ attachedRedeemers).distinct
+                val invalidRedeemers =
+                    currentWitnessSet.redeemers.map(_.value.toSeq.toVector).getOrElse(Vector.empty)
+                val allRedeemers = (invalidRedeemers ++ attachedRedeemers).distinct
                 val updatedWitnessSet =
                     currentWitnessSet.copy(redeemers =
                         if allRedeemers.isEmpty then None
@@ -260,10 +260,10 @@ object TransactionConversion {
             editable.redeemers.flatMap(RedeemerManagement.attachRedeemer(ctx, _))
 
         val currentWitnessSet = editable.transaction.witnessSet
-        val invalidReedemers =
+        val invalidRedeemers =
             currentWitnessSet.redeemers.map(_.value.toSeq).getOrElse(Seq.empty)
 
-        val allRedeemers = (invalidReedemers ++ attachedRedeemers).distinct
+        val allRedeemers = (invalidRedeemers ++ attachedRedeemers).distinct
         val updatedWitnessSet =
             currentWitnessSet.copy(redeemers =
                 if allRedeemers.isEmpty then None
