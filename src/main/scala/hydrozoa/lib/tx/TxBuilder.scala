@@ -470,17 +470,22 @@ def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match
         } yield ()
     case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) =>
         useMintAssetWitness(scriptHash, assetName, amount, mintWitness)
-    case TransactionBuilderStep.IssueCertificate(cert, witness)                       => ??? /* do
-_transaction <<< _body <<< _certs %= pushUnique cert
-useCertificateWitness cert witness */
-    case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness)     => ??? /*
+    case TransactionBuilderStep.IssueCertificate(cert, witness) =>
+        for {
+            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                ctx.focus(_.transaction.body.value.certificates)
+                    .modify(certificates => TaggedSet.from(pushUnique(cert, certificates.toIndexedSeq)))
+            )
+            _ <- useCertificateWitness(cert, witness)
+        } yield ()
+    case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) => ??? /*
 useWithdrawRewardsWitness stakeCredential amount witness
          */
-    case TransactionBuilderStep.SubmitProposal(proposal, witness)                     => ??? /* do
+    case TransactionBuilderStep.SubmitProposal(proposal, witness)                 => ??? /* do
 _transaction <<< _body <<< _votingProposals
 %= pushUnique proposal
 useProposalWitness proposal witness*/
-    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness)          => ??? /* do
+    case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness)      => ??? /* do
 _transaction <<< _body <<< _votingProcedures <<< _Newtype
 %= Map.insert voter votes
 useVotingProcedureWitness voter witness
@@ -965,6 +970,113 @@ def useCredentialWitness(
                 } yield ()
         }
     } yield ()
+
+// ============================================================================
+// IssueCertificate
+// ============================================================================
+
+/*
+useCertificateWitness :: Certificate -> Maybe CredentialWitness -> BuilderM Unit
+useCertificateWitness cert mbWitness =
+  case cert of
+    StakeDeregistration stakeCred -> do
+      let cred = unwrap stakeCred
+      case stakeCred, mbWitness of
+        StakeCredential (PubKeyHashCredential _), Just witness ->
+          throwError $ UnneededDeregisterWitness stakeCred witness
+        StakeCredential (PubKeyHashCredential _), Nothing -> pure unit
+        StakeCredential (ScriptHashCredential _), Nothing ->
+          throwError $ WrongCredentialType (StakeCert cert) PubKeyHashWitness
+            cred
+        StakeCredential (ScriptHashCredential scriptHash), Just witness ->
+          assertScriptHashMatchesCredentialWitness scriptHash witness
+      useCredentialWitness (StakeCert cert) cred mbWitness
+    StakeDelegation stakeCred _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    StakeRegistration _ -> pure unit
+    PoolRegistration _ -> pure unit
+    PoolRetirement _ -> pure unit
+    VoteDelegCert stakeCred _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    StakeVoteDelegCert stakeCred _ _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    StakeRegDelegCert stakeCred _ _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    VoteRegDelegCert stakeCred _ _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    StakeVoteRegDelegCert stakeCred _ _ _ ->
+      useCredentialWitness (StakeCert cert) (unwrap stakeCred) mbWitness
+    AuthCommitteeHotCert _ -> pure unit -- not supported
+    ResignCommitteeColdCert _ _ -> pure unit -- not supported
+    RegDrepCert drepCred _ _ ->
+      useCredentialWitness (StakeCert cert) drepCred mbWitness
+    UnregDrepCert drepCred _ ->
+      useCredentialWitness (StakeCert cert) drepCred mbWitness
+    UpdateDrepCert drepCred _ ->
+      useCredentialWitness (StakeCert cert) drepCred mbWitness
+ */
+def useCertificateWitness(cert: Certificate, mbWitness: Option[CredentialWitness]): BuilderM[Unit] =
+    cert match {
+        // FIXME: verify
+        case Certificate.UnregCert(credential, _) =>
+            for {
+                _ <- (credential, mbWitness) match {
+                    case (Credential.KeyHash(_), Some(witness)) =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                          Left(
+                            TxBuildError.UnneededDeregisterWitness(
+                              StakeCredential(credential),
+                              witness
+                            )
+                          )
+                        )
+                    case (Credential.KeyHash(_), None) =>
+                        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+                    case (Credential.ScriptHash(_), None) =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                          Left(
+                            TxBuildError.WrongCredentialType(
+                              CredentialAction.StakeCert(cert),
+                              ExpectedWitnessType.PubKeyHashWitness(),
+                              credential
+                            )
+                          )
+                        )
+                    case (Credential.ScriptHash(scriptHash), Some(witness)) =>
+                        assertScriptHashMatchesCredentialWitness(scriptHash, witness)
+                }
+                _ <- useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+            } yield ()
+        case Certificate.StakeDelegation(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        // FIXME: verify
+        case Certificate.RegCert(_, _) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+        case Certificate.PoolRegistration(_, _, _, _, _, _, _, _, _) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+        case Certificate.PoolRetirement(_, _) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
+        case Certificate.VoteDelegCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.StakeVoteDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.StakeRegDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.VoteRegDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.StakeVoteRegDelegCert(credential, _, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.AuthCommitteeHotCert(_, _) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](()) // not supported
+        case Certificate.ResignCommitteeColdCert(_, _) =>
+            StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](()) // not supported
+        case Certificate.RegDRepCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.UnregDRepCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+        case Certificate.UpdateDRepCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
+    }
 
 /*
 assertCredentialType
