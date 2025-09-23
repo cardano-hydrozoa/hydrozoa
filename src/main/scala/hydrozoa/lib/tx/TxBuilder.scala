@@ -1,21 +1,13 @@
 package hydrozoa.lib.tx
 
 /*
- TODO: Add file-level documentation
-
  This module contains declarative transaction building types and utilities
  ported from purescript-cardano-transaction-builder.
-
- Key concepts:
- - TransactionBuilderStep: Declarative operations for building transactions
- - Automatic redeemer management without manual index tracking
- - Type-safe transaction construction
  */
 
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import cats.syntax.all.*
 import hydrozoa.emptyTransaction
 import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
@@ -147,7 +139,7 @@ object CredentialWitness {
     case class NativeScriptCredential(witness: ScriptWitness[Script.Native])
         extends CredentialWitness
     case class PlutusScriptCredential(
-        witness: ScriptWitness[PlutusScript],
+        witness: ScriptWitness[Script.PlutusV1 | Script.PlutusV2 | Script.PlutusV3],
         redeemer: Data
     ) extends CredentialWitness
 }
@@ -160,7 +152,7 @@ object CredentialWitness {
 -- | Gives the user options for specifying everything needed to unlock an action guarded by a script, including
 -- | - Spending a UTxO located at an address with a ScriptHash payment credential.
 -- | - Witnessing credential operations requiring a script hash
--- | - Witnessing  a mint
+-- | - Witnessing a mint
 -- | - Witnessing a rewards withdrawal for a script hash credential
 -- |
 -- |  The two constructors behave as follows:
@@ -234,19 +226,13 @@ object DatumWitness {
     ) extends DatumWitness
 }
 
-sealed trait StakeWitness
-
-object StakeWitness {
-    case class PubKeyHashStakeWitness(pkh: StakeKeyHash) extends StakeWitness
-    case class PlutusScriptStakeWitness(scriptWitness: ScriptWitness[PlutusScript])
-    case class NativeScriptStakeWitness(scriptWitness: ScriptWitness[Script.Native])
-}
-
-case class Context(
-    transaction: Transaction,
-    redeemers: Seq[DetachedRedeemer],
-    networkId: Option[Int]
-)
+//sealed trait StakeWitness
+//
+//object StakeWitness {
+//    case class PubKeyHashStakeWitness(pkh: StakeKeyHash) extends StakeWitness
+//    case class PlutusScriptStakeWitness(scriptWitness: ScriptWitness[PlutusScript])
+//    case class NativeScriptStakeWitness(scriptWitness: ScriptWitness[Script.Native])
+//}
 
 sealed trait ExpectedWitnessType[A <: OutputWitness | CredentialWitness] {
     def explain: String
@@ -261,27 +247,15 @@ object ExpectedWitnessType {
         override def explain: String = "PubKeyHash"
 }
 
-sealed trait CredentialAction:
-    def explain: String
-
-object CredentialAction {
-    case class StakeCert(cert: Certificate) extends CredentialAction:
-        override def explain: String = "This stake certificate"
-    case class Withdrawal(address: Address) extends CredentialAction:
-        override def explain: String = "This stake rewards withdrawal"
-    case class Minting(scriptHash: PolicyId) extends CredentialAction:
-        override def explain: String = "This mint"
-    case class Voting(voter: Voter) extends CredentialAction:
-        override def explain: String = "This voting procedure"
-    case class Proposing(proposal: ProposalProcedure) extends CredentialAction:
-        override def explain: String = "This voting proposal"
-}
-
 // NOTE (Peter, 2025-09-23): this comes from  https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/TransactionUnspentOutput.purs
 case class TransactionUnspentOutput(input: TransactionInput, output: TransactionOutput)
 
 // NOTE (Peter, 2025-09-23): this comes from https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/StakeCredential.purs
 case class StakeCredential(credential: Credential)
+
+// ============================================================================
+// Errors
+// ============================================================================
 
 sealed trait TxBuildError:
     def explain: String
@@ -405,6 +379,32 @@ object TxBuildError {
     }
 }
 
+sealed trait CredentialAction:
+    def explain: String
+
+object CredentialAction {
+    case class StakeCert(cert: Certificate) extends CredentialAction:
+        override def explain: String = "This stake certificate"
+    case class Withdrawal(address: Address) extends CredentialAction:
+        override def explain: String = "This stake rewards withdrawal"
+    case class Minting(scriptHash: PolicyId) extends CredentialAction:
+        override def explain: String = "This mint"
+    case class Voting(voter: Voter) extends CredentialAction:
+        override def explain: String = "This voting procedure"
+    case class Proposing(proposal: ProposalProcedure) extends CredentialAction:
+        override def explain: String = "This voting proposal"
+}
+
+// ============================================================================
+// The builder
+// ============================================================================
+
+case class Context(
+    transaction: Transaction,
+    redeemers: Seq[DetachedRedeemer],
+    networkId: Option[Int]
+)
+
 type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
 
 def buildTransaction(steps: Seq[TransactionBuilderStep]): Either[TxBuildError, Transaction] =
@@ -473,12 +473,6 @@ useVotingProcedureWitness voter witness
          */
 }
 
-// CHECK (from dragospe, 2025-09-23): Does purescript's nub and scalas' _.distinct do the same thing?
-// Or will it change the order?
-// Does it matter??
-// Original:
-//      pushUnique :: forall a. Ord a => a -> Array a -> Array a
-//      pushUnique x xs = nub $ xs <> [ x ]
 def pushUnique[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct
 
@@ -497,7 +491,7 @@ def assertNetworkId(addr: Address): BuilderM[Unit] =
         _: Unit <- context.networkId match {
             case None => StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
             case Some(ctxNetworkId) =>
-                if (addrNetworkId == ctxNetworkId)
+                if (addrNetworkId != ctxNetworkId)
                 then
                     StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
                       Left(TxBuildError.WrongNetworkId(addr))
@@ -537,7 +531,7 @@ def useSpendWitness(
                 )
                 _ <- usePlutusScriptWitness(plutusScriptWitness)
                 _ <- useDatumWitnessForUtxo(utxo, mbDatumWitness)
-            } yield (???)
+            } yield ()
     }
 }
 
