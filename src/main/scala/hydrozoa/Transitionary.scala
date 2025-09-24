@@ -13,6 +13,7 @@ import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
+import scalus.cardano.ledger
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -37,16 +38,16 @@ val emptyTxBody: TransactionBody = TransactionBody(
   outputs = IndexedSeq.empty,
   fee = Coin(0)
 )
-//
-//val emptyTransaction: Transaction = {
-//    Transaction(
-//        body = KeepRaw(emptyTxBody),
-//        witnessSet = TransactionWitnessSet.empty,
-//        isValid = false,
-//        auxiliaryData = None
-//    )
-//}
-//
+
+val emptyTransaction: Transaction = {
+    Transaction(
+      body = KeepRaw(emptyTxBody),
+      witnessSet = TransactionWitnessSet.empty,
+      isValid = false,
+      auxiliaryData = None
+    )
+}
+
 val emptyContext: Context =
     Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
 
@@ -465,9 +466,9 @@ extension (txBuilder: TxBuilder)
             modifyBody(txBuilder.tx, b => b.copy(outputs = b.outputs ++ outputs.map(Sized(_))))
         )
     }
-    
+
     /** Useful for mock or change utxos, 0 value, no datum, no script ref */
-    def addEmptyOutput(address : ShelleyAddress) : TxBuilder = {
+    def addEmptyOutput(address: ShelleyAddress): TxBuilder = {
         addOutputs(List(Babbage(address = address, value = Value.zero)))
     }
 
@@ -511,3 +512,15 @@ def modifyAuxiliaryData(tx: Transaction, f: Option[AuxiliaryData] => Option[Auxi
     val newAuxData = f(tx.auxiliaryData)
     tx.copy(auxiliaryData = newAuxData)
 }
+
+extension (self: TransactionOutput)
+    def datumOption: Option[DatumOption] =
+        self match {
+            case TransactionOutput.Shelley(_, _, datumHash) =>
+                datumHash.map(DatumOption.Hash(_))
+            case Babbage(_, _, datumOption, _) =>
+                datumOption match {
+                    case Some(value) => Some(value)
+                    case None        => None
+                }
+        }
