@@ -3,8 +3,7 @@ package hydrozoa.lib.cardano.scalus.ledger.txbuilder
 import monocle.syntax.all.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.{Coin, Sized, TransactionOutput}
-import scalus.ledger.babbage.ProtocolParams
+import scalus.cardano.ledger.{Coin, Sized, TransactionOutput, ProtocolParams}
 
 import scala.annotation.tailrec
 
