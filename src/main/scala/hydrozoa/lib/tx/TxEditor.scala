@@ -22,8 +22,6 @@ import cats.implicits.*
 import scalus.builtin.Data
 import scalus.cardano.ledger.*
 
-import scala.collection.immutable.SortedMap
-
 // ============================================================================
 // DetachedRedeemer
 // ============================================================================
@@ -109,11 +107,11 @@ object RedeemersContext {
            */
           certs = body.certificates.toIndexedSeq.toVector,
           proposals = body.proposalProcedures.toSeq.toVector,
-          voters = body.votingProcedures
-              .getOrElse(VotingProcedures(SortedMap.empty))
-              .procedures
-              .keys
-              .toVector
+          voters = body.votingProcedures match {
+              case Some(voters) =>
+                  voters.procedures.keys.toVector
+              case None => Vector.empty
+          }
         )
     }
 }
@@ -193,11 +191,15 @@ object TransactionConversion {
         val ctx = RedeemersContext.fromTransaction(tx)
         val witnessSet = tx.witnessSet
 
-        val (validRedeemers, invalidRedeemers) =
-            witnessSet.redeemers.map(_.value).getOrElse(Redeemers.from(Seq.empty)).toSeq.partition {
-                redeemer =>
-                    RedeemerManagement.detachRedeemer(ctx, redeemer).isDefined
+        val (validRedeemers, invalidRedeemers) = {
+            witnessSet.redeemers.map(_.value) match {
+                case None => (Seq.empty, Seq.empty)
+                case Some(rs) =>
+                    rs.toSeq.partition(redeemer =>
+                        RedeemerManagement.detachRedeemer(ctx, redeemer).isDefined
+                    )
             }
+        }
 
         val redeemers = validRedeemers.flatMap(RedeemerManagement.detachRedeemer(ctx, _)).toVector
         val updatedWitnessSet = witnessSet.copy(redeemers =
@@ -216,14 +218,15 @@ object TransactionConversion {
         val ctx = RedeemersContext.fromTransaction(tx)
 
         for {
-            redeemers <-
-                tx.witnessSet.redeemers
-                    .map(_.value)
-                    .getOrElse(Redeemers.from(Seq.empty))
-                    .toSeq
-                    .traverse { redeemer =>
-                        RedeemerManagement.detachRedeemer(ctx, redeemer).toRight(redeemer)
-                    }
+            redeemers <- tx.witnessSet.redeemers match {
+                case None => Right(Vector.empty)
+                case Some(rs) =>
+                    rs.value.toSeq
+                        .traverse { redeemer =>
+                            RedeemerManagement.detachRedeemer(ctx, redeemer).toRight(redeemer)
+                        }
+            }
+
             updatedWitnessSet = tx.witnessSet.copy(redeemers = None)
             updatedTx = tx.copy(witnessSet = TransactionWitnessSet.empty)
         } yield EditableTransaction(updatedTx, redeemers.toVector)
