@@ -45,8 +45,7 @@ val minInitTreasuryAda: Coin = {
 }
 
 def genInitTxRecipe(
-    estimatedFee: Coin =
-        Coin(5_000_000L)
+    estimatedFee: Coin = Coin(5_000_000L)
 ): Gen[InitializationTx.Recipe] =
     for {
         peers <- genTestPeers
@@ -94,7 +93,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
-    
+
     // TODO: replace with variant that is not generated
     val dummyAddr: ShelleyAddress = genPubkeyAddr().sample.get
 
@@ -178,7 +177,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                   val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
 
                   // TODO: add parsing roundtrip
-                  
+
                   (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
                   && (tx.tx.body.value.outputs.size == 2) :| "Initialization tx should have a treasury output and" +
                       "change output"

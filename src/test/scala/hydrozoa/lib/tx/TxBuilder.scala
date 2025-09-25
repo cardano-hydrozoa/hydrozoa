@@ -112,7 +112,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
           obtained = editTransaction((tx: Transaction) =>
               tx.focus(_.body.value.inputs)
                   .modify((i: TaggedOrderedSet[TransactionInput]) =>
-                      TaggedOrderedSet.from(i.toSeq ++ Seq(input2))
+                      TaggedOrderedSet.from(i.toSeq :+ input2)
                   )
           )(
             oneInput

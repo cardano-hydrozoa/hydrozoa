@@ -1,23 +1,27 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
+import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
+import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, Pay, SpendOutput}
+import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
     OtherScalusBalancingError,
-    OtherScalusTransactionException
+    OtherScalusTransactionException,
+    SomeBuilderError
 }
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
-import scalus.cardano.ledger.txbuilder.TxBuilder
-import scalus.cardano.ledger.{txbuilder, *}
 
 import scala.collection.immutable.SortedMap
 
@@ -68,6 +72,7 @@ object InitializationTx {
     ): Either[ParseError, InitializationTx] = ???
 
     enum BuildError:
+        case SomeBuilderError(e: TxBuildError)
         case OtherScalusBalancingError(e: TxBalancingError)
         case OtherScalusTransactionException(e: TransactionException)
 
@@ -91,38 +96,52 @@ object InitializationTx {
 
         val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
-        val b = recipe.context.buildNewTx
-            .withInputs((recipe.seedUtxos.toList.toSet.map(_._1)))
-            .addMint(headToken)
-            .attachNativeScript(headNativeScript.script, 0)
-            .setAuxData(MD.apply(Initialization, headAddress))
-            .addDummyVKeys(headNativeScript.numSigners)
-            // Treasury Output
-            .payToScript(
-              address = headAddress,
-              value = headValue,
-              datum = datum.toData
-            )
-            // Change Output
-            // TODO: let x be the imbalace of the transaction
-            // if 0 <= x < minAda, then we should pay to treasury
-            // if minAda <= x, then we should use a change output
-            .addOutputs(
-              List(
-                Babbage(
-                  address = recipe.changeAddress,
-                  value = Value.zero,
-                  datumOption = None,
-                  scriptRef = None
-                )
-              )
-            )
+        // .setAuxData(MD.apply(Initialization, headAddress))
+        // .addDummyVKeys(headNativeScript.numSigners)
+
+        //// Change Output
+        //// TODO: let x be the imbalace of the transaction
+        //// if 0 <= x < minAda, then we should pay to treasury
+        //// if minAda <= x, then we should use a change output
+        // .addOutputs(
+        //  List(
+        //    Babbage(
+        //      address = recipe.changeAddress,
+        //      value = Value.zero,
+        //      datumOption = None,
+        //      scriptRef = None
+        //    )
+        //  )
+        // )
 
         for {
+
+            unbalancedTx <- TransactionBuilder
+                .buildTransaction(
+                  recipe.seedUtxos
+                      .map(utxo =>
+                          SpendOutput(TransactionUnspentOutput.apply(utxo._1, utxo._2), None)
+                      )
+                      .toList
+                      ++ List(
+                        MintAsset(
+                          headNativeScript.script.scriptHash,
+                          headTokenName,
+                          1,
+                          NativeScriptCredential(ScriptValue(headNativeScript.script))
+                        ),
+                        Pay(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None))
+                      )
+                )
+                .left
+                .map(SomeBuilderError(_))
+
+            _ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
+
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = b.tx,
-                  changeOutputIdx = 1,
+                  initial = unbalancedTx,
+                  changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
                   evaluator = recipe.context.evaluator
@@ -165,6 +184,7 @@ case class Recipe(
                    // Other utxo to fund the treasury, maybe empty
                    otherFundingUtxos: List[SpendOutput],
                    // NB: currently the balancing of tokens is NOT supported
+                   // make a pair of commitment with its value
                    utxosL2Value: Value,
                    utxosL2Commitment: UtxoCommitment,
                    peers: NonEmptyList[VerificationKeyBytes],
@@ -184,8 +204,8 @@ val beaconTokenName = mkBeaconTokenName(recipe.seedUtxos.map(_._1))
 val multisigTokenName = mkMultisigTokenName(recipe.seedUtxos.map(_._1))
 val beaconToken, multisigToken: MultiAsset = ???
 
-val minTreasuryValue = utxosL2Value + beaconToken
-val minMultisigValue = multisigToken + collateral + fallbackFees
+val minTreasuryValue = utxosL2Value + beaconToken + minAda for the beacon token
+val minMultisigValue = multisigToken + collateral + fallbackFees + minAda for the multisig token
 
 val headAddress = ???
 val treasuryDatum = ??? // utxosL2Commitment
@@ -203,6 +223,8 @@ val (unbalancedTx, vkeys: Set[VerificationKeyBytes]) = buildTransaction(
   ))
 )
 
+// Final step - aux data hash + probably something else
+
 // TODO: bake it into a separate builder constructor Endo[Transaction]?
 unbalancedTx = unbalancedTx.editTransaction(List(
   _.focus(_.metadata).replace(???),
@@ -211,6 +233,7 @@ unbalancedTx = unbalancedTx.editTransaction(List(
 
 // Should handle the corner case when the change is smaller than minAda
 // Should add and then remove all fake signatures under the hood
+// Consider required signatures from the tx body
 balancedTx = balanceFeeAndChange___(vkeys, changeOutputIdx = treasuryOutput | changeOutput)
 
 ```

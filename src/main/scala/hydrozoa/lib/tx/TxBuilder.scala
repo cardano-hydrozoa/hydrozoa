@@ -5,23 +5,24 @@ package hydrozoa.lib.tx
  ported from purescript-cardano-transaction-builder.
  */
 
-import cats._
-import cats.data._
-import cats.implicits._
+import cats.*
+import cats.data.*
+import cats.implicits.*
 import hydrozoa.datumOption
 import hydrozoa.emptyTransaction
 import hydrozoa.lib.tx.InputAction.ReferenceInput
 import hydrozoa.lib.tx.InputAction.SpendInput
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
-import io.bullet.borer.Cbor
-import monocle.syntax.all._
+import io.bullet.borer.{Cbor, Encoder}
+import monocle.syntax.all.*
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.ByteString
 import scalus.builtin.Data
 import scalus.cardano.address
-import scalus.cardano.address._
-import scalus.cardano.ledger._
+import scalus.cardano.address.*
+import scalus.cardano.ledger.*
+import scalus.serialization.cbor.Cbor as ScalusCbor
 
 import scala.collection.immutable.SortedMap
 
@@ -603,6 +604,17 @@ object TransactionBuilder:
         tx: Transaction,
         steps: Seq[TransactionBuilderStep]
     ): Either[TxBuildError, Transaction] =
+
+        def refreshAllKeepRaw(self: Transaction): Transaction = {
+            self
+                .focus(_.body.raw)
+                .replace(ScalusCbor.encode(self.body.value))
+                .focus(_.witnessSet.plutusData.raw)
+                .replace(ScalusCbor.encode(self.witnessSet.plutusData.value))
+                // FIXME: witnessSet.plutusData.value.toIndexedSeq
+                // FIXME: witnessSet.redeemers
+        }
+
         for {
             context <- for {
                 editableTransaction <- TransactionConversion
@@ -615,6 +627,7 @@ object TransactionBuilder:
               networkId = editableTransaction.transaction.body.value.networkId
             )
             eiCtx <- processConstraints(steps).run(context).map(_._1)
+
             res <- TransactionConversion.fromEditableTransactionSafe(
               EditableTransaction(
                 transaction = eiCtx.transaction,
@@ -624,7 +637,7 @@ object TransactionBuilder:
                 case None    => Left(RedeemerIndexingInternalError(tx, steps))
                 case Some(x) => Right(x)
             }
-        } yield res
+        } yield refreshAllKeepRaw(res)
 
     /*
     processConstraints :: Array TransactionBuilderStep -> BuilderM Unit

@@ -42,7 +42,7 @@ def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
 def genDepositUtxo(
     network: Network = Mainnet,
     params: ProtocolParams = blockfrost544Params,
-    headAddr : Option[ShelleyAddress] = None
+    headAddr: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
         txId <- genTxId
@@ -89,7 +89,7 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 def genTreasuryUtxo(
     network: Network = Mainnet,
     params: ProtocolParams = blockfrost544Params,
-    headAddr : Option[ShelleyAddress]
+    headAddr: Option[ShelleyAddress]
 ): Gen[TreasuryUtxo] =
     for {
         txId <- genTxId
@@ -100,7 +100,10 @@ def genTreasuryUtxo(
         })
         datum <- genTreasuryDatum
 
-        treasuryToken = singleton(scriptAddr.payment.asInstanceOf[ShelleyPaymentPart.Script].hash, headTn)
+        treasuryToken = singleton(
+          scriptAddr.payment.asInstanceOf[ShelleyPaymentPart.Script].hash,
+          headTn
+        )
 
         treasuryMinAda = setMinAda(
           TreasuryUtxo(
@@ -132,7 +135,9 @@ def genSettlementRecipe(
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
-        deposits <- Gen.listOf(genDepositUtxo(network = network, params = params, headAddr = Some(hns.address(network))))
+        deposits <- Gen.listOf(
+          genDepositUtxo(network = network, params = params, headAddr = Some(hns.address(network)))
+        )
 
         utxo <- genTreasuryUtxo(headAddr = Some(hns.address(network)), network = network)
         treasuryInputAda = utxo.value.coin

@@ -25,6 +25,7 @@
             just
             openjdk21
             sbt
+            sbt-with-scala-native
             scala-cli
      	    visualvm
             scalafix

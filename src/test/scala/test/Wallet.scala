@@ -86,8 +86,6 @@ class Wallet(
     def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =
         walletModule.createEd25519Signature(msg, signingKey)
 
-
-
 object WalletModuleBloxbean extends WalletModule:
 
     override type VerificationKey = HdPublicKey
