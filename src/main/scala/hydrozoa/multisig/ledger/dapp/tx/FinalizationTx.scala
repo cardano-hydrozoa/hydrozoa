@@ -67,11 +67,10 @@ object FinalizationTx {
                     recipe.headNativeScript.address(recipe.context.network)
                   )
                 )
-                .addDummyVKeys(recipe.headNativeScript.numSigners)
-
+        
             LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = b1.tx,
+                  initial = addDummyVKeys(recipe.headNativeScript.numSigners,b1.tx),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

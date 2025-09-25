@@ -10,6 +10,7 @@ import org.scalacheck.Gen.choose
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -17,6 +18,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.TxBalancingError
 import test.*
 import test.TestPeer.*
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 
 import scala.collection.immutable.SortedMap
 
@@ -206,6 +209,8 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                           )
                           (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
                       }
+                        && (tx.tx.auxiliaryData == Some(MD.apply(Initialization, headMultisigScript.address(Mainnet))))
+                  :| "Unexpected metadata"
           }
       }
     )

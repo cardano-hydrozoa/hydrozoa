@@ -112,12 +112,11 @@ object DepositTx {
             )
             .withInputs((recipe.utxosFunding.toList.toSet.map(_._1)))
             .setAuxData(MD(MD.L1TxTypes.Deposit, recipe.headAddress))
-            .addDummyVKeys(1)
 
         for {
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = b1.tx,
+                  initial = addDummyVKeys(1, b1.tx),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

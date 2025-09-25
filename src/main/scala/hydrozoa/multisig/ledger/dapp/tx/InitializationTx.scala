@@ -5,17 +5,15 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, Pay, SpendOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, Pay, SpendOutput}
 import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
-    OtherScalusBalancingError,
-    OtherScalusTransactionException,
-    SomeBuilderError
-}
+import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{OtherScalusBalancingError, OtherScalusTransactionException, SomeBuilderError}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -96,9 +94,6 @@ object InitializationTx {
 
         val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
-        // .setAuxData(MD.apply(Initialization, headAddress))
-        // .addDummyVKeys(headNativeScript.numSigners)
-
         //// Change Output
         //// TODO: let x be the imbalace of the transaction
         //// if 0 <= x < minAda, then we should pay to treasury
@@ -130,18 +125,20 @@ object InitializationTx {
                           1,
                           NativeScriptCredential(ScriptValue(headNativeScript.script))
                         ),
-                        Pay(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None))
+                        Pay(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)),
+                        Pay(Babbage(recipe.changeAddress, Value.zero, None, None)),
+                        ModifyAuxData(_ => Some((MD.apply(Initialization, headAddress))))
                       )
                 )
                 .left
                 .map(SomeBuilderError(_))
 
-            _ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
+            // _ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx,
-                  changeOutputIdx = 0,
+                  initial = addDummyVKeys(headNativeScript.numSigners, unbalancedTx),
+                  changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
                   evaluator = recipe.context.evaluator

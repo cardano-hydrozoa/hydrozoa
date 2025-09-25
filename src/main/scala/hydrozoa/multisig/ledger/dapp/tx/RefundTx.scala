@@ -77,11 +77,10 @@ object RefundTx {
                         recipe.headScript.address(recipe.context.network)
                       )
                     )
-                    .addDummyVKeys(recipe.headScript.numSigners)
-
+                
                 LowLevelTxBuilder
                     .balanceFeeAndChange(
-                      initial = b1.tx,
+                      initial = addDummyVKeys(recipe.headScript.numSigners, b1.tx),
                       changeOutputIdx = 0,
                       protocolParams = recipe.context.protocolParams,
                       resolvedUtxo = recipe.context.utxo,

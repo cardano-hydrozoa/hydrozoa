@@ -1,6 +1,5 @@
 package hydrozoa.lib.tx
 
-import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.emptyTransaction
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
@@ -9,7 +8,7 @@ import hydrozoa.lib.tx.InputAction.SpendInput
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilder.modifyTransaction
-import hydrozoa.lib.tx.TransactionBuilderStep.{IssueCertificate, MintAsset, Pay, SpendOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
 import hydrozoa.lib.tx.TxBuildError.{
     IncorrectScriptHash,
@@ -19,21 +18,18 @@ import hydrozoa.lib.tx.TxBuildError.{
 }
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
-import scalus.builtin.{ByteString, Data}
 import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.ShelleyDelegationPart.{Key, scriptHash}
+import scalus.cardano.address.ShelleyDelegationPart.Key
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.RedeemerTag.{Cert, Spend}
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Credential, *}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Certificate.UnregCert
+import scalus.cardano.ledger.RedeemerTag.{Cert, Spend}
 import scalus.cardano.ledger.Timelock.AllOf
-import scalus.ledger.api.v1.Credential.ScriptCredential
-import scalus.prelude
+import scalus.cardano.ledger.TransactionOutput.Babbage
 
 import scala.collection.immutable.{SortedMap, SortedSet}
-import scala.math.Ordered.orderingToOrdered
 
 class TxEditorTests extends munit.ScalaCheckSuite {
     // let
@@ -695,6 +691,16 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
       ),
       error = IncorrectScriptHash(Right(script1), script2.scriptHash)
     )
+
+    // =======================================================================
+    // Group: "Modify Aux Data"
+    // =======================================================================
+    testBuilderSteps(
+      label = "ModifyAuxData: id",
+      steps = List(ModifyAuxData(identity)),
+      expected = anyNetworkTx
+    )
+
 }
 
 // ===========================================================================

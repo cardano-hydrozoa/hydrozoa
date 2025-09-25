@@ -85,6 +85,9 @@ object TransactionBuilderStep {
         votes: Map[GovActionId, VotingProcedure],
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep
+
+    case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
+        extends TransactionBuilderStep
 }
 
 // ============================================================================
@@ -611,8 +614,8 @@ object TransactionBuilder:
                 .replace(ScalusCbor.encode(self.body.value))
                 .focus(_.witnessSet.plutusData.raw)
                 .replace(ScalusCbor.encode(self.witnessSet.plutusData.value))
-                // FIXME: witnessSet.plutusData.value.toIndexedSeq
-                // FIXME: witnessSet.redeemers
+            // FIXME: witnessSet.plutusData.value.toIndexedSeq
+            // FIXME: witnessSet.redeemers
         }
 
         for {
@@ -748,6 +751,11 @@ object TransactionBuilder:
                 )
                 _ <- useVotingProcedureWitness(voter, witness)
             } yield ()
+        case TransactionBuilderStep.ModifyAuxData(f) =>
+            StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                ctx.focus(_.transaction.auxiliaryData).modify(f(_))
+            )
+
     }
 
     /** -- | Ensures uniqueness of an element pushUnique :: forall a. Ord a => a -> Array a -> Array

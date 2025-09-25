@@ -74,7 +74,7 @@ object SettlementTx {
                 // Deposits and treasury
                 .selectInputs(SelectInputs.particular(utxos.map(_._1).toSet))
                 .setAuxData(MD(MD.L1TxTypes.Settlement, headAddress))
-                .addDummyVKeys(recipe.headNativeScript.numSigners)
+
             val b2 =
                 if recipe.utxosWithdrawn.isEmpty then b1
                 else
@@ -83,7 +83,7 @@ object SettlementTx {
 
             LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = b2.tx,
+                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, b2.tx),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

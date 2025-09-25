@@ -9,6 +9,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
+import monocle.syntax.all.*
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -21,8 +22,8 @@ import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
-import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
+import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
@@ -480,15 +481,10 @@ extension (txBuilder: TxBuilder)
         txBuilder.copy(tx = modifyAuxiliaryData(txBuilder.tx, f))
     }
 
-    /** add at most 256 keys */
-    def addDummyVKeys(numberOfKeys: Int): TxBuilder = {
-        txBuilder.copy(tx =
-            modifyWs(
-              txBuilder.tx,
-              ws => ws.copy(vkeyWitnesses = ws.vkeyWitnesses ++ generateUniqueKeys(numberOfKeys))
-            )
-        )
-    }
+/** add at most 256 keys */
+def addDummyVKeys(numberOfKeys: Int, tx : Transaction): Transaction = {
+    tx.focus(_.witnessSet.vkeyWitnesses).modify(_ ++ generateUniqueKeys(numberOfKeys))
+}
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
 def removeDummyVKeys(numberOfKeys: Int, tx: Transaction): Transaction = {
