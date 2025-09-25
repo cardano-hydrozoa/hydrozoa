@@ -20,6 +20,8 @@ import test.*
 import test.TestPeer.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import io.bullet.borer.Cbor
+import cats.syntax.all.*
 
 import scala.collection.immutable.SortedMap
 
@@ -179,10 +181,12 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                   val headMultisigScript = HeadMultisigScript(recipe.peers)
                   val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
 
-                  // TODO: add parsing roundtrip
-
+                  val bytes = tx.tx.toCbor
+                  given OriginalCborByteArray = OriginalCborByteArray(bytes)
+                  (tx.tx == Cbor.decode(bytes).to[Transaction].value) :| "Cbor round-tripping failed"
+                  &&
                   (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
-                  && (tx.tx.body.value.outputs.size == 2) :| "Initialization tx should have a treasury output and" +
+                  && (tx.tx.body.value.outputs.size === 2) :| "Initialization tx should have a treasury output and" +
                       "change output"
                       &&
                       (tx.treasuryProduced.toUtxo._2 ==
@@ -196,7 +200,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                           .get(headMultisigScript.policyId)
                           .get(
                             headTokenName
-                          ) == 1L) :| "treasury output does not contain correct head token"
+                          ) === 1L) :| "treasury output does not contain correct head token"
                       && {
                           val actual = tx.treasuryProduced.toUtxo._2.value
                           val expected = Value(
@@ -209,8 +213,8 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                           )
                           (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
                       }
-                        && (tx.tx.auxiliaryData == Some(MD.apply(Initialization, headMultisigScript.address(Mainnet))))
-                  :| "Unexpected metadata"
+                      && tx.tx.auxiliaryData.contains(MD.apply(Initialization, headMultisigScript.address(Mainnet)))
+                      :| "Unexpected metadata"
           }
       }
     )
