@@ -2,21 +2,21 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import cats.syntax.all.*
+import hydrozoa.lib.tx.TransactionBuilderStep.*
+import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.{
-    OtherScalusBalancingError,
-    OtherScalusTransactionException
-}
+import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{addDummyVKeys, addOutputs, removeDummyVKeys, setAuxData}
+import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 import scala.util.{Failure, Success}
 
@@ -34,6 +34,7 @@ object DepositTx {
         headAddress: ShelleyAddress,
         utxosFunding: NonEmptyList[(TransactionInput, TransactionOutput)],
         changeAddress: ShelleyAddress,
+        // FIXME: we don't need the whole context anymore, only the fields necessary for the low-level builder.
         context: BuilderContext
     )
 
@@ -85,6 +86,7 @@ object DepositTx {
     }
 
     enum BuildError:
+        case SomeBuilderError(e: TxBuildError)
         case OtherScalusBalancingError(e: TxBalancingError)
         case OtherScalusTransactionException(e: TransactionException)
 
@@ -92,31 +94,39 @@ object DepositTx {
         val depositValue: Value =
             Value(coin = recipe.depositAmount)
 
-        val b1 = recipe.context.buildNewTx
-            // Deposit output
-            .payToScript(
+        val steps = Seq(
+          // Deposit Output
+          Pay(
+            Babbage(
               address = recipe.headAddress,
               value = depositValue,
-              datum = toData(recipe.datum)
+              datumOption = Some(Inline(toData(recipe.datum))),
+              scriptRef = None
             )
-            // Change output
-            .addOutputs(
-              List(
-                Babbage(
-                  address = recipe.changeAddress,
-                  value = Value.zero,
-                  datumOption = None,
-                  scriptRef = None
+          ),
+          // Change Output
+          Pay(
+            Babbage(
+              address = recipe.changeAddress,
+              value = Value.zero,
+              datumOption = None,
+              scriptRef = None
+            )
+          ),
+          ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+        ) ++ recipe.utxosFunding.toList.toSet
+            .map(utxo =>
+                SpendOutput(
+                  TransactionUnspentOutput(utxo._1, utxo._2),
+                  None
                 )
-              )
             )
-            .withInputs((recipe.utxosFunding.toList.toSet.map(_._1)))
-            .setAuxData(MD(MD.L1TxTypes.Deposit, recipe.headAddress))
 
         for {
+            b1 <- TransactionBuilder.buildTransaction(steps).left.map(SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(1, b1.tx),
+                  initial = addDummyVKeys(1, b1),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

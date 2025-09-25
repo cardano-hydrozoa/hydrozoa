@@ -1,12 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
+import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import org.scalacheck.{Test as ScalaCheckTest, *}
 import scalus.builtin.Data.toData
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.prelude.Option as SOption
 import test.*

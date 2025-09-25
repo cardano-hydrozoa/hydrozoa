@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.*
 import cats.data.*
 import hydrozoa.*
-import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
+import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}

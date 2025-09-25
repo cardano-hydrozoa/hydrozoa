@@ -1,10 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
+import cats.syntax.all.*
+import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import org.scalacheck.Gen.choose
 import org.scalacheck.Prop.propBoolean
@@ -18,10 +22,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.TxBalancingError
 import test.*
 import test.TestPeer.*
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
-import io.bullet.borer.Cbor
-import cats.syntax.all.*
 
 import scala.collection.immutable.SortedMap
 
@@ -183,7 +183,10 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
 
                   val bytes = tx.tx.toCbor
                   given OriginalCborByteArray = OriginalCborByteArray(bytes)
-                  (tx.tx == Cbor.decode(bytes).to[Transaction].value) :| "Cbor round-tripping failed"
+                  (tx.tx == Cbor
+                      .decode(bytes)
+                      .to[Transaction]
+                      .value) :| "Cbor round-tripping failed"
                   &&
                   (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
                   && (tx.tx.body.value.outputs.size === 2) :| "Initialization tx should have a treasury output and" +
@@ -213,7 +216,9 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                           )
                           (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
                       }
-                      && tx.tx.auxiliaryData.contains(MD.apply(Initialization, headMultisigScript.address(Mainnet)))
+                      && tx.tx.auxiliaryData.contains(
+                        MD.apply(Initialization, headMultisigScript.address(Mainnet))
+                      )
                       :| "Unexpected metadata"
           }
       }

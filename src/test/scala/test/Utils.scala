@@ -1,6 +1,6 @@
 package test
 
-import hydrozoa.lib.cardano.scalus.ledger.txbuilder.setMinAda
+import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Gen.{const, posNum}
@@ -9,8 +9,8 @@ import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.txbuilder.{BuilderContext, UtxoProvider}
