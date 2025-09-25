@@ -90,8 +90,8 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     def makeUtxosCommitment: IO[KzgCommitment] =
         for {
             s <- state.get
-            // FIXME: or just commitment = KzgCommitment.getUtxosActiveCommitment(s.activeUtxos) ?
-            commitment <- IO(KzgCommitment.calculateCommitment(s.activeUtxos))
+            utxoHashed <- IO(KzgCommitment.hashToScalar(s.activeUtxos))
+            commitment <- IO(KzgCommitment.calculateCommitment(utxoHashed))
         } yield commitment
 }
 
