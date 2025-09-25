@@ -10,7 +10,11 @@ import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildErr
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{OtherScalusBalancingError, OtherScalusTransactionException, SomeBuilderError}
+import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
+    OtherScalusBalancingError,
+    OtherScalusTransactionException,
+    SomeBuilderError
+}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization

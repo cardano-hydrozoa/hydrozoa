@@ -482,7 +482,7 @@ extension (txBuilder: TxBuilder)
     }
 
 /** add at most 256 keys */
-def addDummyVKeys(numberOfKeys: Int, tx : Transaction): Transaction = {
+def addDummyVKeys(numberOfKeys: Int, tx: Transaction): Transaction = {
     tx.focus(_.witnessSet.vkeyWitnesses).modify(_ ++ generateUniqueKeys(numberOfKeys))
 }
 

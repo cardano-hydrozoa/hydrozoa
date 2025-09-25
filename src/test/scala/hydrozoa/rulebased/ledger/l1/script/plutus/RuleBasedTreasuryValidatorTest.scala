@@ -2,7 +2,7 @@ package hydrozoa.rulebased.ledger.l1.script.plutus
 
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.Scalar as ScalusScalar
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import munit.FunSuite
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.ledger.api.v3.ScriptContext

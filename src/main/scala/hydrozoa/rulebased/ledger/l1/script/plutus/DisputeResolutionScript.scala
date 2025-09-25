@@ -19,13 +19,9 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
 }
 import scalus.cardano.address.Network
 //import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript.plutusScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.ByteStringExtension.take
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.TxOutExtension.inlineDatumOfType
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.ValueExtension.{
-    containsCurrencySymbol,
-    containsExactlyOneAsset,
-    onlyNonAdaAsset
-}
+import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
 import hydrozoa.{PosixTime, *}
 import scalus.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}

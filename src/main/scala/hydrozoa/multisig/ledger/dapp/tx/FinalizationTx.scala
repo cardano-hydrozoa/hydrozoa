@@ -55,10 +55,9 @@ object FinalizationTx {
                 .attachNativeScript(recipe.headNativeScript.script, index = 0)
                 // change output
                 .addEmptyOutput(
-                  address = recipe.headNativeScript.address(recipe.context.network),
+                  address = recipe.headNativeScript.address(recipe.context.network)
                 )
-                .withInputs((Set(recipe.treasuryUtxo.toUtxo._1))
-                )
+                .withInputs((Set(recipe.treasuryUtxo.toUtxo._1)))
                 .addMint(beaconTokenBurn)
                 .addOutputs(recipe.utxosWithdrawn.toSeq.map(_._2))
                 .setAuxData(
@@ -67,10 +66,10 @@ object FinalizationTx {
                     recipe.headNativeScript.address(recipe.context.network)
                   )
                 )
-        
+
             LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners,b1.tx),
+                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, b1.tx),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
