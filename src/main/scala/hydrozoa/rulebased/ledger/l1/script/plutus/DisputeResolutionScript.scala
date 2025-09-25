@@ -7,22 +7,19 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.Tal
     Continuing,
     Removed
 }
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
-    VoteDatum,
-    VoteDetails,
-    VoteStatus
-}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
     TreasuryDatum,
     cip67BeaconTokenPrefix
 }
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.cardano.address.Network
 //import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript.plutusScript
+import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.{PosixTime, *}
 import scalus.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
@@ -32,112 +29,44 @@ import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
+import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require}
 
 @Compile
 object DisputeResolutionValidator extends Validator {
-    // EdDSA / ed25519 signature
-    private type Signature = ByteString
-
-    // G1 compressed point
-    private type KzgCommitment = ByteString
-
-    // Datum
-    case class VoteDatum(
-        key: BigInt,
-        link: BigInt,
-        peer: Option[PubKeyHash],
-        voteStatus: VoteStatus
-    )
-
-    given FromData[VoteDatum] = FromData.derived
-
-    given ToData[VoteDatum] = ToData.derived
-
-    enum VoteStatus:
-        case NoVote
-        case Vote(voteDetails: VoteDetails)
-
-    given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
-        a match
-            case VoteStatus.NoVote =>
-                b match
-                    case VoteStatus.NoVote  => true
-                    case VoteStatus.Vote(_) => false
-            case VoteStatus.Vote(as) =>
-                a match {
-                    case VoteStatus.NoVote   => false
-                    case VoteStatus.Vote(bs) => as === bs
-                }
-
-    given FromData[VoteStatus] = FromData.derived
-
-    given ToData[VoteStatus] = ToData.derived
-
-    case class VoteDetails(
-        utxosActive: KzgCommitment,
-        versionMinor: BigInt
-    )
-
-    given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
-        a.utxosActive == b.utxosActive && a.versionMinor == b.versionMinor
-
-    given FromData[VoteDetails] = FromData.derived
-
-    given ToData[VoteDetails] = ToData.derived
 
     // Redeemer
-    enum DisputeRedeemer:
-        case Vote(voteRedeemer: MinorBlockL1Effect)
+    enum DisputeRedeemer derives FromData, ToData:
+        case Vote(voteRedeemer: VoteRedeemer)
         case Tally(tallyRedeemer: TallyRedeemer)
         case Resolve
 
-    given FromData[DisputeRedeemer] = FromData.derived
-
-    given ToData[DisputeRedeemer] = ToData.derived
-
-    // TODO: I don't like this name
-    case class MinorBlockL1Effect(
+    case class VoteRedeemer(
         blockHeader: BlockHeader,
         multisig: List[Signature]
-    )
-
-    given FromData[MinorBlockL1Effect] = FromData.derived
-
-    given ToData[MinorBlockL1Effect] = ToData.derived
-
-    enum TallyRedeemer:
-        case Continuing
-        case Removed
-
-    given FromData[TallyRedeemer] = FromData.derived
-
-    given ToData[TallyRedeemer] = ToData.derived
-
-    // TODO: should we re-use Hydrozoa's type more broadly?
-    // The issue we had previously with that: some types from Scalus didn't work well with Hydrozoa transport
-
-    enum BlockTypeL2 derives CanEqual:
-        case Minor
-        case Major
-        case Final
+    ) derives FromData,
+          ToData
 
     case class BlockHeader(
         blockNum: BigInt,
-        blockType: BlockTypeL2,
-        timeCreation: PosixTime,
+        blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
+        timeCreation: PosixTime, // the same
         versionMajor: BigInt,
         versionMinor: BigInt,
-        utxosActive: KzgCommitment
-    )
+        commitment: VoteState.KzgCommitment
+    ) derives FromData,
+          ToData
 
-    given FromData[BlockHeader] = FromData.derived
+    // EdDSA / ed25519 signature
+    private type Signature = ByteString
 
-    given ToData[BlockHeader] = ToData.derived
+    enum TallyRedeemer derives FromData, ToData:
+        case Continuing
+        case Removed
 
-    given FromData[BlockTypeL2] = FromData.derived
-
-    given ToData[BlockTypeL2] = ToData.derived
+    enum BlockTypeL2 derives CanEqual, FromData, ToData:
+        case Minor
+        case Major
+        case Final
 
     inline def cip67DisputeTokenPrefix = hex"00d950b0"
 
@@ -328,7 +257,7 @@ object DisputeResolutionValidator extends Validator {
                           VoteOutputDatumCheck
                         )
                         require(
-                          voteDetails.utxosActive == voteRedeemer.blockHeader.utxosActive,
+                          voteDetails.commitment == voteRedeemer.blockHeader.commitment,
                           VoteOutputDatumCheck
                         )
                     case _ => fail(VoteOutputDatumCheck)
@@ -551,22 +480,22 @@ object DisputeResolutionScript {
     def address(n: Network): AddressL1 = ???
 }
 
-// TODO: utxoActive
-def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
-    VoteDatum(
-      0,
-      if peersN > 0 then 1 else 0,
-      None,
-      VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
-    )
+//// TODO: utxoActive
+//def mkDefVoteDatum(peersN: Int, _utxosActive: Unit): VoteDatum =
+//    VoteDatum(
+//      0,
+//      if peersN > 0 then 1 else 0,
+//      None,
+//      VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
+//    )
 
 def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
     PubKeyHash(blake2b_224(peer.bytes))
 
-def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
-    VoteDatum(
-      key = key,
-      link = if peersN > key then key + 1 else 0,
-      peer = Some(hashVerificationKey(peer)),
-      voteStatus = VoteStatus.NoVote
-    )
+//def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
+//    VoteDatum(
+//      key = key,
+//      link = if peersN > key then key + 1 else 0,
+//      peer = Some(hashVerificationKey(peer)),
+//      voteStatus = VoteStatus.NoVote
+//    )

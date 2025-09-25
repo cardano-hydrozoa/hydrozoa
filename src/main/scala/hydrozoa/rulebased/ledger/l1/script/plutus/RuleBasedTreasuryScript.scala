@@ -3,11 +3,8 @@ package hydrozoa.rulebased.ledger.l1.script.plutus
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.VoteDatum
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.VoteStatus.{
-    NoVote,
-    Vote
-}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.{
     Resolved,
     Unresolved
@@ -242,7 +239,7 @@ object RuleBasedTreasuryValidator extends Validator {
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.utxosActive === voteDetails.utxosActive,
+                          treasuryOutputDatum.utxosActive === voteDetails.commitment,
                           ResolveUtxoActiveCheck
                         )
 

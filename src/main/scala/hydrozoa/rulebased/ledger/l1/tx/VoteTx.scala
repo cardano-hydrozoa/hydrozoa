@@ -5,17 +5,19 @@ import cats.implicits.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
-import hydrozoa.rulebased.ledger.l1.state.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 // import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript // TODO: Will be needed for actual script
 import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
-import hydrozoa.{AddressL1, L1, UtxoId, Utxo, Output}
+import hydrozoa.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
-import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
+
+import scala.util.{Failure, Success, Try}
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
 
 // Simplified types for now - these would need to be defined based on the actual L2 block structure
