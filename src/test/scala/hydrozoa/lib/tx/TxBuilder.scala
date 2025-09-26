@@ -1,6 +1,5 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.emptyTransaction
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
@@ -16,7 +15,9 @@ import hydrozoa.lib.tx.TxBuildError.{
     WrongNetworkId,
     WrongOutputType
 }
+import hydrozoa.{emptyTransaction, keepRawL}
 import io.bullet.borer.Cbor
+import monocle.Focus
 import monocle.syntax.all.*
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -31,6 +32,11 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 
 import scala.collection.immutable.{SortedMap, SortedSet}
 
+// A lens for cutting down verbosity of accessing the tx body.
+// Note that we can't "chain" this like we would with the _.focus syntax.
+// See https://groups.google.com/g/scala-monocle/c/xMzezt2wAog
+private val txBody = Focus[Transaction](_.body).andThen(keepRawL[TransactionBody]())
+
 class TxEditorTests extends munit.ScalaCheckSuite {
     // let
     //    oneInput = anyNetworkTx
@@ -44,24 +50,28 @@ class TxEditorTests extends munit.ScalaCheckSuite {
     //          ]
     //      # _body <<< _inputs .~
     //          [ input1 ]
-    val oneInput: Transaction = anyNetworkTx
-        .focus(_.witnessSet.redeemers)
-        .replace(
-          Some(
-            KeepRaw(
-              Redeemers(
-                Redeemer(
-                  tag = Spend,
-                  index = 0,
-                  data = ByteString.fromHex("").toData,
-                  exUnits = ExUnits.zero
+    val oneInput: Transaction = {
+        val l1 = txBody
+            .refocus(_.inputs)
+            .replace(TaggedOrderedSet(input1))
+        val l2 = Focus[Transaction](_.witnessSet.redeemers)
+            .replace(
+              Some(
+                KeepRaw(
+                  Redeemers(
+                    Redeemer(
+                      tag = Spend,
+                      index = 0,
+                      data = ByteString.fromHex("").toData,
+                      exUnits = ExUnits.zero
+                    )
+                  )
                 )
               )
             )
-          )
-        )
-        .focus(_.body.value.inputs)
-        .replace(TaggedOrderedSet(input1))
+        l1.compose(l2)(anyNetworkTx)
+
+    }
 
     test("do nothing")({
         assertEquals(obtained = editTransaction(identity)(oneInput), expected = oneInput)
@@ -85,7 +95,8 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         `shouldEqual` tx'
      */
     test("attach one input to the end")({
-        val expectedTx = anyNetworkTx
+        val tx1 = txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1, input2))(anyNetworkTx)
+        val expectedTx = tx1
             .focus(_.witnessSet.redeemers)
             .replace(
               Some(
@@ -101,15 +112,14 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                 )
               )
             )
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input1, input2))
 
         assertEquals(
-          obtained = editTransaction((tx: Transaction) =>
-              tx.focus(_.body.value.inputs)
-                  .modify((i: TaggedOrderedSet[TransactionInput]) =>
-                      TaggedOrderedSet.from(i.toSeq :+ input2)
-                  )
+          obtained = editTransaction(
+            txBody
+                .refocus(_.inputs)
+                .modify((i: TaggedOrderedSet[TransactionInput]) =>
+                    TaggedOrderedSet.from(i.toSeq :+ input2)
+                )
           )(
             oneInput
           ),
@@ -145,19 +155,27 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         `shouldEqual` pure tx'
      */
     test("remove two inputs, before and after")({
-        val tx1 = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(Some(KeepRaw(Redeemers(unitRedeemer.focus(_.index).replace(1)))))
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input0, input1, input2))
-        val tx2 = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(Some(KeepRaw(Redeemers(unitRedeemer))))
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input1))
+        val tx1 = {
+            val l1 =
+                Focus[Transaction](_.witnessSet.redeemers)
+                    .replace(Some(KeepRaw(Redeemers(unitRedeemer.focus(_.index).replace(1)))))
+            val l2 = txBody
+                .refocus(_.inputs)
+                .replace(TaggedOrderedSet(input0, input1, input2))
+            l1.compose(l2)(anyNetworkTx)
+        }
+        val tx2 = {
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
+                .replace(Some(KeepRaw(Redeemers(unitRedeemer))))
+            val l2 = txBody
+                .refocus(_.inputs)
+                .replace(TaggedOrderedSet(input1))
+            l1.compose(l2)(anyNetworkTx)
+        }
+
         assertEquals(
-          obtained = editTransactionSafe((tx: Transaction) =>
-              tx.focus(_.body.value.inputs).replace(TaggedOrderedSet(input1))
+          obtained = editTransactionSafe(
+            txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
           )(tx1),
           expected = Right(tx2)
         )
@@ -203,53 +221,61 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         `shouldEqual` pure tx'
      */
     test("remove two inputs with redeemers, before and after")({
-        val tx1 = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    unitRedeemer,
-                    Redeemer(
-                      tag = Spend,
-                      index = 1,
-                      data = Data.List(List()),
-                      exUnits = ExUnits.zero
-                    ),
-                    Redeemer(
-                      tag = Spend,
-                      index = 2,
-                      data = Data.Map(List.empty),
-                      exUnits = ExUnits.zero
+        val tx1 = {
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
+                .replace(
+                  Some(
+                    KeepRaw(
+                      Redeemers(
+                        unitRedeemer,
+                        Redeemer(
+                          tag = Spend,
+                          index = 1,
+                          data = Data.List(List()),
+                          exUnits = ExUnits.zero
+                        ),
+                        Redeemer(
+                          tag = Spend,
+                          index = 2,
+                          data = Data.Map(List.empty),
+                          exUnits = ExUnits.zero
+                        )
+                      )
                     )
                   )
                 )
-              )
-            )
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input0, input1, input2))
-        val tx2 = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    Redeemer(
-                      tag = Spend,
-                      index = 0,
-                      data = Data.List(List.empty),
-                      exUnits = ExUnits.zero
+            val l2 = txBody
+                .refocus(_.inputs)
+                .replace(TaggedOrderedSet(input0, input1, input2))
+            l1.compose(l2)(anyNetworkTx)
+        }
+        val tx2 = {
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
+                .replace(
+                  Some(
+                    KeepRaw(
+                      Redeemers(
+                        Redeemer(
+                          tag = Spend,
+                          index = 0,
+                          data = Data.List(List.empty),
+                          exUnits = ExUnits.zero
+                        )
+                      )
                     )
                   )
                 )
-              )
-            )
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input1))
+            val l2 =
+                txBody
+                    .refocus(_.inputs)
+                    .replace(TaggedOrderedSet(input1))
+
+            l1.compose(l2)(anyNetworkTx)
+        }
         assertEquals(
           expected = Right(tx2),
-          obtained = editTransactionSafe(tx =>
-              tx.focus(_.body.value.inputs).replace(TaggedOrderedSet(input1))
+          obtained = editTransactionSafe(
+            txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
           )(tx1)
         )
     })
@@ -307,69 +333,80 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         `shouldEqual` pure tx'
      */
     test("remove input & redeemer, add another input & redeemer")({
-        val tx1 = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    unitRedeemer,
-                    Redeemer(
-                      tag = Spend,
-                      index = 1,
-                      data = Data.Map(List.empty),
-                      exUnits = ExUnits.zero
-                    )
-                  )
-                )
-              )
-            )
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input1, input2))
-        val tx2: Transaction = anyNetworkTx
-            .focus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    Redeemer(
-                      tag = Spend,
-                      index = 1,
-                      data = Data.Map(List.empty),
-                      exUnits = ExUnits.zero
-                    ),
-                    Redeemer(
-                      tag = Spend,
-                      index = 0,
-                      data = Data.List(List.empty),
-                      exUnits = ExUnits.zero
-                    )
-                  )
-                )
-              )
-            )
-            .focus(_.body.value.inputs)
-            .replace(TaggedOrderedSet(input0, input2))
-        assertEquals(
-          expected = Right(tx2),
-          obtained = editTransactionSafe(tx =>
-              tx.focus(_.body.value.inputs)
-                  .replace(TaggedOrderedSet(input0, input2))
-                  .focus(_.witnessSet.redeemers)
-                  .replace(
-                    Some(
-                      KeepRaw(
-                        Redeemers(
-                          Redeemer(
-                            tag = Spend,
-                            index = 0,
-                            data = Data.List(List.empty),
-                            exUnits = ExUnits.zero
-                          )
+        val tx1 = {
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
+                .replace(
+                  Some(
+                    KeepRaw(
+                      Redeemers(
+                        unitRedeemer,
+                        Redeemer(
+                          tag = Spend,
+                          index = 1,
+                          data = Data.Map(List.empty),
+                          exUnits = ExUnits.zero
                         )
                       )
                     )
                   )
+                )
+            val l2 = txBody
+                .refocus(_.inputs)
+                .replace(TaggedOrderedSet(input1, input2))
+            l1.compose(l2)(anyNetworkTx)
+        }
+
+        val tx2: Transaction = {
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
+                .replace(
+                  Some(
+                    KeepRaw(
+                      Redeemers(
+                        Redeemer(
+                          tag = Spend,
+                          index = 1,
+                          data = Data.Map(List.empty),
+                          exUnits = ExUnits.zero
+                        ),
+                        Redeemer(
+                          tag = Spend,
+                          index = 0,
+                          data = Data.List(List.empty),
+                          exUnits = ExUnits.zero
+                        )
+                      )
+                    )
+                  )
+                )
+            val l2 =
+                txBody
+                    .refocus(_.inputs)
+                    .replace(TaggedOrderedSet(input0, input2))
+            l1.compose(l2)(anyNetworkTx)
+        }
+        assertEquals(
+          expected = Right(tx2),
+          obtained = editTransactionSafe(
+            txBody
+                .refocus(_.inputs)
+                .replace(TaggedOrderedSet(input0, input2))
+                .compose(
+                  Focus[Transaction](_.witnessSet.redeemers)
+                      .replace(
+                        Some(
+                          KeepRaw(
+                            Redeemers(
+                              Redeemer(
+                                tag = Spend,
+                                index = 0,
+                                data = Data.List(List.empty),
+                                exUnits = ExUnits.zero
+                              )
+                            )
+                          )
+                        )
+                      )
+                )
           )(tx1)
         )
     })
@@ -467,7 +504,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "PKH Output",
       steps = List(SpendOutput(pkhUtxo, None)),
-      expected = anyNetworkTx.focus(_.body.value.inputs).replace(TaggedOrderedSet(input1))
+      expected = txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))(anyNetworkTx)
     )
 
     // testBuilderSteps "PKH output x2 -> 1"
@@ -476,7 +513,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "PKH output x2 -> 1",
       steps = List(SpendOutput(pkhUtxo, None), SpendOutput(pkhUtxo, None)),
-      expected = anyNetworkTx.focus(_.body.value.inputs).replace(TaggedOrderedSet(input1))
+      expected = txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))(anyNetworkTx)
     )
 
     // testBuilderStepsFail "PKH output with wrong witness #1"
@@ -536,7 +573,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "Pay #1",
       steps = List(Pay(pkhOutput)),
-      expected = anyNetworkTx.focus(_.body.value.outputs).replace(IndexedSeq(Sized(pkhOutput)))
+      expected = txBody.refocus(_.outputs).replace(IndexedSeq(Sized(pkhOutput)))(anyNetworkTx)
     )
 
     // =======================================================================
@@ -559,40 +596,45 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = anyNetworkTx
-          .focus(_.body.value.mint)
-          .replace(
-            Some(
-              Mint(
-                MultiAsset(
-                  SortedMap.from(
-                    List(
-                      scriptHash1 -> SortedMap.from(
-                        List(AssetName(ByteString.fromHex("deadbeef")) -> 1L)
+      expected = List(
+        // replace mint
+        txBody
+            .refocus(_.mint)
+            .replace(
+              Some(
+                Mint(
+                  MultiAsset(
+                    SortedMap.from(
+                      List(
+                        scriptHash1 -> SortedMap.from(
+                          List(AssetName(ByteString.fromHex("deadbeef")) -> 1L)
+                        )
                       )
                     )
                   )
                 )
               )
-            )
-          )
-          .focus(_.witnessSet.plutusV1Scripts)
-          .replace(Set(script1))
-          .focus(_.witnessSet.redeemers)
-          .replace(
-            Some(
-              KeepRaw(
-                Redeemers(
-                  Redeemer(
-                    tag = RedeemerTag.Mint,
-                    index = 0,
-                    data = Data.List(List.empty),
-                    exUnits = ExUnits.zero
+            ),
+        // add script witness
+        Focus[Transaction](_.witnessSet.plutusV1Scripts)
+            .replace(Set(script1)),
+        // add redeemer
+        Focus[Transaction](_.witnessSet.redeemers)
+            .replace(
+              Some(
+                KeepRaw(
+                  Redeemers(
+                    Redeemer(
+                      tag = RedeemerTag.Mint,
+                      index = 0,
+                      data = Data.List(List.empty),
+                      exUnits = ExUnits.zero
+                    )
                   )
                 )
               )
             )
-          )
+      ).reduce(_ andThen _)(anyNetworkTx)
     )
 
     // =======================================================================
@@ -631,28 +673,32 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = anyNetworkTx
-          .focus(_.witnessSet.plutusV1Scripts)
-          .replace(Set(script1))
-          .focus(_.witnessSet.redeemers)
-          .replace(
-            Some(
-              KeepRaw(
-                Redeemers(
-                  Redeemer(
-                    tag = Cert,
-                    index = 0,
-                    data = Data.List(List.empty),
-                    exUnits = ExUnits.zero
+      expected = List(
+        Focus[Transaction](_.witnessSet.plutusV1Scripts)
+            .replace(Set(script1)),
+        Focus[Transaction](_.witnessSet.redeemers)
+            .replace(
+              Some(
+                KeepRaw(
+                  Redeemers(
+                    Redeemer(
+                      tag = Cert,
+                      index = 0,
+                      data = Data.List(List.empty),
+                      exUnits = ExUnits.zero
+                    )
                   )
                 )
               )
+            ),
+        txBody
+            .refocus(_.certificates)
+            .replace(
+              TaggedSet(
+                Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None)
+              )
             )
-          )
-          .focus(_.body.value.certificates)
-          .replace(
-            TaggedSet(Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None))
-          )
+      ).reduce(_ andThen _)(anyNetworkTx)
     )
 
     // witness = PlutusScriptCredential (ScriptValue script1) RedeemerDatum.unit
@@ -917,4 +963,4 @@ testnetTransaction = Transaction.empty # _body <<< _networkId .~ Just TestnetId
  */
 // See: https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/test/CSLHex.purs#L109
 val testnetTransaction: Transaction =
-    emptyTransaction.focus(_.body.value.networkId).replace(Some(0))
+    txBody.refocus(_.networkId).replace(Some(0))(anyNetworkTx)

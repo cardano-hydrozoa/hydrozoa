@@ -8,12 +8,12 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import hydrozoa.datumOption
-import hydrozoa.emptyTransaction
+import hydrozoa.{datumOption, emptyTransaction, keepRawL}
 import hydrozoa.lib.tx.InputAction.ReferenceInput
 import hydrozoa.lib.tx.InputAction.SpendInput
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
 import io.bullet.borer.{Cbor, Encoder}
+import monocle.{Focus, Lens}
 import monocle.syntax.all.*
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Builtins.serialiseData
@@ -211,6 +211,28 @@ object InputAction {
     case object ReferenceInput extends InputAction
     case object SpendInput extends InputAction
 }
+
+/*
+-- | Depending on `RefInputAction` value, we either want to spend a reference
+-- | UTxO, or just reference it.
+refInputActionToLens
+        :: RefInputAction
+        -> Lens' TransactionBody (Array TransactionInput)
+refInputActionToLens =
+    case _ of
+    ReferenceInput -> _referenceInputs
+    SpendInput -> _inputs
+
+ */
+private def inputActionToLens(
+    inputAction: InputAction
+): monocle.PLens[TransactionBody, TransactionBody, TaggedOrderedSet[
+  scalus.cardano.ledger.TransactionInput
+], TaggedOrderedSet[scalus.cardano.ledger.TransactionInput]] =
+    inputAction match {
+        case ReferenceInput => Focus[TransactionBody](_.referenceInputs)
+        case SpendInput     => Focus[TransactionBody](_.inputs)
+    }
 
 // ============================================================================
 // DatumWitness
@@ -571,10 +593,20 @@ case class Context(
     transaction: Transaction,
     redeemers: Seq[DetachedRedeemer],
     networkId: Option[Int]
-)
+) {
+
+    val ctxBody = this.focus(_.transaction.body).andThen(keepRawL[TransactionBody]())
+}
+
+// =============================================================
+// Lens to make context modification easier
+
+// ==============================================================
+// Transaction Builder
+// ==============================================================
 
 // type BuilderM a = StateT Context (Except TxBuildError) a
-type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
+private type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
 
 object TransactionBuilder:
     /** Recursively calculate the minAda for UTxO.
@@ -649,17 +681,6 @@ object TransactionBuilder:
         tx: Transaction,
         steps: Seq[TransactionBuilderStep]
     ): Either[TxBuildError, Transaction] =
-
-        def refreshAllKeepRaw(self: Transaction): Transaction = {
-            self
-                .focus(_.body.raw)
-                .replace(ScalusCbor.encode(self.body.value))
-                .focus(_.witnessSet.plutusData.raw)
-                .replace(ScalusCbor.encode(self.witnessSet.plutusData.value))
-            // FIXME: witnessSet.plutusData.value.toIndexedSeq
-            // FIXME: witnessSet.redeemers
-        }
-
         for {
             context <- for {
                 editableTransaction <- TransactionConversion
@@ -682,7 +703,7 @@ object TransactionBuilder:
                 case None    => Left(RedeemerIndexingInternalError(tx, steps))
                 case Some(x) => Right(x)
             }
-        } yield refreshAllKeepRaw(res)
+        } yield res
 
     /*
     processConstraints :: Array TransactionBuilderStep -> BuilderM Unit
@@ -725,11 +746,10 @@ object TransactionBuilder:
         case TransactionBuilderStep.SpendOutput(utxo, spendWitness) =>
             for {
                 _ <- assertNetworkId(utxo.output.address)
-                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                    ctx.focus(_.transaction.body.value.inputs)
-                        .modify(inputs =>
-                            TaggedOrderedSet.from(pushUnique(utxo.input, inputs.toSeq))
-                        )
+                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                  _.ctxBody
+                      .refocus(_.inputs)
+                      .modify(inputs => TaggedOrderedSet.from(pushUnique(utxo.input, inputs.toSeq)))
                 )
                 _ <- useSpendWitness(utxo, spendWitness)
             } yield ()
@@ -744,21 +764,23 @@ object TransactionBuilder:
         case TransactionBuilderStep.Pay(output) =>
             for {
                 _ <- assertNetworkId(output.address)
-                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                    ctx.focus(_.transaction.body.value.outputs)
-                        // Intentionally not using pushUnique: we can create multiple outputs of the same shape
-                        .modify(outputs => outputs.toSeq :+ Sized(output))
+                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                  _.ctxBody
+                      .refocus(_.outputs)
+                      // Intentionally not using pushUnique: we can create multiple outputs of the same shape
+                      .modify(outputs => outputs.toSeq :+ Sized(output))
                 )
             } yield ()
         case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) =>
             useMintAssetWitness(scriptHash, assetName, amount, mintWitness)
         case TransactionBuilderStep.IssueCertificate(cert, witness) =>
             for {
-                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                    ctx.focus(_.transaction.body.value.certificates)
-                        .modify(certificates =>
-                            TaggedSet.from(pushUnique(cert, certificates.toIndexedSeq))
-                        )
+                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                  _.ctxBody
+                      .refocus(_.certificates)
+                      .modify(certificates =>
+                          TaggedSet.from(pushUnique(cert, certificates.toIndexedSeq))
+                      )
                 )
                 _ <- useCertificateWitness(cert, witness)
             } yield ()
@@ -766,30 +788,32 @@ object TransactionBuilder:
             useWithdrawRewardsWitness(StakeCredential(stakeCredential), amount, witness)
         case TransactionBuilderStep.SubmitProposal(proposal, witness) =>
             for {
-                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                    ctx.focus(_.transaction.body.value.proposalProcedures)
-                        .modify(proposals =>
-                            TaggedOrderedSet.from(pushUnique(proposal, proposals.toSeq))
-                        )
+                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                  _.ctxBody
+                      .refocus(_.proposalProcedures)
+                      .modify(proposals =>
+                          TaggedOrderedSet.from(pushUnique(proposal, proposals.toSeq))
+                      )
                 )
                 _ <- useProposalWitness(proposal, witness)
             } yield ()
         case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) =>
             for {
-                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                    ctx.focus(_.transaction.body.value.votingProcedures)
-                        .modify(procedures => {
-                            val currentProcedures = procedures
-                                .map(_.procedures)
-                                .getOrElse(
-                                  SortedMap.empty[Voter, SortedMap[GovActionId, VotingProcedure]]
-                                )
-                            Some(
-                              VotingProcedures(
-                                currentProcedures + (voter -> SortedMap.from(votes))
+                _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                  _.ctxBody
+                      .refocus(_.votingProcedures)
+                      .modify(procedures => {
+                          val currentProcedures = procedures
+                              .map(_.procedures)
+                              .getOrElse(
+                                SortedMap.empty[Voter, SortedMap[GovActionId, VotingProcedure]]
                               )
+                          Some(
+                            VotingProcedures(
+                              currentProcedures + (voter -> SortedMap.from(votes))
                             )
-                        })
+                          )
+                      })
                 )
                 _ <- useVotingProcedureWitness(voter, witness)
             } yield ()
@@ -1018,15 +1042,10 @@ object TransactionBuilder:
                         .modify(s => pushUnique(ns, s.toList).toSet)
                 )
             case ScriptWitness.ScriptReference(input, inputAction) =>
-                StateT.modify(ctx =>
-                    inputAction match {
-                        case ReferenceInput =>
-                            ctx.focus(_.transaction.body.value.referenceInputs)
-                                .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
-                        case SpendInput =>
-                            ctx.focus(_.transaction.body.value.inputs)
-                                .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
-                    }
+                StateT.modify(
+                  _.ctxBody
+                      .andThen(inputActionToLens(inputAction))
+                      .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                 )
         }
 
@@ -1061,15 +1080,10 @@ object TransactionBuilder:
                         .modify(s => Set.from(pushUnique(ps, s.toSeq)))
                 )
             case ScriptWitness.ScriptReference(input, action) =>
-                StateT.modify(ctx =>
-                    action match {
-                        case ReferenceInput =>
-                            ctx.focus(_.transaction.body.value.referenceInputs)
-                                .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
-                        case SpendInput =>
-                            ctx.focus(_.transaction.body.value.inputs)
-                                .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
-                    }
+                StateT.modify(
+                  _.ctxBody
+                      .andThen(inputActionToLens(action))
+                      .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                 )
         }
 
@@ -1194,19 +1208,10 @@ object TransactionBuilder:
                         // UTxO lookups are quite expensive, so it's best to not require more
                         // of them than strictly necessary.
                         case Some(DatumWitness.DatumReference(input, inputAction)) =>
-                            StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                                inputAction match {
-                                    case InputAction.ReferenceInput =>
-                                        ctx.focus(_.transaction.body.value.referenceInputs)
-                                            .modify(s =>
-                                                TaggedOrderedSet.from(pushUnique(input, s.toSeq))
-                                            )
-                                    case InputAction.SpendInput =>
-                                        ctx.focus(_.transaction.body.value.inputs)
-                                            .modify(s =>
-                                                TaggedOrderedSet.from(pushUnique(input, s.toSeq))
-                                            )
-                                }
+                            StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                              _.ctxBody
+                                  .andThen(inputActionToLens(inputAction))
+                                  .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                             )
                     }
             }
@@ -1250,7 +1255,7 @@ object TransactionBuilder:
                     case None           => Some(thisMint)
                     case Some(existing) => Some(existing + thisMint)
                 }
-                ctx.focus(_.transaction.body.value.mint).replace(newMint.map(Mint.apply))
+                ctx.ctxBody.refocus(_.mint).replace(newMint.map(Mint.apply))
             })
         } yield ()
 
@@ -1509,16 +1514,17 @@ object TransactionBuilder:
                     RewardAccount(stakeAddress)
             }
 
-            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                ctx.focus(_.transaction.body.value.withdrawals)
-                    .modify(withdrawals => {
-                        val currentWithdrawals = withdrawals.map(_.withdrawals).getOrElse(Map.empty)
-                        Some(
-                          Withdrawals(
-                            SortedMap.from(currentWithdrawals + (rewardAccount -> amount))
-                          )
+            _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+              _.ctxBody
+                  .refocus(_.withdrawals)
+                  .modify(withdrawals => {
+                      val currentWithdrawals = withdrawals.map(_.withdrawals).getOrElse(Map.empty)
+                      Some(
+                        Withdrawals(
+                          SortedMap.from(currentWithdrawals + (rewardAccount -> amount))
                         )
-                    })
+                      )
+                  })
             )
 
             _ <- useCredentialWitness(
@@ -1717,25 +1723,3 @@ object TransactionBuilder:
                     StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
             }
         } yield ()
-
-    /*
-    -- | Depending on `RefInputAction` value, we either want to spend a reference
-    -- | UTxO, or just reference it.
-    refInputActionToLens
-            :: RefInputAction
-            -> Lens' TransactionBody (Array TransactionInput)
-    refInputActionToLens =
-        case _ of
-        ReferenceInput -> _referenceInputs
-        SpendInput -> _inputs
-
-     */
-    // def refInputActionToLens(
-    //    inputAction: InputAction
-    // ): monocle.PLens[TransactionBody, TransactionBody, TaggedOrderedSet[
-    //  scalus.cardano.ledger.TransactionInput
-    // ], TaggedOrderedSet[scalus.cardano.ledger.TransactionInput]] =
-    //    inputAction match {
-    //        case ReferenceInput => Focus[TransactionBody](_.referenceInputs)
-    //        case SpendInput     => Focus[TransactionBody](_.inputs)
-    //    }
