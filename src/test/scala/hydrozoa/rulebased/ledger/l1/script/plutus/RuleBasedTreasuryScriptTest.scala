@@ -13,7 +13,7 @@ import supranational.blst.Scalar
 
 import scala.io.Source
 
-class RuleBasedTreasuryValidatorTest extends FunSuite {
+class RuleBasedTreasuryScriptTest extends FunSuite {
 
     test("Membership check: empty accumulator / subset") {
 

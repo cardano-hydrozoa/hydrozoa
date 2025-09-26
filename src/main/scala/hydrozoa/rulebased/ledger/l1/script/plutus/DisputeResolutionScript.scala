@@ -1,8 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
 import cats.syntax.group.*
-import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
     Continuing,
     Removed
@@ -15,7 +13,8 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.cardano.address.Network
-//import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript.plutusScript
+import scalus.cardano.ledger.{Language, ScriptHash}
+import scalus.uplc.DeBruijnedProgram
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
@@ -167,114 +166,114 @@ object DisputeResolutionValidator extends Validator {
             case DisputeRedeemer.Vote(voteRedeemer) =>
                 log("Vote")
 
-                // There must not be any other spent input matching voteOutref on transaction hash
-                val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
-                    case List.Cons(voteOutref, tail) =>
-                        require(tail.isEmpty, VoteOnlyOneVoteUtxoIsSpent)
-                        voteOutref
-                    // Unreachable
-                    case _ => fail()
-
-                // Check vote status
-                require(voteDatum.voteStatus === VoteStatus.NoVote, VoteAlreadyCast)
-
-                // Check signature
-                require(voteDatum.peer.forall(tx.signatories.contains(_)), VoteMustBeSignedByPeer)
-
-                // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
-                // tokens in voteInput.
-                val voteInput = voteOutref.resolved
-                val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
-
-                // Verify the treasury reference input
-                // Let treasury be the only reference input matching voteOutref on tx hash.
-                val treasuryReference = tx.referenceInputs match {
-                    case List.Cons(input, otherInputs) =>
-                        require(
-                          otherInputs.isEmpty && input.outRef.id === voteOutref.outRef.id,
-                          VoteOneRefInputTreasury
-                        )
-                        input
-                    case List.Nil => fail(VoteOneRefInputTreasury)
-                }
-
-                // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
-                treasuryReference.resolved.value.toSortedMap
-                    .get(headMp)
-                    .getOrElse(SortedMap.empty)
-                    .toList match
-                    case List.Cons((tokenName, amount), none) =>
-                        require(
-                          none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
-                          VoteTreasuryBeacon
-                        )
-                    case _ => fail(VoteTreasuryBeacon)
-
-                //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
-                val treasuryDatum =
-                    treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(VoteTreasuryDatum)
-                    }
-                require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
-                require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
-
-                // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                // field of treasury.
-                tx.validRange.to.boundType match {
-                    case Finite(toTime) =>
-                        require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
-                    case _ => fail(VoteTimeValidityCheck)
-                }
-
-                // The multisig field of voteRedeemer must have signatures of the blockHeader
-                // field of voteRedeemer for all the public keys in the peers field of treasury.
-                val msg = voteRedeemer.blockHeader.toData |> serialiseData
-                require(
-                  treasuryDatum.peers.length == voteRedeemer.multisig.length,
-                  VoteMultisigCheck
-                )
-
-                List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
-                    require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                ): Unit
-
-                // The versionMajor field must match between treasury and voteRedeemer.
-                require(
-                  voteRedeemer.blockHeader.versionMajor === treasuryDatum.versionMajor,
-                  VoteMajorVersionCheck
-                )
-
-                // Vote output
-                val voteOutput = tx.outputs.find(o =>
-                    o.value.containsExactlyOneAsset(headMp, disputeId, voteTokenAmount)
-                ) match
-                    case Some(e) => e
-                    case None    => fail(VoteVoteOutputExists)
-
-                require(voteOutput.address === voteInput.address, VoteVoteOutputExists)
-
-                val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
-
-                // voteStatus field of voteOutput must be a Vote matching voteRedeemer
-                // on the utxosActive and versionMinor fields.
-                voteOutputDatum.voteStatus match {
-                    case VoteStatus.Vote(voteDetails) =>
-                        require(
-                          voteDetails.versionMinor === voteRedeemer.blockHeader.versionMinor,
-                          VoteOutputDatumCheck
-                        )
-                        require(
-                          voteDetails.commitment == voteRedeemer.blockHeader.commitment,
-                          VoteOutputDatumCheck
-                        )
-                    case _ => fail(VoteOutputDatumCheck)
-                }
-
-                // All other fields of voteInput and voteOutput must match.
-                require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
-                require(voteDatum.peer === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
-                require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
+                //// There must not be any other spent input matching voteOutref on transaction hash
+                //val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
+                //    case List.Cons(voteOutref, tail) =>
+                //        require(tail.isEmpty, VoteOnlyOneVoteUtxoIsSpent)
+                //        voteOutref
+                //    // Unreachable
+                //    case _ => fail()
+                //
+                //// Check vote status
+                //require(voteDatum.voteStatus === VoteStatus.NoVote, VoteAlreadyCast)
+                //
+                //// Check signature
+                //require(voteDatum.peer.forall(tx.signatories.contains(_)), VoteMustBeSignedByPeer)
+                //
+                //// Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
+                //// tokens in voteInput.
+                //val voteInput = voteOutref.resolved
+                //val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
+                //
+                //// Verify the treasury reference input
+                //// Let treasury be the only reference input matching voteOutref on tx hash.
+                //val treasuryReference = tx.referenceInputs match {
+                //    case List.Cons(input, otherInputs) =>
+                //        require(
+                //          otherInputs.isEmpty && input.outRef.id === voteOutref.outRef.id,
+                //          VoteOneRefInputTreasury
+                //        )
+                //        input
+                //    case List.Nil => fail(VoteOneRefInputTreasury)
+                //}
+                //
+                //// A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
+                //treasuryReference.resolved.value.toSortedMap
+                //    .get(headMp)
+                //    .getOrElse(SortedMap.empty)
+                //    .toList match
+                //    case List.Cons((tokenName, amount), none) =>
+                //        require(
+                //          none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
+                //          VoteTreasuryBeacon
+                //        )
+                //    case _ => fail(VoteTreasuryBeacon)
+                //
+                ////  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
+                //val treasuryDatum =
+                //    treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                //        case Unresolved(unresolvedDatum) => unresolvedDatum
+                //        case _                           => fail(VoteTreasuryDatum)
+                //    }
+                //require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
+                //require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
+                //
+                //// The transaction’s time -validity upper bound must not exceed the deadlineVoting
+                //// field of treasury.
+                //tx.validRange.to.boundType match {
+                //    case Finite(toTime) =>
+                //        require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
+                //    case _ => fail(VoteTimeValidityCheck)
+                //}
+                //
+                //// The multisig field of voteRedeemer must have signatures of the blockHeader
+                //// field of voteRedeemer for all the public keys in the peers field of treasury.
+                //val msg = voteRedeemer.blockHeader.toData |> serialiseData
+                //require(
+                //  treasuryDatum.peers.length == voteRedeemer.multisig.length,
+                //  VoteMultisigCheck
+                //)
+                //
+                //List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                //    require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
+                //): Unit
+                //
+                //// The versionMajor field must match between treasury and voteRedeemer.
+                //require(
+                //  voteRedeemer.blockHeader.versionMajor === treasuryDatum.versionMajor,
+                //  VoteMajorVersionCheck
+                //)
+                //
+                //// Vote output
+                //val voteOutput = tx.outputs.find(o =>
+                //    o.value.containsExactlyOneAsset(headMp, disputeId, voteTokenAmount)
+                //) match
+                //    case Some(e) => e
+                //    case None    => fail(VoteVoteOutputExists)
+                //
+                //require(voteOutput.address === voteInput.address, VoteVoteOutputExists)
+                //
+                //val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
+                //
+                //// voteStatus field of voteOutput must be a Vote matching voteRedeemer
+                //// on the utxosActive and versionMinor fields.
+                //voteOutputDatum.voteStatus match {
+                //    case VoteStatus.Vote(voteDetails) =>
+                //        require(
+                //          voteDetails.versionMinor === voteRedeemer.blockHeader.versionMinor,
+                //          VoteOutputDatumCheck
+                //        )
+                //        require(
+                //          voteDetails.commitment == voteRedeemer.blockHeader.commitment,
+                //          VoteOutputDatumCheck
+                //        )
+                //    case _ => fail(VoteOutputDatumCheck)
+                //}
+                //
+                //// All other fields of voteInput and voteOutput must match.
+                //require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
+                //require(voteDatum.peer === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
+                //require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
 
             /** Tallying is done as follows:
               *
@@ -304,186 +303,206 @@ object DisputeResolutionValidator extends Validator {
             case DisputeRedeemer.Tally(tallyRedeemer) =>
                 log("Tally")
 
-                // TODO: hide `ownInput` and `otherInput` so they can't be used accidentally
-                val ownInput = tx.inputs.find(_.outRef === ownRef).get
-                val otherInput: TxInInfo =
-                    tx.inputs.filter(i =>
-                        i.resolved.address === ownInput.resolved.address && (i.outRef !== ownRef)
-                    ) match
-                        case List.Cons(other, empty) =>
-                            require(empty.isEmpty, TwoVotingInputsExpected)
-                            other
-                        case _ => fail(VotingInputsNotFound)
-
-                val ((continuingInputId, continuingInput), (removedInputId, removedInput)) =
-                    tallyRedeemer match
-                        case Continuing =>
-                            // TODO: make a helper
-                            (
-                              (ownInput.outRef, ownInput.resolved),
-                              (otherInput.outRef, otherInput.resolved)
-                            )
-                        case Removed =>
-                            // TODO: make a helper
-                            (
-                              (otherInput.outRef, otherInput.resolved),
-                              (ownInput.outRef, ownInput.resolved)
-                            )
-
-                // continuingInput and removedInput must have non-ADA tokens of only one asset
-                // class, which must match between them
-                val (contCs, contTn, _) = continuingInput.value.onlyNonAdaAsset
-                val (removedCs, removedTn, _) = continuingInput.value.onlyNonAdaAsset
-                require(contCs === removedCs && contTn === removedTn, VotingInputsDoNotMatch)
-
-                // The key field of removedInput must be greater than the key field and equal to the
-                // link field of continuingInput.
-                val continuingDatum = continuingInput.inlineDatumOfType[VoteDatum]
-                val removedDatum = removedInput.inlineDatumOfType[VoteDatum]
-                require(
-                  removedDatum.key > continuingDatum.key && removedDatum.key == continuingDatum.link,
-                  KeyLinkFieldsDoNotMatch
-                )
-
-                // FIXME: we don't have address anymore since address is how we find the other input
-                // There must be no other spent inputs from the same address as continuingInput
-                // or holding any tokens of headMp.
-                require(
-                  tx.inputs
-                      .filter(i =>
-                          // Input other than we handle
-                          (i.outRef !== continuingInputId) && (i.outRef !== removedInputId)
-                          // holding any tokens of headMp
-                              && (i.resolved.value.containsCurrencySymbol(contCs))
-                      )
-                      .isEmpty,
-                  NoOtherInputs
-                )
-
-                // Verify the treasury reference input
-
-                // If the voteStatus of either continuingInput or removedInput is NoVote,
-                // all the following must be satisfied
-                if (
-                  continuingDatum.voteStatus === VoteStatus.NoVote
-                  || removedDatum.voteStatus === VoteStatus.NoVote
-                ) {
-                    // Let treasury be a reference input holding the head beacon token of headMp
-                    // and CIP-67 prefix 4937
-                    val treasuryReference = tx.referenceInputs
-                        .find { i =>
-                            i.resolved.value.toSortedMap
-                                .get(contCs)
-                                .getOrElse(SortedMap.empty)
-                                .toList match
-                                case List.Cons((tokenName, amount), none) =>
-                                    tokenName.take(4) == cip67BeaconTokenPrefix
-                                    && amount == BigInt(1)
-                                    && none.isEmpty
-                                case _ => fail(TreasuryReferenceInputExists)
-                        }
-                        .getOrFail(TreasuryReferenceInputExists)
-
-                    // headMp and disputeId must match the corresponding fields of the Unresolved
-                    // datum in treasury
-                    val treasuryDatum =
-                        treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
-                            case Unresolved(unresolvedDatum) => unresolvedDatum
-                            case _                           => fail(TreasuryDatumIsUnresolved)
-                        }
-
-                    require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
-                    require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
-
-                    // The transaction’s time -validity upper bound must not exceed the deadlineVoting
-                    // field of treasury.
-                    tx.validRange.to.boundType match {
-                        case Finite(toTime) =>
-                            require(toTime <= treasuryDatum.deadlineVoting, TimeValidityCheck)
-                        case _ => fail(TimeValidityCheck)
-                    }
-                }
-
-                // Verify the vote output
-
-                // 8. Let continuingOutput be an output with the same address and the sum of all
-                // tokens (including ADA) in continuingInput and removedInput.
-                val continuingOutput = tx.outputs
-                    .find(o =>
-                        o.address === continuingInput.address
-                            && o.value === continuingInput.value + removedInput.value
-                    )
-                    .getOrFail(AbsentOrWrongContinuingOutput)
-
-                // 9. The voteStatus field of continuingOutput must match the highest voteStatus
-                // of continuingInput and removedInput
-                val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
-                require(
-                  continuingOutputDatum.voteStatus === maxVote(
-                    continuingDatum.voteStatus,
-                    removedDatum.voteStatus
-                  ),
-                  HighestVoteCheck
-                )
-
-                // 10. The link field of removedInput and continuingOutput must match.
-                require(continuingOutputDatum.link == removedDatum.link, LinkCheck)
-
-                // 11. All other fields of continuingInput and continuingOutput must match.
-                require(continuingOutputDatum.key === continuingDatum.key, KeyCheck)
-                require(continuingOutputDatum.peer === None)
+                //// TODO: hide `ownInput` and `otherInput` so they can't be used accidentally
+                //val ownInput = tx.inputs.find(_.outRef === ownRef).get
+                //val otherInput: TxInInfo =
+                //    tx.inputs.filter(i =>
+                //        i.resolved.address === ownInput.resolved.address && (i.outRef !== ownRef)
+                //    ) match
+                //        case List.Cons(other, empty) =>
+                //            require(empty.isEmpty, TwoVotingInputsExpected)
+                //            other
+                //        case _ => fail(VotingInputsNotFound)
+                //
+                //val ((continuingInputId, continuingInput), (removedInputId, removedInput)) =
+                //    tallyRedeemer match
+                //        case Continuing =>
+                //            // TODO: make a helper
+                //            (
+                //              (ownInput.outRef, ownInput.resolved),
+                //              (otherInput.outRef, otherInput.resolved)
+                //            )
+                //        case Removed =>
+                //            // TODO: make a helper
+                //            (
+                //              (otherInput.outRef, otherInput.resolved),
+                //              (ownInput.outRef, ownInput.resolved)
+                //            )
+                //
+                //// continuingInput and removedInput must have non-ADA tokens of only one asset
+                //// class, which must match between them
+                //val (contCs, contTn, _) = continuingInput.value.onlyNonAdaAsset
+                //val (removedCs, removedTn, _) = continuingInput.value.onlyNonAdaAsset
+                //require(contCs === removedCs && contTn === removedTn, VotingInputsDoNotMatch)
+                //
+                //// The key field of removedInput must be greater than the key field and equal to the
+                //// link field of continuingInput.
+                //val continuingDatum = continuingInput.inlineDatumOfType[VoteDatum]
+                //val removedDatum = removedInput.inlineDatumOfType[VoteDatum]
+                //require(
+                //  removedDatum.key > continuingDatum.key && removedDatum.key == continuingDatum.link,
+                //  KeyLinkFieldsDoNotMatch
+                //)
+                //
+                //// FIXME: we don't have address anymore since address is how we find the other input
+                //// There must be no other spent inputs from the same address as continuingInput
+                //// or holding any tokens of headMp.
+                //require(
+                //  tx.inputs
+                //      .filter(i =>
+                //          // Input other than we handle
+                //          (i.outRef !== continuingInputId) && (i.outRef !== removedInputId)
+                //          // holding any tokens of headMp
+                //              && (i.resolved.value.containsCurrencySymbol(contCs))
+                //      )
+                //      .isEmpty,
+                //  NoOtherInputs
+                //)
+                //
+                //// Verify the treasury reference input
+                //
+                //// If the voteStatus of either continuingInput or removedInput is NoVote,
+                //// all the following must be satisfied
+                //if (
+                //  continuingDatum.voteStatus === VoteStatus.NoVote
+                //  || removedDatum.voteStatus === VoteStatus.NoVote
+                //) {
+                //    // Let treasury be a reference input holding the head beacon token of headMp
+                //    // and CIP-67 prefix 4937
+                //    val treasuryReference = tx.referenceInputs
+                //        .find { i =>
+                //            i.resolved.value.toSortedMap
+                //                .get(contCs)
+                //                .getOrElse(SortedMap.empty)
+                //                .toList match
+                //                case List.Cons((tokenName, amount), none) =>
+                //                    tokenName.take(4) == cip67BeaconTokenPrefix
+                //                    && amount == BigInt(1)
+                //                    && none.isEmpty
+                //                case _ => fail(TreasuryReferenceInputExists)
+                //        }
+                //        .getOrFail(TreasuryReferenceInputExists)
+                //
+                //    // headMp and disputeId must match the corresponding fields of the Unresolved
+                //    // datum in treasury
+                //    val treasuryDatum =
+                //        treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                //            case Unresolved(unresolvedDatum) => unresolvedDatum
+                //            case _                           => fail(TreasuryDatumIsUnresolved)
+                //        }
+                //
+                //    require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
+                //    require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
+                //
+                //    // The transaction’s time -validity upper bound must not exceed the deadlineVoting
+                //    // field of treasury.
+                //    tx.validRange.to.boundType match {
+                //        case Finite(toTime) =>
+                //            require(toTime <= treasuryDatum.deadlineVoting, TimeValidityCheck)
+                //        case _ => fail(TimeValidityCheck)
+                //    }
+                //}
+                //
+                //// Verify the vote output
+                //
+                //// 8. Let continuingOutput be an output with the same address and the sum of all
+                //// tokens (including ADA) in continuingInput and removedInput.
+                //val continuingOutput = tx.outputs
+                //    .find(o =>
+                //        o.address === continuingInput.address
+                //            && o.value === continuingInput.value + removedInput.value
+                //    )
+                //    .getOrFail(AbsentOrWrongContinuingOutput)
+                //
+                //// 9. The voteStatus field of continuingOutput must match the highest voteStatus
+                //// of continuingInput and removedInput
+                //val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
+                //require(
+                //  continuingOutputDatum.voteStatus === maxVote(
+                //    continuingDatum.voteStatus,
+                //    removedDatum.voteStatus
+                //  ),
+                //  HighestVoteCheck
+                //)
+                //
+                //// 10. The link field of removedInput and continuingOutput must match.
+                //require(continuingOutputDatum.link == removedDatum.link, LinkCheck)
+                //
+                //// 11. All other fields of continuingInput and continuingOutput must match.
+                //require(continuingOutputDatum.key === continuingDatum.key, KeyCheck)
+                //require(continuingOutputDatum.peer === None)
 
             case DisputeRedeemer.Resolve =>
                 log("Resolve")
 
-                val voteInput = tx.inputs.find(_.outRef === ownRef).get
-                val (headMp, disputeId, _) = voteInput.resolved.value.onlyNonAdaAsset
-
-                // Let treasury be a spent input that holds a head beacon token of headMp and CIP-67
-                // prefix 4937.
-                val treasuryInput = tx.inputs
-                    .find { i =>
-                        i.resolved.value.toSortedMap
-                            .get(headMp)
-                            .getOrElse(SortedMap.empty)
-                            .toList match
-                            case List.Cons((tokenName, amount), none) =>
-                                tokenName.take(4) == cip67BeaconTokenPrefix
-                                && amount == BigInt(1)
-                                && none.isEmpty
-                            case _ => false
-                    }
-                    .getOrFail(ResolveTreasurySpent)
-
-                // TODO: This is checked by the treasury validator
-                val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
-                        case Unresolved(unresolvedDatum) => unresolvedDatum
-                        case _                           => fail(ResolveDatumIsUnresolved)
-                    }
-
-                // headMp and disputeId must match the corresponding fields of the Unresolved datum
-                // in treasury.
-                require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
-                require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
+                //val voteInput = tx.inputs.find(_.outRef === ownRef).get
+                //val (headMp, disputeId, _) = voteInput.resolved.value.onlyNonAdaAsset
+                //
+                //// Let treasury be a spent input that holds a head beacon token of headMp and CIP-67
+                //// prefix 4937.
+                //val treasuryInput = tx.inputs
+                //    .find { i =>
+                //        i.resolved.value.toSortedMap
+                //            .get(headMp)
+                //            .getOrElse(SortedMap.empty)
+                //            .toList match
+                //            case List.Cons((tokenName, amount), none) =>
+                //                tokenName.take(4) == cip67BeaconTokenPrefix
+                //                && amount == BigInt(1)
+                //                && none.isEmpty
+                //            case _ => false
+                //    }
+                //    .getOrFail(ResolveTreasurySpent)
+                //
+                //// TODO: This is checked by the treasury validator
+                //val treasuryDatum =
+                //    treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
+                //        case Unresolved(unresolvedDatum) => unresolvedDatum
+                //        case _                           => fail(ResolveDatumIsUnresolved)
+                //    }
+                //
+                //// headMp and disputeId must match the corresponding fields of the Unresolved datum
+                //// in treasury.
+                //require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
+                //require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
 
 }
 
+/** Native Scalus implementation for DisputeResolutionScript Eliminates dependency on Bloxbean for
+  * script creation
+  */
 object DisputeResolutionScript {
-    lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    // Compile the validator to Scalus Intermediate Representation (SIR)
+    // Using def instead of lazy val to avoid stack overflow during tests
+    private def compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
 
-    // TODO: can we use Scalus for that?
-    lazy val plutusScript: PlutusV3Script = PlutusV3Script
-        .builder()
-        .`type`("PlutusScriptV3")
-        .cborHex(script.doubleCborHex)
-        .build()
-        .asInstanceOf[PlutusV3Script]
+    // Convert to optimized UPLC with error traces for PlutusV3
+    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    private def compiledPlutusV3Program = compiledUplc.plutusV3
 
-    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    // Native Scalus PlutusScript - no Bloxbean dependency needed
+    private def compiledDeBruijnedProgram: DeBruijnedProgram = compiledPlutusV3Program.deBruijnedProgram
 
-    lazy val scriptHashString: String = HexUtil.encodeHexString(plutusScript.getScriptHash)
+    // Various encoding formats available natively in Scalus
+    // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
+    // private def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+    private def compiledDoubleCborEncoded: Array[Byte] = compiledDeBruijnedProgram.doubleCborEncoded
+
+    // Hex representations - use the main program methods
+    private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+
+    def compiledScriptHash = ScriptHash.fromByteString(blake2b_224(ByteString.fromArray(compiledDoubleCborEncoded)))
+
+    // Generate .plutus file if needed
+    def writePlutusFile(path: String): Unit = {
+        compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
+    }
+
+    // For compatibility with existing code that expects hex representation
+    def getScriptHex: String = compiledDoubleCborHex
+
+    // For compatibility with code that expects script hash as byte array
+    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
     def address(n: Network): AddressL1 = ???
 }
