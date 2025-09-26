@@ -1,7 +1,8 @@
 package hydrozoa.rulebased.ledger.l1.state
 
+import hydrozoa.multisig.protocol.types.Block.Version.Minor
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData}
+import scalus.builtin.Data.{Constr, FromData, ToData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash
 import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require, given}
@@ -34,7 +35,7 @@ object VoteState:
 
     case class VoteDetails(
         commitment: KzgCommitment,
-        versionMinor: VersionMinor
+        versionMinor: BigInt
     ) derives FromData,
           ToData
 
@@ -48,5 +49,4 @@ object VoteState:
     // G1 compressed point
     type KzgCommitment = ByteString
 
-    private type VersionMinor = BigInt
 end VoteState

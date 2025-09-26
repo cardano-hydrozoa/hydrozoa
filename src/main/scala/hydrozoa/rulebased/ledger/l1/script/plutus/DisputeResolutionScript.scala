@@ -41,12 +41,20 @@ object DisputeResolutionValidator extends Validator {
         case Resolve
 
     case class VoteRedeemer(
-        blockHeader: BlockHeader,
+        blockHeader: OnchainBlockHeader,
         multisig: List[Signature]
     ) derives FromData,
           ToData
 
-    case class BlockHeader(
+    /** After an attempt to make types form hydrozoa.multisig.protocol.types onchain-compatible we
+      * decided to go for having a separate type to use onchain. Mostly because opaque types don't
+      * seem to work well with deriving machinery.
+      *
+      * TODO: implement the function: onchainBlockHeader :: BlockHeaderMinor -> OnchainBlockHeader
+      *
+      * NB: The signing function should use this type.
+      */
+    case class OnchainBlockHeader(
         blockNum: BigInt,
         blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
         timeCreation: PosixTime, // the same
@@ -59,14 +67,14 @@ object DisputeResolutionValidator extends Validator {
     // EdDSA / ed25519 signature
     private type Signature = ByteString
 
-    enum TallyRedeemer derives FromData, ToData:
-        case Continuing
-        case Removed
-
     enum BlockTypeL2 derives CanEqual, FromData, ToData:
         case Minor
         case Major
         case Final
+
+    enum TallyRedeemer derives FromData, ToData:
+        case Continuing
+        case Removed
 
     inline def cip67DisputeTokenPrefix = hex"00d950b0"
 
@@ -233,7 +241,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
-                  voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor,
+                  voteRedeemer.blockHeader.versionMajor === treasuryDatum.versionMajor,
                   VoteMajorVersionCheck
                 )
 
@@ -253,7 +261,7 @@ object DisputeResolutionValidator extends Validator {
                 voteOutputDatum.voteStatus match {
                     case VoteStatus.Vote(voteDetails) =>
                         require(
-                          voteDetails.versionMinor == voteRedeemer.blockHeader.versionMinor,
+                          voteDetails.versionMinor === voteRedeemer.blockHeader.versionMinor,
                           VoteOutputDatumCheck
                         )
                         require(
