@@ -69,8 +69,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                 )
               )
             )
-        l1.compose(l2)(anyNetworkTx)
-
+        anyNetworkTx |> l1 |> l2
     }
 
     test("do nothing")({
@@ -162,7 +161,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             val l2 = txBody
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input1, input2))
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
             val l1 = Focus[Transaction](_.witnessSet.redeemers)
@@ -170,7 +169,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             val l2 = txBody
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input1))
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
 
         assertEquals(
@@ -247,7 +246,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             val l2 = txBody
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input1, input2))
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
             val l1 = Focus[Transaction](_.witnessSet.redeemers)
@@ -270,7 +269,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                     .refocus(_.inputs)
                     .replace(TaggedOrderedSet(input1))
 
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
         assertEquals(
           expected = Right(tx2),
@@ -353,7 +352,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             val l2 = txBody
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input1, input2))
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
 
         val tx2: Transaction = {
@@ -382,7 +381,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                 txBody
                     .refocus(_.inputs)
                     .replace(TaggedOrderedSet(input0, input2))
-            l1.compose(l2)(anyNetworkTx)
+            anyNetworkTx |> l1 |> l2
         }
         assertEquals(
           expected = Right(tx2),

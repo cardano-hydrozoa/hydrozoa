@@ -19,8 +19,13 @@ package hydrozoa.lib.tx
  */
 
 import cats.implicits.*
+import hydrozoa.lib.tx.TransactionWithSigners.txwsUnsafeL
+import hydrozoa.{emptyTransaction, lib}
+import monocle.{Focus, Lens}
+import monocle.Monocle.{focus, refocus}
 import scalus.builtin.Data
 import scalus.cardano.ledger.*
+import scalus.|>
 
 // ============================================================================
 // DetachedRedeemer
@@ -76,17 +81,6 @@ case class RedeemersContext(
     certs: Vector[Certificate],
     proposals: Vector[ProposalProcedure],
     voters: Vector[Voter]
-)
-
-// ============================================================================
-// EditableTransaction
-// ============================================================================
-
-/** A transaction with redeemers detached.
-  */
-case class EditableTransaction(
-    transaction: Transaction,
-    redeemers: Vector[DetachedRedeemer]
 )
 
 // ============================================================================
@@ -177,6 +171,168 @@ object RedeemerManagement {
         detached.traverse(redeemer => attachRedeemer(ctx, redeemer).toRight(redeemer))
     }
 }
+// ===========================================================================
+// ExpectedSigner
+// ===========================================================================
+
+case class ExpectedSigner(
+    expectedSigner: AddrKeyHash,
+    signerPurpose: SignerPurpose
+)
+
+// ============================================================================
+// SignerPurpose
+// ============================================================================
+
+/** Contains a value that a Signer corresponds to.
+  */
+sealed trait SignerPurpose:
+    /** returns true if this signer purpose is valid for the given transaction */
+    def isIn(tx: Transaction): Boolean
+
+object SignerPurpose {
+    case class ForSpend(input: TransactionInput) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean = tx.body.value.inputs.toSeq.contains(input)
+    case class ForMint(policyId: PolicyId) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean = tx.body.value.mint match {
+            case None => false
+            case Some(m) => m.assets.contains(policyId)
+        }    
+    case class ForReward(rewardAddress: RewardAccount) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean = tx.body.value.withdrawals
+            .getOrElse(Withdrawals.empty)
+            .withdrawals
+            .keys
+            .toSeq
+            .contains(rewardAddress)
+    case class ForCert(certificate: Certificate) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean =
+            tx.body.value.certificates.toIndexedSeq.contains(certificate)
+    case class ForVote(voter: Voter) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean =
+            tx.body.value.votingProcedures match {
+                case Some(voters) => voters.procedures.keys.toSeq.contains(voter)
+                case None         => false
+            }
+    case class ForPropose(proposal: ProposalProcedure) extends SignerPurpose:
+        override def isIn(tx: Transaction): Boolean =
+            tx.body.value.proposalProcedures.toSeq.contains(proposal)
+}
+
+// ============================================================================
+// EditableTransaction
+// ============================================================================
+
+/** A transaction with redeemers detached.
+  */
+case class EditableTransaction(
+    transaction: TransactionWithSigners,
+    redeemers: Vector[DetachedRedeemer]
+)
+
+/** A transaction paired with the expected signers. This is necessary for accurate fee calculation
+  *
+  * If the number of expected signers is too small compared to the number of actual signers, the
+  * transaction should fail with an insufficient fee error.
+  *
+  * If the number of expected signers is too large compared to the number of actual signers, the
+  * transaction may pass, but the fee will be over-paid.
+  *
+  * Note: this class is opaque. It is not (or should not be) possible to have expectedSigners that
+  * point to invalid transaction components
+  */
+
+case class TransactionWithSigners private (tx: Transaction, expectedSigners: Set[ExpectedSigner]):
+    /** Modify a TransactionWithSigners, dropping any signatures that point to components that have
+      * been removed.
+      *
+      * @param f
+      * @return
+      */
+    def modify(f: TransactionWithSigners => TransactionWithSigners): TransactionWithSigners = {
+        val modifiedTx = f(this)
+        val signersPartition = TransactionWithSigners.partitionValidSignatures(
+          modifiedTx.tx,
+          modifiedTx.expectedSigners
+        )
+        new TransactionWithSigners(modifiedTx.tx, signersPartition.validSigners)
+    }
+
+    /** Safely modify a TransactionWithSigners, returning a Left if any signatures point to
+      * components that have been removed.
+      *
+      * @param f
+      * @return
+      */
+    def modifySafe(
+        f: TransactionWithSigners => TransactionWithSigners
+    ): Either[Set[ExpectedSigner], TransactionWithSigners] = {
+        val modifiedTx = f(this)
+        val signersPartition = TransactionWithSigners.partitionValidSignatures(
+          modifiedTx.tx,
+          modifiedTx.expectedSigners
+        )
+        if signersPartition.invalidSigners.isEmpty
+        then Right(new TransactionWithSigners(modifiedTx.tx, signersPartition.validSigners))
+        else Left(signersPartition.invalidSigners)
+    }
+
+object TransactionWithSigners:
+    val empty: TransactionWithSigners = TransactionWithSigners.mkUnsafe(emptyTransaction, Set.empty)
+    private case class SignersPartition(
+        validSigners: Set[ExpectedSigner],
+        invalidSigners: Set[ExpectedSigner]
+    )
+
+    private def partitionValidSignatures(
+        tx: Transaction,
+        expectedSigners: Set[ExpectedSigner]
+    ): SignersPartition =
+        expectedSigners.foldLeft(SignersPartition(Set.empty, Set.empty))((acc, signer) =>
+            if signer.signerPurpose.isIn(tx) then acc.focus(_.validSigners).modify(_ + signer)
+            else acc.focus(_.invalidSigners).modify(_ + signer)
+        )
+
+    /** Create a transaction with expected signers, returning a Left if any signers are not present.
+      * @param tx
+      *   a transaction
+      * @param expectedSigners
+      *   a set of expected signers for this transaction
+      * @return
+      *   Left(invalidSigners) or Right(transactionWithSigners)
+      */
+    def apply(
+        tx: Transaction,
+        expectedSigners: Set[ExpectedSigner]
+    ): Either[Set[ExpectedSigner], TransactionWithSigners] = {
+        val signersPartition = partitionValidSignatures(tx, expectedSigners)
+        if signersPartition.invalidSigners.isEmpty
+        then Right(new TransactionWithSigners(tx, signersPartition.validSigners))
+        else Left(signersPartition.invalidSigners)
+    }
+
+    /** Silently drops any signers that point to invalid transaction components
+      * @param tx
+      * @param expectedSigners
+      * @return
+      */
+    def mkUnsafe(tx: Transaction, expectedSigners: Set[ExpectedSigner]): TransactionWithSigners = {
+        val signersPartition = partitionValidSignatures(tx, expectedSigners)
+        new TransactionWithSigners(tx, signersPartition.validSigners)
+    }
+
+    /** Lens using [[mkUnsafe]].
+      *
+      * This is safe to use only if you're modifying parts of the transaction that do not correspond
+      * to signatures.
+      */
+    val txwsUnsafeL: Lens[TransactionWithSigners, Transaction] = {
+        val getter: TransactionWithSigners => Transaction = (txws => txws.tx)
+        val setter: Transaction => TransactionWithSigners => TransactionWithSigners = {
+            (tx => txws => mkUnsafe(tx = tx, expectedSigners = txws.expectedSigners))
+        }
+        Lens(getter)(setter)
+    }
 
 // ============================================================================
 // Transaction conversion functions
@@ -187,9 +343,9 @@ object TransactionConversion {
     /** Detach transaction redeemers. Leaves invalid redeemers in the transaction's witness set, and
       * places the valid ones alongside the transaction.
       */
-    def toEditableTransaction(tx: Transaction): EditableTransaction = {
-        val ctx = RedeemersContext.fromTransaction(tx)
-        val witnessSet = tx.witnessSet
+    def toEditableTransaction(tx: TransactionWithSigners): EditableTransaction = {
+        val ctx = RedeemersContext.fromTransaction(tx.tx)
+        val witnessSet = tx.tx.witnessSet
 
         val (validRedeemers, invalidRedeemers) = {
             witnessSet.redeemers.map(_.value) match {
@@ -206,7 +362,9 @@ object TransactionConversion {
             if invalidRedeemers.isEmpty then None
             else Some(KeepRaw.apply(Redeemers.from(invalidRedeemers)))
         )
-        val updatedTx = tx.copy(witnessSet = updatedWitnessSet)
+
+        val updatedTx =
+            tx |> txwsUnsafeL.refocus(_.witnessSet).replace(updatedWitnessSet)
 
         EditableTransaction(updatedTx, redeemers)
     }
@@ -214,11 +372,13 @@ object TransactionConversion {
     /** Detach transaction redeemers. Removes redeemers from the witness set and places them
       * alongside the transaction. Fails if there are redeemers that do not point to anything.
       */
-    def toEditableTransactionSafe(tx: Transaction): Either[Redeemer, EditableTransaction] = {
-        val ctx = RedeemersContext.fromTransaction(tx)
+    def toEditableTransactionSafe(
+        tx: TransactionWithSigners
+    ): Either[Redeemer, EditableTransaction] = {
+        val ctx = RedeemersContext.fromTransaction(tx.tx)
 
         for {
-            redeemers <- tx.witnessSet.redeemers match {
+            redeemers <- tx.tx.witnessSet.redeemers match {
                 case None => Right(Vector.empty)
                 case Some(rs) =>
                     rs.value.toSeq
@@ -227,21 +387,24 @@ object TransactionConversion {
                         }
             }
 
-            updatedWitnessSet = tx.witnessSet.copy(redeemers = None)
-            updatedTx = tx.copy(witnessSet = TransactionWitnessSet.empty)
+            updatedTx = tx |> txwsUnsafeL
+                .refocus(_.witnessSet)
+                .replace(TransactionWitnessSet.empty)
         } yield EditableTransaction(updatedTx, redeemers.toVector)
     }
 
     /** Re-attach transaction redeemers. Fails if there are detached redeemers that are not valid
       * (do not point to anything in the transaction).
       */
-    def fromEditableTransactionSafe(editable: EditableTransaction): Option[Transaction] = {
-        val ctx = RedeemersContext.fromTransaction(editable.transaction)
+    def fromEditableTransactionSafe(
+        editable: EditableTransaction
+    ): Option[TransactionWithSigners] = {
+        val ctx = RedeemersContext.fromTransaction(editable.transaction.tx)
 
         RedeemerManagement.attachRedeemers(ctx, editable.redeemers) match {
             case Left(_) => None
             case Right(attachedRedeemers) =>
-                val currentWitnessSet = editable.transaction.witnessSet
+                val currentWitnessSet = editable.transaction.tx.witnessSet
                 val invalidRedeemers =
                     currentWitnessSet.redeemers.map(_.value.toSeq.toVector).getOrElse(Vector.empty)
                 val allRedeemers = (invalidRedeemers ++ attachedRedeemers).distinct
@@ -250,19 +413,21 @@ object TransactionConversion {
                         if allRedeemers.isEmpty then None
                         else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
                     )
-                val updatedTx = editable.transaction.copy(witnessSet = updatedWitnessSet)
+                val updatedTx = editable.transaction |> txwsUnsafeL
+                    .refocus(_.witnessSet)
+                    .replace(updatedWitnessSet)
                 Some(updatedTx)
         }
     }
 
     /** Re-attach transaction redeemers. Silently drops detached redeemers that are not valid.
       */
-    def fromEditableTransaction(editable: EditableTransaction): Transaction = {
-        val ctx = RedeemersContext.fromTransaction(editable.transaction)
+    def fromEditableTransaction(editable: EditableTransaction): TransactionWithSigners = {
+        val ctx = RedeemersContext.fromTransaction(editable.transaction.tx)
         val attachedRedeemers =
             editable.redeemers.flatMap(RedeemerManagement.attachRedeemer(ctx, _))
 
-        val currentWitnessSet = editable.transaction.witnessSet
+        val currentWitnessSet = editable.transaction.tx.witnessSet
         val invalidRedeemers =
             currentWitnessSet.redeemers.map(_.value.toSeq).getOrElse(Seq.empty)
 
@@ -272,7 +437,9 @@ object TransactionConversion {
                 if allRedeemers.isEmpty then None
                 else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
             )
-        val updatedTx = editable.transaction.copy(witnessSet = updatedWitnessSet)
+        val updatedTx = editable.transaction |> txwsUnsafeL
+            .refocus(_.witnessSet)
+            .replace(updatedWitnessSet)
         updatedTx
     }
 }
@@ -302,9 +469,11 @@ object TransactionEditor {
       * @return
       *   target transaction
       */
-    def editTransaction(f: Transaction => Transaction)(tx: Transaction): Transaction = {
+    def editTransaction(
+        f: (TransactionWithSigners) => (TransactionWithSigners)
+    )(tx: TransactionWithSigners): TransactionWithSigners = {
         val editableTx = TransactionConversion.toEditableTransaction(tx)
-        val processedTransaction = f(editableTx.transaction)
+        val processedTransaction = editableTx.transaction.modify(f)
         val newEditableTx = TransactionConversion.toEditableTransaction(processedTransaction)
         val editedTx = editableTx.copy(
           transaction = processedTransaction,
@@ -327,11 +496,13 @@ object TransactionEditor {
       *   target transaction
       */
     def editTransactionSafe(
-        f: Transaction => Transaction
-    )(tx: Transaction): Either[Redeemer, Transaction] = {
+        f: TransactionWithSigners => TransactionWithSigners
+    )(
+        tx: TransactionWithSigners
+    ): Either[Redeemer | Set[ExpectedSigner], TransactionWithSigners] = {
         for {
             editableTx <- TransactionConversion.toEditableTransactionSafe(tx)
-            processedTx = f(editableTx.transaction)
+            processedTx <- editableTx.transaction.modifySafe(f)
             newEditableTx <- TransactionConversion.toEditableTransactionSafe(processedTx)
             editedTx = editableTx.copy(
               transaction = processedTx,
