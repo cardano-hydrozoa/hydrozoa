@@ -275,7 +275,7 @@ object Block {
             extension (self: Full)
                 def major: Major = Major(self._1)
                 def minor: Minor = Minor(self._2)
-                def incrementMajor: Full = Full(self._1 + 1, self._2)
+                def incrementMajor: Full = Full(self._1 + 1, 0)
                 def incrementMinor: Full = Full(self._1, self._2 + 1)
         }
 
