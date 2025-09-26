@@ -14,12 +14,17 @@ object VoteState:
         link: Link,
         peer: Option[PubKeyHash],
         voteStatus: VoteStatus
-    ) derives FromData,
-          ToData
+    )
 
-    enum VoteStatus derives FromData, ToData:
+    given FromData[VoteDatum] = FromData.derived
+    given ToData[VoteDatum] = ToData.derived
+
+    enum VoteStatus:
         case NoVote
         case Vote(voteDetails: VoteDetails)
+
+    given FromData[VoteStatus] = FromData.derived
+    given ToData[VoteStatus] = ToData.derived
 
     given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
         a match
@@ -36,8 +41,10 @@ object VoteState:
     case class VoteDetails(
         commitment: KzgCommitment,
         versionMinor: BigInt
-    ) derives FromData,
-          ToData
+    )
+
+    given FromData[VoteDetails] = FromData.derived
+    given ToData[VoteDetails] = ToData.derived
 
     given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
         a.commitment == b.commitment && a.versionMinor == b.versionMinor

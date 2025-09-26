@@ -9,19 +9,18 @@ class DisputeResolutionScriptTest extends FunSuite {
         assertNotEquals(DisputeResolutionScript.toString, null)
     }
 
-    // FIXME: Script compilation currently has issues with FromData/ToData circular dependencies
-    // This test is disabled until the underlying Scalus compilation issues are resolved
-    //
-    // The error involves infinite recursion in flat encoding during script compilation:
-    // - Module linking errors for VoteDatum and related types
-    // - Stack overflow in scalus.serialization.flat.package$.w7l
-    // - Circular dependencies in FromData/ToData derivation
-    //
     test("Script compiles, size and hash is still the same") {
         assertEquals(
           DisputeResolutionScript.compiledScriptHash,
-          ScriptHash.fromHex("deedbeef"),
+          ScriptHash.fromHex("1c547f989c9bea54e25ca36c938d51b15b7b88b46d0e6432a5bf1890"),
           "Script hash should be stable. In case the script is modified please update the test."
         )
+
+        assertEquals(
+          DisputeResolutionScript.flatEncoded.length,
+          10169,
+          "Script size should be stable. In case the script is modified please update the test."
+        )
+
     }
 }

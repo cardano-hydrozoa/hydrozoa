@@ -1,15 +1,13 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
-// import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential // TODO: Will be needed for actual script witness
+import hydrozoa.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
-import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
-// import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript // TODO: Will be needed for actual script
 import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
-import hydrozoa.*
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.*
@@ -103,26 +101,24 @@ object VoteTx {
 
         // Get dispute resolution script (placeholder - would need actual implementation)
         val disputeResolutionScript =
-            Script.PlutusV3(ByteString.fromHex("deadbeef")) // TODO: actual script
+            Script.PlutusV3(ByteString.fromHex(DisputeResolutionScript.getScriptHex))
 
         // Build the transaction
         val buildResult = for {
             unbalancedTx <- TransactionBuilder
                 .buildTransaction(
                   List(
-                    // Spend the vote UTXO with dispute resolution script witness
+                    // Spend the vote utxo with dispute resolution script witness
                     SpendOutput(
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
                         OutputWitness.PlutusScriptOutput(
                           ScriptValue(disputeResolutionScript),
                           redeemer,
-                          None // No datum witness needed for spending
+                          None // No datum witness needed for an inline datum?
                         )
                       )
                     ),
-                    // TODO: Add treasury UTXO as reference input if needed
-                    // For now, we'll skip the treasury reference to simplify the implementation
                     // Pay back to the vote contract address with updated datum
                     Pay(
                       Babbage(
@@ -136,6 +132,8 @@ object VoteTx {
                 )
                 .left
                 .map(SomeBuilderError(_))
+
+            // TODO: add the treasury as a reference utxo
 
             // Balance the transaction
             balanced <- LowLevelTxBuilder
