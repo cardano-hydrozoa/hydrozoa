@@ -127,7 +127,12 @@ object InitializationTx {
                           headNativeScript.script.scriptHash,
                           headTokenName,
                           1,
-                          NativeScriptCredential(ScriptValue(headNativeScript.script))
+                          NativeScriptCredential(
+                            ScriptValue(
+                              headNativeScript.script,
+                              headNativeScript.requiredSigners.toSeq.toSet
+                            )
+                          )
                         ),
                         Pay(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)),
                         Pay(Babbage(recipe.changeAddress, Value.zero, None, None)),
@@ -141,7 +146,7 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(headNativeScript.numSigners, unbalancedTx),
+                  initial = addDummyVKeys(headNativeScript.numSigners, unbalancedTx.tx),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

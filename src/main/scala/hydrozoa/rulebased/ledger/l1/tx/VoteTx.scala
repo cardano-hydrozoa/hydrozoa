@@ -115,7 +115,9 @@ object VoteTx {
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
                         OutputWitness.PlutusScriptOutput(
-                          ScriptValue(disputeResolutionScript),
+                          ScriptValue(disputeResolutionScript,
+                              // FIXME: does this need any additional signers?
+                              Set.empty),
                           redeemer,
                           None // No datum witness needed for spending
                         )
@@ -140,7 +142,7 @@ object VoteTx {
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx,
+                  initial = unbalancedTx.tx,
                   changeOutputIdx = 0, // Send change to the vote output
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

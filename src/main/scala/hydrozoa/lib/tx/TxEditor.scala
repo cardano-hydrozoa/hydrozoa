@@ -21,7 +21,7 @@ package hydrozoa.lib.tx
 import cats.implicits.*
 import hydrozoa.lib.tx.TransactionWithSigners.txwsUnsafeL
 import hydrozoa.{emptyTransaction, lib}
-import monocle.{Focus, Lens}
+import monocle.Lens
 import monocle.Monocle.{focus, refocus}
 import scalus.builtin.Data
 import scalus.cardano.ledger.*
@@ -195,16 +195,20 @@ object SignerPurpose {
         override def isIn(tx: Transaction): Boolean = tx.body.value.inputs.toSeq.contains(input)
     case class ForMint(policyId: PolicyId) extends SignerPurpose:
         override def isIn(tx: Transaction): Boolean = tx.body.value.mint match {
-            case None => false
+            case None    => false
             case Some(m) => m.assets.contains(policyId)
-        }    
-    case class ForReward(rewardAddress: RewardAccount) extends SignerPurpose:
+        }
+    // N.B.: In the redeemer version, this is a RewardAddress (which is just a stake credential
+    // paired with a network). For signing, I change this because I don't think the
+    // network is relevant -- we would need to pass the tx/context to [[additionalSignersUnsafe]]
+    // in order to create the reward address.
+    case class ForReward(stakeCredential: StakeCredential) extends SignerPurpose:
         override def isIn(tx: Transaction): Boolean = tx.body.value.withdrawals
             .getOrElse(Withdrawals.empty)
             .withdrawals
             .keys
             .toSeq
-            .contains(rewardAddress)
+            .contains(stakeCredential)
     case class ForCert(certificate: Certificate) extends SignerPurpose:
         override def isIn(tx: Transaction): Boolean =
             tx.body.value.certificates.toIndexedSeq.contains(certificate)
@@ -258,6 +262,15 @@ case class TransactionWithSigners private (tx: Transaction, expectedSigners: Set
         new TransactionWithSigners(modifiedTx.tx, signersPartition.validSigners)
     }
 
+    /** Add additional signers to the transaction, silently dropping any that point to invalid
+      * componenets
+      */
+    def addSigners(additionalSigners: Set[ExpectedSigner]): TransactionWithSigners = {
+        val signersPartition =
+            TransactionWithSigners.partitionValidSignatures(this.tx, additionalSigners)
+        new TransactionWithSigners(this.tx, signersPartition._1)
+    }
+
     /** Safely modify a TransactionWithSigners, returning a Left if any signatures point to
       * components that have been removed.
       *
@@ -266,7 +279,12 @@ case class TransactionWithSigners private (tx: Transaction, expectedSigners: Set
       */
     def modifySafe(
         f: TransactionWithSigners => TransactionWithSigners
-    ): Either[Set[ExpectedSigner], TransactionWithSigners] = {
+    ): Either[
+      // NOTE: Should be a non-empty set, but it seems like that has to come from a SortedSet,
+      // and I don't yet know how to handle Ordering instances in scala.
+      Set[ExpectedSigner],
+      TransactionWithSigners
+    ] = {
         val modifiedTx = f(this)
         val signersPartition = TransactionWithSigners.partitionValidSignatures(
           modifiedTx.tx,
@@ -274,6 +292,28 @@ case class TransactionWithSigners private (tx: Transaction, expectedSigners: Set
         )
         if signersPartition.invalidSigners.isEmpty
         then Right(new TransactionWithSigners(modifiedTx.tx, signersPartition.validSigners))
+        else Left(signersPartition.invalidSigners)
+    }
+
+    /** Add additional signers to the transaction, returning a Left with all invalid signatures if
+      * any exist.
+      * @param additionalSigners
+      * @return
+      */
+    def addSignersSafe(
+        additionalSigners: Set[ExpectedSigner]
+    ): Either[
+      // NOTE: Should be a non-empty set, but it seems like that has to come from a SortedSet,
+      // and I don't yet know how to handle Ordering instances in scala.
+      Set[ExpectedSigner],
+      TransactionWithSigners
+    ] = {
+        val signersPartition = TransactionWithSigners.partitionValidSignatures(
+          this.tx,
+          additionalSigners
+        )
+        if signersPartition.invalidSigners.isEmpty
+        then Right(new TransactionWithSigners(this.tx, signersPartition.validSigners))
         else Left(signersPartition.invalidSigners)
     }
 

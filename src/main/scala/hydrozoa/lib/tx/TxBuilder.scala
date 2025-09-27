@@ -8,11 +8,12 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
+import hydrozoa.lib.tx
 import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
-import hydrozoa.lib.tx.SignerPurpose.{ForCert, ForMint, ForReward, ForSpend}
+import hydrozoa.lib.tx.SignerPurpose.*
 import hydrozoa.lib.tx.TransactionWithSigners.txwsUnsafeL
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
-import hydrozoa.{datumOption, emptyTransaction, keepRawL}
+import hydrozoa.{datumOption, keepRawL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
@@ -21,6 +22,7 @@ import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.GovAction.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.|>
@@ -50,7 +52,15 @@ instance Show TransactionBuilderStep where
  */
 
 sealed trait TransactionBuilderStep:
-    val additionalSigners: Set[ExpectedSigner]
+    /** A "best effort" method to determine which additional signers should be added or removed from
+      * the context and/or the TransactionBody.requiredSigners field.
+      *
+      * This method is "unsafe" because it will return an empty set if we can't figure out what you
+      * mean. For example, if you try to spend a script UTxO but don't pass a witness.
+      *
+      * TODO: Make a safe version with better error handling
+      */
+    val additionalSignersUnsafe: Set[ExpectedSigner]
 
 object TransactionBuilderStep {
     case class SpendOutput(
@@ -58,7 +68,7 @@ object TransactionBuilderStep {
         /** Pass None for pubkey outputs only */
         witness: Option[OutputWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = {
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
             val signers = witness match {
                 case Some(ns: OutputWitness.NativeScriptOutput) => ns.additionalSigners
                 case Some(ps: OutputWitness.PlutusScriptOutput) => ps.additionalSigners
@@ -66,7 +76,10 @@ object TransactionBuilderStep {
                     utxo.output.address match {
                         case ShelleyAddress(_, payment: ShelleyPaymentPart.Key, _) =>
                             Set(payment.hash)
-                        case _ => Set.empty // FIXME: What should we do in this case? Return a left?
+                        // Note: in the "safe" version, this case should probably return a left
+                        // It means that we've passed a pubkey output, but without a Shelley key address.
+                        // Question: can we get anything useful from byron addresses?
+                        case _ => Set.empty
                     }
             }
 
@@ -74,7 +87,9 @@ object TransactionBuilderStep {
         }
 
     case class Pay(output: TransactionOutput) extends TransactionBuilderStep:
-        override def additionalSigners = Set.empty
+        // Note: this should be the same in the safe version. Creating an output does
+        // not trigger any scripts or pkh checks.
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = Set.empty
 
     case class MintAsset(
         scriptHash: ScriptHash,
@@ -82,10 +97,11 @@ object TransactionBuilderStep {
         amount: Long,
         witness: CredentialWitness
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] =
+        override val additionalSignersUnsafe: Set[ExpectedSigner] =
             val signers = witness match {
-                case ns: OutputWitness.NativeScriptOutput => ns.additionalSigners
-                case ps: OutputWitness.PlutusScriptOutput => ps.additionalSigners
+                case ns: CredentialWitness.NativeScriptCredential => ns.additionalSigners
+                case ps: CredentialWitness.PlutusScriptCredential => ps.additionalSigners
+
             }
             signers.map(ExpectedSigner(_, ForMint(scriptHash)))
 
@@ -93,59 +109,93 @@ object TransactionBuilderStep {
         cert: Certificate,
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = {
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
             val signers = witness match {
-                case Some(ns: OutputWitness.NativeScriptOutput) => ns.additionalSigners
-                case Some(ps: OutputWitness.PlutusScriptOutput) => ps.additionalSigners
-                case None                                       =>
+                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
+                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+                case None                                               =>
                     // FIXME: I'm not sure if this is correct at all. And some of these can definitely be pool key
                     //  hashes, so I'm not sure if the cast is valid? Do all of the hashes need to sign in order
                     //  unlock the certificate action(s)?
+                    //  If the pool hashes do need to sign, then the type of `ExpectedSigner.signer` should be relaxed.
                     cert.keyHashes.map(_.asInstanceOf[AddrKeyHash])
-
             }
-
             signers.map(ExpectedSigner(_, ForCert(cert)))
         }
 
     case class WithdrawRewards(
-        stakeCredential: Credential,
+        stakeCredential: StakeCredential,
         amount: Coin,
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = {
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
             val signers = witness match {
-                case Some(ns: OutputWitness.NativeScriptOutput) => ns.additionalSigners
-                case Some(ps: OutputWitness.PlutusScriptOutput) => ps.additionalSigners
-                case None                                       =>
-                    stakeCredential.keyHashOption match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
+                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+                case None =>
+                    stakeCredential.credential.keyHashOption match {
                         case Some(kh) => Set(kh)
-                        // FIXME: In this case, we've got a script without a witness. We should throw a Left
+                        // Note: in the safe version, this should return a left.
+                        // It means we've passed a PKH credential, but can't extract the key
                         case None => Set.empty
                     }
 
             }
-
-            // FIXME: I don't think this is correct -- I think ForReward should probably take a stake credential?
-            signers.map(ExpectedSigner(_, ForReward(RewardAccount(???))))
+            signers.map(ExpectedSigner(_, ForReward(stakeCredential)))
         }
 
     case class SubmitProposal(
         proposal: ProposalProcedure,
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = ???
+
+        // Note (dragospe, 2025-09-27): I'm not sure if this is correct.
+        // From a brief look at the spec, it looks like placing a gov action on chain requires a deposit,
+        // but that deposit itself does not get unlocked via the "SubmitProposal" step.
+        // The "ParameterChange" and "TreasuryWithdrawals" proposal types can refer to "guardrails scripts";
+        // the signatures related to these should be obtained from the witness field.
+        // As far as I can tell, there is no possiblity of having a individual pubkey signature directly
+        // tied to a proposal submission without a script requiring it.
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
+            val signers = witness match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
+                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+                // Note: This case is PROBABLY correct -- I think this is just the default when
+                // there is no guardrails script. I think we keep this as-is in the safe version
+                case None => Set.empty
+            }
+            signers.map(ExpectedSigner(_, ForPropose(proposal)))
+        }
 
     case class SubmitVotingProcedure(
         voter: Voter,
         votes: Map[GovActionId, VotingProcedure],
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = ???
+        // Note (dragospe, 2025-09-27): I'm not sure if this is correct.
+        // I believe that if voter.keyHashOption is Some(kh), the kh should be the sole additional signer.
+        // Otherwise, the script hash must correspond to the credential witness.
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
+            val signers = witness match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
+                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+                case None =>
+                    voter.keyHashOption match {
+                        // Note: in the "safe" version, this should return left.
+                        // It is again the case where we've passed a PKH voter
+                        // (indicated by `witness == None`), but no
+                        // key hash could be extracted.
+                        case None     => Set.empty
+                        case Some(kh) => Set(kh)
+                    }
+            }
+            signers.map(ExpectedSigner(_, ForVote(voter)))
+        }
 
     case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
         extends TransactionBuilderStep:
-        override val additionalSigners: Set[ExpectedSigner] = ???
+        // This should stay the same in the safe version.
+        override val additionalSignersUnsafe: Set[ExpectedSigner] = Set.empty
 }
 
 // ============================================================================
@@ -213,17 +263,20 @@ instance Show CredentialWitness where
   show = genericShow
  */
 
-sealed trait CredentialWitness
+sealed trait CredentialWitness:
+    val additionalSigners: Set[AddrKeyHash]
 
 object CredentialWitness {
     case class NativeScriptCredential(
         witness: ScriptWitness[Script.Native]
-    ) extends CredentialWitness
+    ) extends CredentialWitness:
+        override final val additionalSigners: Set[AddrKeyHash] = witness.additionalSigners
     case class PlutusScriptCredential(
         // N.B.: Changed from upstream, we have 3 distinct script types
         witness: ScriptWitness[PlutusScript],
         redeemer: Data
-    ) extends CredentialWitness
+    ) extends CredentialWitness:
+        override final val additionalSigners: Set[AddrKeyHash] = witness.additionalSigners
 }
 
 // ============================================================================
@@ -253,7 +306,7 @@ sealed trait ScriptWitness[+A]:
     val additionalSigners: Set[AddrKeyHash]
 
 object ScriptWitness {
-    case class ScriptValue[A](script: A, additionalSigners: Set[ExpectedSigner])
+    case class ScriptValue[A](script: A, additionalSigners: Set[AddrKeyHash])
         extends ScriptWitness[A]
     case class ScriptReference(
         input: TransactionInput,
@@ -665,13 +718,6 @@ case class Context(
     networkId: Option[Int]
 )
 
-// Will drop signers silently
-val unsafeCtxBodyL: Lens[Context, TransactionBody] =
-    Focus[Context](_.transactionWS)
-        .andThen(txwsUnsafeL)
-        .refocus(_.body)
-        .andThen(keepRawL[TransactionBody]())
-
 // =============================================================
 // Lens to make context modification easier
 
@@ -683,6 +729,23 @@ val unsafeCtxBodyL: Lens[Context, TransactionBody] =
 private type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
 
 object TransactionBuilder:
+    // Will drop signers silently
+    private val unsafeCtxBodyL: Lens[Context, TransactionBody] =
+        Focus[Context](_.transactionWS)
+            .andThen(txwsUnsafeL)
+            .refocus(_.body)
+            .andThen(keepRawL[TransactionBody]())
+
+    // Will drop signers silently
+    private val unsafeCtxWitnessL: Lens[Context, TransactionWitnessSet] =
+        Focus[Context](_.transactionWS).andThen(txwsUnsafeL.refocus(_.witnessSet))
+
+    // Add signers to the Context's transaction for the given step
+    private def addSigners(step: TransactionBuilderStep): BuilderM[Unit] =
+        StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+          Focus[Context](_.transactionWS).modify(_.addSigners(step.additionalSignersUnsafe))
+        )
+
     /** Recursively calculate the minAda for UTxO.
       *
       * @param candidateOutput
@@ -786,7 +849,15 @@ object TransactionBuilder:
     processConstraints = traverse_ processConstraint
      */
     def processConstraints(steps: Seq[TransactionBuilderStep]): BuilderM[Unit] =
-        steps.traverse_(processConstraint)
+        steps.traverse_(step =>
+            for {
+                // processConstraints modifies _transaction components_ for each step.
+                // FIXME: maybe this needs a name change?
+                _ <- processConstraint(step)
+                // addSigners updates the expected signers.
+                _ <- addSigners(step)
+            } yield ()
+        )
 
     /*
     processConstraint :: TransactionBuilderStep -> BuilderM Unit
@@ -819,7 +890,7 @@ object TransactionBuilder:
         useVotingProcedureWitness voter witness
      */
     def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match {
-        case TransactionBuilderStep.SpendOutput(utxo, spendWitness) =>
+        case step @ TransactionBuilderStep.SpendOutput(utxo, spendWitness) =>
             for {
                 _ <- assertNetworkId(utxo.output.address)
                 _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
@@ -864,7 +935,7 @@ object TransactionBuilder:
                 _ <- useCertificateWitness(cert, witness)
             } yield ()
         case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) =>
-            useWithdrawRewardsWitness(StakeCredential(stakeCredential), amount, witness)
+            useWithdrawRewardsWitness(stakeCredential, amount, witness)
         case TransactionBuilderStep.SubmitProposal(proposal, witness) =>
             for {
                 _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
@@ -897,8 +968,10 @@ object TransactionBuilder:
                 _ <- useVotingProcedureWitness(voter, witness)
             } yield ()
         case TransactionBuilderStep.ModifyAuxData(f) =>
-            StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                ctx.focus(_.transaction.auxiliaryData).modify(f(_))
+            StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+              Focus[Context](_.transactionWS)
+                  .andThen(txwsUnsafeL.refocus(_.auxiliaryData))
+                  .modify(f(_))
             )
 
     }
@@ -1062,12 +1135,12 @@ object TransactionBuilder:
         for {
             _ <- witness match {
                 case OutputWitness.PlutusScriptOutput(
-                      ScriptWitness.ScriptValue(plutusScript),
+                      ScriptWitness.ScriptValue(plutusScript, _),
                       _,
                       _
                     ) =>
                     assertScriptHashMatchesScript(scriptHash, Right(plutusScript))
-                case OutputWitness.NativeScriptOutput(ScriptWitness.ScriptValue(nativeScript)) =>
+                case OutputWitness.NativeScriptOutput(ScriptWitness.ScriptValue(nativeScript, _)) =>
                     assertScriptHashMatchesScript(scriptHash, Left(nativeScript))
                 case _ =>
                     StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
@@ -1118,13 +1191,13 @@ object TransactionBuilder:
             case ScriptWitness.ScriptValue(ns, expectedSigners) =>
                 StateT.modify(
                   // Add the native script to the witness set
-                  Focus[Context](_.transactionWS)
-                      .andThen(txwsUnsafeL.refocus(_.witnessSet.nativeScripts))
+                  unsafeCtxWitnessL
+                      .refocus(_.nativeScripts)
                       .modify(s => pushUnique(ns, s.toList).toSet)
                 )
             case ScriptWitness.ScriptReference(input, inputAction, expectedSigners) =>
                 StateT.modify(
-                  ctxBodyL
+                  unsafeCtxBodyL
                       .andThen(inputActionToLens(inputAction))
                       .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                 )
@@ -1145,24 +1218,30 @@ object TransactionBuilder:
         scriptWitness: ScriptWitness[PlutusScript]
     ): BuilderM[Unit] =
         scriptWitness match {
-            case ScriptWitness.ScriptValue(ps: Script.PlutusV1) =>
-                StateT.modify(ctx =>
-                    ctx.focus(_.transaction.witnessSet.plutusV1Scripts)
-                        .modify(s => Set.from(pushUnique(ps, s.toSeq)))
-                )
-            case ScriptWitness.ScriptValue(ps: Script.PlutusV2) =>
-                StateT.modify(ctx =>
-                    ctx.focus(_.transaction.witnessSet.plutusV2Scripts)
-                        .modify(s => Set.from(pushUnique(ps, s.toSeq)))
-                )
-            case ScriptWitness.ScriptValue(ps: Script.PlutusV3) =>
-                StateT.modify(ctx =>
-                    ctx.focus(_.transaction.witnessSet.plutusV3Scripts)
-                        .modify(s => Set.from(pushUnique(ps, s.toSeq)))
-                )
-            case ScriptWitness.ScriptReference(input, action) =>
+            case ScriptWitness.ScriptValue(ps: PlutusScript, _) =>
+                ps match {
+                    case (v1: Script.PlutusV1) =>
+                        StateT.modify(
+                          unsafeCtxWitnessL
+                              .refocus(_.plutusV1Scripts)
+                              .modify(s => Set.from(pushUnique(v1, s.toSeq)))
+                        )
+                    case (v2: Script.PlutusV2) =>
+                        StateT.modify(
+                          unsafeCtxWitnessL
+                              .refocus(_.plutusV2Scripts)
+                              .modify(s => Set.from(pushUnique(v2, s.toSeq)))
+                        )
+                    case (v3: Script.PlutusV3) =>
+                        StateT.modify(
+                          unsafeCtxWitnessL
+                              .refocus(_.plutusV3Scripts)
+                              .modify(s => Set.from(pushUnique(v3, s.toSeq)))
+                        )
+                }
+            case ScriptWitness.ScriptReference(input, action, _) =>
                 StateT.modify(
-                  ctxBodyL
+                  unsafeCtxBodyL
                       .andThen(inputActionToLens(action))
                       .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                 )
@@ -1257,18 +1336,19 @@ object TransactionBuilder:
                                 DataHash.fromByteString(blake2b_224(serialiseData(providedDatum)))
                             if (datumHash == computedHash) {
                                 //
-                                StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
-                                    ctx.focus(_.transaction.witnessSet.plutusData)
-                                        .modify(plutusData =>
-                                            KeepRaw.apply(
-                                              TaggedSet.from(
-                                                pushUnique(
-                                                  KeepRaw.apply(providedDatum),
-                                                  plutusData.value.toIndexedSeq
-                                                )
+                                StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                                  unsafeCtxWitnessL
+                                      .refocus(_.plutusData)
+                                      .modify(plutusData =>
+                                          KeepRaw.apply(
+                                            TaggedSet.from(
+                                              pushUnique(
+                                                KeepRaw.apply(providedDatum),
+                                                plutusData.value.toIndexedSeq
                                               )
                                             )
-                                        )
+                                          )
+                                      )
                                 )
                             } else {
                                 StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
@@ -1290,7 +1370,7 @@ object TransactionBuilder:
                         // of them than strictly necessary.
                         case Some(DatumWitness.DatumReference(input, inputAction)) =>
                             StateT.modify[[X] =>> Either[TxBuildError, X], Context](
-                              ctxBodyL
+                              unsafeCtxBodyL
                                   .andThen(inputActionToLens(inputAction))
                                   .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                             )
@@ -1329,14 +1409,14 @@ object TransactionBuilder:
               Some(witness)
             )
             _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx => {
-                val currentMint = ctx.transactionWS.body.value.mint
+                val currentMint = ctx |> unsafeCtxBodyL.refocus(_.mint).get
                 val thisMint = MultiAsset.asset(scriptHash, assetName, amount)
 
                 val newMint = currentMint match {
                     case None           => Some(thisMint)
                     case Some(existing) => Some(existing + thisMint)
                 }
-                ctx |> ctxBodyL.refocus(_.mint).replace(newMint.map(Mint.apply))
+                ctx |> unsafeCtxBodyL.refocus(_.mint).replace(newMint.map(Mint.apply))
             })
         } yield ()
 
@@ -1378,12 +1458,8 @@ object TransactionBuilder:
             _ <- mbWitness match {
                 case None =>
                     assertCredentialType(credAction, ExpectedWitnessType.PubKeyHashWitness(), cred)
-                        .flatMap(
-                          _ ->
-                              ???
-                        )
                 case Some(
-                      witness @ CredentialWitness.NativeScriptCredential(nsWitness, expectedSigners)
+                      witness @ CredentialWitness.NativeScriptCredential(nsWitness)
                     ) =>
                     for {
                         _ <- assertCredentialType(
@@ -1602,7 +1678,7 @@ object TransactionBuilder:
             }
 
             _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
-              ctxBodyL
+              unsafeCtxBodyL
                   .refocus(_.withdrawals)
                   .modify(withdrawals => {
                       val currentWithdrawals = withdrawals.map(_.withdrawals).getOrElse(Map.empty)
@@ -1798,11 +1874,11 @@ object TransactionBuilder:
         for {
             _ <- witness match {
                 case CredentialWitness.NativeScriptCredential(
-                      ScriptWitness.ScriptValue(nativeScript)
+                      ScriptWitness.ScriptValue(nativeScript, _)
                     ) =>
                     assertScriptHashMatchesScript(scriptHash, Left(nativeScript))
                 case CredentialWitness.PlutusScriptCredential(
-                      ScriptWitness.ScriptValue(plutusScript),
+                      ScriptWitness.ScriptValue(plutusScript, _),
                       _
                     ) =>
                     assertScriptHashMatchesScript(scriptHash, Right(plutusScript))

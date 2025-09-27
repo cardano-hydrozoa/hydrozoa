@@ -81,7 +81,12 @@ object SettlementTx {
                     utxo._2
                   ),
                   witness = Some(
-                    OutputWitness.NativeScriptOutput(ScriptValue(recipe.headNativeScript.script))
+                    OutputWitness.NativeScriptOutput(
+                      ScriptValue(
+                        recipe.headNativeScript.script,
+                        recipe.headNativeScript.requiredSigners.toSortedSet
+                      )
+                    )
                   )
                 )
             )
@@ -108,7 +113,7 @@ object SettlementTx {
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, unbalanced),
+                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, unbalanced.tx),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
