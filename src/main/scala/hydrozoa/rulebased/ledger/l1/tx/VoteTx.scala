@@ -7,72 +7,67 @@ import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
+    OnchainBlockHeader,
+    VoteRedeemer
+}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.NoVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import monocle.syntax.all.*
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
+import scalus.prelude.List as SList
 
 import scala.util.{Failure, Success, Try}
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
 
-// Simplified types for now - these would need to be defined based on the actual L2 block structure
-case class BlockHeader(hash: ByteString, version: BigInt) derives scalus.builtin.ToData
-case class MinorBlockL1Effect(header: BlockHeader, multisigProof: ByteString)
-    derives scalus.builtin.ToData
-case class Account(
-    address: AddressL1,
-    signingKey: ByteString
-) // Simplified - actual implementation would need proper key management
-
 final case class VoteTx(
+    // TODO: what we want to keep here if anything?
     voteUtxoSpent: VoteUtxo,
     voteUtxoProduced: VoteUtxo,
     tx: Transaction
-) // TODO: extends appropriate Tx trait
+) // TODO: rule-based trait analogous to Tx?
 
 object VoteTx {
 
     case class Recipe(
         voteUtxo: VoteUtxo, // The vote UTXO to spend
+        // TODO: use rule-based treasury utxo
         treasuryUtxo: TreasuryUtxo, // Treasury UTXO for reference
-        blockHeader: BlockHeader,
-        proof: MinorBlockL1Effect,
+        blockHeader: OnchainBlockHeader,
+        signatures: List[IArray[Byte]],
         nodeAddress: AddressL1,
-        nodeAccount: Account,
         newVoteDetails: VoteDetails, // The new vote to cast
         context: BuilderContext
     )
 
     enum BuildError:
         case SomeBuilderError(e: TxBuildError)
-        case OtherScalusBalancingError(e: TxBalancingError)
-        case OtherScalusTransactionException(e: TransactionException)
+        case SomeBalancingError(e: TxBalancingError)
+        case SomeTransactionException(e: TransactionException)
         case InvalidVoteDatum(msg: String)
-        case MissingDisputeResolutionScript
+        case VoteAlreadyCast
 
     def build(recipe: Recipe): Either[BuildError, VoteTx] = {
         import BuildError.*
 
         // Extract current vote datum from the UTXO
-        // Get the TransactionOutput from VoteUtxo
         val voteOutput = recipe.voteUtxo.utxo.output.untagged
 
         voteOutput.datumOption match {
             case Some(DatumOption.Inline(datumData)) =>
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
-                        // Create updated vote datum with new vote
-                        val updatedVoteDatum = VoteDatum(
-                          key = voteDatum.key,
-                          link = voteDatum.link,
-                          peer = voteDatum.peer,
-                          voteStatus = VoteStatus.Vote(recipe.newVoteDetails)
-                        )
-
-                        buildVoteTx(recipe, updatedVoteDatum)
+                        if voteDatum.voteStatus == NoVote then
+                            val updatedVoteDatum = voteDatum.copy(
+                              voteStatus = VoteStatus.Vote(recipe.newVoteDetails)
+                            )
+                            buildVoteTx(recipe, updatedVoteDatum)
+                        else Left(VoteAlreadyCast)
 
                     case Failure(e) =>
                         Left(
@@ -82,13 +77,13 @@ object VoteTx {
                         )
                 }
             case _ =>
-                Left(InvalidVoteDatum("Vote UTXO must have inline datum"))
+                Left(InvalidVoteDatum("Vote utxo must have inline datum"))
         }
     }
 
     private def buildVoteTx(
         recipe: Recipe,
-        updatedVoteDatum: VoteDatum
+        datumWithVote: VoteDatum
     ): Either[BuildError, VoteTx] = {
         import BuildError.*
 
@@ -97,9 +92,15 @@ object VoteTx {
             (recipe.voteUtxo.utxo.input.untagged, recipe.voteUtxo.utxo.output.untagged)
 
         // Create redeemer for dispute resolution script
-        val redeemer = recipe.proof.toData
+        val redeemer = VoteRedeemer(
+          recipe.blockHeader,
+          SList.from(
+            recipe.signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+          )
+        )
 
-        // Get dispute resolution script (placeholder - would need actual implementation)
+        // Get dispute resolution script
+        // TODO: use ref script/config?
         val disputeResolutionScript =
             Script.PlutusV3(ByteString.fromHex(DisputeResolutionScript.getScriptHex))
 
@@ -109,12 +110,13 @@ object VoteTx {
                 .buildTransaction(
                   List(
                     // Spend the vote utxo with dispute resolution script witness
+                    // So far we use in-place script
                     SpendOutput(
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
                         OutputWitness.PlutusScriptOutput(
                           ScriptValue(disputeResolutionScript),
-                          redeemer,
+                          redeemer.toData,
                           None // No datum witness needed for an inline datum?
                         )
                       )
@@ -124,7 +126,7 @@ object VoteTx {
                       Babbage(
                         address = voteOutput.address,
                         value = voteOutput.value,
-                        datumOption = Some(Inline(updatedVoteDatum.toData)),
+                        datumOption = Some(Inline(datumWithVote.toData)),
                         scriptRef = None
                       )
                     )
@@ -133,7 +135,10 @@ object VoteTx {
                 .left
                 .map(SomeBuilderError(_))
 
-            // TODO: add the treasury as a reference utxo
+            // add the treasury as a reference utxo
+            _ = unbalancedTx
+                .focus(_.body.value.referenceInputs)
+                .replace(TaggedOrderedSet.from(List(recipe.treasuryUtxo.txId)))
 
             // Balance the transaction
             balanced <- LowLevelTxBuilder
@@ -145,13 +150,13 @@ object VoteTx {
                   evaluator = recipe.context.evaluator
                 )
                 .left
-                .map(OtherScalusBalancingError(_))
+                .map(SomeBalancingError(_))
 
             // Validate the transaction
             validated <- recipe.context
                 .validate(balanced)
                 .left
-                .map(OtherScalusTransactionException(_))
+                .map(SomeTransactionException(_))
 
         } yield validated
 
