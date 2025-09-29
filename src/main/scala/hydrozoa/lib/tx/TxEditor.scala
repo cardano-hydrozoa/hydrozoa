@@ -20,12 +20,10 @@ package hydrozoa.lib.tx
 
 import cats.implicits.*
 import hydrozoa.lib
-import hydrozoa.lib.tx.TransactionWithSigners.txwsTxUnsafeL
 import monocle.Lens
 import monocle.Monocle.{focus, refocus}
 import scalus.builtin.Data
 import scalus.cardano.ledger.*
-import scalus.|>
 
 // ============================================================================
 // DetachedRedeemer
@@ -179,7 +177,7 @@ object RedeemerManagement {
 /** A transaction with redeemers detached.
   */
 case class EditableTransaction(
-    transaction: TransactionWithSigners,
+    transaction: Transaction,
     redeemers: Vector[DetachedRedeemer]
 )
 
@@ -192,9 +190,9 @@ object TransactionConversion {
     /** Detach transaction redeemers. Leaves invalid redeemers in the transaction's witness set, and
       * places the valid ones alongside the transaction.
       */
-    def toEditableTransaction(tx: TransactionWithSigners): EditableTransaction = {
-        val ctx = RedeemersContext.fromTransaction(tx.tx)
-        val witnessSet = tx.tx.witnessSet
+    def toEditableTransaction(tx: Transaction): EditableTransaction = {
+        val ctx = RedeemersContext.fromTransaction(tx)
+        val witnessSet = tx.witnessSet
 
         val (validRedeemers, invalidRedeemers) = {
             witnessSet.redeemers.map(_.value) match {
@@ -213,7 +211,7 @@ object TransactionConversion {
         )
 
         val updatedTx =
-            tx |> txwsTxUnsafeL.refocus(_.witnessSet).replace(updatedWitnessSet)
+            tx.focus(_.witnessSet).replace(updatedWitnessSet)
 
         EditableTransaction(updatedTx, redeemers)
     }
@@ -222,12 +220,12 @@ object TransactionConversion {
       * alongside the transaction. Fails if there are redeemers that do not point to anything.
       */
     def toEditableTransactionSafe(
-        tx: TransactionWithSigners
+        tx: Transaction
     ): Either[Redeemer, EditableTransaction] = {
-        val ctx = RedeemersContext.fromTransaction(tx.tx)
+        val ctx = RedeemersContext.fromTransaction(tx)
 
         for {
-            redeemers <- tx.tx.witnessSet.redeemers match {
+            redeemers <- tx.witnessSet.redeemers match {
                 case None => Right(Vector.empty)
                 case Some(rs) =>
                     rs.value.toSeq
@@ -236,8 +234,8 @@ object TransactionConversion {
                         }
             }
 
-            updatedTx = tx |> txwsTxUnsafeL
-                .refocus(_.witnessSet)
+            updatedTx = tx
+                .focus(_.witnessSet)
                 .replace(TransactionWitnessSet.empty)
         } yield EditableTransaction(updatedTx, redeemers.toVector)
     }
@@ -247,13 +245,13 @@ object TransactionConversion {
       */
     def fromEditableTransactionSafe(
         editable: EditableTransaction
-    ): Option[TransactionWithSigners] = {
-        val ctx = RedeemersContext.fromTransaction(editable.transaction.tx)
+    ): Option[Transaction] = {
+        val ctx = RedeemersContext.fromTransaction(editable.transaction)
 
         RedeemerManagement.attachRedeemers(ctx, editable.redeemers) match {
             case Left(_) => None
             case Right(attachedRedeemers) =>
-                val currentWitnessSet = editable.transaction.tx.witnessSet
+                val currentWitnessSet = editable.transaction.witnessSet
                 val invalidRedeemers =
                     currentWitnessSet.redeemers.map(_.value.toSeq.toVector).getOrElse(Vector.empty)
                 val allRedeemers = (invalidRedeemers ++ attachedRedeemers).distinct
@@ -262,8 +260,8 @@ object TransactionConversion {
                         if allRedeemers.isEmpty then None
                         else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
                     )
-                val updatedTx = editable.transaction |> txwsTxUnsafeL
-                    .refocus(_.witnessSet)
+                val updatedTx = editable.transaction
+                    .focus(_.witnessSet)
                     .replace(updatedWitnessSet)
                 Some(updatedTx)
         }
@@ -271,12 +269,12 @@ object TransactionConversion {
 
     /** Re-attach transaction redeemers. Silently drops detached redeemers that are not valid.
       */
-    def fromEditableTransaction(editable: EditableTransaction): TransactionWithSigners = {
-        val ctx = RedeemersContext.fromTransaction(editable.transaction.tx)
+    def fromEditableTransaction(editable: EditableTransaction): Transaction = {
+        val ctx = RedeemersContext.fromTransaction(editable.transaction)
         val attachedRedeemers =
             editable.redeemers.flatMap(RedeemerManagement.attachRedeemer(ctx, _))
 
-        val currentWitnessSet = editable.transaction.tx.witnessSet
+        val currentWitnessSet = editable.transaction.witnessSet
         val invalidRedeemers =
             currentWitnessSet.redeemers.map(_.value.toSeq).getOrElse(Seq.empty)
 
@@ -286,8 +284,8 @@ object TransactionConversion {
                 if allRedeemers.isEmpty then None
                 else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
             )
-        val updatedTx = editable.transaction |> txwsTxUnsafeL
-            .refocus(_.witnessSet)
+        val updatedTx = editable.transaction
+            .focus(_.witnessSet)
             .replace(updatedWitnessSet)
         updatedTx
     }
@@ -319,8 +317,8 @@ object TransactionEditor {
       *   target transaction
       */
     def editTransaction(
-        f: (TransactionWithSigners) => (TransactionWithSigners)
-    )(tx: TransactionWithSigners): TransactionWithSigners = {
+        f: Transaction => Transaction
+    )(tx: Transaction): Transaction = {
         val editableTx = TransactionConversion.toEditableTransaction(tx)
         val processedTransaction = f(editableTx.transaction)
         val newEditableTx = TransactionConversion.toEditableTransaction(processedTransaction)
@@ -345,10 +343,10 @@ object TransactionEditor {
       *   target transaction
       */
     def editTransactionSafe(
-        f: TransactionWithSigners => TransactionWithSigners
+        f: Transaction => Transaction
     )(
-        tx: TransactionWithSigners
-    ): Either[Redeemer | Set[ExpectedSigner], TransactionWithSigners] = {
+        tx: Transaction
+    ): Either[Redeemer, Transaction] = {
         for {
             editableTx <- TransactionConversion.toEditableTransactionSafe(tx)
             processedTx = f(editableTx.transaction)

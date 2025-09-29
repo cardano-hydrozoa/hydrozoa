@@ -113,7 +113,7 @@ object SettlementTx {
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, unbalanced.tx),
+                  initial = addDummyVKeys(unbalanced._2.size, unbalanced._1),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

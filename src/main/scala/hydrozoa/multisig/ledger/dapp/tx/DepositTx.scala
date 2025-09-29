@@ -126,7 +126,7 @@ object DepositTx {
             b1 <- TransactionBuilder.buildTransaction(steps).left.map(SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(1, b1.tx),
+                  initial = addDummyVKeys(b1._2.size, b1._1),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

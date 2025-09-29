@@ -1,26 +1,24 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.keepRawL
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
 import hydrozoa.lib.tx.InputAction.SpendInput
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
-import hydrozoa.lib.tx.SignerPurpose.ForSpend
 import hydrozoa.lib.tx.TransactionBuilder.{buildTransaction, modifyTransaction}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
-import hydrozoa.lib.tx.TransactionWithSigners.txwsTxUnsafeL
 import hydrozoa.lib.tx.TxBuildError.{
     IncorrectScriptHash,
     UnneededDeregisterWitness,
     WrongNetworkId,
     WrongOutputType
 }
+import hydrozoa.{emptyTransaction, txBodyL}
 import io.bullet.borer.Cbor
-import monocle.Lens
 import monocle.syntax.all.*
+import monocle.{Focus, Lens}
 import org.scalacheck.Gen
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -38,14 +36,8 @@ import test.{genAddrKeyHash, genTxId}
 
 import scala.collection.immutable.{SortedMap, SortedSet}
 
-// A lens for cutting down verbosity of accessing the tx body.
-// Note that we can't "chain" this like we would with the _.focus syntax.
-// See https://groups.google.com/g/scala-monocle/c/xMzezt2wAog
-private val txBody: Lens[TransactionWithSigners, TransactionBody] =
-    txwsTxUnsafeL.refocus(_.body).andThen(keepRawL[TransactionBody]())
-
-private def addInput(input: TransactionInput): TransactionWithSigners => TransactionWithSigners =
-    txBody
+private def addInput(input: TransactionInput): Transaction => Transaction =
+    txBodyL
         .refocus(_.inputs)
         .modify((is: TaggedOrderedSet[TransactionInput]) =>
             TaggedOrderedSet.from(
@@ -66,12 +58,11 @@ class TxEditorTests extends munit.ScalaCheckSuite {
     //          ]
     //      # _body <<< _inputs .~
     //          [ input1 ]
-    val oneInput: TransactionWithSigners = {
-        val l1 = txBody
+    val oneInput: Transaction = {
+        val l1 = txBodyL
             .refocus(_.inputs)
             .replace(TaggedOrderedSet(input1))
-        val l2 = txwsTxUnsafeL
-            .refocus(_.witnessSet.redeemers)
+        val l2 = Focus[Transaction](_.witnessSet.redeemers)
             .replace(
               Some(
                 KeepRaw(
@@ -111,9 +102,8 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         `shouldEqual` tx'
      */
     test("attach one input to the end")({
-        val tx1 = txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1, input2))(anyNetworkTx)
-        val expectedTx = tx1 |> txwsTxUnsafeL
-            .refocus(_.witnessSet.redeemers)
+        val tx1 = txBodyL.refocus(_.inputs).replace(TaggedOrderedSet(input1, input2))(anyNetworkTx)
+        val expectedTx = tx1 |> Focus[Transaction](_.witnessSet.redeemers)
             .replace(
               Some(
                 KeepRaw(
@@ -131,7 +121,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
 
         assertEquals(
           obtained = editTransaction(
-            txBody
+            txBodyL
                 .refocus(_.inputs)
                 .modify((i: TaggedOrderedSet[TransactionInput]) =>
                     TaggedOrderedSet.from(i.toSeq :+ input2)
@@ -173,19 +163,17 @@ class TxEditorTests extends munit.ScalaCheckSuite {
     test("remove two inputs, before and after")({
         val tx1 = {
             val l1 =
-                txwsTxUnsafeL
-                    .refocus(_.witnessSet.redeemers)
+                Focus[Transaction](_.witnessSet.redeemers)
                     .replace(Some(KeepRaw(Redeemers(unitRedeemer.focus(_.index).replace(1)))))
-            val l2 = txBody
+            val l2 = txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input1, input2))
             anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
-            val l1 = txwsTxUnsafeL
-                .refocus(_.witnessSet.redeemers)
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
                 .replace(Some(KeepRaw(Redeemers(unitRedeemer))))
-            val l2 = txBody
+            val l2 = txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input1))
             anyNetworkTx |> l1 |> l2
@@ -193,7 +181,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
 
         assertEquals(
           obtained = editTransactionSafe(
-            txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
+            txBodyL.refocus(_.inputs).replace(TaggedOrderedSet(input1))
           )(tx1),
           expected = Right(tx2)
         )
@@ -240,8 +228,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
      */
     test("remove two inputs with redeemers, before and after")({
         val tx1 = {
-            val l1 = txwsTxUnsafeL
-                .refocus(_.witnessSet.redeemers)
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
                 .replace(
                   Some(
                     KeepRaw(
@@ -263,14 +250,13 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                     )
                   )
                 )
-            val l2 = txBody
+            val l2 = txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input1, input2))
             anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
-            val l1 = txwsTxUnsafeL
-                .refocus(_.witnessSet.redeemers)
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
                 .replace(
                   Some(
                     KeepRaw(
@@ -286,7 +272,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                   )
                 )
             val l2 =
-                txBody
+                txBodyL
                     .refocus(_.inputs)
                     .replace(TaggedOrderedSet(input1))
 
@@ -295,7 +281,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         assertEquals(
           expected = Right(tx2),
           obtained = editTransactionSafe(
-            txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
+            txBodyL.refocus(_.inputs).replace(TaggedOrderedSet(input1))
           )(tx1)
         )
     })
@@ -354,8 +340,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
      */
     test("remove input & redeemer, add another input & redeemer")({
         val tx1 = {
-            val l1 = txwsTxUnsafeL
-                .refocus(_.witnessSet.redeemers)
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
                 .replace(
                   Some(
                     KeepRaw(
@@ -371,15 +356,14 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                     )
                   )
                 )
-            val l2 = txBody
+            val l2 = txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input1, input2))
             anyNetworkTx |> l1 |> l2
         }
 
         val tx2 = {
-            val l1 = txwsTxUnsafeL
-                .refocus(_.witnessSet.redeemers)
+            val l1 = Focus[Transaction](_.witnessSet.redeemers)
                 .replace(
                   Some(
                     KeepRaw(
@@ -401,7 +385,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                   )
                 )
             val l2 =
-                txBody
+                txBodyL
                     .refocus(_.inputs)
                     .replace(TaggedOrderedSet(input0, input2))
             anyNetworkTx |> l1 |> l2
@@ -409,12 +393,11 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         assertEquals(
           expected = Right(tx2),
           obtained = tx1 |> editTransactionSafe(
-            txBody
+            txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input2))
                 .compose(
-                  txwsTxUnsafeL
-                      .refocus(_.witnessSet.redeemers)
+                  Focus[Transaction](_.witnessSet.redeemers)
                       .replace(
                         Some(
                           KeepRaw(
@@ -478,7 +461,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     def testBuilderSteps(
         label: String,
         steps: Seq[TransactionBuilderStep],
-        expected: TransactionWithSigners
+        expected: (Transaction, Set[ExpectedSigner])
     )(implicit loc: munit.Location): Unit =
         test(label)({
             val res = TransactionBuilder.buildTransaction(steps)
@@ -529,25 +512,20 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     ///////////////////////////////////////////////////////////////
 
     val spendPkhUtxoStep = TransactionBuilderStep.SpendOutput(pkhUtxo, None)
+    val pubKeyInput1Expected: (Transaction, Set[ExpectedSigner]) = (anyNetworkTx, Set.empty)
+        |> Focus[(Transaction, Set[ExpectedSigner])](_._1)
+            .andThen(txBodyL.refocus(_.inputs))
+            .replace(TaggedOrderedSet(input1))
+        |> ((tx: Transaction, es: Set[ExpectedSigner]) =>
+            (tx, es ++ spendPkhUtxoStep.additionalSignersUnsafe)
+        )
 
     // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
     //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
     testBuilderSteps(
       label = "PKH Output",
       steps = List(SpendOutput(pkhUtxo, None)),
-      expected = anyNetworkTx
-          |> txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
-          |> (txws => txws.addSigners(spendPkhUtxoStep.additionalSignersUnsafe))
-    )
-
-    // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
-    //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
-    testBuilderSteps(
-      label = "PKH Output",
-      steps = List(SpendOutput(pkhUtxo, None)),
-      expected = anyNetworkTx
-          |> txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
-          |> (txws => txws.addSigners(spendPkhUtxoStep.additionalSignersUnsafe))
+      expected = pubKeyInput1Expected
     )
 
     // testBuilderSteps "PKH output x2 -> 1"
@@ -556,9 +534,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "PKH output x2 -> 1",
       steps = List(SpendOutput(pkhUtxo, None), SpendOutput(pkhUtxo, None)),
-      expected = anyNetworkTx
-          |> txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
-          |> (txws => txws.addSigners(spendPkhUtxoStep.additionalSignersUnsafe))
+      expected = pubKeyInput1Expected
     )
 
     // testBuilderStepsFail "PKH output with wrong witness #1"
@@ -605,7 +581,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     //      result `shouldEqual`
     //        Left (WrongNetworkId $ pkhUtxo ^. _output <<< _address)
     test("PKH output with wrong NetworkId")({
-        val res = modifyTransaction(testnetTransaction, List(SpendOutput(pkhUtxo, None)))
+        val res = modifyTransaction(testnetTransaction, Set.empty, List(SpendOutput(pkhUtxo, None)))
         assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxo.output.address)))
     })
 
@@ -621,8 +597,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
             obtained = spendPkhUtxoStep.additionalSignersUnsafe,
             expected = Set(
               ExpectedSigner(
-                pkhOutputPaymentPart.asInstanceOf[ShelleyPaymentPart.Key].hash,
-                ForSpend(pkhUtxo.input)
+                pkhOutputPaymentPart.asInstanceOf[ShelleyPaymentPart.Key].hash
               )
             )
           )
@@ -630,7 +605,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           // Check that the transaction step adds the correct signer
           val tx = buildTransaction(List(spendPkhUtxoStep))
           assertEquals(
-            obtained = tx.map(_.expectedSigners),
+            obtained = tx.map(_._2),
             expected = Right(spendPkhUtxoStep.additionalSignersUnsafe)
           )
 
@@ -657,15 +632,14 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         // Signers are what we expected for an NS spend
         assertEquals(
           obtained = step.additionalSignersUnsafe,
-          expected = nsSigners.map(ExpectedSigner(_, ForSpend(txInput)))
+          expected = nsSigners.map(ExpectedSigner(_))
         )
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
-          obtained = buildTransaction(List(step)).map(_.expectedSigners),
+          obtained = buildTransaction(List(step)).map(_._2),
           expected = Right(step.additionalSignersUnsafe)
         )
-
     })
 
     test("Signers work for PS spend")({
@@ -688,12 +662,12 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         // Signers are what we expected for an PS spend
         assertEquals(
           obtained = step.additionalSignersUnsafe,
-          expected = psSignersOutput.map(RequiredSigner(_, ForSpend(txInput)))
+          expected = psSignersOutput.map(ExpectedSigner(_))
         )
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
-          obtained = buildTransaction(List(step)).map(_.expectedSigners),
+          obtained = buildTransaction(List(step)).map(_._2),
           expected = Right(step.additionalSignersUnsafe)
         )
 
@@ -708,7 +682,9 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "Pay #1",
       steps = List(Pay(pkhOutput)),
-      expected = txBody.refocus(_.outputs).replace(IndexedSeq(Sized(pkhOutput)))(anyNetworkTx)
+      expected = (anyNetworkTx, Set.empty) |> Focus[(Transaction, Set[ExpectedSigner])](_._1)
+          .andThen(txBodyL.refocus(_.outputs))
+          .replace(IndexedSeq(Sized(pkhOutput)))
     )
 
     // =======================================================================
@@ -731,47 +707,49 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = List(
-        // replace mint
-        txBody
-            .refocus(_.mint)
-            .replace(
-              Some(
-                Mint(
-                  MultiAsset(
-                    SortedMap.from(
-                      List(
-                        scriptHash1 -> SortedMap.from(
-                          List(AssetName(ByteString.fromHex("deadbeef")) -> 1L)
+      expected = (anyNetworkTx, Set.empty) |>
+          // replace mint
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .andThen(txBodyL)
+              .refocus(_.mint)
+              .replace(
+                Some(
+                  Mint(
+                    MultiAsset(
+                      SortedMap.from(
+                        List(
+                          scriptHash1 -> SortedMap.from(
+                            List(AssetName(ByteString.fromHex("deadbeef")) -> 1L)
+                          )
                         )
                       )
                     )
                   )
                 )
               )
-            ),
-        // add script witness
-        txwsTxUnsafeL
-            .refocus(_.witnessSet.plutusV1Scripts)
-            .replace(Set(script1)),
-        // add redeemer
-        txwsTxUnsafeL
-            .refocus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    Redeemer(
-                      tag = RedeemerTag.Mint,
-                      index = 0,
-                      data = Data.List(List.empty),
-                      exUnits = ExUnits.zero
+          |>
+          // add script witness
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .refocus(_.witnessSet.plutusV1Scripts)
+              .replace(Set(script1))
+          |>
+          // add redeemer
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .refocus(_.witnessSet.redeemers)
+              .replace(
+                Some(
+                  KeepRaw(
+                    Redeemers(
+                      Redeemer(
+                        tag = RedeemerTag.Mint,
+                        index = 0,
+                        data = Data.List(List.empty),
+                        exUnits = ExUnits.zero
+                      )
                     )
                   )
                 )
               )
-            )
-      ).reduce(_ andThen _)(anyNetworkTx)
     )
 
     // =======================================================================
@@ -813,34 +791,34 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = List(
-        txwsTxUnsafeL
-            .refocus(_.witnessSet.plutusV1Scripts)
-            .replace(Set(script1)),
-        txwsTxUnsafeL
-            .refocus(_.witnessSet.redeemers)
-            .replace(
-              Some(
-                KeepRaw(
-                  Redeemers(
-                    Redeemer(
-                      tag = Cert,
-                      index = 0,
-                      data = Data.List(List.empty),
-                      exUnits = ExUnits.zero
+      expected = (anyNetworkTx, Set.empty) |>
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .refocus(_.witnessSet.plutusV1Scripts)
+              .replace(Set(script1)) |>
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .refocus(_.witnessSet.redeemers)
+              .replace(
+                Some(
+                  KeepRaw(
+                    Redeemers(
+                      Redeemer(
+                        tag = Cert,
+                        index = 0,
+                        data = Data.List(List.empty),
+                        exUnits = ExUnits.zero
+                      )
                     )
                   )
                 )
+              ) |>
+          Focus[(Transaction, Set[ExpectedSigner])](_._1)
+              .andThen(txBodyL)
+              .refocus(_.certificates)
+              .replace(
+                TaggedSet(
+                  Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None)
+                )
               )
-            ),
-        txBody
-            .refocus(_.certificates)
-            .replace(
-              TaggedSet(
-                Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None)
-              )
-            )
-      ).reduce(_ andThen _)(anyNetworkTx)
     )
 
     // witness = PlutusScriptCredential (ScriptValue script1) RedeemerDatum.unit
@@ -888,7 +866,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "ModifyAuxData: id",
       steps = List(ModifyAuxData(identity)),
-      expected = anyNetworkTx
+      expected = (anyNetworkTx, Set.empty)
     )
 
 }
@@ -1101,12 +1079,12 @@ val script2: Script.PlutusV1 =
 anyNetworkTx :: Transaction
 anyNetworkTx = Transaction.empty
  */
-val anyNetworkTx: TransactionWithSigners = TransactionWithSigners.empty
+val anyNetworkTx: Transaction = emptyTransaction
 
 /*
 testnetTransaction :: Transaction
 testnetTransaction = Transaction.empty # _body <<< _networkId .~ Just TestnetId
  */
 // See: https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/test/CSLHex.purs#L109
-val testnetTransaction: TransactionWithSigners =
-    txBody.refocus(_.networkId).replace(Some(0))(anyNetworkTx)
+val testnetTransaction: Transaction =
+    txBodyL.refocus(_.networkId).replace(Some(0))(anyNetworkTx)

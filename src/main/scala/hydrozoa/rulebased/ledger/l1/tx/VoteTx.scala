@@ -8,8 +8,8 @@ import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOut
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 // import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript // TODO: Will be needed for actual script
-import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.*
@@ -115,9 +115,11 @@ object VoteTx {
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
                         OutputWitness.PlutusScriptOutput(
-                          ScriptValue(disputeResolutionScript,
-                              // FIXME: does this need any additional signers?
-                              Set.empty),
+                          ScriptValue(
+                            disputeResolutionScript,
+                            // FIXME: does this need any additional signers?
+                            Set.empty
+                          ),
                           redeemer,
                           None // No datum witness needed for spending
                         )
@@ -142,7 +144,7 @@ object VoteTx {
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx.tx,
+                  initial = unbalancedTx._1,
                   changeOutputIdx = 0, // Send change to the vote output
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

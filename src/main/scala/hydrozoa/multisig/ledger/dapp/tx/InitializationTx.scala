@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
@@ -15,9 +14,9 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
     OtherScalusTransactionException,
     SomeBuilderError
 }
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -146,7 +145,7 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(headNativeScript.numSigners, unbalancedTx.tx),
+                  initial = addDummyVKeys(unbalancedTx._2.size, unbalancedTx._1),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
