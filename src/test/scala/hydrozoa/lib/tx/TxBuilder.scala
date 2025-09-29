@@ -11,7 +11,7 @@ import hydrozoa.lib.tx.SignerPurpose.ForSpend
 import hydrozoa.lib.tx.TransactionBuilder.{buildTransaction, modifyTransaction}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
-import hydrozoa.lib.tx.TransactionWithSigners.txwsUnsafeL
+import hydrozoa.lib.tx.TransactionWithSigners.txwsTxUnsafeL
 import hydrozoa.lib.tx.TxBuildError.{
     IncorrectScriptHash,
     UnneededDeregisterWitness,
@@ -42,7 +42,7 @@ import scala.collection.immutable.{SortedMap, SortedSet}
 // Note that we can't "chain" this like we would with the _.focus syntax.
 // See https://groups.google.com/g/scala-monocle/c/xMzezt2wAog
 private val txBody: Lens[TransactionWithSigners, TransactionBody] =
-    txwsUnsafeL.refocus(_.body).andThen(keepRawL[TransactionBody]())
+    txwsTxUnsafeL.refocus(_.body).andThen(keepRawL[TransactionBody]())
 
 private def addInput(input: TransactionInput): TransactionWithSigners => TransactionWithSigners =
     txBody
@@ -70,7 +70,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         val l1 = txBody
             .refocus(_.inputs)
             .replace(TaggedOrderedSet(input1))
-        val l2 = txwsUnsafeL
+        val l2 = txwsTxUnsafeL
             .refocus(_.witnessSet.redeemers)
             .replace(
               Some(
@@ -112,7 +112,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
      */
     test("attach one input to the end")({
         val tx1 = txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1, input2))(anyNetworkTx)
-        val expectedTx = tx1 |> txwsUnsafeL
+        val expectedTx = tx1 |> txwsTxUnsafeL
             .refocus(_.witnessSet.redeemers)
             .replace(
               Some(
@@ -173,7 +173,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
     test("remove two inputs, before and after")({
         val tx1 = {
             val l1 =
-                txwsUnsafeL
+                txwsTxUnsafeL
                     .refocus(_.witnessSet.redeemers)
                     .replace(Some(KeepRaw(Redeemers(unitRedeemer.focus(_.index).replace(1)))))
             val l2 = txBody
@@ -182,7 +182,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
-            val l1 = txwsUnsafeL
+            val l1 = txwsTxUnsafeL
                 .refocus(_.witnessSet.redeemers)
                 .replace(Some(KeepRaw(Redeemers(unitRedeemer))))
             val l2 = txBody
@@ -240,7 +240,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
      */
     test("remove two inputs with redeemers, before and after")({
         val tx1 = {
-            val l1 = txwsUnsafeL
+            val l1 = txwsTxUnsafeL
                 .refocus(_.witnessSet.redeemers)
                 .replace(
                   Some(
@@ -269,7 +269,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
             anyNetworkTx |> l1 |> l2
         }
         val tx2 = {
-            val l1 = txwsUnsafeL
+            val l1 = txwsTxUnsafeL
                 .refocus(_.witnessSet.redeemers)
                 .replace(
                   Some(
@@ -354,7 +354,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
      */
     test("remove input & redeemer, add another input & redeemer")({
         val tx1 = {
-            val l1 = txwsUnsafeL
+            val l1 = txwsTxUnsafeL
                 .refocus(_.witnessSet.redeemers)
                 .replace(
                   Some(
@@ -378,7 +378,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
         }
 
         val tx2 = {
-            val l1 = txwsUnsafeL
+            val l1 = txwsTxUnsafeL
                 .refocus(_.witnessSet.redeemers)
                 .replace(
                   Some(
@@ -413,7 +413,7 @@ class TxEditorTests extends munit.ScalaCheckSuite {
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input2))
                 .compose(
-                  txwsUnsafeL
+                  txwsTxUnsafeL
                       .refocus(_.witnessSet.redeemers)
                       .replace(
                         Some(
@@ -529,6 +529,16 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     ///////////////////////////////////////////////////////////////
 
     val spendPkhUtxoStep = TransactionBuilderStep.SpendOutput(pkhUtxo, None)
+
+    // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
+    //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
+    testBuilderSteps(
+      label = "PKH Output",
+      steps = List(SpendOutput(pkhUtxo, None)),
+      expected = anyNetworkTx
+          |> txBody.refocus(_.inputs).replace(TaggedOrderedSet(input1))
+          |> (txws => txws.addSigners(spendPkhUtxoStep.additionalSignersUnsafe))
+    )
 
     // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
     //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
@@ -678,7 +688,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         // Signers are what we expected for an PS spend
         assertEquals(
           obtained = step.additionalSignersUnsafe,
-          expected = psSignersOutput.map(ExpectedSigner(_, ForSpend(txInput)))
+          expected = psSignersOutput.map(RequiredSigner(_, ForSpend(txInput)))
         )
 
         // Signers are what we expect for a transaction built with this step
@@ -741,11 +751,11 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
               )
             ),
         // add script witness
-        txwsUnsafeL
+        txwsTxUnsafeL
             .refocus(_.witnessSet.plutusV1Scripts)
             .replace(Set(script1)),
         // add redeemer
-        txwsUnsafeL
+        txwsTxUnsafeL
             .refocus(_.witnessSet.redeemers)
             .replace(
               Some(
@@ -804,10 +814,10 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         )
       ),
       expected = List(
-        txwsUnsafeL
+        txwsTxUnsafeL
             .refocus(_.witnessSet.plutusV1Scripts)
             .replace(Set(script1)),
-        txwsUnsafeL
+        txwsTxUnsafeL
             .refocus(_.witnessSet.redeemers)
             .replace(
               Some(

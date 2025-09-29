@@ -528,3 +528,11 @@ def keepRawL[A: Encoder](): Lens[KeepRaw[A], A] = {
     val replace: A => KeepRaw[A] => KeepRaw[A] = (a => kr => KeepRaw(a))
     Lens[KeepRaw[A], A](get)(replace)
 }
+
+def txBodyL: Lens[Transaction, TransactionBody] = {
+    val get: Transaction => TransactionBody = tx =>
+        tx.focus(_.body).andThen(keepRawL[TransactionBody]()).get
+    val replace: TransactionBody => Transaction => Transaction = body =>
+        tx => tx.focus(_.body).andThen(keepRawL[TransactionBody]()).replace(body)
+    Lens(get)(replace)
+}

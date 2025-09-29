@@ -11,7 +11,7 @@ import cats.implicits.*
 import hydrozoa.lib.tx
 import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.SignerPurpose.*
-import hydrozoa.lib.tx.TransactionWithSigners.txwsUnsafeL
+import hydrozoa.lib.tx.TransactionWithSigners.{txwsSignersUnsafeL, txwsTxUnsafeL}
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
 import hydrozoa.{datumOption, keepRawL}
 import io.bullet.borer.Cbor
@@ -58,7 +58,18 @@ sealed trait TransactionBuilderStep:
       * This method is "unsafe" because it will return an empty set if we can't figure out what you
       * mean. For example, if you try to spend a script UTxO but don't pass a witness.
       *
-      * TODO: Make a safe version with better error handling
+      * TODO: Make a safe version with better error handling NOTE: There's a pattern here: basically
+      * a pattern match on the witness, followed by an injection into either ExpectedSigner or
+      * RequiredSigner for all additional signers of the witness. It wasn't obvious to me when I
+      * started writing, but it could be refactored to clear it up. This extends to the types as
+      * well: it's clear that native scripts and pubkey outputs will always be "expected" and plutus
+      * scripts will always be the "RequiredSigners" subclass, but it isn't totally clear to me
+      * _where_ we should make this distinction in the type system. We need to know both the step
+      * and the witness type before knowing the signer type; flattening the types so that the
+      * witness, signer, and transaction component all existed side-by-side would probably make this
+      * more apparent and give us more totality, (possibly) at the expense of more verbosity and
+      * more LoC TODO: This would be a function `TransactionBuilderStep => Set[ExpectedSigner]`, but
+      * I made it a method instead and sort of regret it.
       */
     val additionalSignersUnsafe: Set[ExpectedSigner]
 
@@ -69,21 +80,22 @@ object TransactionBuilderStep {
         witness: Option[OutputWitness]
     ) extends TransactionBuilderStep:
         override val additionalSignersUnsafe: Set[ExpectedSigner] = {
-            val signers = witness match {
-                case Some(ns: OutputWitness.NativeScriptOutput) => ns.additionalSigners
-                case Some(ps: OutputWitness.PlutusScriptOutput) => ps.additionalSigners
+            witness match {
+                case Some(ns: OutputWitness.NativeScriptOutput) =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForSpend(utxo._1)))
+                case Some(ps: OutputWitness.PlutusScriptOutput) =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForSpend(utxo._1)))
                 case None =>
-                    utxo.output.address match {
+                    (utxo.output.address match {
                         case ShelleyAddress(_, payment: ShelleyPaymentPart.Key, _) =>
                             Set(payment.hash)
                         // Note: in the "safe" version, this case should probably return a left
                         // It means that we've passed a pubkey output, but without a Shelley key address.
                         // Question: can we get anything useful from byron addresses?
                         case _ => Set.empty
-                    }
+                    }).map(ExpectedSigner(_, ForSpend(utxo._1)))
             }
 
-            signers.map(ExpectedSigner(_, ForSpend(utxo._1)))
         }
 
     case class Pay(output: TransactionOutput) extends TransactionBuilderStep:
@@ -98,29 +110,33 @@ object TransactionBuilderStep {
         witness: CredentialWitness
     ) extends TransactionBuilderStep:
         override val additionalSignersUnsafe: Set[ExpectedSigner] =
-            val signers = witness match {
-                case ns: CredentialWitness.NativeScriptCredential => ns.additionalSigners
-                case ps: CredentialWitness.PlutusScriptCredential => ps.additionalSigners
+            witness match {
+                case ns: CredentialWitness.NativeScriptCredential =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForMint(scriptHash)))
+                case ps: CredentialWitness.PlutusScriptCredential =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForMint(scriptHash)))
 
             }
-            signers.map(ExpectedSigner(_, ForMint(scriptHash)))
 
     case class IssueCertificate(
         cert: Certificate,
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
         override val additionalSignersUnsafe: Set[ExpectedSigner] = {
-            val signers = witness match {
-                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
-                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
-                case None                                               =>
+            witness match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForCert(cert)))
+                case Some(ps: CredentialWitness.PlutusScriptCredential) =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForCert(cert)))
+                case None =>
                     // FIXME: I'm not sure if this is correct at all. And some of these can definitely be pool key
                     //  hashes, so I'm not sure if the cast is valid? Do all of the hashes need to sign in order
                     //  unlock the certificate action(s)?
                     //  If the pool hashes do need to sign, then the type of `ExpectedSigner.signer` should be relaxed.
-                    cert.keyHashes.map(_.asInstanceOf[AddrKeyHash])
+                    cert.keyHashes
+                        .map(_.asInstanceOf[AddrKeyHash])
+                        .map(ExpectedSigner(_, ForCert(cert)))
             }
-            signers.map(ExpectedSigner(_, ForCert(cert)))
         }
 
     case class WithdrawRewards(
@@ -128,21 +144,21 @@ object TransactionBuilderStep {
         amount: Coin,
         witness: Option[CredentialWitness]
     ) extends TransactionBuilderStep:
-        override val additionalSignersUnsafe: Set[ExpectedSigner] = {
-            val signers = witness match {
-                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
-                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+        override val additionalSignersUnsafe: Set[ExpectedSigner] =
+            witness match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForReward(stakeCredential)))
+                case Some(ps: CredentialWitness.PlutusScriptCredential) =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForReward(stakeCredential)))
                 case None =>
                     stakeCredential.credential.keyHashOption match {
-                        case Some(kh) => Set(kh)
+                        case Some(kh) => Set(kh).map(ExpectedSigner(_, ForReward(stakeCredential)))
                         // Note: in the safe version, this should return a left.
                         // It means we've passed a PKH credential, but can't extract the key
                         case None => Set.empty
                     }
 
             }
-            signers.map(ExpectedSigner(_, ForReward(stakeCredential)))
-        }
 
     case class SubmitProposal(
         proposal: ProposalProcedure,
@@ -158,13 +174,15 @@ object TransactionBuilderStep {
         // tied to a proposal submission without a script requiring it.
         override val additionalSignersUnsafe: Set[ExpectedSigner] = {
             val signers = witness match {
-                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
-                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+                case Some(ns: CredentialWitness.NativeScriptCredential) =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForPropose(proposal)))
+                case Some(ps: CredentialWitness.PlutusScriptCredential) =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForPropose(proposal)))
                 // Note: This case is PROBABLY correct -- I think this is just the default when
                 // there is no guardrails script. I think we keep this as-is in the safe version
                 case None => Set.empty
             }
-            signers.map(ExpectedSigner(_, ForPropose(proposal)))
+            signers
         }
 
     case class SubmitVotingProcedure(
@@ -176,9 +194,11 @@ object TransactionBuilderStep {
         // I believe that if voter.keyHashOption is Some(kh), the kh should be the sole additional signer.
         // Otherwise, the script hash must correspond to the credential witness.
         override val additionalSignersUnsafe: Set[ExpectedSigner] = {
-            val signers = witness match {
-                case Some(ns: CredentialWitness.NativeScriptCredential) => ns.additionalSigners
-                case Some(ps: CredentialWitness.PlutusScriptCredential) => ps.additionalSigners
+            witness match {
+                case Some(ns: CredentialWitness.NativeScriptCredential) =>
+                    ns.additionalSigners.map(ExpectedSigner(_, ForVote(voter)))
+                case Some(ps: CredentialWitness.PlutusScriptCredential) =>
+                    ps.additionalSigners.map(RequiredSigner(_, ForVote(voter)))
                 case None =>
                     voter.keyHashOption match {
                         // Note: in the "safe" version, this should return left.
@@ -186,10 +206,10 @@ object TransactionBuilderStep {
                         // (indicated by `witness == None`), but no
                         // key hash could be extracted.
                         case None     => Set.empty
-                        case Some(kh) => Set(kh)
+                        case Some(kh) => Set(kh).map(ExpectedSigner(_, ForVote(voter)))
                     }
             }
-            signers.map(ExpectedSigner(_, ForVote(voter)))
+
         }
 
     case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
@@ -732,13 +752,13 @@ object TransactionBuilder:
     // Will drop signers silently
     private val unsafeCtxBodyL: Lens[Context, TransactionBody] =
         Focus[Context](_.transactionWS)
-            .andThen(txwsUnsafeL)
+            .andThen(txwsTxUnsafeL)
             .refocus(_.body)
             .andThen(keepRawL[TransactionBody]())
 
     // Will drop signers silently
     private val unsafeCtxWitnessL: Lens[Context, TransactionWitnessSet] =
-        Focus[Context](_.transactionWS).andThen(txwsUnsafeL.refocus(_.witnessSet))
+        Focus[Context](_.transactionWS).andThen(txwsTxUnsafeL.refocus(_.witnessSet))
 
     // Add signers to the Context's transaction for the given step
     private def addSigners(step: TransactionBuilderStep): BuilderM[Unit] =
@@ -970,7 +990,7 @@ object TransactionBuilder:
         case TransactionBuilderStep.ModifyAuxData(f) =>
             StateT.modify[[X] =>> Either[TxBuildError, X], Context](
               Focus[Context](_.transactionWS)
-                  .andThen(txwsUnsafeL.refocus(_.auxiliaryData))
+                  .andThen(txwsTxUnsafeL.refocus(_.auxiliaryData))
                   .modify(f(_))
             )
 
@@ -1886,13 +1906,3 @@ object TransactionBuilder:
                     StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
             }
         } yield ()
-
-    /** Update the signers in the builder, removing stale signers (silently) and adding new ones.
-      */
-    def updateSigners(additionalSigners: Set[ExpectedSigner]): BuilderM[Unit] =
-        StateT.modify(ctx => {
-            val withAdditionalSigners = ctx.transactionWS.expectedSigners ++ additionalSigners
-            ctx.copy(transactionWS =
-                TransactionWithSigners.mkUnsafe(ctx.transactionWS.tx, withAdditionalSigners)
-            )
-        })
