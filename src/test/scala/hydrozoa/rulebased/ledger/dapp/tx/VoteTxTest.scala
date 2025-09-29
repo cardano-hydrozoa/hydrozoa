@@ -1,6 +1,7 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.utxo.VoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
@@ -225,128 +226,12 @@ class VoteTxTest extends munit.ScalaCheckSuite {
         println(exampleRecipe)
     }
 
-//    // TODO: replace with variant that is not generated
-//    val dummyAddr: ShelleyAddress = genPubkeyAddr().sample.get
-//
-//    test("Test minAda violation in the treasury") {
-//        ////
-//        // General data setup
-//
-//        // Seed UTxO with 100 ADA
-//        val seedUtxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
-//            .focus(_._2.value.coin.value)
-//            .replace(100_000_000L)
-//
-//        val peers = NonEmptyList.fromListUnsafe(List(Alice, Bob))
-//        val peerVKeys = peers.map(_.wallet.exportVerificationKeyBytes)
-//
-//        // This recipe should have exactly the min ADA
-//        val recipeSucceed = InitializationTx.Recipe(
-//          seedUtxos = NonEmptyList.one(seedUtxo),
-//          initialDeposit = minInitTreasuryAda,
-//          peers = peerVKeys,
-//          context = unsignedTxBuilderContext(Map(seedUtxo)),
-//          changeAddress = Alice.address
-//        )
-//
-//        // This recipe should have 1 lovelace less than the minimum acceptable ADA
-//        val recipeFail = recipeSucceed.focus(_.initialDeposit).modify(_ - Coin(1L))
-//
-//        InitializationTx.build(recipeFail) match {
-//            case Left(
-//                  InitializationTx.BuildError.OtherScalusTransactionException(
-//                    e: TransactionException.OutputsHaveNotEnoughCoinsException
-//                  )
-//                ) =>
-//                ()
-//            case Right(_) => throw RuntimeException("Build succeeded, but should have failed")
-//            case Left(e)  => throw RuntimeException(s"Build failed, but for the wrong reason: $e")
-//        }
-//
-//        InitializationTx.build(recipeSucceed) match {
-//            case Left(e)  => throw RuntimeException("Build failed but should have succeeded")
-//            case Right(_) => ()
-//        }
-//    }
-//
-////    test("MinAda incoherence between l1 and l2") {
-////        ???
-////    }
-//
-//    test("Enough ada for minAda in treasury and change utxo, but insufficient ada to pay for fee") {
-//        val seedUtxo = {
-//            val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
-//            utxo.focus(_._2.value.coin).replace(minPubkeyAda() + minInitTreasuryAda)
-//        }
-//
-//        val recipe = InitializationTx.Recipe(
-//          seedUtxos = NonEmptyList.one(seedUtxo),
-//          initialDeposit = minInitTreasuryAda,
-//          peers = NonEmptyList.one(Alice.wallet.exportVerificationKeyBytes),
-//          context = unsignedTxBuilderContext(Map.from(List(seedUtxo))),
-//          changeAddress = Alice.address
-//        )
-//
-//        InitializationTx.build(recipe) match {
-//            case Left(
-//                  InitializationTx.BuildError.OtherScalusBalancingError(
-//                    e: TxBalancingError.InsufficientFunds
-//                  )
-//                ) =>
-//                ()
-//            case Right(_) => throw RuntimeException("Build succeeded, but should have failed")
-//            case Left(e)  => throw RuntimeException(s"Build failed, but for the wrong reason: $e")
-//        }
-//    }
-
     property("Vote tx builds")(
       Prop.forAll(genVoteTxRecipe()) { recipe =>
-          // InitializationTx.build(recipe) match {
-          //    case Left(e) => throw RuntimeException(s"Build failed $e")
-          //    case Right(tx) =>
-          //        val headMultisigScript = HeadMultisigScript(recipe.peers)
-          //        val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
-          //
-          //        val bytes = tx.tx.toCbor
-          //        given OriginalCborByteArray = OriginalCborByteArray(bytes)
-          //        (tx.tx == Cbor
-          //            .decode(bytes)
-          //            .to[Transaction]
-          //            .value) :| "Cbor round-tripping failed"
-          //        &&
-          //        (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
-          //        && (tx.tx.body.value.outputs.size === 2) :| "Initialization tx should have a treasury output and" +
-          //            "change output"
-          //            &&
-          //            (tx.treasuryProduced.toUtxo._2 ==
-          //                tx.tx.body.value.outputs.head.value) :|
-          //            "treasury output in InitializationTx value not coherent with actual transaction produced"
-          //            && (
-          //              tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script
-          //            ) :| "Head multisig script not as expected"
-          //            && (tx.treasuryProduced.headTokenName == headTokenName) :| "Unexpected head token name in treasury output"
-          //            && (tx.treasuryProduced.toUtxo._2.value.assets.assets
-          //                .get(headMultisigScript.policyId)
-          //                .get(
-          //                  headTokenName
-          //                ) === 1L) :| "treasury output does not contain correct head token"
-          //            && {
-          //                val actual = tx.treasuryProduced.toUtxo._2.value
-          //                val expected = Value(
-          //                  coin = recipe.initialDeposit,
-          //                  multiAsset = MultiAsset(assets =
-          //                      SortedMap(
-          //                        (headMultisigScript.policyId, SortedMap((headTokenName, 1L)))
-          //                      )
-          //                  )
-          //                )
-          //                (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
-          //            }
-          //            && tx.tx.auxiliaryData.contains(
-          //              MD.apply(Initialization, headMultisigScript.address(Mainnet))
-          //            )
-          //            :| "Unexpected metadata"
-          // }
+          VoteTx.build(recipe) match {
+              case Left(e)   => throw RuntimeException(s"Build failed $e")
+              case Right(tx) => println(HexUtil.encodeHexString(tx.tx.toCbor))
+          }
       }
     )
 
