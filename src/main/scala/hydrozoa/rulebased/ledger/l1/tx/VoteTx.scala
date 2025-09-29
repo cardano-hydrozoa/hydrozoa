@@ -5,7 +5,8 @@ import hydrozoa.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
-import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.VoteUtxo
+import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
     OnchainBlockHeader,
@@ -37,10 +38,9 @@ object VoteTx {
     case class Recipe(
         voteUtxo: VoteUtxo, // The vote UTXO to spend
         // TODO: use rule-based treasury utxo
-        treasuryUtxo: TreasuryUtxo, // Treasury UTXO for reference
+        treasuryUtxo: RuleBasedTreasuryUtxo, // Treasury UTXO for reference
         blockHeader: OnchainBlockHeader,
-        signatures: List[IArray[Byte]],
-        nodeAddress: AddressL1,
+        signatures: List[Ed25519Signature],
         newVoteDetails: VoteDetails, // The new vote to cast
         context: BuilderContext
     )

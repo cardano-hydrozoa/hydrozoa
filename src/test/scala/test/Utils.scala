@@ -62,6 +62,7 @@ def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
     )
 }
 
+// FIXME: rename
 val genTxId: Gen[TransactionInput] =
     for {
         txId <- genByteStringOfN(32).map(TransactionHash.fromByteString)

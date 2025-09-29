@@ -5,15 +5,10 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
-    Continuing,
-    Removed
-}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
-    TreasuryDatum,
-    cip67BeaconTokenPrefix
-}
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
@@ -225,7 +220,7 @@ object DisputeResolutionValidator extends Validator {
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
                 val treasuryDatum =
-                    treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                    treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
                         case _                           => fail(VoteTreasuryDatum)
                     }
@@ -235,6 +230,7 @@ object DisputeResolutionValidator extends Validator {
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
                 tx.validRange.to.boundType match {
+                    case Finite(toTime) =>
                     case Finite(toTime) =>
                         require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
                     case _ => fail(VoteTimeValidityCheck)
@@ -399,7 +395,7 @@ object DisputeResolutionValidator extends Validator {
                     // headMp and disputeId must match the corresponding fields of the Unresolved
                     // datum in treasury
                     val treasuryDatum =
-                        treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                        treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                             case Unresolved(unresolvedDatum) => unresolvedDatum
                             case _                           => fail(TreasuryDatumIsUnresolved)
                         }
@@ -469,7 +465,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
+                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
                         case _                           => fail(ResolveDatumIsUnresolved)
                     }

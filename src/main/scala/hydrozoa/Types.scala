@@ -48,6 +48,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v3
 import scalus.builtin.Builtins.blake2b_224
+import scalus.ledger.api.v3.PubKeyHash
+
 import scala.collection.mutable
 import scala.language.implicitConversions
 
@@ -264,6 +266,7 @@ extension (utxo: UTxO)
 // A verification key of a peer, used on both L1 and L2
 case class VerificationKeyBytes(bytes: ByteString) {
     def verKeyHash: AddrKeyHash = Hash(blake2b_224(bytes))
+    def pubKeyHash: PubKeyHash = PubKeyHash(blake2b_224(bytes))
 }
 
 object VerificationKeyBytes:
