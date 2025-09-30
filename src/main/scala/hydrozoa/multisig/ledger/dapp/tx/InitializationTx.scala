@@ -115,7 +115,7 @@ object InitializationTx {
         for {
 
             unbalancedTx <- TransactionBuilder
-                .buildTransaction(
+                .build(
                   recipe.seedUtxos
                       .map(utxo =>
                           SpendOutput(TransactionUnspentOutput.apply(utxo._1, utxo._2), None)
@@ -145,7 +145,7 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(unbalancedTx.signers.size, unbalancedTx.tx),
+                  initial = addDummyVKeys(unbalancedTx.expectedSigners.size, unbalancedTx.transaction),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

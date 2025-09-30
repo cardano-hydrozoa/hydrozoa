@@ -108,12 +108,12 @@ object SettlementTx {
 
         for {
             unbalanced <- TransactionBuilder
-                .buildTransaction(steps)
+                .build(steps)
                 .left
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(unbalanced.signers.size, unbalanced.tx),
+                  initial = addDummyVKeys(unbalanced.expectedSigners.size, unbalanced.transaction),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

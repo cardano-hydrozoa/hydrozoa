@@ -108,7 +108,7 @@ object VoteTx {
         // Build the transaction
         val buildResult = for {
             unbalancedTx <- TransactionBuilder
-                .buildTransaction(
+                .build(
                   List(
                     // Spend the vote UTXO with dispute resolution script witness
                     SpendOutput(
@@ -144,7 +144,7 @@ object VoteTx {
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx.tx,
+                  initial = unbalancedTx.transaction,
                   changeOutputIdx = 0, // Send change to the vote output
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
