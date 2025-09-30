@@ -1,17 +1,15 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
-import hydrozoa.multisig.ledger.dapp.utxo.VoteUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
-    OnchainBlockHeader,
-    VoteRedeemer
-}
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.NoVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import monocle.syntax.all.*
@@ -28,20 +26,19 @@ import scala.util.{Failure, Success, Try}
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?
-    voteUtxoSpent: VoteUtxo,
-    voteUtxoProduced: VoteUtxo,
+    voteUtxoSpent: OwnVoteUtxo,
+    voteUtxoProduced: OwnVoteUtxo,
     tx: Transaction
 ) // TODO: rule-based trait analogous to Tx?
 
 object VoteTx {
 
     case class Recipe(
-        voteUtxo: VoteUtxo, // The vote UTXO to spend
+        voteUtxo: OwnVoteUtxo, // The vote UTXO to spend
         // TODO: use rule-based treasury utxo
         treasuryUtxo: RuleBasedTreasuryUtxo, // Treasury UTXO for reference
         blockHeader: OnchainBlockHeader,
         signatures: List[Ed25519Signature],
-        newVoteDetails: VoteDetails, // The new vote to cast
         context: BuilderContext
     )
 
@@ -64,7 +61,12 @@ object VoteTx {
                     case Success(voteDatum) =>
                         if voteDatum.voteStatus == NoVote then
                             val updatedVoteDatum = voteDatum.copy(
-                              voteStatus = VoteStatus.Vote(recipe.newVoteDetails)
+                              voteStatus = VoteStatus.Vote(
+                                VoteDetails(
+                                  recipe.blockHeader.commitment,
+                                  recipe.blockHeader.versionMinor
+                                )
+                              )
                             )
                             buildVoteTx(recipe, updatedVoteDatum)
                         else Left(VoteAlreadyCast)
@@ -99,11 +101,6 @@ object VoteTx {
           )
         )
 
-        // Get dispute resolution script
-        // TODO: use ref script/config?
-        val disputeResolutionScript =
-            Script.PlutusV3(ByteString.fromHex(DisputeResolutionScript.getScriptHex))
-
         // Build the transaction
         val buildResult = for {
             unbalancedTx <- TransactionBuilder
@@ -115,7 +112,9 @@ object VoteTx {
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
                         OutputWitness.PlutusScriptOutput(
-                          ScriptValue(disputeResolutionScript),
+                          // TODO: use a reference utxo? Rule-based regime scripts will be deployed as reference script,
+                          //  though nodes don't necessarily need to resolve those utxos, they may reconstruct them based manually.
+                          ScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                           redeemer.toData,
                           None // No datum witness needed for an inline datum?
                         )
@@ -140,6 +139,11 @@ object VoteTx {
                 .focus(_.body.value.referenceInputs)
                 .replace(TaggedOrderedSet.from(List(recipe.treasuryUtxo.txId)))
 
+
+
+            _ = println(unbalancedTx)
+            //_ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
+
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
@@ -163,7 +167,7 @@ object VoteTx {
         buildResult.map { validatedTx =>
             VoteTx(
               voteUtxoSpent = recipe.voteUtxo,
-              voteUtxoProduced = VoteUtxo(
+              voteUtxoProduced = OwnVoteUtxo(
                 Utxo[L1](
                   UtxoId[L1](validatedTx.id, 0), // Vote output is at index 0
                   Output[L1](

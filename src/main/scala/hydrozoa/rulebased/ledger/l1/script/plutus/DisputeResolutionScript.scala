@@ -17,7 +17,7 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{Language, ScriptHash}
+import scalus.cardano.ledger.{Language, Script, ScriptHash}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
@@ -498,19 +498,22 @@ object DisputeResolutionScript {
     def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
     private def compiledDoubleCborEncoded: Array[Byte] = compiledDeBruijnedProgram.doubleCborEncoded
 
-    // Hex representations - use the main program methods
-    private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
 
-    def compiledScriptHash =
-        ScriptHash.fromByteString(blake2b_224(ByteString.fromArray(compiledDoubleCborEncoded)))
+    def compiledPlutusV3Script = Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
+
+    //// Hex representations - use the main program methods
+    //private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+
+    def compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {
         compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
     }
 
-    // For compatibility with existing code that expects hex representation
-    def getScriptHex: String = compiledDoubleCborHex
+    //// For compatibility with existing code that expects hex representation
+    //def getScriptHex: String = compiledDoubleCborHex
 
     // For compatibility with code that expects script hash as byte array
     def getScriptHash: Array[Byte] = compiledScriptHash.bytes

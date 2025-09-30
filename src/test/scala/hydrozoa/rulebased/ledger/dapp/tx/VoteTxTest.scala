@@ -3,7 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.utxo.VoteUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
 import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
@@ -121,7 +121,11 @@ def genVoteNoVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDa
       voteStatus = VoteStatus.NoVote
     )
 
-def genVoteUtxo(headMp: PolicyId, voteTokenName: TokenName, voteDatum: VoteDatum): Gen[VoteUtxo] =
+def genVoteUtxo(
+    headMp: PolicyId,
+    voteTokenName: TokenName,
+    voteDatum: VoteDatum
+): Gen[OwnVoteUtxo] =
     for {
         txId <- genTxId
         spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
@@ -137,7 +141,7 @@ def genVoteUtxo(headMp: PolicyId, voteTokenName: TokenName, voteDatum: VoteDatum
           datumOption = Some(Inline(voteDatum.toData)),
           scriptRef = None
         )
-    } yield VoteUtxo(Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput)))
+    } yield OwnVoteUtxo(Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput)))
 
 def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
     for {
@@ -161,12 +165,6 @@ def signBlockHeader(
     val bs = blockHeader.toData |> serialiseData |> (_.bytes) |> IArray.from
     peers.toList.map(peer => peer.wallet.createEd25519Signature(bs))
 }
-
-def mkVoteDetails(header: OnchainBlockHeader): VoteDetails =
-    VoteDetails(
-      commitment = header.commitment,
-      versionMinor = header.versionMinor
-    )
 
 def genVoteTxRecipe(
     estimatedFee: Coin = Coin(5_000_000L)
@@ -198,7 +196,6 @@ def genVoteTxRecipe(
         blockHeader <- genOnchainBlockHeader(versionMajor)
         signatures = signBlockHeader(blockHeader, peers)
         // Make vote details
-        newVoteDetails = mkVoteDetails(blockHeader)
 
         // Create builder context
         allUtxos = Map(
@@ -212,7 +209,6 @@ def genVoteTxRecipe(
       treasuryUtxo = treasuryUtxo,
       blockHeader = blockHeader,
       signatures = signatures,
-      newVoteDetails = newVoteDetails,
       context = context
     )
 
