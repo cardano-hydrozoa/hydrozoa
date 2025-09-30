@@ -1,5 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.token
 
+import cats.data.NonEmptyList
+import scalus.builtin.Builtins.blake2b_224
+import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AssetName, TransactionInput}
 
 object Token {
@@ -9,12 +12,18 @@ object Token {
         val vote: Long = 8683L // "VOTE" (dispute) on the phone pad
     }
 
-    def mkHeadTokenName(fundingUtxos: List[(TransactionInput)]): AssetName = {
-        // Concatenate the CIP-67 treasury token name prefix with the hash of the list of funding utxos
-        ???
+    def mkHeadTokenName(seedUtxos: NonEmptyList[(TransactionInput)]): AssetName = {
+        // Concatenate the CIP-67 treasury token name prefix with the hash of the list of seed utxos
+        val utxoBytes = ByteString.fromArray(
+          seedUtxos.toList
+              .flatMap(ti => ti.transactionId.bytes ++ BigInt(ti.index).toByteArray)
+              .toArray
+        )
+        val utxoBlake2b = blake2b_224(utxoBytes)
+        AssetName(ByteString.fromArray(BigInt(CIP67Tags.head).toByteArray) ++ utxoBlake2b)
     }
 
-    val rolloutTokenName: AssetName = ???
+    // val rolloutTokenName: AssetName = ???
 
-    val voteTokenName: AssetName = ???
+    // val voteTokenName: AssetName = ???
 }

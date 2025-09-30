@@ -1,11 +1,32 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData}
+import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput}
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
 
-final case class TreasuryUtxo(headTokenName: AssetName, utxo: (TransactionInput, TransactionOutput))
+// TODO: Make opaque
+final case class TreasuryUtxo(
+    headTokenName: AssetName,
+    txId: TransactionInput,
+    addr: ShelleyAddress,
+    datum: TreasuryUtxo.Datum,
+    value: Value
+) {
+    def toUtxo: (TransactionInput, Babbage) =
+        (
+          txId,
+          Babbage(
+            address = addr,
+            value = value,
+            datumOption = Some(Inline(datum.toData)),
+            scriptRef = None
+          )
+        )
+}
 
 object TreasuryUtxo {
     final case class Datum(
@@ -37,4 +58,15 @@ object TreasuryUtxo {
           ByteString.empty
         )
 
+//    def fromUtxo(utxo : (TransactionInput, TransactionOutput)) : Option[TreasuryUtxo] = {
+//        val tuxo = for {
+//           datum <- Try(fromData[TreasuryUtxo.Datum](utxo._2.asInstanceOf[Babbage].datumOption.get.asInstanceOf[Inline].data))
+//           va
+//        } yield ???
+//
+//        tuxo match {
+//            case Success(v) => Some(v)
+//            case Failure(e) => None
+//        }
+//    }
 }

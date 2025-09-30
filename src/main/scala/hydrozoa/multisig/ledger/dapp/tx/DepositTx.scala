@@ -1,18 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.emptyTxBody
+import cats.data.NonEmptyList
+import cats.syntax.all.*
+import hydrozoa.lib.tx.TransactionBuilderStep.*
+import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
+import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import io.bullet.borer.Cbor
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
-import scala.util.{Failure, Success, Try}
+import scala.util.{Failure, Success}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -23,11 +29,13 @@ final case class DepositTx(
 
 object DepositTx {
     case class Recipe(
-        deposit: TransactionInput, // the only UTXO with deposit funds in user's wallet
-        depositAmount: BigInt,
-        datum: DepositUtxo.Datum, // datum for deposit utxo
+        depositAmount: Coin,
+        datum: DepositUtxo.Datum,
         headAddress: ShelleyAddress,
-        utxoFunding: TransactionOutput
+        utxosFunding: NonEmptyList[(TransactionInput, TransactionOutput)],
+        changeAddress: ShelleyAddress,
+        // FIXME: we don't need the whole context anymore, only the fields necessary for the low-level builder.
+        context: BuilderContext
     )
 
     sealed trait ParseError extends Throwable
@@ -77,78 +85,70 @@ object DepositTx {
 
     }
 
-    def build(recipe: Recipe): Either[String, DepositTx] = {
-        // TODO: we set the fee to 1 ada, but this doesn't need to be
-        val feeCoin = Coin(1_000_000)
+    enum BuildError:
+        case SomeBuilderError(e: TxBuildError)
+        case OtherScalusBalancingError(e: TxBalancingError)
+        case OtherScalusTransactionException(e: TransactionException)
+
+    def build(recipe: Recipe): Either[BuildError, DepositTx] = {
         val depositValue: Value =
-            Value(coin = Coin(recipe.depositAmount.toLong))
+            Value(coin = recipe.depositAmount)
 
-        val depositOutput: Babbage = Babbage(
-          address = recipe.headAddress,
-          value = depositValue,
-          datumOption = Some(Inline(toData(recipe.datum)))
-        )
-        for {
-
-            changeOutputValue <- Try(
-              recipe.utxoFunding.value - Value(
-                coin = feeCoin
-              ) - depositValue
-            ) match {
-                case Success(s) => Right(s)
-                case Failure(e) =>
-                    Left(
-                      s"Malformed value equal to `utxoFunding.value - Value(feeCoin) - depositValue`" +
-                          s" encountered: utxoFunding.value = ${recipe.utxoFunding.value}, " +
-                          s"depositValue = $depositValue, feeCoin = $feeCoin"
-                    )
-            }
-
-            changeOutput: TransactionOutput =
-                TransactionOutput(
-                  address = recipe.utxoFunding.address,
-                  value = changeOutputValue,
-                  datumOption = None
+        val steps = Seq(
+          // Deposit Output
+          Pay(
+            Babbage(
+              address = recipe.headAddress,
+              value = depositValue,
+              datumOption = Some(Inline(toData(recipe.datum))),
+              scriptRef = None
+            )
+          ),
+          // Change Output
+          Pay(
+            Babbage(
+              address = recipe.changeAddress,
+              value = Value.zero,
+              datumOption = None,
+              scriptRef = None
+            )
+          ),
+          ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+        ) ++ recipe.utxosFunding.toList.toSet
+            .map(utxo =>
+                SpendOutput(
+                  TransactionUnspentOutput(utxo._1, utxo._2),
+                  None
                 )
-
-            requiredSigner: AddrKeyHash <- {
-                recipe.utxoFunding.address match
-                    case shelleyAddress: ShelleyAddress =>
-                        shelleyAddress.payment match
-                            case ShelleyPaymentPart.Key(hash) => Right(hash)
-                            case _ => Left("deposit not at a pubkey address")
-                    case _ => Left("Could not get key hash for required signer")
-            }
-
-            txBody = emptyTxBody.copy(
-              inputs = Set(recipe.deposit),
-              outputs = IndexedSeq(depositOutput, changeOutput).map(Sized(_)),
-              fee = feeCoin,
-              requiredSigners = Set(requiredSigner)
             )
 
-            tx: Transaction = Transaction(
-              body = KeepRaw(txBody),
-              witnessSet = TransactionWitnessSet.empty,
-              isValid = true,
-              auxiliaryData = Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress))
-            )
-
-            // Find the deposit output index
-            ix = tx.body.value.outputs.indexWhere(output =>
-                output.value.address == recipe.headAddress
-            )
-
-            _ = assert(ix >= 0, s"Deposit output was not found in the tx.")
+        for {
+            b1 <- TransactionBuilder.buildTransaction(steps).left.map(SomeBuilderError(_))
+            balanced <- LowLevelTxBuilder
+                .balanceFeeAndChange(
+                  initial = addDummyVKeys(b1.signers.size, b1.tx),
+                  changeOutputIdx = 1,
+                  protocolParams = recipe.context.protocolParams,
+                  resolvedUtxo = recipe.context.utxo,
+                  evaluator = recipe.context.evaluator
+                )
+                .map(tx => removeDummyVKeys(1, tx))
+                .left
+                .map(OtherScalusBalancingError(_))
+            validated <- recipe.context
+                .validate(balanced)
+                .left
+                .map(OtherScalusTransactionException(_))
         } yield DepositTx(
           depositProduced = DepositUtxo(
-            l1Input = recipe.deposit,
+            l1Input = TransactionInput(validated.id, 0),
             l1OutputAddress = recipe.headAddress,
             l1OutputDatum = recipe.datum,
             l1OutputValue = depositValue.coin,
             l1RefScript = None
           ),
-          tx = tx
+          tx = validated
         )
+
     }
 }

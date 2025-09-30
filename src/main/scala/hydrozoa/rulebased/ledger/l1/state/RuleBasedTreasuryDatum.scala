@@ -4,11 +4,12 @@ import scalus.builtin.ByteString
 import scalus.builtin.Data
 import scalus.builtin.FromData
 import scalus.builtin.ToData
-import scalus.ledger.api.v3._
+import scalus.ledger.api.v1.CurrencySymbol
+import scalus.ledger.api.v3.*
 
 enum RuleBasedTreasuryDatum derives FromData, ToData:
     case UnresolvedDatum(
-        headMp: CurrencySymbol,
+        headMp: PolicyId,
         disputeId: TokenName,
         peers: VerificationKey,
         peersN: BigInt,
@@ -17,7 +18,7 @@ enum RuleBasedTreasuryDatum derives FromData, ToData:
         params: H32
     )
     case ResolvedDatum(
-        headMp: CurrencySymbol,
+        headMp: PolicyId,
         commit: KzgCommit
     )
 

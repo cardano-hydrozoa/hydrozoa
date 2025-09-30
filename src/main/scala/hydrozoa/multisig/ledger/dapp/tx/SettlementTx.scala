@@ -1,22 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
-import hydrozoa.emptyTxBody
+import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, Pay, SpendOutput}
+import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.*
 
 import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
-import scala.util.{Failure, Success, Try}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -33,33 +35,31 @@ object SettlementTx {
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo,
         headNativeScript: HeadMultisigScript,
-        network: Network
+        context: BuilderContext
     )
 
-    sealed trait BuildError extends Throwable
-    case object FailedToBuildTreasuryValue extends BuildError
+    enum BuildError:
+        case SomeBuilderError(e: TxBuildError)
+        case OtherScalusBalancingError(e: TxBalancingError)
+        case OtherScalusTransactionException(e: TransactionException)
 
     def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
-        val feeCoin = Coin(10000000)
+
+        val headAddress = recipe.headNativeScript.address(recipe.context.network)
+
         val utxos =
-            recipe.deposits.map(_.toUtxo).toBuffer.append(recipe.treasuryUtxo._2)
+            recipe.deposits
+                .map(_.toUtxo)
+                .toBuffer
 
         val withdrawnValue: Value =
             recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
-        // FIXME: Make this into a proper rollout utxo
-        val rolloutOutput: TransactionOutput = Babbage(
-          address = recipe.headNativeScript.address(recipe.network),
-          value = withdrawnValue,
-          datumOption = None,
-          scriptRef = None
-        )
 
         //////////////
         // Datum
         // TODO: Pass the hash of the protocol parameters in the datum
-        val treasuryDatum = toData(
-          mkMultisigTreasuryDatum(recipe.majorVersion, ByteString.empty).toData
-        )
+        val treasuryDatum =
+            mkMultisigTreasuryDatum(recipe.majorVersion, ByteString.empty)
 
         // The new treasury value should be the sum of all inputs minus withdrawals minus fee
         // -- the inputs will be the deposits and the old treasury utxo
@@ -70,69 +70,85 @@ object SettlementTx {
             utxos.foldLeft(Value.zero)((b, utxo) => b + utxo._2.value)
         }
 
-        for
-            treasuryValue: Value <- Try(
-              inputsValue - withdrawnValue - Value(coin = feeCoin)
-            ) match {
-                case Success(s) => Right(s)
-                case Failure(e: IllegalArgumentException) =>
-                    Left(
-                      FailedToBuildTreasuryValue
-                      // s"Malformed value equal to `inputsValue - withdrawnValue - Value(coin = feeCoin)` encountered: inputsValue = ${inputsValue}, withdrawnValue = ${withdrawnValue}, feeCoin = ${feeCoin}"
+        val treasuryValue: Value = inputsValue - withdrawnValue
+
+        val steps =
+            // Spend Treasury and Deposits
+            utxos.toSeq.map(utxo =>
+                SpendOutput(
+                  TransactionUnspentOutput(
+                    utxo._1,
+                    utxo._2
+                  ),
+                  witness = Some(
+                    OutputWitness.NativeScriptOutput(
+                      ScriptValue(
+                        recipe.headNativeScript.script,
+                        recipe.headNativeScript.requiredSigners.toSortedSet
+                      )
                     )
-                case Failure(otherE) =>
-                    Left(FailedToBuildTreasuryValue)
-                // s"mkSettlementTxDraft: unable to make treasury value. ${otherE}")
-            }
-
-            ////////////////////////////
-            // Then construct the output
-
-            treasuryOutput: Sized[TransactionOutput] = Sized(
-              TransactionOutput(
-                address = recipe.headNativeScript.address(recipe.network),
-                value = treasuryValue,
-                datumOption = Some(Inline(treasuryDatum))
-              )
-            )
-
-            ///////////////////////////
-            // Finally construct the body
-            txBody =
-                emptyTxBody.copy(
-                  inputs = utxos.toSet.map(_._1),
-                  outputs =
-                      if recipe.utxosWithdrawn.isEmpty then IndexedSeq(treasuryOutput)
-                      else IndexedSeq(treasuryOutput, Sized(rolloutOutput)),
-                  // TODO: we set the fee to 1 ada, but this doesn't need to be
-                  fee = feeCoin
+                  )
                 )
-
-            txWitSet: TransactionWitnessSet =
-                TransactionWitnessSet(
-                  nativeScripts = Set(recipe.headNativeScript)
-                )
-
-            tx: Transaction = Transaction(
-              body = KeepRaw(txBody),
-              witnessSet = txWitSet,
-              isValid = true,
-              auxiliaryData = None
             )
-        yield SettlementTx(
-          treasurySpent = recipe.treasuryUtxo,
-          treasuryProduced = recipe.treasuryUtxo.copy(utxo =
-              (
-                TransactionInput(transactionId = tx.id, index = 0),
-                treasuryOutput.value
-              )
-          ),
-          depositsSpent = recipe.deposits,
-          rolloutProduced =
-              if recipe.utxosWithdrawn.isEmpty then None
-              else Some(RolloutUtxo((TransactionInput(tx.id, 1), rolloutOutput))),
-          tx = tx
+                ++ Seq(
+                  // Treasury Output
+                  Pay(
+                    Babbage(
+                      address = headAddress,
+                      value = treasuryValue,
+                      datumOption = Some(Inline(treasuryDatum.toData)),
+                      scriptRef = None
+                    )
+                  ),
+                  ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
+                ) ++ {
+                    if recipe.utxosWithdrawn.isEmpty then Seq.empty
+                    else Seq(Pay(Babbage(address = headAddress, value = withdrawnValue)))
+                }
+
+        for {
+            unbalanced <- TransactionBuilder
+                .buildTransaction(steps)
+                .left
+                .map(BuildError.SomeBuilderError(_))
+            balanced <- LowLevelTxBuilder
+                .balanceFeeAndChange(
+                  initial = addDummyVKeys(unbalanced.signers.size, unbalanced.tx),
+                  changeOutputIdx = 0,
+                  protocolParams = recipe.context.protocolParams,
+                  resolvedUtxo = recipe.context.utxo,
+                  evaluator = recipe.context.evaluator
+                )
+                .map(tx => removeDummyVKeys(recipe.headNativeScript.numSigners, tx))
+                .left
+                .map(BuildError.OtherScalusBalancingError(_))
+            validated <- recipe.context
+                .validate(balanced)
+                .left
+                .map(BuildError.OtherScalusTransactionException(_))
+
+        } yield (
+          SettlementTx(
+            treasurySpent = recipe.treasuryUtxo,
+            treasuryProduced = recipe.treasuryUtxo.copy(
+              txId = TransactionInput(transactionId = validated.id, index = 0),
+              value = treasuryValue,
+              datum = treasuryDatum
+            ),
+            depositsSpent = recipe.deposits,
+            rolloutProduced =
+                if recipe.utxosWithdrawn.isEmpty then None
+                else
+                    Some(
+                      RolloutUtxo(
+                        (TransactionInput(validated.id, 1), validated.body.value.outputs(1).value)
+                      )
+                    )
+            ,
+            tx = validated
+          )
         )
+
     }
 
 }

@@ -3,11 +3,8 @@ package hydrozoa.rulebased.ledger.l1.script.plutus
 import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.VoteDatum
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.VoteStatus.{
-    NoVote,
-    Vote
-}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.{
     Resolved,
     Unresolved
@@ -21,13 +18,10 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
     TreasuryDatum,
     UnresolvedDatum
 }
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.ByteStringExtension.take
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.Scalar as ScalusScalar
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.TxOutExtension.inlineDatumOfType
-import hydrozoa.rulebased.ledger.l1.script.plutus.lib.ValueExtension.{
-    containsExactlyOneAsset,
-    unary_-
-}
+import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
+import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.{AddressL1, VerificationKeyBytes, PosixTime as HPosixTime}
 import scalus.*
 import scalus.builtin.Builtins.*
@@ -69,7 +63,7 @@ object RuleBasedTreasuryValidator extends Validator {
     type L2ConsensusParamsH32 = ByteString
 
     case class UnresolvedDatum(
-        headMp: CurrencySymbol,
+        headMp: PolicyId,
         disputeId: TokenName,
         peers: List[VerificationKey],
         peersN: BigInt,
@@ -84,7 +78,7 @@ object RuleBasedTreasuryValidator extends Validator {
     given ToData[UnresolvedDatum] = ToData.derived
 
     case class ResolvedDatum(
-        headMp: CurrencySymbol,
+        headMp: PolicyId,
         utxosActive: MembershipProof,
         version: (BigInt, BigInt),
         params: L2ConsensusParamsH32,
@@ -245,7 +239,7 @@ object RuleBasedTreasuryValidator extends Validator {
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.utxosActive === voteDetails.utxosActive,
+                          treasuryOutputDatum.utxosActive === voteDetails.commitment,
                           ResolveUtxoActiveCheck
                         )
 
@@ -483,7 +477,7 @@ object RuleBasedTreasuryScript {
 }
 
 def mkTreasuryDatumUnresolved(
-    headMp: CurrencySymbol,
+    headMp: PolicyId,
     disputeId: TokenName,
     peers: List[VerificationKeyBytes],
     deadlineVoting: HPosixTime,

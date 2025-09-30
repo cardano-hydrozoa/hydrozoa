@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
-import cats.implicits.catsSyntaxApplicativeError
 import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
 import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
 import hydrozoa.multisig.ledger.dapp.tx.*
@@ -107,11 +106,15 @@ object DappLedger {
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
     def create(
         initRecipe: InitializationTx.Recipe
-    ): IO[Either[InitializationTx.BuildError, (DappLedger, InitializationTx)]] =
-        (for {
-            initTx <- IO.pure(InitializationTx.build(initRecipe)).rethrow
-            state <- Ref[IO].of(State(treasury = initTx.treasuryProduced))
-        } yield (DappLedger(headAddress = initTx.headAddress)(state), initTx)).attemptNarrow
+    ): IO[Either[InitializationTx.BuildError, (DappLedger, InitializationTx)]] = {
+        InitializationTx.build(initRecipe) match {
+            case Left(e) => IO.pure(Left(e))
+            case Right(tx) =>
+                for {
+                    state <- Ref[IO].of(State(treasury = tx.treasuryProduced))
+                } yield Right((DappLedger(headAddress = tx.treasuryProduced.addr)(state), tx))
+        }
+    }
 
     final case class State(
         treasury: TreasuryUtxo,
