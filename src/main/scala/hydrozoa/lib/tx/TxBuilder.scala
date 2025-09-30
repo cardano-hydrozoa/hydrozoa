@@ -528,19 +528,21 @@ case class Context(
     }
 }
 
+
 // ==============================================================
 // Transaction Builder
 // ==============================================================
 
-/** An "ExpectedSigner" signs for a pubkey or native script transaction component. Their signature
-  * is declared as _expected_ on the final transaction, and thus taken into account when calculating
-  * fees.
-  */
-case class ExpectedSigner(
-    val signer: AddrKeyHash
-)
+/**
+ * An [[AddrKeyHash]] that is expected to sign some [[Transaction]],
+ * mediated by the type [[hydrozoa.lib.tx.TransactionBuilder.TransactionWithSigners]].
+ *
+ * The purpose for signing is not presently tracked. For a sketch, see commit
+ * 1a8c9c73fbfb33e79456a0a8b9f08688ef39b749.
+ * @param hash
+ */
+case class ExpectedSigner(hash: AddrKeyHash)
 
-// type BuilderM a = StateT Context (Except TxBuildError) a
 private type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
 
 object TransactionBuilder:
@@ -596,27 +598,53 @@ object TransactionBuilder:
     def replaceAdaUpdate(coin: Coin, to: Babbage): Babbage =
         to.focus(_.value.coin).replace(coin)
 
-    def buildTransaction(
-        steps: Seq[TransactionBuilderStep]
-    ): Either[TxBuildError, (Transaction, Set[ExpectedSigner])] =
-        modifyTransaction(emptyTransaction, Set.empty, steps)
 
+    /** A transaction paired with the expected (and required) signers. This is necessary for accurate
+     * fee calculation.
+     *
+     * If the number of expected signers is too small compared to the number of actual signers, the
+     * transaction should fail with an insufficient fee error.
+     *
+     * If the number of expected signers is too large compared to the number of actual signers, the
+     * transaction may pass, but the fee will be over-paid.
+     */
+    opaque type TransactionWithSigners = (Transaction, Set[ExpectedSigner])
+    extension (txws : TransactionWithSigners)
+        def signers: Set[ExpectedSigner] = txws._2
+        def tx: Transaction = txws._1
+        def toTuple: (Transaction, Set[ExpectedSigner]) = (txws._1, txws._2)
+
+  
+
+    /** Build a transaction from scratch, starting with an "empty" transaction and no signers. */
+    def buildTransaction(
+            steps: Seq[TransactionBuilderStep]
+        ): Either[TxBuildError, TransactionWithSigners] =
+            modifyTransaction(emptyTransaction, steps)
+
+    /** Modify a transaction that does not have accompanying signers information.*/
     def modifyTransaction(
-        tx: Transaction,
-        expectedSigners: Set[ExpectedSigner],
-        steps: Seq[TransactionBuilderStep]
-    ): Either[TxBuildError, (Transaction, Set[ExpectedSigner])] =
+                           tx: Transaction,
+                           steps: Seq[TransactionBuilderStep]
+                         ): Either[TxBuildError, TransactionWithSigners] =
+      modifyTransactionWithSigners((tx, Set.empty), steps)
+
+    /** Modify a transaction that has existing signers information accompanying it.*/
+    def modifyTransactionWithSigners(
+                                        txws: TransactionWithSigners,
+                                        steps: Seq[TransactionBuilderStep]
+    ): Either[TxBuildError, TransactionWithSigners] =
         for {
             context <- for {
                 editableTransaction <- TransactionConversion
-                    .toEditableTransactionSafe(tx)
+                    .toEditableTransactionSafe(txws._1)
                     .left
                     .map(TxBuildError.RedeemerIndexingError(_))
             } yield Context(
               transaction = editableTransaction.transaction,
               redeemers = editableTransaction.redeemers,
               networkId = editableTransaction.transaction.body.value.networkId,
-              expectedSigners = expectedSigners
+              expectedSigners = txws._2
             )
             // This modifies the transaction field of the context
             eiCtx <- processConstraints(steps).run(context).map(_._1)
@@ -629,7 +657,7 @@ object TransactionBuilder:
                 redeemers = eiCtx2.redeemers.toVector
               )
             ) match {
-                case None    => Left(RedeemerIndexingInternalError(tx, steps))
+                case None    => Left(RedeemerIndexingInternalError(txws._1, steps))
                 case Some(x) => Right(x)
             }
         } yield (res, eiCtx2.expectedSigners)

@@ -145,7 +145,7 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(unbalancedTx._2.size, unbalancedTx._1),
+                  initial = addDummyVKeys(unbalancedTx.signers.size, unbalancedTx.tx),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
