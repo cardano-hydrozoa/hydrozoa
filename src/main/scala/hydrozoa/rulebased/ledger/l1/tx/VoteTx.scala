@@ -6,10 +6,11 @@ import hydrozoa.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
-import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{OwnVoteUtxo, VoteUtxoCast}
 import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
+    DisputeRedeemer,
     OnchainBlockHeader,
     VoteRedeemer
 }
@@ -31,7 +32,7 @@ import scala.util.{Failure, Success, Try}
 final case class VoteTx(
     // TODO: what we want to keep here if anything?
     voteUtxoSpent: OwnVoteUtxo,
-    voteUtxoProduced: OwnVoteUtxo,
+    voteUtxoProduced: VoteUtxoCast,
     tx: Transaction
 ) // TODO: rule-based trait analogous to Tx?
 
@@ -41,14 +42,18 @@ object VoteTx {
         voteUtxo: OwnVoteUtxo, // The vote UTXO to spend
         // TODO: use rule-based treasury utxo
         treasuryUtxo: RuleBasedTreasuryUtxo, // Treasury UTXO for reference
+        collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
         signatures: List[Ed25519Signature],
+        ttl: Long,
         context: BuilderContext
+        //// TODO: should be accessible to the builder, since the vote tx requires voter signature
+        // wallet: Wallet
     )
 
     enum BuildError:
         case SomeBuilderError(e: TxBuildError)
-        case SomeBalancingError(e: TxBalancingError)
+        case SomeBalancingError(e: TxBalancingError | PlutusScriptEvaluationException)
         case SomeTransactionException(e: TransactionException)
         case InvalidVoteDatum(msg: String)
         case VoteAlreadyCast
@@ -97,16 +102,16 @@ object VoteTx {
         val (voteInput, voteOutput) =
             (recipe.voteUtxo.utxo.input.untagged, recipe.voteUtxo.utxo.output.untagged)
 
-        //// Create redeemer for dispute resolution script
-        // val redeemer = VoteRedeemer(
-        //  recipe.blockHeader,
-        //  SList.from(
-        //    recipe.signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
-        //  )
-        // )
         // Create redeemer for dispute resolution script
-        val redeemer = VoteRedeemer(
-          BigInt(42)
+        val redeemer = DisputeRedeemer.Vote(
+          VoteRedeemer(
+            recipe.blockHeader,
+            SList.from(
+              recipe.signatures.map(sig =>
+                  ByteString.fromArray(IArray.genericWrapArray(sig).toArray)
+              )
+            )
+          )
         )
 
         // Build the transaction
@@ -134,7 +139,6 @@ object VoteTx {
                         address = voteOutput.address,
                         value = voteOutput.value,
                         datumOption = Some(Inline(datumWithVote.toData)),
-                        // datumOption = Some(Inline(().toData)),
                         scriptRef = None
                       )
                     )
@@ -147,17 +151,26 @@ object VoteTx {
                 // add the treasury as a reference utxo
                 .focus(_.body.value.referenceInputs)
                 .replace(TaggedOrderedSet.from(List(recipe.treasuryUtxo.txId)))
-                // fake coins
+                // set the voter as the only required signer
+                .focus(_.body.value.requiredSigners)
+                .replace(TaggedOrderedSet.from(List(recipe.voteUtxo.voter)))
+                // set TTL
+                .focus(_.body.value.ttl)
+                .replace(Some(recipe.ttl))
+                // set collateral
+                .focus(_.body.value.collateralInputs)
+                .replace(TaggedOrderedSet.from(List(recipe.collateralUtxo.input)))
+                // TODO: remove - fake coins
                 .focus(_.body.value.fee)
                 .replace(Coin(100000))
-            // ping keep raw
 
+            // ping keep raw
             unbalancedTx2 = unbalancedTx1
                 .focus(_.body.raw)
                 .replace(ScalusCbor.encode(unbalancedTx1.body.value))
 
             // _ = println(unbalancedTx)
-            _ = println(HexUtil.encodeHexString(unbalancedTx2.toCbor))
+            // _ = println(HexUtil.encodeHexString(unbalancedTx2.toCbor))
 
             // Balance the transaction
             balanced <- LowLevelTxBuilder
@@ -171,8 +184,8 @@ object VoteTx {
                 .left
                 .map(SomeBalancingError(_))
 
-            _ = println(HexUtil.encodeHexString(balanced.toCbor))
-            _ = println("validating the balanced tx")
+            // _ = println(HexUtil.encodeHexString(balanced.toCbor))
+            // _ = println("validating the balanced tx")
 
             // Validate the transaction
             validated <- recipe.context
@@ -185,7 +198,7 @@ object VoteTx {
         buildResult.map { validatedTx =>
             VoteTx(
               voteUtxoSpent = recipe.voteUtxo,
-              voteUtxoProduced = OwnVoteUtxo(
+              voteUtxoProduced = VoteUtxoCast(
                 Utxo[L1](
                   UtxoId[L1](validatedTx.id, 0), // Vote output is at index 0
                   Output[L1](

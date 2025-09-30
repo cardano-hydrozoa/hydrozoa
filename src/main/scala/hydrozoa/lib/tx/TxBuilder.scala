@@ -872,7 +872,6 @@ object TransactionBuilder:
                     _ <- usePlutusScriptWitness(plutusScriptWitness)
                     detachedRedeemer = DetachedRedeemer(
                       redeemerDatum,
-                        //().toData,
                       RedeemerPurpose.ForSpend(utxo.input)
                     )
                     _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>

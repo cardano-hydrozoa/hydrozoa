@@ -1,8 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.{L1, Utxo}
-//import hydrozoa.multisig.ledger.dapp.token.Token.voteTokenName
+import scalus.cardano.ledger.AddrKeyHash
 
-final case class OwnVoteUtxo(utxo: Utxo[L1])
+final case class OwnVoteUtxo(
+    voter: AddrKeyHash,
+    utxo: Utxo[L1]
+)
 
 object OwnVoteUtxo {}
+
+final case class VoteUtxoCast(utxo: Utxo[L1])

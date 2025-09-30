@@ -21,8 +21,10 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.{
 }
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
+import hydrozoa.rulebased.ledger.l1.tx.VoteTx.BuildError
+import hydrozoa.rulebased.ledger.l1.tx.VoteTx.BuildError.SomeBalancingError
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -39,6 +41,8 @@ import scalus.prelude.{List as SList, Option as SOption}
 import scalus.|>
 import test.*
 
+import java.time.Instant
+
 def genHeadParams: Gen[
   (
       ScriptHash,
@@ -46,7 +50,8 @@ def genHeadParams: Gen[
       NonEmptyList[TestPeer],
       NonEmptyList[VerificationKeyBytes],
       ByteString,
-      BigInt
+      BigInt,
+      TransactionHash
   )
 ] =
     for {
@@ -61,7 +66,9 @@ def genHeadParams: Gen[
         params <- genByteStringOfN(32)
         // Major version upon switching to the rule-based regime
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
-    } yield (nativeScriptHash, headTokenSuffix, peers, peersVKs, params, versionMajor)
+        // Fallback tx id - should be common for the vote utxo and treasury utxo
+        fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+    } yield (nativeScriptHash, headTokenSuffix, peers, peersVKs, params, versionMajor, fallbackTxId)
 
 def genTreasuryUnresolvedDatum(
     headMp: PolicyId,
@@ -71,7 +78,10 @@ def genTreasuryUnresolvedDatum(
     versionMajor: BigInt
 ): Gen[UnresolvedDatum] =
     for {
-        deadlineVoting <- Gen.choose(1L, 99L).map(BigInt(_)).map(_.abs + 1000000)
+        deadlineVoting <- Gen
+            .choose(600, 1800)
+            .map(BigInt(_))
+            .map(_.abs + Instant.now().getEpochSecond())
         setup = TrustedSetup
             .takeSrsG2(10)
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
@@ -87,21 +97,23 @@ def genTreasuryUnresolvedDatum(
     )
 
 def genRuleBasedTreasuryUtxo(
+    fallbackTxId: TransactionHash,
     headMp: PolicyId,
     beaconTokenName: TokenName,
     unresolvedDatum: UnresolvedDatum
 ): Gen[RuleBasedTreasuryUtxo] =
     for {
-        txId <- genTxId
+        adaAmount <- Arbitrary
+            .arbitrary[Coin]
+            .map(c => Coin(math.abs(c.value) + 1000000L)) // Ensure minimum ADA
+
+        // Treasury is always the first output of the fallback tx
+        txId = TransactionInput(fallbackTxId, 0)
         spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
         scriptAddr = ShelleyAddress(Mainnet, spp, ShelleyDelegationPart.Null)
 
         beaconTokenAssetName = AssetName(beaconTokenName)
         beaconToken = singleton(headMp, beaconTokenAssetName)
-        adaAmount <- Arbitrary
-            .arbitrary[Coin]
-            .map(c => Coin(math.abs(c.value) + 1000000L)) // Ensure minimum ADA
-
     } yield RuleBasedTreasuryUtxo(
       beaconTokenName = beaconTokenAssetName,
       txId = txId,
@@ -110,11 +122,17 @@ def genRuleBasedTreasuryUtxo(
       value = Value(adaAmount) + beaconToken
     )
 
-def genVoteNoVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDatum] =
+/** key != 0
+  *
+  * @param peersVKs
+  * @return
+  */
+def genPeerVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDatum] =
     for {
-        key <- Gen.choose(0, peersVKs.length)
-        link = (key + 1) % peersVKs.length + 1
-        peer = if key == 0 then None else Some(peersVKs.toList(key - 1).pubKeyHash)
+        // key == 0 is the default `NoVote`, here we need a datum for OwnVoteUtxo
+        key <- Gen.choose(1, peersVKs.length)
+        link = (key + 1) % (peersVKs.length + 1)
+        peer = Some(peersVKs.toList(key - 1).pubKeyHash)
     } yield VoteDatum(
       key = key,
       link = link,
@@ -123,12 +141,15 @@ def genVoteNoVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDa
     )
 
 def genVoteUtxo(
+    fallbackTxId: TransactionHash,
+    numberOfPeers: Int,
     headMp: PolicyId,
     voteTokenName: TokenName,
     voteDatum: VoteDatum
 ): Gen[OwnVoteUtxo] =
     for {
-        txId <- genTxId
+        outputIx <- Gen.choose(1, numberOfPeers)
+        txId = TransactionInput(fallbackTxId, outputIx)
         spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
         scriptAddr = ShelleyAddress(Mainnet, spp, ShelleyDelegationPart.Null)
 
@@ -142,7 +163,10 @@ def genVoteUtxo(
           datumOption = Some(Inline(voteDatum.toData)),
           scriptRef = None
         )
-    } yield OwnVoteUtxo(Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput)))
+    } yield OwnVoteUtxo(
+      AddrKeyHash(voteDatum.peer.get.hash),
+      Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
+    )
 
 def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
     for {
@@ -167,13 +191,34 @@ def signBlockHeader(
     peers.toList.map(peer => peer.wallet.createEd25519Signature(bs))
 }
 
+def genCollateralUtxo(peer: TestPeer): Gen[(TransactionInput, Babbage)] =
+    for {
+        txId <- genTxId
+    } yield (
+      txId,
+      Babbage(
+        address = peer.address,
+        value = Value(Coin(5_000_000L)),
+        datumOption = None,
+        scriptRef = None
+      )
+    )
+
 def genVoteTxRecipe(
     estimatedFee: Coin = Coin(5_000_000L)
 ): Gen[VoteTx.Recipe] =
     for {
 
         // Common head parameters
-        (headScriptHash, headTokensSuffix, peers, peersVKs, paramsHash, versionMajor) <-
+        (
+          headScriptHash,
+          headTokensSuffix,
+          peers,
+          peersVKs,
+          paramsHash,
+          versionMajor,
+          fallbackTxId
+        ) <-
             genHeadParams
 
         // Generate a treasury UTXO to use a reference input
@@ -187,29 +232,46 @@ def genVoteTxRecipe(
           paramsHash,
           versionMajor
         )
-        treasuryUtxo <- genRuleBasedTreasuryUtxo(headScriptHash, beaconTokenName, treasuryDatum)
+        treasuryUtxo <- genRuleBasedTreasuryUtxo(
+          fallbackTxId,
+          headScriptHash,
+          beaconTokenName,
+          treasuryDatum
+        )
 
         // Generate a vote UTXO with NoVote status (input)
-        voteDatum <- genVoteNoVoteDatum(peersVKs)
-        voteUtxo <- genVoteUtxo(headScriptHash, voteTokenName, voteDatum)
+        voteDatum <- genPeerVoteDatum(peersVKs)
+        voteUtxo <- genVoteUtxo(
+          fallbackTxId,
+          peers.length,
+          headScriptHash,
+          voteTokenName,
+          voteDatum
+        )
 
         // Generate an onchain block header and sign using peers' wallets
         blockHeader <- genOnchainBlockHeader(versionMajor)
         signatures = signBlockHeader(blockHeader, peers)
         // Make vote details
 
+        collateralUtxo <- genCollateralUtxo(peers.toList(voteDatum.key.intValue - 1))
+
         // Create builder context
         allUtxos = Map(
           voteUtxo.utxo.input.untagged -> voteUtxo.utxo.output.untagged,
-          treasuryUtxo.toUtxo._1 -> treasuryUtxo.toUtxo._2
+          treasuryUtxo.toUtxo._1 -> treasuryUtxo.toUtxo._2,
+          collateralUtxo._1 -> collateralUtxo._2
         )
         context = unsignedTxBuilderContext(allUtxos)
 
     } yield VoteTx.Recipe(
       voteUtxo = voteUtxo,
       treasuryUtxo = treasuryUtxo,
+      collateralUtxo = Utxo[L1](UtxoId(collateralUtxo._1), Output(collateralUtxo._2)),
       blockHeader = blockHeader,
       signatures = signatures,
+      // TODO: now sure how to do that properly
+      ttl = 666,
       context = context
     )
 
@@ -227,12 +289,12 @@ class VoteTxTest extends munit.ScalaCheckSuite {
 
     property("Vote tx builds")(
       Prop.forAll(genVoteTxRecipe()) { recipe =>
-          log.debug("debug entry")
           VoteTx.build(recipe) match {
-              case Left(e)   => throw RuntimeException(s"Build failed $e")
-              case Right(tx) => println(HexUtil.encodeHexString(tx.tx.toCbor))
+              case Left(e) => throw RuntimeException(s"Build failed $e")
+              case Right(tx) =>
+                  ()
+              // println(HexUtil.encodeHexString(tx.tx.toCbor))
           }
       }
     )
-
 }
