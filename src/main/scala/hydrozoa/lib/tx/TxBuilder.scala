@@ -775,6 +775,13 @@ object TransactionBuilder:
                       utxo
                     )
                     _ <- usePlutusScriptWitness(plutusScriptWitness)
+                    detachedRedeemer = DetachedRedeemer(
+                      redeemerDatum,
+                      RedeemerPurpose.ForSpend(utxo.input)
+                    )
+                    _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                        ctx.focus(_.redeemers).modify(r => pushUnique(detachedRedeemer, r))
+                    )
                     _ <- useDatumWitnessForUtxo(utxo, mbDatumWitness)
                 } yield ()
         }
