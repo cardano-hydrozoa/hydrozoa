@@ -9,7 +9,12 @@ import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilder.{buildTransaction, modifyTransaction}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
-import hydrozoa.lib.tx.TxBuildError.{IncorrectScriptHash, UnneededDeregisterWitness, WrongNetworkId, WrongOutputType}
+import hydrozoa.lib.tx.TxBuildError.{
+    IncorrectScriptHash,
+    UnneededDeregisterWitness,
+    WrongNetworkId,
+    WrongOutputType
+}
 import hydrozoa.{emptyTransaction, txBodyL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -460,7 +465,10 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     )(implicit loc: munit.Location): Unit =
         test(label)({
             val res = TransactionBuilder.buildTransaction(steps)
-            assertEquals(obtained = res.map(_.toTuple), expected = (Right(expected) : Either[TxBuildError, (Transaction, Set[ExpectedSigner])]))
+            assertEquals(
+              obtained = res.map(_.toTuple),
+              expected = (Right(expected): Either[TxBuildError, (Transaction, Set[ExpectedSigner])])
+            )
         })
 
     /*
@@ -507,13 +515,14 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     ///////////////////////////////////////////////////////////////
 
     val spendPkhUtxoStep = TransactionBuilderStep.SpendOutput(pkhUtxo, None)
-    val pubKeyInput1Expected: (Transaction, Set[ExpectedSigner]) = (anyNetworkTx, Set.empty[ExpectedSigner])
-          |> Focus[(Transaction, Set[ExpectedSigner])](_._1)
-              .andThen(txBodyL.refocus(_.inputs))
-              .replace(TaggedOrderedSet(input1))
-          |> ((tx: Transaction, es: Set[ExpectedSigner]) =>
-              (tx, es ++ spendPkhUtxoStep.additionalSignersUnsafe)
-          )
+    val pubKeyInput1Expected: (Transaction, Set[ExpectedSigner]) =
+        (anyNetworkTx, Set.empty[ExpectedSigner])
+            |> Focus[(Transaction, Set[ExpectedSigner])](_._1)
+                .andThen(txBodyL.refocus(_.inputs))
+                .replace(TaggedOrderedSet(input1))
+            |> ((tx: Transaction, es: Set[ExpectedSigner]) =>
+                (tx, es ++ fromRight(spendPkhUtxoStep.additionalSigners))
+            )
 
     // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
     //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
@@ -589,10 +598,12 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
           // Check that the additional signers are what we expect
           assertEquals(
-            obtained = spendPkhUtxoStep.additionalSignersUnsafe,
-            expected = Set(
-              ExpectedSigner(
-                pkhOutputPaymentPart.asInstanceOf[ShelleyPaymentPart.Key].hash
+            obtained = spendPkhUtxoStep.additionalSigners,
+            expected = Right(
+              Set(
+                ExpectedSigner(
+                  pkhOutputPaymentPart.asInstanceOf[ShelleyPaymentPart.Key].hash
+                )
               )
             )
           )
@@ -601,7 +612,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           val tx = buildTransaction(List(spendPkhUtxoStep))
           assertEquals(
             obtained = tx.map(_.signers),
-            expected = Right(spendPkhUtxoStep.additionalSignersUnsafe)
+            expected = Right(fromRight(spendPkhUtxoStep.additionalSigners))
           )
 
       }
@@ -626,14 +637,14 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
         // Signers are what we expected for an NS spend
         assertEquals(
-          obtained = step.additionalSignersUnsafe,
-          expected = nsSigners.map(ExpectedSigner(_))
+          obtained = step.additionalSigners,
+          expected = Right(nsSigners.map(ExpectedSigner(_)))
         )
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
           obtained = buildTransaction(List(step)).map(_.signers),
-          expected = Right(step.additionalSignersUnsafe)
+          expected = Right(fromRight(step.additionalSigners))
         )
     })
 
@@ -656,14 +667,14 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
         // Signers are what we expected for an PS spend
         assertEquals(
-          obtained = step.additionalSignersUnsafe,
+          obtained = fromRight(step.additionalSigners),
           expected = psSignersOutput.map(ExpectedSigner(_))
         )
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
           obtained = buildTransaction(List(step)).map(_.signers),
-          expected = Right(step.additionalSignersUnsafe)
+          expected = Right(fromRight(step.additionalSigners))
         )
     })
 
@@ -1082,3 +1093,6 @@ testnetTransaction = Transaction.empty # _body <<< _networkId .~ Just TestnetId
 // See: https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/test/CSLHex.purs#L109
 val testnetTransaction: Transaction =
     txBodyL.refocus(_.networkId).replace(Some(0))(anyNetworkTx)
+
+private def fromRight[A,B](e : Either[A,B]) : B =
+    e match {case Right(x) => x}
