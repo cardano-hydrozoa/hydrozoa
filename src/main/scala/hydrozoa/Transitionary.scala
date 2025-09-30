@@ -9,6 +9,8 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
+import io.bullet.borer.Encoder
+import monocle.Lens
 import monocle.syntax.all.*
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
@@ -520,3 +522,17 @@ extension (self: TransactionOutput)
                     case None        => None
                 }
         }
+
+def keepRawL[A: Encoder](): Lens[KeepRaw[A], A] = {
+    val get: KeepRaw[A] => A = (kr => kr.value)
+    val replace: A => KeepRaw[A] => KeepRaw[A] = (a => kr => KeepRaw(a))
+    Lens[KeepRaw[A], A](get)(replace)
+}
+
+def txBodyL: Lens[Transaction, TransactionBody] = {
+    val get: Transaction => TransactionBody = tx =>
+        tx.focus(_.body).andThen(keepRawL[TransactionBody]()).get
+    val replace: TransactionBody => Transaction => Transaction = body =>
+        tx => tx.focus(_.body).andThen(keepRawL[TransactionBody]()).replace(body)
+    Lens(get)(replace)
+}
