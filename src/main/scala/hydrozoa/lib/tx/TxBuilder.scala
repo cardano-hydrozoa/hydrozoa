@@ -8,17 +8,13 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import hydrozoa.datumOption
-import hydrozoa.emptyTransaction
-import hydrozoa.lib.tx.InputAction.ReferenceInput
-import hydrozoa.lib.tx.InputAction.SpendInput
+import hydrozoa.{datumOption, emptyTransaction}
+import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
-import io.bullet.borer.{Cbor, Encoder}
+import io.bullet.borer.Cbor
 import monocle.syntax.all.*
-import scalus.builtin.Builtins.blake2b_224
-import scalus.builtin.Builtins.serialiseData
-import scalus.builtin.ByteString
-import scalus.builtin.Data
+import scalus.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address
 import scalus.cardano.address.*
 import scalus.cardano.ledger.*
@@ -873,6 +869,13 @@ object TransactionBuilder:
                       utxo
                     )
                     _ <- usePlutusScriptWitness(plutusScriptWitness)
+                    detachedRedeemer = DetachedRedeemer(
+                      redeemerDatum,
+                      RedeemerPurpose.ForSpend(utxo.input)
+                    )
+                    _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>
+                        ctx.focus(_.redeemers).modify(r => pushUnique(detachedRedeemer, r))
+                    )
                     _ <- useDatumWitnessForUtxo(utxo, mbDatumWitness)
                 } yield ()
         }
