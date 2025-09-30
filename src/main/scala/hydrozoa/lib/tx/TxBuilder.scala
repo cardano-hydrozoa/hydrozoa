@@ -14,6 +14,7 @@ import hydrozoa.lib.tx.TxBuildError.RedeemerIndexingInternalError
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
+import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address
 import scalus.cardano.address.*
@@ -871,6 +872,7 @@ object TransactionBuilder:
                     _ <- usePlutusScriptWitness(plutusScriptWitness)
                     detachedRedeemer = DetachedRedeemer(
                       redeemerDatum,
+                        //().toData,
                       RedeemerPurpose.ForSpend(utxo.input)
                     )
                     _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](ctx =>

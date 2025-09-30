@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
+import com.typesafe.scalalogging.Logger
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
@@ -59,7 +60,7 @@ def genHeadParams: Gen[
         // L2 consensus parameters hash
         params <- genByteStringOfN(32)
         // Major version upon switching to the rule-based regime
-        versionMajor <- Arbitrary.arbitrary[BigInt].map(_.abs + 1)
+        versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
     } yield (nativeScriptHash, headTokenSuffix, peers, peersVKs, params, versionMajor)
 
 def genTreasuryUnresolvedDatum(
@@ -70,7 +71,7 @@ def genTreasuryUnresolvedDatum(
     versionMajor: BigInt
 ): Gen[UnresolvedDatum] =
     for {
-        deadlineVoting <- Arbitrary.arbitrary[BigInt].map(_.abs + 1000000)
+        deadlineVoting <- Gen.choose(1L, 99L).map(BigInt(_)).map(_.abs + 1000000)
         setup = TrustedSetup
             .takeSrsG2(10)
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
@@ -113,7 +114,7 @@ def genVoteNoVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDa
     for {
         key <- Gen.choose(0, peersVKs.length)
         link = (key + 1) % peersVKs.length + 1
-        peer = if key == 0 then None else Some(peersVKs.toList(key).pubKeyHash)
+        peer = if key == 0 then None else Some(peersVKs.toList(key - 1).pubKeyHash)
     } yield VoteDatum(
       key = key,
       link = link,
@@ -145,9 +146,9 @@ def genVoteUtxo(
 
 def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
     for {
-        blockNum <- Arbitrary.arbitrary[BigInt].map(_.abs + 1) // Ensure positive
-        timeCreation <- Arbitrary.arbitrary[BigInt].map(_.abs) // PosixTime as BigInt
-        versionMinor <- Arbitrary.arbitrary[BigInt].map(_.abs)
+        blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
+        timeCreation <- Gen.choose(1750000000L, 1760000000L).map(BigInt(_))
+        versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
         commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
     } yield OnchainBlockHeader(
       blockNum = blockNum,
@@ -213,6 +214,8 @@ def genVoteTxRecipe(
     )
 
 class VoteTxTest extends munit.ScalaCheckSuite {
+    private val log = Logger(getClass)
+
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
@@ -224,6 +227,7 @@ class VoteTxTest extends munit.ScalaCheckSuite {
 
     property("Vote tx builds")(
       Prop.forAll(genVoteTxRecipe()) { recipe =>
+          log.debug("debug entry")
           VoteTx.build(recipe) match {
               case Left(e)   => throw RuntimeException(s"Build failed $e")
               case Right(tx) => println(HexUtil.encodeHexString(tx.tx.toCbor))

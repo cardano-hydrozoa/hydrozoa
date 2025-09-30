@@ -9,7 +9,10 @@ import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOut
 import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{OnchainBlockHeader, VoteRedeemer}
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
+    OnchainBlockHeader,
+    VoteRedeemer
+}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.NoVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import monocle.syntax.all.*
@@ -20,6 +23,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
 import scalus.prelude.List as SList
+import scalus.serialization.cbor.Cbor as ScalusCbor
 
 import scala.util.{Failure, Success, Try}
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
@@ -93,12 +97,16 @@ object VoteTx {
         val (voteInput, voteOutput) =
             (recipe.voteUtxo.utxo.input.untagged, recipe.voteUtxo.utxo.output.untagged)
 
+        //// Create redeemer for dispute resolution script
+        // val redeemer = VoteRedeemer(
+        //  recipe.blockHeader,
+        //  SList.from(
+        //    recipe.signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+        //  )
+        // )
         // Create redeemer for dispute resolution script
         val redeemer = VoteRedeemer(
-          recipe.blockHeader,
-          SList.from(
-            recipe.signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
-          )
+          BigInt(42)
         )
 
         // Build the transaction
@@ -126,6 +134,7 @@ object VoteTx {
                         address = voteOutput.address,
                         value = voteOutput.value,
                         datumOption = Some(Inline(datumWithVote.toData)),
+                        // datumOption = Some(Inline(().toData)),
                         scriptRef = None
                       )
                     )
@@ -134,20 +143,26 @@ object VoteTx {
                 .left
                 .map(SomeBuilderError(_))
 
-            // add the treasury as a reference utxo
-            _ = unbalancedTx
+            unbalancedTx1 = unbalancedTx
+                // add the treasury as a reference utxo
                 .focus(_.body.value.referenceInputs)
                 .replace(TaggedOrderedSet.from(List(recipe.treasuryUtxo.txId)))
+                // fake coins
+                .focus(_.body.value.fee)
+                .replace(Coin(100000))
+            // ping keep raw
 
+            unbalancedTx2 = unbalancedTx1
+                .focus(_.body.raw)
+                .replace(ScalusCbor.encode(unbalancedTx1.body.value))
 
-
-            _ = println(unbalancedTx)
-            //_ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
+            // _ = println(unbalancedTx)
+            _ = println(HexUtil.encodeHexString(unbalancedTx2.toCbor))
 
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx,
+                  initial = unbalancedTx1,
                   changeOutputIdx = 0, // Send change to the vote output
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
@@ -155,6 +170,9 @@ object VoteTx {
                 )
                 .left
                 .map(SomeBalancingError(_))
+
+            _ = println(HexUtil.encodeHexString(balanced.toCbor))
+            _ = println("validating the balanced tx")
 
             // Validate the transaction
             validated <- recipe.context

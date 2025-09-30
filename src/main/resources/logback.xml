@@ -1,0 +1,14 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%X{node} %d{HH:mm:ss.SSS} %boldBlue([%thread]) %highlight(%-5level) %cyan(%logger{64}) -%kvp- %n
+                %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <root level="debug">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="hydrozoa" level="debug"/>
+    <logger name="scalus" level="debug"/>
+</configuration>
