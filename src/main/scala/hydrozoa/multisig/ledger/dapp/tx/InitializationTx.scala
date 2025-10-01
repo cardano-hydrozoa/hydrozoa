@@ -18,6 +18,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -116,6 +117,7 @@ object InitializationTx {
 
             unbalancedTx <- TransactionBuilder
                 .build(
+                  Mainnet,
                   recipe.seedUtxos
                       .map(utxo =>
                           SpendOutput(TransactionUnspentOutput.apply(utxo._1, utxo._2), None)
@@ -145,7 +147,8 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(unbalancedTx.expectedSigners.size, unbalancedTx.transaction),
+                  initial =
+                      addDummyVKeys(unbalancedTx.expectedSigners.size, unbalancedTx.transaction),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

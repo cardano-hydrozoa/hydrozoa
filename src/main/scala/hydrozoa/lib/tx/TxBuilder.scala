@@ -33,6 +33,23 @@ import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 
 // ============================================================================
+// Network Extensions
+// ============================================================================
+
+extension (network: Network)
+    /** Convert Network to the corresponding integer network ID */
+    def toNetworkId: Int = network match
+        case Network.Testnet => 0
+        case Network.Mainnet => 1
+
+object NetworkExtensions:
+    /** Convert integer network ID to Network */
+    def fromNetworkId(networkId: Int): Option[Network] = networkId match
+        case 0 => Some(Network.Testnet)
+        case 1 => Some(Network.Mainnet)
+        case _ => None
+
+// ============================================================================
 // TransactionBuilderStep
 // ============================================================================
 
@@ -485,12 +502,6 @@ object TxBuildError {
             "The following `Address` that was specified in one of the UTxOs has a `NetworkId`" +
                 s" different from the one `TransactionBody` has: $address"
     }
-
-    case object NoTransactionNetworkId extends TxBuildError {
-        override def explain: String =
-            "You are editing a transaction without a `NetworkId` set. To create a `RewardAddress`," +
-                " a NetworkId is needed: set it in the `TransactionBody`"
-    }
 }
 
 // ============================================================================
@@ -535,7 +546,7 @@ object TransactionBuilder:
     case class Context private[TransactionBuilder] (
         transaction: Transaction,
         redeemers: Seq[DetachedRedeemer],
-        networkId: Option[Int],
+        network: Network,
         expectedSigners: Set[ExpectedSigner],
         resolvedUtxos: Set[TransactionUnspentOutput]
     ) {
@@ -546,13 +557,13 @@ object TransactionBuilder:
         val toTuple: (
             Transaction,
             Seq[DetachedRedeemer],
-            Option[Int],
+            Network,
             Set[ExpectedSigner],
             Set[TransactionUnspentOutput]
         ) = (
           this.transaction,
           this.redeemers,
-          this.networkId,
+          this.network,
           this.expectedSigners,
           this.resolvedUtxos
         )
@@ -572,10 +583,10 @@ object TransactionBuilder:
     }
 
     object Context:
-        val empty = Context(
+        def empty(networkId: Network) = Context(
           transaction = emptyTransaction,
           redeemers = Seq.empty,
-          networkId = None,
+          network = networkId,
           expectedSigners = Set.empty,
           resolvedUtxos = Set.empty
         )
@@ -639,11 +650,12 @@ object TransactionBuilder:
 
     /** Build a transaction from scratch, starting with an "empty" transaction and no signers. */
     def build(
+        network: Network,
         steps: Seq[TransactionBuilderStep]
     ): Either[TxBuildError, Context] =
-        modify(Context.empty, steps)
+        modify(Context.empty(network), steps)
 
-    /** Modify a transaction that has existing signers information accompanying it. */
+    /** Modify a transaction within a context. */
     def modify(
         ctx: Context,
         steps: Seq[TransactionBuilderStep]
@@ -655,19 +667,6 @@ object TransactionBuilder:
             def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
 
             for {
-                editableTransaction <- TransactionConversion
-                    .toEditableTransactionSafe(ctx.transaction)
-                    .left
-                    .map(TxBuildError.RedeemerIndexingError(_)) |> liftF0
-                _ <- modify0(ctx0 =>
-                    Context(
-                      transaction = editableTransaction.transaction,
-                      redeemers = editableTransaction.redeemers,
-                      networkId = editableTransaction.transaction.body.value.networkId,
-                      expectedSigners = ctx0.expectedSigners,
-                      resolvedUtxos = ctx0.resolvedUtxos
-                    )
-                )
                 _ <- processConstraints(steps)
                 _ <- steps.traverse_(addSignersFromStep)
                 ctx0 <- StateT.get
@@ -682,15 +681,8 @@ object TransactionBuilder:
                       case Some(x) => Right(x)
                   }
                 )
-                // Replace context and wipe (reattached) redeemers
-                _ <- modify0(
-                  Focus[Context](_.transaction)
-                      .replace(res)
-                      .compose(
-                        Focus[Context](_.redeemers)
-                            .replace(Seq.empty)
-                      )
-                )
+                // Replace the transactin in the context, keeping the rest
+                _ <- modify0(Focus[Context](_.transaction).replace(res))
             } yield ()
         }
         modifyBuilderM.run(ctx).map(_._1)
@@ -793,17 +785,14 @@ object TransactionBuilder:
             // is forced to be total. See https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/src/Cardano/Types/Address.purs#L93-L95
             // I do the same here for conformance, otherwise I'm not sure what to do with the leftover case.
             // But I don't know if this is sensible.
-            addrNetworkId = addr.getNetwork.get.value.toInt
-            res <- context.networkId match {
-                case None => StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
-                case Some(ctxNetworkId) =>
-                    if addrNetworkId != ctxNetworkId
-                    then
-                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                            Left(TxBuildError.WrongNetworkId(addr))
-                        )
-                    else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
-            }
+            addrNetwork = addr.getNetwork.get
+            res <-
+                if context.network != addrNetwork
+                then
+                    StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                      Left(TxBuildError.WrongNetworkId(addr))
+                    )
+                else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
         } yield res
 
     /** Tries to modify the transaction to make it consume a given output. Uses a `SpendWitness` to
@@ -1255,26 +1244,16 @@ object TransactionBuilder:
         witness: Option[CredentialWitness]
     ): BuilderM[Unit] =
         for {
-            networkId <- StateT.get[[X] =>> Either[TxBuildError, X], Context].flatMap { ctx =>
-                ctx.networkId match {
-                    case Some(netId) =>
-                        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Int](netId)
-                    case None =>
-                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Int](
-                          Left(TxBuildError.NoTransactionNetworkId)
-                        )
-                }
-            }
-            // Convert Int to Network and Credential to StakePayload
-            network = if (networkId == 0) Network.Testnet else Network.Mainnet
+            ctx <- StateT.get
+
             rewardAccount = stakeCredential.credential match {
                 case Credential.KeyHash(keyHash) =>
                     // Convert AddrKeyHash to StakeKeyHash - they're likely the same underlying type?
                     val stakeKeyHash = keyHash.asInstanceOf[StakeKeyHash]
-                    val stakeAddress = StakeAddress(network, StakePayload.Stake(stakeKeyHash))
+                    val stakeAddress = StakeAddress(ctx.network, StakePayload.Stake(stakeKeyHash))
                     RewardAccount(stakeAddress)
                 case Credential.ScriptHash(scriptHash) =>
-                    val stakeAddress = StakeAddress(network, StakePayload.Script(scriptHash))
+                    val stakeAddress = StakeAddress(ctx.network, StakePayload.Script(scriptHash))
                     RewardAccount(stakeAddress)
             }
 

@@ -123,7 +123,10 @@ object DepositTx {
             )
 
         for {
-            b1 <- TransactionBuilder.build(steps).left.map(SomeBuilderError(_))
+            b1 <- TransactionBuilder
+                .build(recipe.context.network, steps)
+                .left
+                .map(SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
                   initial = addDummyVKeys(b1.expectedSigners.size, b1.transaction),

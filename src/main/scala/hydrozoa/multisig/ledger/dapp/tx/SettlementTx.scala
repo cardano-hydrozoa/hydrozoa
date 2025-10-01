@@ -12,6 +12,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtx
 import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -108,7 +109,7 @@ object SettlementTx {
 
         for {
             unbalanced <- TransactionBuilder
-                .build(steps)
+                .build(Mainnet, steps)
                 .left
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
