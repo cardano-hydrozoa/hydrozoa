@@ -502,12 +502,6 @@ object TxBuildError {
             "The following `Address` that was specified in one of the UTxOs has a `NetworkId`" +
                 s" different from the one `TransactionBody` has: $address"
     }
-
-    case object NoTransactionNetworkId extends TxBuildError {
-        override def explain: String =
-            "You are editing a transaction without a `NetworkId` set. To create a `RewardAddress`," +
-                " a NetworkId is needed: set it in the `TransactionBody`"
-    }
 }
 
 // ============================================================================
@@ -552,7 +546,7 @@ object TransactionBuilder:
     case class Context private[TransactionBuilder] (
         transaction: Transaction,
         redeemers: Seq[DetachedRedeemer],
-        networkId: Option[Network],
+        network: Network,
         expectedSigners: Set[ExpectedSigner],
         resolvedUtxos: Set[TransactionUnspentOutput]
     ) {
@@ -563,13 +557,13 @@ object TransactionBuilder:
         val toTuple: (
             Transaction,
             Seq[DetachedRedeemer],
-            Option[Network],
+            Network,
             Set[ExpectedSigner],
             Set[TransactionUnspentOutput]
         ) = (
           this.transaction,
           this.redeemers,
-          this.networkId,
+          this.network,
           this.expectedSigners,
           this.resolvedUtxos
         )
@@ -589,10 +583,10 @@ object TransactionBuilder:
     }
 
     object Context:
-        def empty(networkId: Option[Network] = None) = Context(
+        def empty(networkId: Network) = Context(
           transaction = emptyTransaction,
           redeemers = Seq.empty,
-          networkId = networkId,
+          network = networkId,
           expectedSigners = Set.empty,
           resolvedUtxos = Set.empty
         )
@@ -659,7 +653,7 @@ object TransactionBuilder:
         network: Network,
         steps: Seq[TransactionBuilderStep]
     ): Either[TxBuildError, Context] =
-        modify(Context.empty(Some(network)), steps)
+        modify(Context.empty(network), steps)
 
     /** Modify a transaction within a context. */
     def modify(
@@ -792,16 +786,13 @@ object TransactionBuilder:
             // I do the same here for conformance, otherwise I'm not sure what to do with the leftover case.
             // But I don't know if this is sensible.
             addrNetwork = addr.getNetwork.get
-            res <- context.networkId match {
-                case None => StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
-                case Some(ctxNetwork) =>
-                    if addrNetwork != ctxNetwork
-                    then
-                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                          Left(TxBuildError.WrongNetworkId(addr))
-                        )
-                    else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
-            }
+            res <-
+                if context.network != addrNetwork
+                then
+                    StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                      Left(TxBuildError.WrongNetworkId(addr))
+                    )
+                else StateT.pure[[X] =>> Either[TxBuildError, X], Context, Unit](())
         } yield res
 
     /** Tries to modify the transaction to make it consume a given output. Uses a `SpendWitness` to
@@ -1253,25 +1244,16 @@ object TransactionBuilder:
         witness: Option[CredentialWitness]
     ): BuilderM[Unit] =
         for {
-            network <- StateT.get[[X] =>> Either[TxBuildError, X], Context].flatMap { ctx =>
-                ctx.networkId match {
-                    case Some(net) =>
-                        StateT.pure[[X] =>> Either[TxBuildError, X], Context, Network](net)
-                    case None =>
-                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Network](
-                          Left(TxBuildError.NoTransactionNetworkId)
-                        )
-                }
-            }
+            ctx <- StateT.get
 
             rewardAccount = stakeCredential.credential match {
                 case Credential.KeyHash(keyHash) =>
                     // Convert AddrKeyHash to StakeKeyHash - they're likely the same underlying type?
                     val stakeKeyHash = keyHash.asInstanceOf[StakeKeyHash]
-                    val stakeAddress = StakeAddress(network, StakePayload.Stake(stakeKeyHash))
+                    val stakeAddress = StakeAddress(ctx.network, StakePayload.Stake(stakeKeyHash))
                     RewardAccount(stakeAddress)
                 case Credential.ScriptHash(scriptHash) =>
-                    val stakeAddress = StakeAddress(network, StakePayload.Script(scriptHash))
+                    val stakeAddress = StakeAddress(ctx.network, StakePayload.Script(scriptHash))
                     RewardAccount(stakeAddress)
             }
 
