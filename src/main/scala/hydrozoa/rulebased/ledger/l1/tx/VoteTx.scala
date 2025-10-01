@@ -1,6 +1,7 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
+import scalus.cardano.address.Network.Mainnet
 // import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential // TODO: Will be needed for actual script witness
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
@@ -108,7 +109,8 @@ object VoteTx {
         // Build the transaction
         val buildResult = for {
             unbalancedTx <- TransactionBuilder
-                .buildTransaction(
+                .build(
+                  Mainnet,
                   List(
                     // Spend the vote UTXO with dispute resolution script witness
                     SpendOutput(
@@ -144,7 +146,7 @@ object VoteTx {
             // Balance the transaction
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = unbalancedTx.tx,
+                  initial = unbalancedTx.transaction,
                   changeOutputIdx = 0, // Send change to the vote output
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

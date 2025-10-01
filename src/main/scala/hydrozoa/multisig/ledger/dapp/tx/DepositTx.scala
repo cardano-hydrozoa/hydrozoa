@@ -123,10 +123,13 @@ object DepositTx {
             )
 
         for {
-            b1 <- TransactionBuilder.buildTransaction(steps).left.map(SomeBuilderError(_))
+            b1 <- TransactionBuilder
+                .build(recipe.context.network, steps)
+                .left
+                .map(SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(b1.signers.size, b1.tx),
+                  initial = addDummyVKeys(b1.expectedSigners.size, b1.transaction),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
