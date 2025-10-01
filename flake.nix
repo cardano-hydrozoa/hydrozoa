@@ -1,6 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
   };
 
   outputs =
@@ -12,7 +13,7 @@
     (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        jdk = pkgs.openjdk21;
+        jdk = pkgs.openjdk23;
         sbt = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
       in
