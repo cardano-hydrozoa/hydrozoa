@@ -122,7 +122,7 @@ object DepositTx {
                   None
                 )
             )
-        
+
         for {
             b1 <- TransactionBuilder
                 .build(recipe.context.network, steps)
