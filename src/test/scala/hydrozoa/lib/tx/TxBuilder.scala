@@ -3,7 +3,7 @@ package hydrozoa.lib.tx
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
-import hydrozoa.lib.tx.InputAction.SpendInput
+import hydrozoa.lib.tx.ReferenceDataAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
@@ -33,7 +33,8 @@ import scalus.cardano.ledger.RedeemerTag.{Cert, Spend}
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.|>
-import test.{genAddrKeyHash, genTxId}
+import test.*
+import test.TestPeer.Alice
 
 import scala.collection.immutable.{SortedMap, SortedSet}
 
@@ -500,19 +501,76 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     // nsWitness = NativeScriptOutput $ ScriptValue ns
     val nsWitness = NativeScriptOutput(ScriptValue(ns, nsSigners))
 
-    val psSignersOutput: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
+    val script2Signers: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
     //  plutusScriptWitness =
     //      PlutusScriptOutput (ScriptValue script2) RedeemerDatum.unit
     //        Nothing
-    val plutusScriptWitness =
-        PlutusScriptOutput(ScriptValue(script2, psSignersOutput), Data.List(List()), None)
+    val plutusScript2Witness =
+        PlutusScriptOutput(ScriptValue(script2, script2Signers), Data.List(List()), None)
 
-    val psSignersRef: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
+    private def setScriptAddr(
+        scriptHash: ScriptHash,
+        utxo: (TransactionInput, Babbage)
+    ): (TransactionInput, Babbage) =
+        utxo.focus(_._2.address)
+            .replace(
+              ShelleyAddress(
+                network = Mainnet,
+                payment = ShelleyPaymentPart.Script(scriptHash),
+                delegation = Null
+              )
+            )
+
+    // A Utxo at the address for script 1
+    val script1Utxo: TransactionUnspentOutput = {
+        val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
+
+        TransactionUnspentOutput(setScriptAddr(script1.scriptHash, utxo))
+    }
+
+    // A Utxo at the address for script 2
+    val script2Utxo: TransactionUnspentOutput = {
+        val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
+        TransactionUnspentOutput(setScriptAddr(script2.scriptHash, utxo))
+    }
+
+    // Expected Signers for the plutus script1 ref witness
+    val psRefWitnessExpectedSigners: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
+
+    private def setRefScript(
+        script: Script,
+        utxo: (TransactionInput, Babbage)
+    ): (TransactionInput, Babbage) =
+        utxo.focus(_._2.scriptRef).replace(Some(ScriptRef(script)))
+
+    // A utxo carrying a reference script for script 1
+    val utxoWithScript1ReferenceScript: TransactionUnspentOutput = {
+        val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
+        TransactionUnspentOutput(setRefScript(script1, utxo))
+    }
+
+    // A utxo carrying a reference script for script 2
+    val utxoWithScript2ReferenceScript: TransactionUnspentOutput = {
+        val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
+        TransactionUnspentOutput(setRefScript(script2, utxo))
+    }
+
     //    plutusScriptRefWitness =
     //      PlutusScriptOutput (ScriptReference input1 SpendInput) RedeemerDatum.unit
     //        Nothing
-    val plutusScriptRefWitness = PlutusScriptOutput(
-      ScriptWitness.ScriptReference(input1, SpendInput, psSignersRef),
+    val plutusScript1RefWitness = PlutusScriptOutput(
+      ScriptWitness
+          .ScriptReference(utxoWithScript1ReferenceScript, SpendInput, psRefWitnessExpectedSigners),
+      Data.List(List()),
+      None
+    )
+
+    val plutusScript2RefWitness = PlutusScriptOutput(
+      ScriptWitness.ScriptReference(
+        utxoWithScript2ReferenceScript,
+        ReferenceInput,
+        psRefWitnessExpectedSigners
+      ),
       Data.List(List()),
       None
     )
@@ -529,6 +587,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                 .replace(TaggedOrderedSet(input1))
             |> expectedSignersL
                 .modify(_ ++ fromRight(spendPkhUtxoStep.additionalSigners))
+            |> resolvedUtxosL.modify(_ + pkhUtxo)
 
     // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
     //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
@@ -561,8 +620,8 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     //      WrongOutputType (ScriptHashWitness plutusScriptRefWitness) pkhUtxo
     testBuilderStepsFail(
       label = "PKH output with wrong witness #2",
-      steps = List(SpendOutput(pkhUtxo, Some(plutusScriptRefWitness))),
-      error = WrongOutputType(ScriptHashWitness(plutusScriptRefWitness), pkhUtxo)
+      steps = List(SpendOutput(pkhUtxo, Some(plutusScript1RefWitness))),
+      error = WrongOutputType(ScriptHashWitness(plutusScript1RefWitness), pkhUtxo)
     )
 
     //  testBuilderStepsFail "SKH output with wrong witness #1"
@@ -579,7 +638,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     //    IncorrectScriptHash (Right script2) scriptHash1
     testBuilderStepsFail(
       label = "SKH output with wrong witness #2",
-      steps = List(SpendOutput(skhUtxo, Some(plutusScriptWitness))),
+      steps = List(SpendOutput(skhUtxo, Some(plutusScript2Witness))),
       error = IncorrectScriptHash(Right(script2), scriptHash1)
     )
 
@@ -611,6 +670,34 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         ) // Mainnet context with mixed network addresses
         assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxoTestNet.output.address)))
     })
+
+    // @Ilia: This should build successfully: we are spending a utxo located at the address for script one,
+    // and providing a reference utxo carrying the same script in its scriptRef
+    testBuilderSteps(
+      label = "Script Output with Script Ref Withness",
+      steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness))),
+      expected = ???
+    )
+
+    // @Ilia: This should currently be failing. script1Utxo is utxo at the script1 address, while the witness passed
+    // denotes a utxo carrying script2 in its scriptRef.
+    // Since we just added this, I don't know if we currently have an appropriate error constructor yet.
+    testBuilderStepsFail(
+      label = "PKH Output with mismatched script ref",
+      steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript2RefWitness))),
+      error = ???
+    )
+
+    // @Ilia: this should pass. I've added it to usePlutusScriptWitness.
+    // A similar test could be written for native scripts
+    test("Referencing a script Utxo adds the utxo to context's resolvedUtxos") {
+        val steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness)))
+        val built = fromRight(TransactionBuilder.build(Mainnet, steps))
+        assertEquals(
+          obtained = built.toTuple |> resolvedUtxosL.get,
+          Set(script1Utxo, utxoWithScript1ReferenceScript)
+        )
+    }
 
     // ================================================================
     // Subgroup: Signature tracking
@@ -685,19 +772,27 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                   scriptRef = None
                 )
               ),
-              witness = Some(plutusScriptWitness)
+              witness = Some(plutusScript2Witness)
             )
 
         // Signers are what we expected for an PS spend
         assertEquals(
           obtained = fromRight(step.additionalSigners),
-          expected = psSignersOutput.map(ExpectedSigner(_))
+          expected = script2Signers.map(ExpectedSigner(_))
         )
+
+        val built = fromRight(build(Mainnet, List(step)))
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
-          obtained = build(Mainnet, List(step)).map(_.expectedSigners),
-          expected = Right(fromRight(step.additionalSigners))
+          obtained = built.expectedSigners,
+          expected = fromRight(step.additionalSigners)
+        )
+
+        // signers are added to the required signers for plutus script output
+        assertEquals(
+          obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.requiredSigners).get,
+          expected = TaggedOrderedSet.from(psRefWitnessExpectedSigners)
         )
     })
 

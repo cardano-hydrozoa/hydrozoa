@@ -16,6 +16,7 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 import scala.util.{Failure, Success}
@@ -121,36 +122,37 @@ object DepositTx {
                   None
                 )
             )
-
+        
         for {
             b1 <- TransactionBuilder
                 .build(recipe.context.network, steps)
                 .left
                 .map(SomeBuilderError(_))
-            balanced <- LowLevelTxBuilder
-                .balanceFeeAndChange(
-                  initial = addDummyVKeys(b1.expectedSigners.size, b1.transaction),
-                  changeOutputIdx = 1,
-                  protocolParams = recipe.context.protocolParams,
-                  resolvedUtxo = recipe.context.utxo,
-                  evaluator = recipe.context.evaluator
+            finalized <- b1
+                .finalizeContext(
+                  recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    1
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
                 )
-                .map(tx => removeDummyVKeys(1, tx))
                 .left
-                .map(OtherScalusBalancingError(_))
-            validated <- recipe.context
-                .validate(balanced)
-                .left
-                .map(OtherScalusTransactionException(_))
+                .map({
+                    case balanceError: TxBalancingError => OtherScalusBalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        OtherScalusTransactionException(validationError)
+                })
         } yield DepositTx(
           depositProduced = DepositUtxo(
-            l1Input = TransactionInput(validated.id, 0),
+            l1Input = TransactionInput(finalized.transaction.id, 0),
             l1OutputAddress = recipe.headAddress,
             l1OutputDatum = recipe.datum,
             l1OutputValue = depositValue.coin,
             l1RefScript = None
           ),
-          tx = validated
+          tx = finalized.transaction
         )
 
     }

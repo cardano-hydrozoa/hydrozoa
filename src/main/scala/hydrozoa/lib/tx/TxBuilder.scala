@@ -8,24 +8,27 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
+import hydrozoa.*
 import hydrozoa.lib.tx
-import hydrozoa.lib.tx.InputAction.{ReferenceInput, SpendInput}
+import hydrozoa.lib.tx.ReferenceDataAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.TxBuildError.{
     CannotExtractSignatures,
     RedeemerIndexingInternalError,
     Unimplemented
 }
-import hydrozoa.{datumOption, emptyTransaction, txBodyL}
 import io.bullet.borer.Cbor
+import monocle.*
 import monocle.syntax.all.*
-import monocle.{Focus, Lens}
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address
-import scalus.cardano.address.*
+import scalus.cardano.address.{Address, *}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.GovAction.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.rules.{STS, UtxoEnv, Context as SContext, State as SState}
+import scalus.cardano.ledger.txbuilder.wip.DiffHandler
+import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.|>
 
@@ -64,6 +67,14 @@ sealed trait TransactionBuilderStep:
     val additionalSigners: Either[TxBuildError, Set[ExpectedSigner]]
 
 object TransactionBuilderStep {
+    // @Ilia add a build step to add an arbitrary reference input and ensure that it gets added to the resolvedUtxos
+    
+    // @Ilia we need another build step to add collateral inputs;
+    // add these utxos to the resolved UTxOs, and add the signers
+    // to expectedSigners
+    // Leave comment that we don't set a collateral output
+    // Leave comment that we don't set total collateral
+
     case class SpendOutput(
         utxo: TransactionUnspentOutput,
         /** Pass None for pubkey outputs only */
@@ -76,11 +87,11 @@ object TransactionBuilderStep {
                 case Some(ps: OutputWitness.PlutusScriptOutput) =>
                     Right(ps.additionalSigners.map(ExpectedSigner(_)))
                 case None =>
-                    (utxo.output.address match {
+                    utxo.output.address match {
                         case ShelleyAddress(_, payment: ShelleyPaymentPart.Key, _) =>
                             Right(Set(ExpectedSigner(payment.hash)))
                         case _ => Left(CannotExtractSignatures(this))
-                    })
+                    }
             }
 
         }
@@ -288,41 +299,41 @@ object ScriptWitness {
     case class ScriptValue[A](script: A, additionalSigners: Set[AddrKeyHash])
         extends ScriptWitness[A]
     case class ScriptReference(
-        input: TransactionInput,
-        action: InputAction,
+        utxo: TransactionUnspentOutput,
+        action: ReferenceDataAction,
         additionalSigners: Set[AddrKeyHash]
     ) extends ScriptWitness[Nothing]
 }
 
 // ============================================================================
-// InputAction
+// Reference Data action
 // ============================================================================
 
 /*
 -- | Inputs can be referenced or spent in a transaction (See CIP-31).
--- | Inline datums (CIP-32) and reference scripts (CIP-33) contained within
--- | transaction outputs become visible to the script context of the
+-- | Inline data, including datums (CIP-32) and reference scripts (CIP-33),
+-- | contained within transaction outputs become visible to the script context of the
 -- | transaction, regardless of whether the output is spent or just
 -- | referenced. This data type lets the developer specify, which
 -- | action to perform with an input.
  */
-sealed trait InputAction
+sealed trait ReferenceDataAction
 
-object InputAction {
-    case object ReferenceInput extends InputAction
-    case object SpendInput extends InputAction
+object ReferenceDataAction {
+    case object ReferenceInput extends ReferenceDataAction
+    case object SpendInput extends ReferenceDataAction
 }
 
 /*
 -- | Depending on `RefInputAction` value, we either want to spend a reference
 -- | UTxO, or just reference it.
  */
-private def inputActionToLens(
-    inputAction: InputAction
+private def referenceDataActionToLens(
+    referenceDataAction: ReferenceDataAction
 ): monocle.PLens[TransactionBody, TransactionBody, TaggedOrderedSet[
   scalus.cardano.ledger.TransactionInput
 ], TaggedOrderedSet[scalus.cardano.ledger.TransactionInput]] =
-    inputAction match {
+    referenceDataAction match {
         case ReferenceInput => Focus[TransactionBody](_.referenceInputs)
         case SpendInput     => Focus[TransactionBody](_.inputs)
     }
@@ -341,9 +352,10 @@ sealed trait DatumWitness
 
 object DatumWitness {
     case class DatumValue(datum: Data) extends DatumWitness
+    // @Ilia remove this
     case class DatumReference(
         input: TransactionInput,
-        action: InputAction
+        action: ReferenceDataAction
     ) extends DatumWitness
 }
 
@@ -364,9 +376,14 @@ object ExpectedWitnessType {
         override def explain: String = "PubKeyHash"
 }
 
+// TODO: itd be nice to make this opaque and only return from chain queries
 // NOTE (Peter, 2025-09-23): this comes from  https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/TransactionUnspentOutput.purs
 case class TransactionUnspentOutput(input: TransactionInput, output: TransactionOutput):
     def toTuple: (TransactionInput, TransactionOutput) = (input, output)
+
+object TransactionUnspentOutput:
+    def apply(utxo: (TransactionInput, TransactionOutput)): TransactionUnspentOutput =
+        TransactionUnspentOutput(utxo._1, utxo._2)
 
 // NOTE (Peter, 2025-09-23): this comes from https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/StakeCredential.purs
 case class StakeCredential(credential: Credential)
@@ -538,7 +555,6 @@ object CredentialAction {
   *
   * The purpose for signing is not presently tracked. For a sketch, see commit
   * 1a8c9c73fbfb33e79456a0a8b9f08688ef39b749.
-  * @param hash
   */
 case class ExpectedSigner(hash: AddrKeyHash)
 
@@ -575,11 +591,86 @@ object TransactionBuilder:
             this |> Focus[Context](_.expectedSigners).modify(_ ++ additionalSigners)
         }
 
-        def balancedTx: Transaction = ???
+        /** ensure that all transaction outputs in the context have min ada */
+        def setMinAdaAll(protocolParams: ProtocolParams): Context = {
+            // @Ilia we also need to set the min ADA on the collateral return output
+            this |> unsafeCtxBodyL
+                .refocus(_.outputs)
+                .modify(os =>
+                    os.map((to: Sized[TransactionOutput]) =>
+                        Sized(setMinAda(to.value, protocolParams))
+                    )
+                )
+        }
 
-        // build : List[Step] => Context
-        // modify : List[Step] => Context => Context
+        /** balance the transaction in a context, adding and removing mock signatures where
+          * necessary.
+          */
+        def balance(
+            // @Ilia leave comment about not messing with inputs, etc. If your diff handler
+            // adds or removes components needing signatures, the fees won't be calculated correctly.
+            // It also won't update .resolvedUtxos.
+            // @Ilia Wrap this so that we can only modify the transaction outputs. Basically inject
+            // a (Coin, Set[TransactionOutput]) => Either[TxBalancingError, Set[TransactionOutput]]
+            // into a DiffHandler
+            diffHandler: DiffHandler,
+            protocolParams: ProtocolParams,
+            evaluator: PlutusScriptEvaluator
+        ): Either[TxBalancingError, Context] = {
+            val withVKeys: Transaction = addDummyVKeys(this.expectedSigners.size, this.transaction)
+            for {
+                balanced <- LowLevelTxBuilder.balanceFeeAndChange(
+                  initial = withVKeys,
+                  diffHandler = diffHandler,
+                  protocolParams = protocolParams,
+                  resolvedUtxo = this.getUtxo,
+                  evaluator = evaluator
+                )
+                withoutVKeys = removeDummyVKeys(this.expectedSigners.size, this.transaction)
 
+            } yield Context(
+              transaction = withoutVKeys,
+              redeemers = this.redeemers,
+              network = this.network,
+              expectedSigners = this.expectedSigners,
+              resolvedUtxos = this.resolvedUtxos
+            )
+        }
+
+        /** Conversion help to Scalus [[Utxo]] */
+        private def getUtxo: UTxO = Map.from(this.resolvedUtxos.map(utxo => (utxo._1, utxo._2)))
+
+        /** validate a context according so a set of ledger rules */
+        def validate(
+            validators: Seq[Validator],
+            protocolParams: ProtocolParams
+        ): Either[TransactionException, Context] = {
+            val certState = CertState.empty
+            val context = SContext(
+              this.transaction.body.value.fee,
+              UtxoEnv(1L, protocolParams, certState, network)
+            )
+            val state = SState(this.getUtxo, certState)
+            validators
+                .map(_.validate(context, state, this.transaction))
+                .collectFirst { case l: Left[?, ?] => l.value }
+                .toLeft(this)
+        }
+
+        /** set min ada, balance, and validate a context */
+        // @Ilia consider putting PP, evaluator, and validators, into the parameters for the transaction builder class
+        def finalizeContext(
+            protocolParams: ProtocolParams,
+            diffHandler: DiffHandler,
+            evaluator: PlutusScriptEvaluator,
+            validators: Seq[Validator]
+        ): Either[TransactionException | TxBalancingError, Context] =
+            for {
+                balancedCtx <- this
+                    .setMinAdaAll(protocolParams)
+                    .balance(diffHandler, protocolParams, evaluator)
+                validatedCtx <- balancedCtx.validate(validators, protocolParams)
+            } yield validatedCtx
     }
 
     object Context:
@@ -624,11 +715,11 @@ object TransactionBuilder:
       *   satisfied for the UTxO
       */
     @tailrec
-    def setMinAda(
-        candidateOutput: Babbage,
+    def setMinAda[TO <: TransactionOutput](
+        candidateOutput: TO,
         params: ProtocolParams,
-        update: (Coin, Babbage) => Babbage = replaceAdaUpdate
-    ): Babbage = {
+        update: (Coin, TO) => TO = replaceAdaUpdate
+    ): TO = {
         val minAda = MinCoinSizedTransactionOutput(Sized(candidateOutput), params)
         //    println(s"Current candidate output value: ${candidateOutput.value.coin};" +
         //        s" minAda required for current candidate output: $minAda; " +
@@ -645,8 +736,11 @@ object TransactionBuilder:
       * @param to
       * @return
       */
-    def replaceAdaUpdate(coin: Coin, to: Babbage): Babbage =
-        to.focus(_.value.coin).replace(coin)
+    def replaceAdaUpdate(coin: Coin, to: TransactionOutput): TransactionOutput =
+        to match {
+            case s: TransactionOutput.Shelley => s.focus(_.value.coin).replace(coin)
+            case b: TransactionOutput.Babbage => b.focus(_.value.coin).replace(coin)
+        }
 
     /** Build a transaction from scratch, starting with an "empty" transaction and no signers. */
     def build(
@@ -801,8 +895,8 @@ object TransactionBuilder:
     def useSpendWitness(
         utxo: TransactionUnspentOutput,
         mbWitness: Option[OutputWitness]
-    ): BuilderM[Unit] = {
-        mbWitness match {
+    ): BuilderM[Unit] = for {
+        _ <- mbWitness match {
             case None =>
                 assertOutputType(ExpectedWitnessType.PubKeyHashWitness[OutputWitness](), utxo)
             case Some(witness @ OutputWitness.NativeScriptOutput(nsWitness)) =>
@@ -836,7 +930,11 @@ object TransactionBuilder:
                     _ <- useDatumWitnessForUtxo(utxo, mbDatumWitness)
                 } yield ()
         }
-    }
+        // Add the spend UTxOs to the context's resolvedUtxos
+        _ <- StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+          Focus[Context](_.resolvedUtxos).modify(_ + utxo)
+        )
+    } yield ()
 
     def assertOutputType(
         expectedType: ExpectedWitnessType[OutputWitness],
@@ -928,11 +1026,14 @@ object TransactionBuilder:
                       .refocus(_.nativeScripts)
                       .modify(s => pushUnique(ns, s.toList).toSet)
                 )
-            case ScriptWitness.ScriptReference(input, inputAction, expectedSigners) =>
+            case ScriptWitness.ScriptReference(utxo, inputAction, expectedSigners) =>
                 StateT.modify(
+                  // Add to transaction inputs
                   unsafeCtxBodyL
-                      .andThen(inputActionToLens(inputAction))
-                      .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
+                      .andThen(referenceDataActionToLens(inputAction))
+                      .modify(s => TaggedOrderedSet.from(pushUnique(utxo.input, s.toSeq)))
+                      // Add UTxO to context's resolvedUtxos
+                      .compose(Focus[Context](_.resolvedUtxos).modify(_ + utxo))
                 )
         }
 
@@ -970,11 +1071,14 @@ object TransactionBuilder:
                                   .modify(s => Set.from(pushUnique(v3, s.toSeq)))
                             )
                     }
-                case ScriptWitness.ScriptReference(input, action, _) =>
+                case ScriptWitness.ScriptReference(utxo, action, _) =>
                     StateT.modify[[X] =>> Either[TxBuildError, X], Context](
+                      // add to reference inputs or regular inputs
                       unsafeCtxBodyL
-                          .andThen(inputActionToLens(action))
-                          .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
+                          .andThen(referenceDataActionToLens(action))
+                          .modify(s => TaggedOrderedSet.from(pushUnique(utxo.input, s.toSeq)))
+                          // Add Utxo to resolved Utxos
+                          .compose(Focus[Context](_.resolvedUtxos).modify(_ + utxo))
                     )
             }
         } yield ()
@@ -1056,7 +1160,7 @@ object TransactionBuilder:
                         case Some(DatumWitness.DatumReference(input, inputAction)) =>
                             StateT.modify[[X] =>> Either[TxBuildError, X], Context](
                               unsafeCtxBodyL
-                                  .andThen(inputActionToLens(inputAction))
+                                  .andThen(referenceDataActionToLens(inputAction))
                                   .modify(s => TaggedOrderedSet.from(pushUnique(input, s.toSeq)))
                             )
                     }
