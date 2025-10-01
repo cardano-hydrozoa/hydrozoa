@@ -26,7 +26,6 @@
             just
             jdk
             sbt
-            sbt-with-scala-native
             scala-cli
      	    visualvm
             scalafix

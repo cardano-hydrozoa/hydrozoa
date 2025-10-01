@@ -122,7 +122,7 @@ def genAdaOnlyPubKeyUtxo(
           scriptRef = None
         ),
         params
-      )
+      ).asInstanceOf[Babbage]
     ).focus(_._2.value).modify(_ + value)
 
 // Get the minAda for an Ada only pubkey utxo
