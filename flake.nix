@@ -1,6 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
   };
 
   outputs =
@@ -9,12 +10,12 @@
     , nixpkgs
     , ...
     } @ inputs:
-    (flake-utils.lib.eachSystem [ "x86_64-darwin" "x86_64-linux" "aarch64-darwin" ]
-      (system:
+    (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        jdk = pkgs.openjdk21;
+        jdk = pkgs.openjdk23;
         sbt = pkgs.sbt.override { jre = jdk; };
+        visualvm = pkgs.visualvm.override { jdk = jdk; };
       in
       rec {
         devShell = pkgs.mkShell {
@@ -23,7 +24,7 @@
           packages = with pkgs; [
             async-profiler
             just
-            openjdk21
+            jdk
             sbt
             sbt-with-scala-native
             scala-cli
