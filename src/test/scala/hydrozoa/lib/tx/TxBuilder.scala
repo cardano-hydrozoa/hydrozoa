@@ -5,6 +5,7 @@ import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
 import hydrozoa.lib.tx.InputAction.SpendInput
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
+import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilder.{Context, build, modify}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
@@ -778,6 +779,17 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                   )
                 )
               )
+          |>
+          redeemersL.replace(
+            List(
+              DetachedRedeemer(
+                datum = Data.List(List.empty),
+                purpose = ForMint(
+                  ScriptHash.fromHex("36137e3d612d23a644283f10585958085aa255bdae4076fcefe414b6")
+                )
+              )
+            )
+          )
     )
 
     // =======================================================================
@@ -838,7 +850,8 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                     )
                   )
                 )
-              ) |>
+              )
+          |>
           transactionL
               .andThen(txBodyL)
               .refocus(_.certificates)
@@ -847,6 +860,22 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                   Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None)
                 )
               )
+          |>
+          redeemersL.replace(
+            List(
+              DetachedRedeemer(
+                datum = Data.List(List.empty),
+                purpose = ForCert(
+                  UnregCert(
+                    Credential.ScriptHash(
+                      ScriptHash.fromHex("36137e3d612d23a644283f10585958085aa255bdae4076fcefe414b6")
+                    ),
+                    None
+                  )
+                )
+              )
+            )
+          )
     )
 
     // witness = PlutusScriptCredential (ScriptValue script1) RedeemerDatum.unit
@@ -1134,6 +1163,6 @@ private type ContextTuple = (
 
 def transactionL: Lens[ContextTuple, Transaction] = Focus[ContextTuple](_._1)
 def redeemersL: Lens[ContextTuple, Seq[DetachedRedeemer]] = Focus[ContextTuple](_._2)
-def networkdIdL: Lens[ContextTuple, Option[Network]] = Focus[ContextTuple](_._3)
+def networkL: Lens[ContextTuple, Option[Network]] = Focus[ContextTuple](_._3)
 def expectedSignersL: Lens[ContextTuple, Set[ExpectedSigner]] = Focus[ContextTuple](_._4)
 def resolvedUtxosL: Lens[ContextTuple, Set[TransactionUnspentOutput]] = Focus[ContextTuple](_._5)

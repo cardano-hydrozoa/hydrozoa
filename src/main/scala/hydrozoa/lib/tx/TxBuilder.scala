@@ -661,7 +661,7 @@ object TransactionBuilder:
     ): Either[TxBuildError, Context] =
         modify(Context.empty(Some(network)), steps)
 
-    /** Modify a transaction that has existing signers information accompanying it. */
+    /** Modify a transaction within a context. */
     def modify(
         ctx: Context,
         steps: Seq[TransactionBuilderStep]
@@ -673,21 +673,6 @@ object TransactionBuilder:
             def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
 
             for {
-                editableTransaction <- TransactionConversion
-                    .toEditableTransactionSafe(ctx.transaction)
-                    .left
-                    .map(TxBuildError.RedeemerIndexingError(_)) |> liftF0
-                _ <- modify0(ctx0 =>
-                    Context(
-                      transaction = editableTransaction.transaction,
-                      redeemers = editableTransaction.redeemers,
-                      networkId = editableTransaction.transaction.body.value.networkId
-                          .flatMap(NetworkExtensions.fromNetworkId)
-                          .orElse(ctx0.networkId),
-                      expectedSigners = ctx0.expectedSigners,
-                      resolvedUtxos = ctx0.resolvedUtxos
-                    )
-                )
                 _ <- processConstraints(steps)
                 _ <- steps.traverse_(addSignersFromStep)
                 ctx0 <- StateT.get
@@ -702,15 +687,8 @@ object TransactionBuilder:
                       case Some(x) => Right(x)
                   }
                 )
-                // Replace context and wipe (reattached) redeemers
-                _ <- modify0(
-                  Focus[Context](_.transaction)
-                      .replace(res)
-                      .compose(
-                        Focus[Context](_.redeemers)
-                            .replace(Seq.empty)
-                      )
-                )
+                // Replace the transactin in the context, keeping the rest
+                _ <- modify0(Focus[Context](_.transaction).replace(res))
             } yield ()
         }
         modifyBuilderM.run(ctx).map(_._1)
