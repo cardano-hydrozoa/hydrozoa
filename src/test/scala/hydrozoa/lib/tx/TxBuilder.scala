@@ -24,7 +24,7 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
@@ -443,7 +443,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         error: TxBuildError
     )(implicit loc: munit.Location): Unit =
         test(label)({
-            val res = TransactionBuilder.build(steps)
+            val res = TransactionBuilder.build(Mainnet, steps)
             assertEquals(obtained = res, expected = Left(error))
         })
 
@@ -464,13 +464,13 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
         expected: (
             Transaction,
             Seq[DetachedRedeemer],
-            Option[Int],
+            Option[Network],
             Set[ExpectedSigner],
             Set[TransactionUnspentOutput]
         )
     )(implicit loc: munit.Location): Unit =
         test(label)({
-            val res = TransactionBuilder.build(steps)
+            val res = TransactionBuilder.build(Mainnet, steps)
             assertEquals(
               obtained = res.map(_.toTuple),
               expected = Right(expected)
@@ -522,7 +522,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
     val spendPkhUtxoStep = TransactionBuilderStep.SpendOutput(pkhUtxo, None)
     val pubKeyInput1Expected: ContextTuple =
-        Context.empty.toTuple
+        Context.empty(Some(Mainnet)).toTuple
             |> transactionL
                 .andThen(txBodyL.refocus(_.inputs))
                 .replace(TaggedOrderedSet(input1))
@@ -604,8 +604,11 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
                 scriptRef = None
               )
             )
-        val res = modify(Context.empty, List(SpendOutput(pkhUtxo, None), SpendOutput(pkhUtxoTestNet, None)))
-        assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxo.output.address)))
+        val res = modify(
+          Context.empty(Some(Mainnet)),
+          List(SpendOutput(pkhUtxo, None), SpendOutput(pkhUtxoTestNet, None))
+        ) // Mainnet context with mixed network addresses
+        assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxoTestNet.output.address)))
     })
 
     // ================================================================
@@ -628,7 +631,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
 
           // Check that the transaction step adds the correct signer
-          val tx = build(List(spendPkhUtxoStep))
+          val tx = build(Mainnet, List(spendPkhUtxoStep))
           assertEquals(
             obtained = tx.map(_.expectedSigners),
             expected = Right(fromRight(spendPkhUtxoStep.additionalSigners))
@@ -662,7 +665,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
-          obtained = build(List(step)).map(_.expectedSigners),
+          obtained = build(Mainnet, List(step)).map(_.expectedSigners),
           expected = Right(fromRight(step.additionalSigners))
         )
     })
@@ -692,7 +695,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
 
         // Signers are what we expect for a transaction built with this step
         assertEquals(
-          obtained = build(List(step)).map(_.expectedSigners),
+          obtained = build(Mainnet, List(step)).map(_.expectedSigners),
           expected = Right(fromRight(step.additionalSigners))
         )
     })
@@ -706,10 +709,10 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "Pay #1",
       steps = List(Pay(pkhOutput)),
-      expected = Context.empty.toTuple
+      expected = Context.empty(Some(Mainnet)).toTuple
           |> transactionL
-          .andThen(txBodyL.refocus(_.outputs))
-          .replace(IndexedSeq(Sized(pkhOutput)))
+              .andThen(txBodyL.refocus(_.outputs))
+              .replace(IndexedSeq(Sized(pkhOutput)))
     )
 
     // =======================================================================
@@ -732,7 +735,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = Context.empty.toTuple |>
+      expected = Context.empty(Some(Mainnet)).toTuple |>
           // replace mint
           transactionL
               .andThen(txBodyL)
@@ -816,7 +819,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
           )
         )
       ),
-      expected = Context.empty.toTuple |>
+      expected = Context.empty(Some(Mainnet)).toTuple |>
           transactionL
               .refocus(_.witnessSet.plutusV1Scripts)
               .replace(Set(script1)) |>
@@ -891,7 +894,7 @@ class TxBuilderTests extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "ModifyAuxData: id",
       steps = List(ModifyAuxData(identity)),
-      expected = Context.empty.toTuple
+      expected = Context.empty(Some(Mainnet)).toTuple
     )
 
 }
@@ -1032,7 +1035,7 @@ pkhOutput =
         }
         )
  */
-val     pkhOutput: Babbage = Babbage(
+val pkhOutput: Babbage = Babbage(
   address = ShelleyAddress(
     network = Mainnet,
     payment = pkhOutputPaymentPart,
@@ -1115,7 +1118,7 @@ val testnetTransaction: Transaction =
     txBodyL.refocus(_.networkId).replace(Some(0))(anyNetworkTx)
 
 val testnetContext: ContextTuple =
-    Context.empty.toTuple |> transactionL.replace(testnetTransaction)
+    Context.empty().toTuple |> transactionL.replace(testnetTransaction)
 
 private def fromRight[A, B](e: Either[A, B]): B =
     e match { case Right(x) => x }
@@ -1124,13 +1127,13 @@ private def fromRight[A, B](e: Either[A, B]): B =
 private type ContextTuple = (
     Transaction,
     Seq[DetachedRedeemer],
-    Option[Int],
+    Option[Network],
     Set[ExpectedSigner],
     Set[TransactionUnspentOutput]
 )
 
 def transactionL: Lens[ContextTuple, Transaction] = Focus[ContextTuple](_._1)
 def redeemersL: Lens[ContextTuple, Seq[DetachedRedeemer]] = Focus[ContextTuple](_._2)
-def networkdIdL: Lens[ContextTuple, Option[Int]] = Focus[ContextTuple](_._3)
+def networkdIdL: Lens[ContextTuple, Option[Network]] = Focus[ContextTuple](_._3)
 def expectedSignersL: Lens[ContextTuple, Set[ExpectedSigner]] = Focus[ContextTuple](_._4)
 def resolvedUtxosL: Lens[ContextTuple, Set[TransactionUnspentOutput]] = Focus[ContextTuple](_._5)
