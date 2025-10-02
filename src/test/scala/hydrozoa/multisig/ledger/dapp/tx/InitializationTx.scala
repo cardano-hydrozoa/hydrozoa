@@ -1,29 +1,32 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import cats.data.NonEmptyList
-import cats.syntax.all.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import io.bullet.borer.Cbor
-import monocle.syntax.all.*
-import org.scalacheck.Gen.choose
-import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger._
 import scalus.cardano.ledger.txbuilder.TxBalancingError
-import test.*
-import test.TestPeer.*
+
+import cats.data.NonEmptyList
+import cats.syntax.all._
 
 import scala.collection.immutable.SortedMap
+
+import io.bullet.borer.Cbor
+import monocle.syntax.all._
+import org.scalacheck.Gen.choose
+import org.scalacheck.Prop.propBoolean
+import org.scalacheck.{Gen, Prop, Test => ScalaCheckTest}
+import test.TestPeer._
+import test._
 
 // The minimum ada required for the initial treasury utxo
 val minInitTreasuryAda: Coin = {

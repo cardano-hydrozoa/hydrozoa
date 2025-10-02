@@ -4,34 +4,36 @@ package hydrozoa
 // Eventually, we want to move exclusively to the scalus types
 // TODO: Not tests for this module yet
 
-import com.bloxbean.cardano.client.api.model.{Result, Utxo}
-import com.bloxbean.cardano.client.backend.api.BackendService
-import com.bloxbean.cardano.client.plutus.spec.PlutusData
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.{Address, *}
-import io.bullet.borer.Encoder
-import monocle.Lens
-import monocle.syntax.all.*
+import hydrozoa.{Address, _}
+
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Network, *}
+import scalus.cardano.address.{Network, _}
 import scalus.cardano.ledger
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger._
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
+import scalus.cardano.ledger.txbuilder._
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
-import scalus.prelude.Option as ScalusOption
+import scalus.prelude.{Option => ScalusOption}
 import scalus.{ledger, prelude, |>}
 
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
+
+import com.bloxbean.cardano.client.api.model.{Result, Utxo}
+import com.bloxbean.cardano.client.backend.api.BackendService
+import com.bloxbean.cardano.client.plutus.spec.PlutusData
+import com.bloxbean.cardano.client.util.HexUtil
+import io.bullet.borer.Encoder
+import monocle.Lens
+import monocle.syntax.all._
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing

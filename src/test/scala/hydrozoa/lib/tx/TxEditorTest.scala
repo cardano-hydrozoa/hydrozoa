@@ -1,17 +1,19 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
+import hydrozoa.lib.tx._
 import hydrozoa.txBodyL
-import monocle.syntax.all.*
-import monocle.{Focus, Lens}
+
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.RedeemerTag.Spend
+import scalus.cardano.ledger._
 import scalus.|>
 
 import scala.collection.immutable.SortedSet
+
+import monocle.syntax.all._
+import monocle.{Focus, Lens}
 
 class TxEditorTest extends munit.ScalaCheckSuite {
 

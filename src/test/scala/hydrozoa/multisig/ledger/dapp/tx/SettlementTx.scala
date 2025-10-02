@@ -1,24 +1,27 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import cats.*
-import cats.data.*
-import hydrozoa.*
+import hydrozoa._
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import io.bullet.borer.Cbor
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger._
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.prelude.Option as SOption
-import test.*
+import scalus.prelude.{Option => SOption}
+
+import cats._
+import cats.data._
+
+import io.bullet.borer.Cbor
+import org.scalacheck.{Gen, Prop, Test => ScalaCheckTest}
+import test._
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {

@@ -1,7 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.syntax.all.*
-import hydrozoa.multisig.protocol.types.Peer
+import cats.syntax.all._
 
 object LedgerEvent {
     type Id = Id.Id

@@ -1,11 +1,7 @@
 package hydrozoa.rulebased.ledger.l1.state
 
-import scalus.builtin.ByteString
-import scalus.builtin.Data
-import scalus.builtin.FromData
-import scalus.builtin.ToData
-import scalus.ledger.api.v1.CurrencySymbol
-import scalus.ledger.api.v3.*
+import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.ledger.api.v3._
 
 enum RuleBasedTreasuryDatum derives FromData, ToData:
     case UnresolvedDatum(

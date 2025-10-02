@@ -1,16 +1,17 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
-import scalus.*
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError._
+
+import scalus._
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.builtin.{Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
+import scalus.cardano.ledger._
 import scalus.ledger.api.v1.PosixTime
 import scalus.ledger.api.v3.{Address, Credential}
-import scalus.prelude.Option as ScalusOption
+import scalus.prelude.{Option => ScalusOption}
 
 import scala.util.{Failure, Success, Try}
 

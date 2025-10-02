@@ -6,10 +6,7 @@ package hydrozoa.lib.tx
   *   - The definition of steps: [[TransactionBuilderStep]]
   */
 
-import cats.*
-import cats.data.*
-import cats.implicits.*
-import hydrozoa.*
+import hydrozoa._
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
 import hydrozoa.lib.tx.TxBuildError.{
@@ -18,24 +15,30 @@ import hydrozoa.lib.tx.TxBuildError.{
     Unimplemented,
     WrongCredentialType
 }
-import io.bullet.borer.Cbor
-import monocle.*
-import monocle.syntax.all.*
+
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.{Address, *}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.GovAction.*
+import scalus.cardano.address.{Address, _}
+import scalus.cardano.ledger.GovAction._
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger._
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.{STS, UtxoEnv, Context as SContext, State as SState}
+import scalus.cardano.ledger.rules.{Context => SContext, STS, State => SState, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.wip.DiffHandler
 import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.|>
 
+import cats._
+import cats.data._
+import cats.implicits._
+
 import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
+
+import io.bullet.borer.Cbor
+import monocle._
+import monocle.syntax.all._
 
 // ============================================================================
 // Network Extensions
@@ -270,8 +273,9 @@ object TxBuildError {
             s"submit a request at $bugTrackerUrl."
     }
 
-    case class CollateralNotPubKey(utxo : TransactionUnspentOutput) extends TxBuildError{
-        override def explain: String = s"The UTxO passed as a collateral input is not a PubKey UTxO. UTxO: $utxo"
+    case class CollateralNotPubKey(utxo: TransactionUnspentOutput) extends TxBuildError {
+        override def explain: String =
+            s"The UTxO passed as a collateral input is not a PubKey UTxO. UTxO: $utxo"
     }
 
     // TODO: This error could probably be improved.
@@ -899,7 +903,7 @@ object TransactionBuilder:
             addr = utxo.output.address
             _ <- addr.keyHashOption.match {
                 case Some(_: AddrKeyHash) => pure0(())
-                case _ => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
+                case _                    => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
             }
         } yield ()
 
@@ -1034,7 +1038,8 @@ object TransactionBuilder:
                 // Direct plutus script
                 case OutputWitness.PlutusScriptOutput(
                       ScriptWitness.ScriptValue(script, _),
-                      _, _
+                      _,
+                      _
                     ) =>
                     pure0(Right(script))
                 case otherwise =>
@@ -1048,7 +1053,8 @@ object TransactionBuilder:
                         // Spent Utxo with CIP-33 Plutus script ref
                         case OutputWitness.PlutusScriptOutput(
                               ScriptWitness.ScriptReferenceSpent(spendStep, _),
-                              _, _
+                              _,
+                              _
                             ) =>
                             spendStep.utxo
                         // Referenced Utxo with a CIP-33 Native script ref
@@ -1059,7 +1065,8 @@ object TransactionBuilder:
                         // Referenced Utxo with a CIP-33 Plutus script ref
                         case OutputWitness.PlutusScriptOutput(
                               ScriptWitness.ScriptReferenceReferenced(referenceStep, _),
-                              _, _
+                              _,
+                              _
                             ) =>
                             referenceStep.utxo
                     }

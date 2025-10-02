@@ -1,10 +1,10 @@
 package hydrozoa.multisig.backend.cardano
 
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend._
+
+import com.suprnation.actor.Actor.{Actor, Receive}
+
 import cats.effect.IO
-import cats.implicits.*
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
 
 /** Cardano backend actor is a mock interface to the Cardano blockchain:
   *

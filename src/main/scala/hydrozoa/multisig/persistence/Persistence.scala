@@ -1,15 +1,16 @@
 package hydrozoa.multisig.persistence
 
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits.*
+import hydrozoa.multisig.protocol.ConsensusProtocol._
+import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse._
+import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence._
+import hydrozoa.multisig.protocol._
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
+
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
-import hydrozoa.multisig.protocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
+
+import cats.effect.{IO, Ref}
+import cats.implicits._
 
 import scala.collection.immutable.TreeMap
 

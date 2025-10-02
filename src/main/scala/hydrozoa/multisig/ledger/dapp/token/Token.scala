@@ -1,9 +1,10 @@
 package hydrozoa.multisig.ledger.dapp.token
 
-import cats.data.NonEmptyList
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AssetName, TransactionInput}
+
+import cats.data.NonEmptyList
 
 object Token {
     object CIP67Tags {
