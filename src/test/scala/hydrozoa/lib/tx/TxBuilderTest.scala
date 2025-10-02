@@ -1,37 +1,39 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.lib.optics.*
-import hydrozoa.lib.tx.*
+import hydrozoa.lib.optics._
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilder.{Context, build, modify}
-import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.TxBuildError.*
+import hydrozoa.lib.tx.TransactionBuilderStep._
+import hydrozoa.lib.tx.TxBuildError._
+import hydrozoa.lib.tx._
 import hydrozoa.{emptyTransaction, txBodyL}
-import io.bullet.borer.Cbor
-import monocle.syntax.all.*
-import monocle.{Focus, Lens}
-import org.scalacheck.Gen
+
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Hash.given
 import scalus.cardano.ledger.RedeemerTag.{Cert, Spend}
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger._
 import scalus.|>
-import test.*
-import test.TestPeer.Alice
 
 import scala.collection.immutable.{SortedMap, SortedSet}
+
+import io.bullet.borer.Cbor
+import monocle.syntax.all._
+import monocle.{Focus, Lens}
+import org.scalacheck.Gen
+import test.TestPeer.Alice
+import test._
 
 private def addInput(input: TransactionInput): Transaction => Transaction =
     txBodyL

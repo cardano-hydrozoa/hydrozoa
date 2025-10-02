@@ -1,13 +1,8 @@
 package test
 
-import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.common.model.Network as BBNetwork
-import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
-import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.*
+import hydrozoa._
 import hydrozoa.multisig.ledger.virtual.{L2EventTransaction, L2EventWithdrawal}
-import org.scalacheck.Gen
+
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network.Mainnet
@@ -15,21 +10,17 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    Coin,
-    Hash,
-    KeepRaw,
-    Sized,
-    TaggedOrderedSet,
-    TransactionBody,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    Value,
-    Transaction as STransaction
-}
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedOrderedSet, Transaction => STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
+
+import cats.data.NonEmptyList
 
 import scala.collection.mutable
+
+import com.bloxbean.cardano.client.account.Account
+import com.bloxbean.cardano.client.common.model.{Network => BBNetwork}
+import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
+import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
+import org.scalacheck.Gen
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)

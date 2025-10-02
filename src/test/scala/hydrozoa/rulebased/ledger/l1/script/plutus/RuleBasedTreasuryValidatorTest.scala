@@ -1,17 +1,19 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
-import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.lib.cardano.scalus.{Scalar => ScalusScalar}
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
-import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import munit.FunSuite
+
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.ledger.api.v3.ScriptContext
 import scalus.prelude.List
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
-import supranational.blst.Scalar
 
 import scala.io.Source
+
+import com.bloxbean.cardano.client.util.HexUtil
+import munit.FunSuite
+import supranational.blst.Scalar
 
 class RuleBasedTreasuryValidatorTest extends FunSuite {
 
@@ -81,7 +83,7 @@ class RuleBasedTreasuryValidatorTest extends FunSuite {
               .getLines()
               .foldLeft("")((acc, line) => acc + line)
         )
-        val ctx: ScriptContext = Data.fromData[ScriptContext](ctxData)
+        Data.fromData[ScriptContext](ctxData)
         // println(ctx)
         RuleBasedTreasuryValidator.validate(ctxData)
     }

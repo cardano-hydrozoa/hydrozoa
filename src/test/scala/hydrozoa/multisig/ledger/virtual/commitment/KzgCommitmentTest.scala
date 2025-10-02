@@ -4,6 +4,6 @@ import munit.FunSuite
 
 class KzgCommitmentTest extends FunSuite {
     test("foo") {
-        val i = 42
+        
     }
 }
