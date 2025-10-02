@@ -1,16 +1,16 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.Deferred
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits.*
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
-import BlockProducer.{Config, ConnectionsPending}
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer._
+import hydrozoa.multisig.protocol.ConsensusProtocol._
+import hydrozoa.multisig.protocol.PersistenceProtocol._
 import hydrozoa.multisig.protocol.types.{AckBlock, Block, Peer}
+
+import com.suprnation.actor.Actor.{Actor, Receive}
+
+import cats.effect.{Deferred, IO, Ref}
+import cats.implicits._
+
+import BlockProducer.{Config, ConnectionsPending}
 
 /** Block actor:
   *
@@ -35,7 +35,7 @@ object BlockProducer {
 
 trait BlockProducer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
-    private val state = State()
+    State()
 
     private final case class Subscribers(
         ackBlock: List[AckBlock.Subscriber],
@@ -82,6 +82,6 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
         }
 
     private final class State {
-        private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
+        Ref.unsafe[IO, Block.Number](Block.Number(0))
     }
 }

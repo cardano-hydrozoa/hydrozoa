@@ -1,19 +1,19 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.Deferred
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits.*
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
+import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison._
+import hydrozoa.multisig.protocol.ConsensusProtocol._
+import hydrozoa.multisig.protocol.PersistenceProtocol._
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
+
+import com.suprnation.actor.Actor.{Actor, Receive}
+
+import cats.effect.{Deferred, IO, Ref}
+import cats.implicits._
 
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
+
 import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
 
 /** Communication actor is connected to its counterpart at another peer:
   *

@@ -1,22 +1,22 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.implicits.*
-import scalus.cardano.address.Network.Mainnet
-// import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential // TODO: Will be needed for actual script witness
+import hydrozoa._
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
 import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
-// import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript // TODO: Will be needed for actual script
-import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
+
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.ledger.*
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger._
+import scalus.cardano.ledger.txbuilder._
+
+import cats.implicits._
 
 import scala.util.{Failure, Success, Try}
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support

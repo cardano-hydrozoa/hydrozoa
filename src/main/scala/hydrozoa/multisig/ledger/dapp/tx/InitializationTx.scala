@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import cats.data.NonEmptyList
-import hydrozoa.*
+import hydrozoa._
 import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, Pay, SpendOutput}
@@ -14,16 +13,19 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
     OtherScalusTransactionException,
     SomeBuilderError
 }
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger._
+import scalus.cardano.ledger.txbuilder._
+
+import cats.data.NonEmptyList
 
 import scala.collection.immutable.SortedMap
 

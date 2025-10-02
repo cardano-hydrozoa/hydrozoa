@@ -1,10 +1,12 @@
 package hydrozoa.multisig.protocol
 
-import cats.effect.{Deferred, IO}
-import cats.syntax.all.*
-import com.suprnation.actor.ReplyingActorRef
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.protocol.ConsensusProtocol.Persisted
+
+import com.suprnation.actor.ReplyingActorRef
+
+import cats.effect.{Deferred, IO}
+import cats.syntax.all._
 
 object PersistenceProtocol {
     object Persistence {

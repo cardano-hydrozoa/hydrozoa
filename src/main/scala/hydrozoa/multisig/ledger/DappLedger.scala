@@ -1,17 +1,19 @@
 package hydrozoa.multisig.ledger
 
-import cats.effect.{IO, Ref}
 import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
 import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
-import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx._
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
+
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
 
+import cats.effect.{IO, Ref}
+
 import scala.collection.immutable.Queue
-import scala.jdk.CollectionConverters.*
+import scala.jdk.CollectionConverters._
 import scala.language.implicitConversions
 
 final case class DappLedger(headAddress: ShelleyAddress)(

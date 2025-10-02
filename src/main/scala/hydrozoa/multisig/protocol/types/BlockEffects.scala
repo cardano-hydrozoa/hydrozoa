@@ -1,6 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx._
 
 enum BlockEffects(val blockType: Block.Type) {
     def id: Block.Number

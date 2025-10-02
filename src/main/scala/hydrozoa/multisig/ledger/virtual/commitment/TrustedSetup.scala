@@ -1,5 +1,7 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
+import scalus.prelude.{List => SList}
+
 import com.bloxbean.cardano.client.util.HexUtil
 import com.github.plokhotnyuk.jsoniter_scala.core.{
     JsonReader,
@@ -8,7 +10,6 @@ import com.github.plokhotnyuk.jsoniter_scala.core.{
     readFromStream
 }
 import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
-import scalus.prelude.List as SList
 import supranational.blst.{P1, P2}
 
 /** Cached trusted setup.
