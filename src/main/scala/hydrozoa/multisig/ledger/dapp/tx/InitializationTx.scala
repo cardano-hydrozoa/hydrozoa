@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, Pay, SpendOutput}
-import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{ExpectedSigner, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
@@ -131,7 +131,7 @@ object InitializationTx {
                           NativeScriptCredential(
                             ScriptValue(
                               headNativeScript.script,
-                              headNativeScript.requiredSigners.toSeq.toSet
+                              headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
                             )
                           )
                         ),

@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, Pay, SpendOutput}
-import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -85,7 +85,8 @@ object SettlementTx {
                     OutputWitness.NativeScriptOutput(
                       ScriptValue(
                         recipe.headNativeScript.script,
-                        recipe.headNativeScript.requiredSigners.toSortedSet
+                        recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
+                            .map(ExpectedSigner(_))
                       )
                     )
                   )
