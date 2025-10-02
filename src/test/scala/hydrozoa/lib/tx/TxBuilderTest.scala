@@ -299,30 +299,63 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
         assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxoTestNet.output.address)))
     })
 
-    // @Ilia: fix the expected value
-    // val scriptInput1Expected: ContextTuple =
-    //     Context.empty(Mainnet).toTuple
-    //         |> transactionL
-    //             .andThen(txBodyL.refocus(_.inputs))
-    //             .replace(TaggedOrderedSet(script1Utxo.input))
-    //         |> expectedSignersL
-    //             .modify(_ ++ psRefWitnessExpectedSigners.map(ExpectedSigner))
-    //         |> resolvedUtxosL.modify(_ + script1Utxo)
+    // @Peter - this is more or less what the transaction looks like, and it's not correct:
+    // - the output with the ref script goes into spend outputs
+    // - the order of redeemers fluctuates
+    val spendScript1UtxoStep = TransactionBuilderStep.SpendOutput(script1Utxo, Some(plutusScript1RefWitness))
+    val scriptInput1Expected: ContextTuple =
+        Context.empty(Mainnet).toTuple
+            |> transactionL
+                .andThen(txBodyL.refocus(_.inputs))
+                .replace(TaggedOrderedSet.from(Set(script1Utxo.input, utxoWithScript1ReferenceScript.input)))
+            |> transactionL
+                .andThen(txBodyL.refocus(_.requiredSigners))
+                .replace(TaggedOrderedSet.from(psRefWitnessExpectedSigners))
+            |> transactionL
+                .refocus(_.witnessSet.redeemers)
+                .replace(
+                  Some(
+                    KeepRaw(
+                      Redeemers(
+                        Redeemer(
+                          tag = Spend,
+                          index = 1, // The script1Utxo.input comes second in sorted order
+                          data = Data.List(List.empty),
+                          exUnits = ExUnits.zero
+                        )
+                      )
+                    )
+                  )
+                )
+            |> expectedSignersL
+                .modify(_ ++ fromRight(spendScript1UtxoStep.additionalSigners))
+            |> resolvedUtxosL.modify(_ + script1Utxo + utxoWithScript1ReferenceScript)
+            |> redeemersL.replace(
+              List(
+                DetachedRedeemer(
+                  datum = Data.List(List.empty),
+                  purpose = RedeemerPurpose.ForSpend(script1Utxo.input)
+                )
+              )
+            )
 
-    // testBuilderSteps(
-    //  label = "Script Output with Script Ref Withness",
-    //  steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness))),
-    //  expected = scriptInput1Expected
-    // )
+    testBuilderSteps(
+     label = "Script Output with Script Ref Witness",
+     steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness))),
+     expected = scriptInput1Expected
+    )
 
-    //// @Ilia: This should currently be failing. script1Utxo is utxo at the script1 address, while the witness passed
-    //// denotes a utxo carrying script2 in its scriptRef.
-    //// Since we just added this, I don't know if we currently have an appropriate error constructor yet.
-    // testBuilderStepsFail(
-    //  label = "PKH Output with mismatched script ref",
-    //  steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript2RefWitness))),
-    //  error = ???
-    // )
+    // @Ilia: This should currently be failing. script1Utxo is utxo at the script1 address, while the witness passed
+    // denotes a utxo carrying script2 in its scriptRef.
+    // Since we just added this, I don't know if we currently have an appropriate error constructor yet.
+    // @Peter - in fact it succeeds
+    testBuilderStepsFail(
+     label = "Script Output with mismatched script ref",
+     steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript2RefWitness))),
+     // Temporary
+     error = WrongNetworkId(script1Utxo.output.address)
+    )
+
 
     // ================================================================
     // Subgroup: Signature tracking
