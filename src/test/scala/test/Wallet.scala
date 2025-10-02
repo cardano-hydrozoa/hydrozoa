@@ -7,7 +7,12 @@ import scalus.cardano.ledger.{OriginalCborByteArray, Transaction, VKeyWitness}
 
 import scala.language.implicitConversions
 
-import co.nstant.in.cbor.model.{Array => CborArray, ByteString => CborByteString, Map, UnsignedInteger}
+import co.nstant.in.cbor.model.{
+    Array => CborArray,
+    ByteString => CborByteString,
+    Map,
+    UnsignedInteger
+}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}

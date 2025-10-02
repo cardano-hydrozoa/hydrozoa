@@ -4,12 +4,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
   };
 
-  outputs =
-    { self
-    , flake-utils
-    , nixpkgs
-    , ...
-    } @ inputs:
+  outputs = { self, flake-utils, nixpkgs, ... }@inputs:
     (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -19,8 +14,7 @@
         bloop0 = pkgs.bloop.override { jre = graalvm; };
         sbt0 = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
-      in
-      rec {
+      in rec {
         devShell = pkgs.mkShell {
           JAVA_HOME = "${graalvm}";
           JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
@@ -30,16 +24,17 @@
             ammonite
             async-profiler
             bloop0
-            just
             jdk
+            just
+            ltex-ls
             metals0
+            nixfmt
             sbt0
             scala-cli
             scalafix
             scalafmt
-     	      visualvm
+            visualvm
           ];
         };
-      })
-    );
+      }));
 }

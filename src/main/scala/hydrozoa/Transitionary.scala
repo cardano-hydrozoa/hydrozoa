@@ -32,8 +32,8 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import io.bullet.borer.Encoder
-import monocle.Lens
 import monocle.syntax.all._
+import monocle.{Focus, Lens}
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
@@ -537,4 +537,20 @@ def txBodyL: Lens[Transaction, TransactionBody] = {
     val replace: TransactionBody => Transaction => Transaction = body =>
         tx => tx.focus(_.body).andThen(keepRawL[TransactionBody]()).replace(body)
     Lens(get)(replace)
+}
+
+def txInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+    txBodyL.refocus(_.inputs)
+}
+
+def txReferenceInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+    txBodyL.refocus(_.referenceInputs)
+}
+
+def txRequiredSignersL: Lens[Transaction, TaggedOrderedSet[AddrKeyHash]] = {
+    txBodyL.refocus(_.requiredSigners)
+}
+
+def txRedeemersL: Lens[Transaction, Option[KeepRaw[Redeemers]]] = {
+    Focus[Transaction](_.witnessSet.redeemers)
 }

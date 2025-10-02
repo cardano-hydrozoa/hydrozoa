@@ -10,7 +10,19 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedOrderedSet, Transaction => STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
+import scalus.cardano.ledger.{
+    Coin,
+    Hash,
+    KeepRaw,
+    Sized,
+    TaggedOrderedSet,
+    Transaction => STransaction,
+    TransactionBody,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    Value
+}
 
 import cats.data.NonEmptyList
 
