@@ -47,3 +47,6 @@ txsl2.out
 /yaci-store.log
 /*.log
 /dipsute.log
+
+.metals
+.bloop

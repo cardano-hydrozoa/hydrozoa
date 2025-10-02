@@ -114,7 +114,6 @@ object TransactionBuilderStep {
       * @param utxo
       *   any utxo
       */
-    // @Ilia add a build step to add an arbitrary reference input and ensure that it gets added to the resolvedUtxos
     case class ReferenceOutput(utxo: TransactionUnspentOutput) extends TransactionBuilderStep:
         override val additionalSigners: Either[TxBuildError, Set[ExpectedSigner]] = Right(Set.empty)
 
@@ -122,10 +121,6 @@ object TransactionBuilderStep {
       * not a script. If you need set collateral outputs ot `totalCollateral` field, please use
       * optics.
       */
-    // @Ilia we need another build step to add collateral inputs;
-    // add these utxos to the resolved UTxOs,
-    // and add the signers to expectedSigners
-    // + tests
     case class AddCollateral(
         utxo: TransactionUnspentOutput
     ) extends TransactionBuilderStep:
@@ -413,7 +408,7 @@ object TxBuildError {
             s"Could not extract signatures via _.additionalSigners from $step"
     }
 
-    case class WrongSpendWitnessType(utxo: TransactionUnspentOutput) extends TxBuildError {
+    case class DatumIsMissing(utxo: TransactionUnspentOutput) extends TxBuildError {
         override def explain: String =
             "`OutputWitness` is incompatible with the given output." +
                 s" The output does not contain a datum: $utxo"
@@ -952,7 +947,7 @@ object TransactionBuilder:
     def assertAdaOnly(utxo: TransactionUnspentOutput): BuilderM[Unit] =
         for {
             res <-
-                if utxo.output.value.assets.isEmpty
+                if !utxo.output.value.assets.isEmpty
                 then
                     liftF0(
                       Left(TxBuildError.CollateralWithTokens(utxo))
@@ -1166,7 +1161,7 @@ object TransactionBuilder:
                 // script outputs must have a datum
                 case None =>
                     liftF0(
-                      Left(TxBuildError.WrongSpendWitnessType(utxo))
+                      Left(TxBuildError.DatumIsMissing(utxo))
                     )
                 // if the datum is inline, we don't need to attach it as witness
                 case Some(DatumOption.Inline(_)) =>

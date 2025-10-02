@@ -93,6 +93,7 @@ ThisBuild / scalacOptions ++= Seq(
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
+  "-Wunused:imports",
   "-Wall"
 )
 

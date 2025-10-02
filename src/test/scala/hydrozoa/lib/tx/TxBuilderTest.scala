@@ -38,6 +38,7 @@ import test.*
 import test.TestPeer.Alice
 
 import scala.collection.immutable.{SortedMap, SortedSet}
+import hydrozoa.lib.tx.TxBuildError.CannotExtractSignatures
 
 private def addInput(input: TransactionInput): Transaction => Transaction =
     txBodyL
@@ -148,8 +149,11 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // A Utxo at the address for script 1
     val script1Utxo: TransactionUnspentOutput = {
         val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
-
-        TransactionUnspentOutput(setScriptAddr(script1.scriptHash, utxo))
+        TransactionUnspentOutput(
+          setScriptAddr(script1.scriptHash, utxo)
+              .focus(_._2.datumOption)
+              .replace(Some(Inline(Data.List(List.empty))))
+        )
     }
 
     // A Utxo at the address for script 2
@@ -295,12 +299,20 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
         assertEquals(obtained = res, expected = Left(WrongNetworkId(pkhUtxoTestNet.output.address)))
     })
 
-    //// @Ilia: This should build successfully: we are spending a utxo located at the address for script one,
-    //// and providing a reference utxo carrying the same script in its scriptRef
+    // @Ilia: fix the expected value
+    // val scriptInput1Expected: ContextTuple =
+    //     Context.empty(Mainnet).toTuple
+    //         |> transactionL
+    //             .andThen(txBodyL.refocus(_.inputs))
+    //             .replace(TaggedOrderedSet(script1Utxo.input))
+    //         |> expectedSignersL
+    //             .modify(_ ++ psRefWitnessExpectedSigners.map(ExpectedSigner))
+    //         |> resolvedUtxosL.modify(_ + script1Utxo)
+
     // testBuilderSteps(
     //  label = "Script Output with Script Ref Withness",
     //  steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness))),
-    //  expected = ???
+    //  expected = scriptInput1Expected
     // )
 
     //// @Ilia: This should currently be failing. script1Utxo is utxo at the script1 address, while the witness passed
@@ -311,17 +323,6 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     //  steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript2RefWitness))),
     //  error = ???
     // )
-
-    // @Ilia: this should pass. I've added it to usePlutusScriptWitness.
-    // A similar test could be written for native scripts
-    test("Referencing a script Utxo adds the utxo to context's resolvedUtxos") {
-        val steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness)))
-        val built = fromRight(TransactionBuilder.build(Mainnet, steps))
-        assertEquals(
-          obtained = built.toTuple |> resolvedUtxosL.get,
-          Set(script1Utxo, utxoWithScript1ReferenceScript)
-        )
-    }
 
     // ================================================================
     // Subgroup: Signature tracking
@@ -510,6 +511,58 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
             )
           )
     )
+
+    // ================================================================
+    // Subgroup: reference utxos
+    // ================================================================
+
+    // TODO: write the same test for a ref native script. Since we don't use then Hydrozoa I decided to skip it
+    test("Referencing a script utxo with Plutus script adds the utxo to resolvedUtxos") {
+        val steps = List(SpendOutput(utxo = script1Utxo, witness = Some(plutusScript1RefWitness)))
+        val built = fromRight(TransactionBuilder.build(Mainnet, steps))
+        assertEquals(
+          obtained = built.toTuple |> resolvedUtxosL.get,
+          Set(script1Utxo, utxoWithScript1ReferenceScript)
+        )
+    }
+
+    test("Referencing a utxo adds the utxo to resolvedUtxos and tx body") {
+        val steps = List(ReferenceOutput(utxo = script1Utxo))
+        val built = fromRight(TransactionBuilder.build(Mainnet, steps))
+        assertEquals(
+          obtained = built.toTuple |> resolvedUtxosL.get,
+          Set(script1Utxo)
+        )
+
+        assertEquals(
+          obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.referenceInputs).get,
+          expected = TaggedOrderedSet.from(List(script1Utxo.input))
+        )
+    }
+
+    // ================================================================
+    // Subgroup: collateral inputs
+    // ================================================================
+
+    test("Adding a utxo as collateral adds the utxo to resolvedUtxos and tx body") {
+        val steps = List(AddCollateral(utxo = pkhUtxo))
+        val built = fromRight(TransactionBuilder.build(Mainnet, steps))
+        assertEquals(
+          obtained = built.toTuple |> resolvedUtxosL.get,
+          Set(pkhUtxo)
+        )
+
+        assertEquals(
+          obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.collateralInputs).get,
+          expected = TaggedOrderedSet.from(List(pkhUtxo.input))
+        )
+    }
+
+    test("A script based utxo can't be used as a collateral") {
+        val step = AddCollateral(utxo = script1Utxo)
+        val res = TransactionBuilder.build(Mainnet, List(step))
+        assertEquals(obtained = res, expected = Left(CannotExtractSignatures(step)))
+    }
 
     // =======================================================================
     // Group: "Deregister"

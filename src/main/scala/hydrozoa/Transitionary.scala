@@ -536,4 +536,3 @@ def txBodyL: Lens[Transaction, TransactionBody] = {
         tx => tx.focus(_.body).andThen(keepRawL[TransactionBody]()).replace(body)
     Lens(get)(replace)
 }
-

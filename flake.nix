@@ -23,6 +23,7 @@
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
             async-profiler
+            bloop
             just
             jdk
             sbt
