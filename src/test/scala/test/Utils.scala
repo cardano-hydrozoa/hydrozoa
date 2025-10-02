@@ -62,7 +62,7 @@ def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
     )
 }
 
-val genTxId: Gen[TransactionInput] =
+val genTransactionInput: Gen[TransactionInput] =
     for {
         txId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         index <- posNum[Int] // we subtract one below to get a non-negative
@@ -110,7 +110,7 @@ def genAdaOnlyPubKeyUtxo(
     params: ProtocolParams = blockfrost544Params
 ): Gen[(TransactionInput, Babbage)] =
     for {
-        txId <- genTxId
+        txId <- genTransactionInput
         value <- genAdaOnlyValue
     } yield (
       txId,

@@ -41,7 +41,7 @@ def genDepositRecipe(
           refundDatum = refundData
         )
 
-        txId <- genTxId
+        txId <- genTransactionInput
 
         depositMinAda = {
             val candidate = Babbage(

@@ -9,8 +9,8 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-
 import hydrozoa.*
+import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
 import hydrozoa.lib.tx.ReferenceDataAction.{ReferenceInput, SpendInput}
 import hydrozoa.lib.tx.TxBuildError.{
@@ -36,10 +36,6 @@ import scalus.|>
 
 import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
-
-extension [S, A, B](lens: Lens[S, A])
-    def >>>[C](other: Lens[A, C]): Lens[S, C] =
-        lens.andThen(other)
 
 // ============================================================================
 // Network Extensions

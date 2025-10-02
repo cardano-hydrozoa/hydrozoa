@@ -45,7 +45,7 @@ def genDepositUtxo(
     headAddr: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
-        txId <- genTxId
+        txId <- genTransactionInput
         headAddr_ = headAddr.getOrElse(genScriptAddr(network).sample.get)
         dd <- genDepositDatum(network)
 
@@ -71,7 +71,7 @@ def genDepositUtxo(
 
 val genHeadTokenName: Gen[AssetName] =
     for {
-        txIds <- Gen.nonEmptyListOf(genTxId)
+        txIds <- Gen.nonEmptyListOf(genTransactionInput)
         ne = NonEmptyList.fromListUnsafe(txIds)
     } yield Token.mkHeadTokenName(ne)
 
@@ -92,7 +92,7 @@ def genTreasuryUtxo(
     headAddr: Option[ShelleyAddress]
 ): Gen[TreasuryUtxo] =
     for {
-        txId <- genTxId
+        txId <- genTransactionInput
         headTn <- genHeadTokenName
 
         scriptAddr = headAddr.getOrElse({

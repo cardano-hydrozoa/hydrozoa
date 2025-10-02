@@ -27,6 +27,7 @@ import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.Hash.given
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.RedeemerTag.{Cert, Spend}
@@ -122,16 +123,12 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
             }
      */
     val skhUtxo = TransactionUnspentOutput(input1, skhOutput)
-    // ns = ScriptAll []
+
     val ns: Script.Native = Script.Native(AllOf(IndexedSeq.empty))
     val nsSigners: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
-    // nsWitness = NativeScriptOutput $ ScriptValue ns
     val nsWitness = NativeScriptOutput(ScriptValue(ns, nsSigners))
 
     val script2Signers: Set[AddrKeyHash] = Gen.listOf(genAddrKeyHash).sample.get.toSet
-    //  plutusScriptWitness =
-    //      PlutusScriptOutput (ScriptValue script2) RedeemerDatum.unit
-    //        Nothing
     val plutusScript2Witness =
         PlutusScriptOutput(ScriptValue(script2, script2Signers), Data.List(List()), None)
 
@@ -356,7 +353,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     )
 
     test("Signers works for NS spend")({
-        val txInput = genTxId.sample.get
+        val txInput = genTransactionInput.sample.get
 
         val step =
             TransactionBuilderStep.SpendOutput(
@@ -386,7 +383,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     })
 
     test("Signers work for PS spend")({
-        val txInput = genTxId.sample.get
+        val txInput = genTransactionInput.sample.get
         val step =
             TransactionBuilderStep.SpendOutput(
               utxo = TransactionUnspentOutput(
@@ -416,10 +413,10 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           expected = fromRight(step.additionalSigners)
         )
 
-        // signers are added to the required signers for plutus script output
+        // signers are added to the `requiredSigners` field in tx body
         assertEquals(
           obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.requiredSigners).get,
-          expected = TaggedOrderedSet.from(psRefWitnessExpectedSigners)
+          expected = TaggedOrderedSet.from(fromRight(step.additionalSigners).map(_.hash))
         )
     })
 
