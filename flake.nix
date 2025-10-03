@@ -9,7 +9,9 @@
       let
         pkgs = import nixpkgs { inherit system; };
         jdk = pkgs.openjdk23;
-        graalvm = pkgs.graalvmPackages.graalvm-ce;
+	# GraalVM is an advanced JDK. We use it for (...) 
+	# https://www.graalvm.org/
+        graalvm = pkgs.graalvmPackages.graalvm-ce; 
         metals0 = pkgs.metals.override { jre = graalvm; };
         bloop0 = pkgs.bloop.override { jre = graalvm; };
         sbt0 = pkgs.sbt.override { jre = jdk; };
@@ -21,18 +23,20 @@
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
-            ammonite
-            async-profiler
-            bloop0
-            jdk
-            just
-            ltex-ls
-            metals0
+            ammonite # modernized scala repl: https://ammonite.io/
+            async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
+            bloop0 # scala build tool (@Ilia how does this compare with sbt/bsp? Where do we use it?)
+            jdk 
+            just # command runner, similar to `make`
+            ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
+            metals0 # Scala language server: https://scalameta.org/metals/
             nixfmt
             sbt0
             scala-cli
             scalafix
             scalafmt
+	    # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
+            #    https://github.com/oracle/visualvm/issues/403		 
             visualvm
           ];
         };

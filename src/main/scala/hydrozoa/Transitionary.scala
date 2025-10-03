@@ -32,6 +32,7 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import io.bullet.borer.Encoder
+import monocle.Monocle.some
 import monocle.syntax.all._
 import monocle.{Focus, Lens}
 
@@ -554,3 +555,18 @@ def txRequiredSignersL: Lens[Transaction, TaggedOrderedSet[AddrKeyHash]] = {
 def txRedeemersL: Lens[Transaction, Option[KeepRaw[Redeemers]]] = {
     Focus[Transaction](_.witnessSet.redeemers)
 }
+
+// N.B.: we can't just do this as an optic, because both Prisms and Optionals
+// are no-ops on non-matching branches.
+def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
+    tx |> txRedeemersL.get match {
+        case None => tx |> txRedeemersL.replace(Some(KeepRaw(Redeemers(redeemer))))
+        case Some(_) =>
+            tx |> (txRedeemersL
+                .andThen(some)
+                .andThen(keepRawL[Redeemers]()))
+                .modify(rs => Redeemers.from(rs.toSeq.appended(redeemer)))
+    }
+
+}
+

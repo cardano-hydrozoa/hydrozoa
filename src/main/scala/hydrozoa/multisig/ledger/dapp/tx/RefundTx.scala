@@ -58,7 +58,6 @@ object RefundTx {
                   value = Value(deposit._4),
                   datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
                 )
-            recipe.headScript.requiredSigners
 
             val builder = {
                 val b1 = recipe.context.buildNewTx
