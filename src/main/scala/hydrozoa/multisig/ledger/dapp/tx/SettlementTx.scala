@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.ScriptSource.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, Pay, SpendOutput}
 import hydrozoa.lib.tx._
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -84,7 +84,7 @@ object SettlementTx {
                     utxo._2
                   ),
                   witness = Some(
-                    OutputWitness.NativeScriptOutput(
+                    WitnessForSpend.NativeScriptOutput(
                       ScriptValue(
                         recipe.headNativeScript.script,
                         recipe.headNativeScript.requiredSigners.toSortedSet.unsorted

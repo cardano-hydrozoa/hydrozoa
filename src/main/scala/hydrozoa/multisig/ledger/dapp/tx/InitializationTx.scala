@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa._
 import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.ScriptSource.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, Pay, SpendOutput}
 import hydrozoa.lib.tx.{ExpectedSigner, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx

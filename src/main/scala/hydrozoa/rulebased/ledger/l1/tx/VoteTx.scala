@@ -1,9 +1,9 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import hydrozoa._
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.ScriptSource.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Pay, SpendOutput}
-import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{WitnessForSpend, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.dapp.utxo.{TreasuryUtxo, VoteUtxo}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
@@ -116,7 +116,7 @@ object VoteTx {
                     SpendOutput(
                       TransactionUnspentOutput(voteInput, voteOutput),
                       Some(
-                        OutputWitness.PlutusScriptOutput(
+                        WitnessForSpend.PlutusScriptOutput(
                           ScriptValue(
                             disputeResolutionScript,
                             // FIXME: does this need any additional signers?

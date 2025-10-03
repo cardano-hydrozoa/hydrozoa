@@ -3,9 +3,9 @@ package hydrozoa.lib.tx
 import hydrozoa.lib.optics._
 import hydrozoa.lib.tx.CredentialWitness.PlutusScriptCredential
 import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
-import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
+import hydrozoa.lib.tx.WitnessForSpend.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
+import hydrozoa.lib.tx.ScriptSource.ScriptValue
 import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, build}
 import hydrozoa.lib.tx.TransactionBuilderStep._
 import hydrozoa.lib.tx.TxBuildError._
@@ -140,7 +140,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     }
 
     val plutusScript1RefWitness = PlutusScriptOutput(
-      ScriptWitness
+      ScriptSource
           .AttachedScript(
             psRefWitnessExpectedSigners
           ),
@@ -149,7 +149,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     )
 
     val plutusScript1RefSpentWitness = PlutusScriptOutput(
-      ScriptWitness
+      ScriptSource
           .AttachedScript(
             psRefWitnessExpectedSigners
           ),
@@ -158,7 +158,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     )
 
     val plutusScript2RefWitness = PlutusScriptOutput(
-      ScriptWitness.AttachedScript(
+      ScriptSource.AttachedScript(
         psRefWitnessExpectedSigners
       ),
       Data.List(List()),
@@ -462,7 +462,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           assetName = AssetName(ByteString.fromHex("deadbeef")),
           amount = 1L,
           witness = CredentialWitness.PlutusScriptCredential(
-            ScriptWitness.ScriptValue(script1, Set.empty),
+            ScriptSource.ScriptValue(script1, Set.empty),
             redeemer = Data.List(List.empty)
           )
         )
@@ -572,7 +572,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           cert = Certificate.UnregCert(Credential.ScriptHash(script1.scriptHash), coin = None),
           witness = Some(
             PlutusScriptCredential(
-              ScriptWitness.ScriptValue(script1, Set.empty),
+              ScriptSource.ScriptValue(script1, Set.empty),
               Data.List(List.empty)
             )
           )
@@ -612,7 +612,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     )
 
     val witness =
-        PlutusScriptCredential(ScriptWitness.ScriptValue(script1, Set.empty), Data.List(List.empty))
+        PlutusScriptCredential(ScriptSource.ScriptValue(script1, Set.empty), Data.List(List.empty))
 
     testBuilderStepsFail(
       label = "Deregistering stake credential with unneeded witness fails",

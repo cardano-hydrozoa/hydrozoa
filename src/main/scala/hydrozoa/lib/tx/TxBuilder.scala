@@ -50,11 +50,34 @@ object TransactionBuilderStep {
     /** Spend a utxo - utxos should be unique. TODO: add tests. If spending witness uses a reference
       * utxo for a script, that should be added beforehand with [[ReferenceOutput]] or
       * [[SpendOutput]] step (the latter is rare).
+      *
+      *   - Endos (StateT effect):
+      *     - Must add utxo to resolved utxos
+      *     - Must add utxo.input to txBody inputs
+      *     - Must add expected signers:
+      *       - If pubkey, pubkey signer
+      *       - If plutus/native scripts, additional signers from script witness
+      *     - Must add plutus data for plutus scripts (datums, redeemers)
+      *     - (...)
+      *   - Asserts (Either effect):
+      *     - Must have coherent networkId
+      *     - Must have coherent witness (script has must match script addr)
+      *     - (...)
+      *
+      * case class SpendOutpuytSpec( spentOutputNotReferenced : SpentOutputNotReferencedProof,
+      * spentOutputNotAlreadySpent : SpentOutputNotAlreadySpentProof, (...))
+      *
+      * case class SpendOutputRecipe (utxo: TransactionUnspentOutput, witness: Option[OutputWitness]
+      *
+      * spendOutput(recipe : SpendOutputRecipe) = BuilderM[SpendOutputSpec]
+     *
+     * N.B.: Using the an update monad (https://chrispenner.ca/posts/update-monad) would be more sutiable than state. There are a restricted set
+     * endomorphisms on the Context that we would want to restrict to ensure invariants are satisfied.
       */
     case class SpendOutput(
         utxo: TransactionUnspentOutput,
         /** Pass None for pubkey outputs only */
-        witness: Option[OutputWitness] = None
+        witness: NativeScriptWitness | ThreeArgumentPlutusScriptWitness | PubKeyWitness.type = PubKeyWitness
     ) extends TransactionBuilderStep
 
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
@@ -65,13 +88,14 @@ object TransactionBuilderStep {
         scriptHash: ScriptHash,
         assetName: AssetName,
         amount: Long,
-        witness: CredentialWitness
+        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ) extends TransactionBuilderStep
 
     /** Add a [[TransactionUnspentOutput]] as a CIP-31 reference input. Doesn't allow the same utxo
       * being referenced several times. The reason that action is represented as a step is that
       * reference utxos should be added to the context and also may be required to create a
-      * [[OutputWitness]].
+      * [[WitnessForSpend]].
+      *
       * @param utxo
       *   any utxo
       */
@@ -87,122 +111,81 @@ object TransactionBuilderStep {
 
     case class IssueCertificate(
         cert: Certificate,
-        witness: Option[CredentialWitness]
+        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
     ) extends TransactionBuilderStep
 
     case class WithdrawRewards(
         stakeCredential: StakeCredential,
         amount: Coin,
-        witness: Option[CredentialWitness]
+        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
     ) extends TransactionBuilderStep
 
     case class SubmitProposal(
         proposal: ProposalProcedure,
-        witness: Option[CredentialWitness]
+        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
     ) extends TransactionBuilderStep
 
     case class SubmitVotingProcedure(
         voter: Voter,
         votes: Map[GovActionId, VotingProcedure],
-        witness: Option[CredentialWitness]
+        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
     ) extends TransactionBuilderStep
 
     case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
         extends TransactionBuilderStep
 }
 
+/**
+ * A witness to conduct an authorized operation on-chain. This could be spending an input, minting,
+ * rewarding, governance ops, certificate ops, etc.
+ * The only ways to do this as of writing (2025-10-03) are
+ * - PubKey
+ * - Native Script
+ * - Plutus Script
+ *
+ * The types include all additional data required to authorize the operation.
+ */
+sealed trait Witness
+
+case object PubKeyWitness extends Witness
+
+case class NativeScriptWitness
+  (scriptSource: ScriptSource[Script.Native], additionalSigners : Set[ExpectedSigner]) extends Witness
+
+// For operations that only take a redeemer and script context
+case class TwoArgumentPlutusScriptWitness(
+    scriptSource: ScriptSource[PlutusScript],
+    redeemer: Data,
+    additionalSigners: Set[ExpectedSigner]
+) extends Witness
+
+// For operations that take a datum, redeemer, and script context
+case class ThreeArgumentPlutusScriptWitness(
+    scriptSource: ScriptSource[PlutusScript],
+    redeemer: Data,
+    datum: DatumWitness,
+    additionalSigner: Set[ExpectedSigner]
+) extends Witness
+
 // -----------------------------------------------------------------------------
-// OutputWitness
+// ScriptSource
 // -----------------------------------------------------------------------------
 
-/** [[OutputWitness]] is used to provide the evidence needed to consume an output. It must
-  * correspond to a [[TransactionUnspentOutput]] address' payment credential to unlock it.
-  *
-  * It also contains the signatures expected (for native scripts) or required (for plutus scripts)
-  * to be used in fee calculation.
-  *
-  * // TODO: rename to SpendWitness
+/** Specifes how the transaction should find the source code for the script.
   */
-sealed trait OutputWitness
+sealed trait ScriptSource[+A <: PlutusScript | Script.Native]
 
-object OutputWitness {
-    case class NativeScriptOutput(
-        witness: ScriptWitness[Script.Native]
-    ) extends OutputWitness
-
-    case class PlutusScriptOutput(
-        witness: ScriptWitness[PlutusScript],
-        redeemer: Data,
-        datum: Option[DatumWitness]
-    ) extends OutputWitness
-
-    extension (self: OutputWitness)
-        def scriptWitness: ScriptWitness[Script] = self match {
-            case NativeScriptOutput(witness)       => witness
-            case PlutusScriptOutput(witness, _, _) => witness
-        }
-}
-
-// -----------------------------------------------------------------------------
-// CredentialWitness
-// -----------------------------------------------------------------------------
-
-/** [[CredentialWitness]] is used to provide the evidence needed to perform operations on behalf of
-  * a credential, which include:
-  *
-  *   - Minting
-  *   - Certificate witnessing
-  *   - Rewards withdrawal
-  *
-  * Unlike [[OutputWitness]], it does not include a [[DatumWitness]], because minting policies and
-  * stake scripts do not take a datum.
-  */
-sealed trait CredentialWitness
-
-object CredentialWitness {
-    case class NativeScriptCredential(
-        witness: ScriptWitness[Script.Native]
-    ) extends CredentialWitness
-
-    case class PlutusScriptCredential(
-        witness: ScriptWitness[PlutusScript],
-        redeemer: Data
-    ) extends CredentialWitness
-
-    extension (self: CredentialWitness)
-        def scriptWitness: ScriptWitness[Script] = self match {
-            case NativeScriptCredential(witness)    => witness
-            case PlutusScriptCredential(witness, _) => witness
-        }
-}
-
-// -----------------------------------------------------------------------------
-// ScriptWitness
-// -----------------------------------------------------------------------------
-
-/** Gives the user options for specifying everything needed to unlock an action guarded by a script,
-  * including:
-  *   - Spending a UTxO located at an address with a ScriptHash payment credential.
-  *   - Witnessing credential operations requiring a script hash
-  *   - Witnessing a mint
-  *   - Witnessing a rewards withdrawal for a script hash credential
-  *   - Any additional signers required to unlock the script, such as for a plutus or native
-  *     multisig
-  *
-  * TODO: rename ScriptSource?
-  */
-sealed trait ScriptWitness[+A]:
-    val additionalSigners: Set[ExpectedSigner]
-
-// Perhaps we change this to take an Option[Script] and just have a single constructor?
-object ScriptWitness {
-
-    /** Contains a script itself, will be included to the witness set. */
-    case class ScriptValue[A](script: A, additionalSigners: Set[ExpectedSigner])
-        extends ScriptWitness[A]
+object ScriptSource {
+        /** Contains a script itself, will be included to the witness set. */
+    case class NativeScriptValue(script: Script.Native)
+        extends ScriptSource[Script.Native]
 
     /** Tries to use a CIP-33 reference script or a script manually passed in the builder. */
-    case class AttachedScript[A](additionalSigners: Set[ExpectedSigner]) extends ScriptWitness[A]
+    case object NativeAttachedScript extends ScriptSource[Script.Native]
+
+    case class PlutusScriptValue(script: PlutusScript) extends ScriptSource[PlutusScript]
+
+    case object PlutusAttachedScript extends ScriptSource[PlutusScript]
 }
 
 // -----------------------------------------------------------------------------
@@ -258,18 +241,18 @@ object CredentialAction {
 }
 
 /** Represents a witness type, i.e., key-based or script-based for possible kinds of witnesses -
-  * [[OutputWitness]] or [[CredentialWitness]].
+  * [[WitnessForSpend]] or [[CredentialWitness]].
   */
-sealed trait ExpectedWitnessType[A <: OutputWitness | CredentialWitness] {
+sealed trait ExpectedWitnessType[A <: Witness] {
     def explain: String
 }
 
 object ExpectedWitnessType {
-    case class ScriptHashWitness[A <: OutputWitness | CredentialWitness](witness: A)
+    case class ScriptHashWitness[A <: Witness](witness: A)
         extends ExpectedWitnessType[A]:
         override def explain: String = "ScriptHash"
 
-    case class PubKeyHashWitness[A <: OutputWitness | CredentialWitness]()
+    case class PubKeyHashWitness[A <: Witness]()
         extends ExpectedWitnessType[A]:
         override def explain: String = "PubKeyHash"
 }
@@ -289,9 +272,9 @@ object TransactionBuilder:
     /** A wrapper around a UTxO set that prevents adding conflicting pairs */
     case class ResolvedUtxos private (utxos: UTxO) {
 
-        /**   - If the UTxO does not exist in the map, add its.
-          *     - If the UTxO exists in the map with a different output associated, return None
-          *     - If the UTxO exists in the map with the same output, return the map unmodified
+        /**   - If the UTxO does not exist in the map, add it.
+          *   - If the UTxO exists in the map with a different output associated, return None
+          *   - If the UTxO exists in the map with the same output, return the map unmodified
           */
         def addUtxo(utxo: TransactionUnspentOutput): Option[ResolvedUtxos] =
             utxos.get(utxo.input) match {
@@ -685,17 +668,17 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
 
     /** Tries to modify the transaction to make it consume a given output and add the requisite
-      * signature(s) to the Context's _.expectedSigners. Uses an [[OutputWitness]] to try to satisfy
-      * spending requirements.
+      * signature(s) to the Context's _.expectedSigners. Uses an [[WitnessForSpend]] to try to
+      * satisfy spending requirements.
       */
     def useOutputWitness(
-        mbWitness: Option[OutputWitness],
+        mbWitness: Option[WitnessForSpend],
         utxo: TransactionUnspentOutput
     ): BuilderM[Unit] =
         mbWitness match {
             // Case 1: Pubkey input: add the pubkey hash to ctx.expectedSigners
             case None => {
-                val pkhw = ExpectedWitnessType.PubKeyHashWitness[OutputWitness]()
+                val pkhw = ExpectedWitnessType.PubKeyHashWitness[WitnessForSpend]()
                 for {
                     // Extract Key Hash, erroring if not a Shelley PKH address
                     keyHash <- liftF0(utxo.output.address match {
@@ -718,7 +701,7 @@ object TransactionBuilder:
             // Case 2: Script input.
             // Ensure the hash matches the witness, handle the output components, defer to witness handling
             case Some(outputWitness) => {
-                val shw = ExpectedWitnessType.ScriptHashWitness[OutputWitness](outputWitness)
+                val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
                 for {
                     // Extract the script hash, throwing an error on anything but a Shelley Script Addrress
                     scriptHash <- liftF0(utxo.output.address match {
@@ -738,11 +721,11 @@ object TransactionBuilder:
                     _ <- outputWitness match {
                         // Native Script: The output witness has no further responsibilities
                         // besides delegating to the NS witness handler
-                        case OutputWitness.NativeScriptOutput(nsWitness) =>
+                        case WitnessForSpend.NativeScriptOutput(nsWitness) =>
                             useNativeScriptWitness(nsWitness)
                         // Plutus script: the output witness needs to handle datums and redeemers,
                         // and then delegate to the script witness.
-                        case OutputWitness.PlutusScriptOutput(
+                        case WitnessForSpend.PlutusScriptOutput(
                               plutusScriptWitness,
                               redeemerDatum,
                               mbDatumWitness
@@ -1170,7 +1153,7 @@ object TransactionBuilder:
       * @param scriptWitness
       * @return
       */
-    def useNativeScriptWitness(scriptWitness: ScriptWitness[Script.Native]): BuilderM[Unit] =
+    def useNativeScriptWitness(scriptWitness: ScriptSource[Script.Native]): BuilderM[Unit] =
         for {
             // Regardless of how the witness is passed, add the additional signers
             _ <- modify0(
@@ -1178,7 +1161,7 @@ object TransactionBuilder:
             )
 
             _ <- scriptWitness match {
-                case ScriptWitness.ScriptValue(ns, _) =>
+                case ScriptSource.ScriptValue(ns, _) =>
                     modify0(
                       // Add the native script to the witness set
                       unsafeCtxWitnessL
@@ -1186,13 +1169,13 @@ object TransactionBuilder:
                           .modify(s => appendDistinct(ns, s.toList).toSet)
                     )
                 // Script should already be attached, see [[assertAttachedScriptExists]]
-                case ScriptWitness.AttachedScript(_) => pure0(())
+                case ScriptSource.AttachedScript(_) => pure0(())
 
             }
         } yield ()
 
     def usePlutusScriptWitness(
-        scriptWitness: ScriptWitness[PlutusScript]
+        scriptWitness: ScriptSource[PlutusScript]
     ): BuilderM[Unit] =
         for {
             // Add script's additional signers to txBody.requiredSigners
@@ -1206,13 +1189,13 @@ object TransactionBuilder:
                   )
             )
 
-            // Add to expected signesr
+            // Add to expected signers
             _ <- modify0(
               Focus[Context](_.expectedSigners).modify(_ ++ scriptWitness.additionalSigners)
             )
 
             _ <- scriptWitness match {
-                case ScriptWitness.ScriptValue(ps: PlutusScript, _) =>
+                case ScriptSource.ScriptValue(ps: PlutusScript, _) =>
                     // Add the script value to the appropriate field
                     ps match {
                         case (v1: Script.PlutusV1) =>
@@ -1235,7 +1218,7 @@ object TransactionBuilder:
                             )
                     }
                 // Script should already be attached, see [[assertAttachedScriptExists]]
-                case ScriptWitness.AttachedScript(_) => pure0(())
+                case ScriptSource.AttachedScript(_) => pure0(())
             }
         } yield ()
 
@@ -1243,41 +1226,38 @@ object TransactionBuilder:
         action: CredentialAction,
         expectedType: ExpectedWitnessType[CredentialWitness],
         cred: Credential
-    ): BuilderM[Unit] =
-        for {
-            _ <- {
-                val wrongCredErr = TxBuildError.WrongCredentialType(action, expectedType, cred)
-                expectedType match {
-                    case ExpectedWitnessType.ScriptHashWitness(witness) =>
-                        for {
-                            scriptHash <- cred.scriptHashOption match {
-                                case Some(hash) =>
-                                    StateT
-                                        .pure[[X] =>> Either[TxBuildError, X], Context, ScriptHash](
-                                          hash
-                                        )
-                                case None =>
-                                    StateT.liftF[[X] =>> Either[
-                                      TxBuildError,
-                                      X
-                                    ], Context, ScriptHash](
-                                      Left(wrongCredErr)
-                                    )
-                            }
-                            _ <- assertScriptHashMatchesWitness(scriptHash, witness.scriptWitness)
-                        } yield ()
-                    case ExpectedWitnessType.PubKeyHashWitness() =>
-                        cred.keyHashOption match {
-                            case Some(_) =>
-                                pure0(())
-                            case None =>
-                                StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                                  Left(wrongCredErr)
+    ): BuilderM[Unit] = {
+        val wrongCredErr = TxBuildError.WrongCredentialType(action, expectedType, cred)
+        expectedType match {
+            case ExpectedWitnessType.ScriptHashWitness(witness) =>
+                for {
+                    scriptHash <- cred.scriptHashOption match {
+                        case Some(hash) =>
+                            StateT
+                                .pure[[X] =>> Either[TxBuildError, X], Context, ScriptHash](
+                                  hash
                                 )
-                        }
+                        case None =>
+                            StateT.liftF[[X] =>> Either[
+                              TxBuildError,
+                              X
+                            ], Context, ScriptHash](
+                              Left(wrongCredErr)
+                            )
+                    }
+                    _ <- assertScriptHashMatchesWitness(scriptHash, witness.scriptWitness)
+                } yield ()
+            case ExpectedWitnessType.PubKeyHashWitness() =>
+                cred.keyHashOption match {
+                    case Some(_) =>
+                        pure0(())
+                    case None =>
+                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
+                          Left(wrongCredErr)
+                        )
                 }
-            }
-        } yield ()
+        }
+    }
 
     /** Given a script hash, check the context to ensure that a script matching the given script
       * hash is attached to the transaction either as a CIP-33 ref script or in the witness set
@@ -1314,13 +1294,13 @@ object TransactionBuilder:
       */
     def assertScriptHashMatchesWitness(
         neededScriptHash: ScriptHash,
-        scriptWitness: ScriptWitness[Script]
+        scriptWitness: ScriptSource[Script]
     ): BuilderM[Unit] =
         scriptWitness match {
             // Direct script
-            case ScriptWitness.ScriptValue(script, _) =>
+            case ScriptSource.ScriptValue(script, _) =>
                 assertScriptHashMatchesScript(neededScriptHash, script)
-            case ScriptWitness.AttachedScript(_) => assertAttachedScriptExists(neededScriptHash)
+            case ScriptSource.AttachedScript(_) => assertAttachedScriptExists(neededScriptHash)
         }
 
     def assertScriptHashMatchesScript(
@@ -1431,7 +1411,7 @@ object TxBuildError {
     }
 
     case class WrongOutputType(
-        expectedType: ExpectedWitnessType[OutputWitness],
+        expectedType: ExpectedWitnessType[WitnessForSpend],
         utxo: TransactionUnspentOutput
     ) extends TxBuildError {
         override def explain: String =
