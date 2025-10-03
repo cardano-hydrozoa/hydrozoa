@@ -251,19 +251,19 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // ============================================================================
 
     val pkhUtxoTestNet =
-                TransactionUnspentOutput(
-                  input = input0,
-                  output = Babbage(
-                    address = ShelleyAddress(
-                      network = Testnet,
-                      payment = pkhOutputPaymentPart,
-                      delegation = Null
-                    ),
-                    value = Value.zero,
-                    datumOption = None,
-                    scriptRef = None
-                  )
-                )
+        TransactionUnspentOutput(
+          input = input0,
+          output = Babbage(
+            address = ShelleyAddress(
+              network = Testnet,
+              payment = pkhOutputPaymentPart,
+              delegation = Null
+            ),
+            value = Value.zero,
+            datumOption = None,
+            scriptRef = None
+          )
+        )
 
     testBuilderStepsFail(
       label = "Try to spend output with wrong network in address",
