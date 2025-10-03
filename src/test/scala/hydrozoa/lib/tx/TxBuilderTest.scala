@@ -6,11 +6,11 @@ import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
 import hydrozoa.lib.tx.OutputWitness.{NativeScriptOutput, PlutusScriptOutput}
 import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptWitness.ScriptValue
-import hydrozoa.lib.tx.TransactionBuilder.{Context, build, modify}
+import hydrozoa.lib.tx.TransactionBuilder.{Context, build}
 import hydrozoa.lib.tx.TransactionBuilderStep._
 import hydrozoa.lib.tx.TxBuildError._
 import hydrozoa.lib.tx._
-import hydrozoa.{emptyTransaction, txBodyL, txInputsL, txReferenceInputsL, txRequiredSignersL}
+import hydrozoa.{emptyTransaction, txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
 
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -34,7 +34,6 @@ import monocle.{Focus, Lens}
 import org.scalacheck.Gen
 import test.TestPeer.Alice
 import test._
-import hydrozoa.txRedeemersL
 
 // private def addInput(input: TransactionInput): Transaction => Transaction =
 //     txBodyL
