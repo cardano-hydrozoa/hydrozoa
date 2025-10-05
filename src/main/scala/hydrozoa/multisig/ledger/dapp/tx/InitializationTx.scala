@@ -1,28 +1,36 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.lib.tx.TransactionBuilderStep.{SpendOutput, MintAsset, ModifyAuxData, SendOutput}
-import hydrozoa.lib.tx.{TxBuildError, TransactionBuilder, ExpectedSigner, TransactionUnspentOutput}
+import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, SendOutput, SpendOutput}
+import hydrozoa.lib.tx.{
+    ExpectedSigner,
+    NativeScriptWitness,
+    PubKeyWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput,
+    TxBuildError
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{OtherScalusTransactionException, OtherScalusBalancingError, SomeBuilderError}
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
+    OtherScalusBalancingError,
+    OtherScalusTransactionException,
+    SomeBuilderError
+}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.txbuilder.*
-import cats.data.NonEmptyList
-import hydrozoa.lib.tx.NativeScriptWitness
-import hydrozoa.lib.tx.PubKeyWitness
-import hydrozoa.lib.tx.ScriptSource.NativeValue
-
-import scala.collection.immutable.SortedMap
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -117,7 +125,10 @@ object InitializationTx {
                   Mainnet,
                   recipe.seedUtxos
                       .map(utxo =>
-                          SpendOutput(TransactionUnspentOutput.apply(utxo._1, utxo._2), PubKeyWitness)
+                          SpendOutput(
+                            TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                            PubKeyWitness
+                          )
                       )
                       .toList
                       ++ List(
@@ -126,12 +137,13 @@ object InitializationTx {
                           headTokenName,
                           1,
                           NativeScriptWitness(
-                              NativeValue(headNativeScript.script),
-                              headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_)
-                            )
+                            NativeScriptValue(headNativeScript.script),
+                            headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
                           )
                         ),
-                        SendOutput(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)),
+                        SendOutput(
+                          Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
+                        ),
                         SendOutput(Babbage(recipe.changeAddress, Value.zero, None, None)),
                         ModifyAuxData(_ => Some((MD.apply(Initialization, headAddress))))
                       )

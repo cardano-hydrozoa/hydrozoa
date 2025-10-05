@@ -1,24 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import cats.data.NonEmptyList
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{TxBuildError, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import io.bullet.borer.Cbor
+import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{TxBalancingError, BuilderContext, LowLevelTxBuilder}
-import cats.data.NonEmptyList
-import hydrozoa.lib.tx.PubKeyWitness
-
-import scala.util.{Success, Failure}
-import io.bullet.borer.Cbor
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.

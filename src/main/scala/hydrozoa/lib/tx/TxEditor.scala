@@ -17,15 +17,12 @@ package hydrozoa.lib.tx
   * The main functions are `editTransaction` and `editTransactionSafe`.
   */
 
+import cats.implicits.*
 import hydrozoa.lib
-
-import scalus.builtin.Data
-import scalus.cardano.ledger._
-
-import cats.implicits._
-
 import monocle.Lens
 import monocle.Monocle.{focus, refocus}
+import scalus.builtin.Data
+import scalus.cardano.ledger.*
 
 // ============================================================================
 // DetachedRedeemer

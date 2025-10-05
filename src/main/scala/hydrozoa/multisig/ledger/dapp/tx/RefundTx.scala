@@ -1,21 +1,19 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa._
+import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
+import scala.language.implicitConversions
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger._
 import scalus.cardano.ledger.txbuilder.{
     BuilderContext,
     LowLevelTxBuilder,
     SelectInputs,
     TxBalancingError
 }
-
-import scala.language.implicitConversions
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo

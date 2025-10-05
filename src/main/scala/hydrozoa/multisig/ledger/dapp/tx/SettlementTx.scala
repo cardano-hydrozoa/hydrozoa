@@ -1,25 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.TransactionBuilderStep.{SpendOutput, ModifyAuxData, SendOutput}
+import cats.implicits.*
 import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, SendOutput, SpendOutput}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo, RolloutUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.{addDummyVKeys, removeDummyVKeys}
+import scala.collection
+import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.txbuilder.*
-import cats.implicits.*
-import hydrozoa.lib.tx.ScriptSource.NativeValue
-
-import scala.collection
-import scala.language.{implicitConversions, reflectiveCalls}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -82,13 +81,12 @@ object SettlementTx {
                     utxo._2
                   ),
                   witness = NativeScriptWitness(
-                      NativeValue(recipe.headNativeScript.script),
-                      recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
-                          .map(ExpectedSigner(_))
-                      
-                    )
+                    NativeScriptValue(recipe.headNativeScript.script),
+                    recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
+                        .map(ExpectedSigner(_))
                   )
                 )
+            )
                 ++ Seq(
                   // Treasury Output
                   SendOutput(
