@@ -6,34 +6,32 @@ package hydrozoa.lib.tx
   *   - The definition of steps: [[TransactionBuilderStep]]
   */
 
-import hydrozoa._
+import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
-import hydrozoa.lib.tx.TxBuildError._
-
+import hydrozoa.lib.tx.TxBuildError.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.{Address, _}
-import scalus.cardano.ledger.GovAction._
+import scalus.cardano.address.{Address, *}
+import scalus.cardano.ledger.GovAction.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.{Context => SContext, STS, State => SState, UtxoEnv}
+import scalus.cardano.ledger.rules.{STS, UtxoEnv, Context as SContext, State as SState}
 import scalus.cardano.ledger.txbuilder.wip.DiffHandler
 import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 import scalus.cardano.ledger.utils.{AllResolvedScripts, MinCoinSizedTransactionOutput}
 import scalus.|>
-
-import cats._
-import cats.data._
-import cats.implicits._
+import cats.*
+import cats.data.*
+import cats.implicits.*
+import hydrozoa.lib.tx.Datum.DatumValue
 
 import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
-
 import io.bullet.borer.Cbor
-import monocle._
-import monocle.syntax.all._
+import monocle.*
+import monocle.syntax.all.*
 
 // -----------------------------------------------------------------------------
 // Tx Builder steps
@@ -70,25 +68,27 @@ object TransactionBuilderStep {
       * case class SpendOutputRecipe (utxo: TransactionUnspentOutput, witness: Option[OutputWitness]
       *
       * spendOutput(recipe : SpendOutputRecipe) = BuilderM[SpendOutputSpec]
-     *
-     * N.B.: Using the an update monad (https://chrispenner.ca/posts/update-monad) would be more sutiable than state. There are a restricted set
-     * endomorphisms on the Context that we would want to restrict to ensure invariants are satisfied.
+      *
+      * N.B.: Using the an update monad (https://chrispenner.ca/posts/update-monad) would be more
+      * sutiable than state. There are a restricted set endomorphisms on the Context that we would
+      * want to restrict to ensure invariants are satisfied.
       */
     case class SpendOutput(
         utxo: TransactionUnspentOutput,
         /** Pass None for pubkey outputs only */
-        witness: NativeScriptWitness | ThreeArgumentPlutusScriptWitness | PubKeyWitness.type = PubKeyWitness
+        witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness =
+            PubKeyWitness
     ) extends TransactionBuilderStep
 
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
-    case class Pay(output: TransactionOutput) extends TransactionBuilderStep
+    case class SendOutput(output: TransactionOutput) extends TransactionBuilderStep
 
     /** Mint/burn tokens using a native/plutus script. */
     case class MintAsset(
         scriptHash: ScriptHash,
         assetName: AssetName,
         amount: Long,
-        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness
+        witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ) extends TransactionBuilderStep
 
     /** Add a [[TransactionUnspentOutput]] as a CIP-31 reference input. Doesn't allow the same utxo
@@ -111,46 +111,56 @@ object TransactionBuilderStep {
 
     case class IssueCertificate(
         cert: Certificate,
-        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness =
+            PubKeyWitness
     ) extends TransactionBuilderStep
 
     case class WithdrawRewards(
         stakeCredential: StakeCredential,
         amount: Coin,
-        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness =
+            PubKeyWitness
     ) extends TransactionBuilderStep
 
     case class SubmitProposal(
         proposal: ProposalProcedure,
-        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness =
+            PubKeyWitness
     ) extends TransactionBuilderStep
 
     case class SubmitVotingProcedure(
         voter: Voter,
         votes: Map[GovActionId, VotingProcedure],
-        witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness | PubKeyWitness.type
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness =
+            PubKeyWitness
     ) extends TransactionBuilderStep
 
     case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
         extends TransactionBuilderStep
 }
 
-/**
- * A witness to conduct an authorized operation on-chain. This could be spending an input, minting,
- * rewarding, governance ops, certificate ops, etc.
- * The only ways to do this as of writing (2025-10-03) are
- * - PubKey
- * - Native Script
- * - Plutus Script
- *
- * The types include all additional data required to authorize the operation.
- */
+// -----------------------------------------------------------------------------
+// Witness
+// -----------------------------------------------------------------------------
+
+/** A witness to conduct an authorized operation on-chain. This could be spending an input, minting,
+  * rewarding, governance ops, certificate ops, etc.
+  *
+  * The only ways to do this as of writing (2025-10-03) are
+  *   - PubKey
+  *   - Native Script
+  *   - Plutus Script
+  *
+  * The types include all additional data required to authorize the operation.
+  */
 sealed trait Witness
 
 case object PubKeyWitness extends Witness
 
-case class NativeScriptWitness
-  (scriptSource: ScriptSource[Script.Native], additionalSigners : Set[ExpectedSigner]) extends Witness
+case class NativeScriptWitness(
+    scriptSource: ScriptSource[Script.Native],
+    additionalSigners: Set[ExpectedSigner]
+) extends Witness
 
 // For operations that only take a redeemer and script context
 case class TwoArgumentPlutusScriptWitness(
@@ -163,7 +173,7 @@ case class TwoArgumentPlutusScriptWitness(
 case class ThreeArgumentPlutusScriptWitness(
     scriptSource: ScriptSource[PlutusScript],
     redeemer: Data,
-    datum: DatumWitness,
+    datum: Datum,
     additionalSigner: Set[ExpectedSigner]
 ) extends Witness
 
@@ -176,20 +186,20 @@ case class ThreeArgumentPlutusScriptWitness(
 sealed trait ScriptSource[+A <: PlutusScript | Script.Native]
 
 object ScriptSource {
-        /** Contains a script itself, will be included to the witness set. */
-    case class NativeScriptValue(script: Script.Native)
-        extends ScriptSource[Script.Native]
+
+    /** Contains a script itself, will be included to the witness set. */
+    case class NativeValue(script: Script.Native) extends ScriptSource[Script.Native]
 
     /** Tries to use a CIP-33 reference script or a script manually passed in the builder. */
-    case object NativeAttachedScript extends ScriptSource[Script.Native]
+    case object NativeAttached extends ScriptSource[Script.Native]
 
-    case class PlutusScriptValue(script: PlutusScript) extends ScriptSource[PlutusScript]
+    case class PlutusValue(script: PlutusScript) extends ScriptSource[PlutusScript]
 
-    case object PlutusAttachedScript extends ScriptSource[PlutusScript]
+    case object PlutusAttached extends ScriptSource[PlutusScript]
 }
 
 // -----------------------------------------------------------------------------
-// DatumWitness
+// Datum
 // -----------------------------------------------------------------------------
 
 /** Datums in UTxOs can be stored in two forms: inline datums or datum hashes. When there's a hash,
@@ -198,10 +208,12 @@ object ScriptSource {
   * supported, since we haven't seen it in the wild - you can work with the datum of a reference
   * input deirectly, so we decided to remove that. Please open an issue if you need it.
   */
-sealed trait DatumWitness
 
-object DatumWitness {
-    case class DatumValue(datum: Data) extends DatumWitness
+sealed trait Datum
+
+object Datum {
+    case object DatumInlined extends Datum
+    case class DatumValue(datum: Data) extends Datum
 }
 
 // -----------------------------------------------------------------------------
@@ -240,34 +252,50 @@ object CredentialAction {
         override def explain: String = "This voting proposal"
 }
 
-/** Represents a witness type, i.e., key-based or script-based for possible kinds of witnesses -
-  * [[WitnessForSpend]] or [[CredentialWitness]].
+/** Represents a type of [[Witness]], i.e., whether it's a key-based or a script-based one.
   */
 sealed trait ExpectedWitnessType[A <: Witness] {
     def explain: String
 }
 
 object ExpectedWitnessType {
-    case class ScriptHashWitness[A <: Witness](witness: A)
-        extends ExpectedWitnessType[A]:
+    case class ScriptHashWitness[A <: Witness](witness: A) extends ExpectedWitnessType[A]:
         override def explain: String = "ScriptHash"
 
-    case class PubKeyHashWitness[A <: Witness]()
-        extends ExpectedWitnessType[A]:
+    case class PubKeyHashWitness[A <: Witness]() extends ExpectedWitnessType[A]:
         override def explain: String = "PubKeyHash"
 }
 
+trait HasWitnessKind[A]:
+    def witnessKind: WitnessKind
+
+enum WitnessKind:
+    case KeyBased
+    case ScriptBased
+
+object HasWitnessKind:
+    given HasWitnessKind[PubKeyWitness.type] with
+        override def witnessKind = WitnessKind.KeyBased
+
+    given HasWitnessKind[NativeScriptWitness] with
+        override def witnessKind = WitnessKind.ScriptBased
+
+    given HasWitnessKind[TwoArgumentPlutusScriptWitness] with
+        override def witnessKind = WitnessKind.ScriptBased
+
+    given HasWitnessKind[ThreeArgumentPlutusScriptWitness] with
+        override def witnessKind = WitnessKind.ScriptBased
+
 object TransactionBuilder:
 
-    /** Builder is a state monad over Context.
-      * @tparam A
-      */
+    /** Builder is a state monad over Context. */
     private type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
 
     // Helpers to cut down on type signature noise
-    def pure0[A] = StateT.pure[[X] =>> Either[TxBuildError, X], Context, A]
-    def liftF0[A] = StateT.liftF[[X] =>> Either[TxBuildError, X], Context, A]
-    def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
+    private def pure0[A] = StateT.pure[[X] =>> Either[TxBuildError, X], Context, A]
+    private def liftF0[A] = StateT.liftF[[X] =>> Either[TxBuildError, X], Context, A]
+    private def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
+    private def get0 = StateT.get[[X] =>> Either[TxBuildError, X], Context]
 
     /** A wrapper around a UTxO set that prevents adding conflicting pairs */
     case class ResolvedUtxos private (utxos: UTxO) {
@@ -306,13 +334,9 @@ object TransactionBuilder:
         val empty: ResolvedUtxos = ResolvedUtxos(Map.empty)
         def apply(utxos: UTxO): ResolvedUtxos = new ResolvedUtxos(utxos)
 
-    /** An opaque context in which the builder operates. TODO: make a class, remove toTuple()
+    /** An opaque context in which the builder operates.
       *
-      * @param transaction
-      * @param redeemers
-      * @param network
-      * @param expectedSigners
-      * @param resolvedUtxos
+      * TODO: make a class, remove toTuple()
       */
     case class Context private[TransactionBuilder] (
         transaction: Transaction,
@@ -498,10 +522,6 @@ object TransactionBuilder:
 
     /** An update function for use with calcMinAda. It replaces the output's coin with the given
       * coin.
-      *
-      * @param coin
-      * @param to
-      * @return
       */
     // TODO: try to make it polymorphic
     private def replaceAdaUpdate(coin: Coin, to: TransactionOutput): TransactionOutput =
@@ -545,6 +565,9 @@ object TransactionBuilder:
         modifyBuilderM.run(ctx).map(_._1)
     }
 
+    trait HasBuilderEffect[A]:
+        def runEffect(): BuilderM[Unit]
+
     private def processConstraints(steps: Seq[TransactionBuilderStep]): BuilderM[Unit] =
         steps.traverse_(processConstraint)
 
@@ -567,7 +590,7 @@ object TransactionBuilder:
                 _ <- useOutputWitness(witness, utxo)
             } yield ()
 
-        case TransactionBuilderStep.Pay(output) =>
+        case TransactionBuilderStep.SendOutput(output) =>
             for {
                 _ <- assertNetworkId(output.address)
                 _ <- modify0(
@@ -579,7 +602,7 @@ object TransactionBuilder:
             } yield ()
 
         case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) =>
-            useMintAssetWitness(scriptHash, assetName, amount, mintWitness)
+            useMint(scriptHash, assetName, amount, mintWitness)
 
         case TransactionBuilderStep.ReferenceOutput(utxo) =>
             for {
@@ -672,23 +695,24 @@ object TransactionBuilder:
       * satisfy spending requirements.
       */
     def useOutputWitness(
-        mbWitness: Option[WitnessForSpend],
+        witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness,
         utxo: TransactionUnspentOutput
     ): BuilderM[Unit] =
-        mbWitness match {
-            // Case 1: Pubkey input: add the pubkey hash to ctx.expectedSigners
-            case None => {
-                val pkhw = ExpectedWitnessType.PubKeyHashWitness[WitnessForSpend]()
+        witness match {
+            // Case 1: Key-locked input
+            // Add the pubkey hash to ctx.expectedSigners
+            case _: PubKeyWitness.type => {
+                //val pkhw = ExpectedWitnessType.PubKeyHashWitness[PubKeyWitness.type]()
                 for {
-                    // Extract Key Hash, erroring if not a Shelley PKH address
+                    // Extract the key hash, erroring if not a Shelley PKH address
                     keyHash <- liftF0(utxo.output.address match {
                         case sa: ShelleyAddress =>
                             sa.payment match {
                                 case kh: ShelleyPaymentPart.Key => Right(kh.hash)
                                 case _: ShelleyPaymentPart.Script =>
-                                    Left(TxBuildError.WrongOutputType(pkhw, utxo))
+                                    Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
                             }
-                        case _ => Left(TxBuildError.WrongOutputType(pkhw, utxo))
+                        case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
                     })
                     // Add the Key hash to expectedSigners
                     _ <- modify0(
@@ -697,11 +721,10 @@ object TransactionBuilder:
                     )
                 } yield ()
             }
-
-            // Case 2: Script input.
+            // Case 2: Native script-locked input
             // Ensure the hash matches the witness, handle the output components, defer to witness handling
-            case Some(outputWitness) => {
-                val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
+            case nativeScriptWitness: NativeScriptWitness => {
+                // val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
                 for {
                     // Extract the script hash, throwing an error on anything but a Shelley Script Addrress
                     scriptHash <- liftF0(utxo.output.address match {
@@ -709,86 +732,163 @@ object TransactionBuilder:
                             sa.payment match {
                                 case s: ShelleyPaymentPart.Script => Right(s.hash)
                                 case _: ShelleyPaymentPart.Key =>
-                                    Left(TxBuildError.WrongOutputType(shw, utxo))
+                                    Left(TxBuildError.WrongOutputType(???, utxo))
 
                             }
-                        case _ => Left(TxBuildError.WrongOutputType(shw, utxo))
+                        case _ => Left(TxBuildError.WrongOutputType(???, utxo))
                     })
 
-                    _ <- assertScriptHashMatchesWitness(scriptHash, outputWitness.scriptWitness)
+                    _ <- assertScriptHashMatchesSource(scriptHash, nativeScriptWitness.scriptSource)
 
-                    // Branch on specific output witness types, defering to the witness handlers
-                    _ <- outputWitness match {
-                        // Native Script: The output witness has no further responsibilities
-                        // besides delegating to the NS witness handler
-                        case WitnessForSpend.NativeScriptOutput(nsWitness) =>
-                            useNativeScriptWitness(nsWitness)
-                        // Plutus script: the output witness needs to handle datums and redeemers,
-                        // and then delegate to the script witness.
-                        case WitnessForSpend.PlutusScriptOutput(
-                              plutusScriptWitness,
-                              redeemerDatum,
-                              mbDatumWitness
-                            ) =>
-                            for {
-                                _ <- usePlutusScriptWitness(plutusScriptWitness)
-                                detachedRedeemer = DetachedRedeemer(
-                                  redeemerDatum,
-                                  RedeemerPurpose.ForSpend(utxo.input)
-                                )
-                                _ <- modify0(ctx =>
-                                    ctx.focus(_.redeemers)
-                                        .modify(r => appendDistinct(detachedRedeemer, r))
-                                )
-                                _ <- useDatumWitnessForUtxo(utxo, mbDatumWitness)
-                            } yield ()
-                    }
+                    _ <- useNativeScript(
+                      nativeScriptWitness.scriptSource,
+                      nativeScriptWitness.additionalSigners
+                    )
+                } yield ()
+            }
+
+            // Case 3: Plutus script-locked input
+            // Ensure the hash matches the witness, handle the output components, defer to witness handling
+            case plutusWitness: ThreeArgumentPlutusScriptWitness => {
+                // val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
+                for {
+                    // TODO: Factor out
+                    // Extract the script hash, throwing an error on anything but a Shelley Script Addrress
+                    scriptHash <- liftF0(utxo.output.address match {
+                        case sa: ShelleyAddress =>
+                            sa.payment match {
+                                case s: ShelleyPaymentPart.Script => Right(s.hash)
+                                case _: ShelleyPaymentPart.Key =>
+                                    Left(TxBuildError.WrongOutputType(???, utxo))
+
+                            }
+                        case _ => Left(TxBuildError.WrongOutputType(???, utxo))
+                    })
+
+                    _ <- assertScriptHashMatchesSource(scriptHash, plutusWitness.scriptSource)
+
+                    _ <- usePlutusScript(plutusWitness.scriptSource, plutusWitness.additionalSigner)
+
+                    detachedRedeemer = DetachedRedeemer(
+                      plutusWitness.redeemer,
+                      RedeemerPurpose.ForSpend(utxo.input)
+                    )
+                    _ <- modify0(ctx =>
+                        ctx.focus(_.redeemers)
+                            .modify(r => appendDistinct(detachedRedeemer, r))
+                    )
+                    _ <- useDatum(utxo, plutusWitness.datum)
                 } yield ()
             }
         }
 
+    def useNativeScript(
+        scriptWitness: ScriptSource[Script.Native],
+        additionalSigners: Set[ExpectedSigner]
+    ): BuilderM[Unit] =
+        for {
+            // Regardless of how the witness is passed, add the additional signers
+            _ <- modify0(
+              Focus[Context](_.expectedSigners).modify(_ ++ additionalSigners)
+            )
+
+            _ <- scriptWitness match {
+                case ScriptSource.NativeValue(ns) =>
+                    modify0(
+                      // Add the native script to the witness set
+                      unsafeCtxWitnessL
+                          .refocus(_.nativeScripts)
+                          .modify(s => appendDistinct(ns, s.toList).toSet)
+                    )
+                // Script should already be attached, see [[assertAttachedScriptExists]]
+                // case ScriptSource.NativeAttachedScript(_) => pure0(())
+                // FIXME: Should not happen
+                case ScriptSource.PlutusValue(_) => ???
+                //case ScriptSource.PlutusAttachedScript => ???
+            }
+        } yield ()
+
+    def usePlutusScript(
+        scriptWitness: ScriptSource[PlutusScript],
+        additionalSigners: Set[ExpectedSigner]
+    ): BuilderM[Unit] =
+        for {
+            // Add script's additional signers to txBody.requiredSigners
+            _ <- modify0(
+              (Focus[Context](_.transaction) >>> txBodyL)
+                  .refocus(_.requiredSigners)
+                  .modify((s: TaggedOrderedSet[AddrKeyHash]) =>
+                      TaggedOrderedSet.from(
+                        s.toSortedSet ++ additionalSigners.map(_.hash)
+                      )
+                  )
+            )
+
+            // Add to expected signers
+            _ <- modify0(
+              Focus[Context](_.expectedSigners).modify(_ ++ additionalSigners)
+            )
+
+            _ <- scriptWitness match {
+                case ScriptSource.PlutusValue(ps: PlutusScript) =>
+                    // Add the script value to the appropriate field
+                    ps match {
+                        case (v1: Script.PlutusV1) =>
+                            modify0(
+                              unsafeCtxWitnessL
+                                  .refocus(_.plutusV1Scripts)
+                                  .modify(s => Set.from(appendDistinct(v1, s.toSeq)))
+                            )
+                        case (v2: Script.PlutusV2) =>
+                            modify0(
+                              unsafeCtxWitnessL
+                                  .refocus(_.plutusV2Scripts)
+                                  .modify(s => Set.from(appendDistinct(v2, s.toSeq)))
+                            )
+                        case (v3: Script.PlutusV3) =>
+                            modify0(
+                              unsafeCtxWitnessL
+                                  .refocus(_.plutusV3Scripts)
+                                  .modify(s => Set.from(appendDistinct(v3, s.toSeq)))
+                            )
+                    }
+                // Script should already be attached, see [[assertAttachedScriptExists]]
+                case ScriptSource.PlutusAttached => pure0(())
+            }
+        } yield ()
+
     /** Tries to modify the transaction state to make it consume a given script output. Uses a
-      * `DatumWitness` if the UTxO datum is provided as a hash.
+      * `DatumWitness` if the UTxO datum is provided as a hash. TODO: used only once in
+      * useOutputWitness
       */
-    def useDatumWitnessForUtxo(
+    def useDatum(
         utxo: TransactionUnspentOutput,
-        mbDatumWitness: Option[DatumWitness]
+        datum: Datum
     ): BuilderM[Unit] =
         for {
             _ <- utxo.output.datumOption match {
-                // script outputs must have a datum
                 case None =>
                     liftF0(
                       Left(TxBuildError.DatumIsMissing(utxo))
                     )
-                // if the datum is inline, we don't need to attach it as witness
                 case Some(DatumOption.Inline(_)) =>
-                    mbDatumWitness match {
-                        case Some(datumWitness) =>
+                    datum match {
+                        case Datum.DatumInlined => pure0(())
+                        case Datum.DatumValue(_) =>
                             liftF0(
-                              Left(TxBuildError.UnneededDatumWitness(utxo, datumWitness))
+                              Left(TxBuildError.DatumValueForUtxoWithInlineDatum(utxo, datum))
                             )
-                        case None =>
-                            pure0(())
                     }
-                // if the datum is provided as hash
                 case Some(DatumOption.Hash(datumHash)) =>
-                    mbDatumWitness match {
-                        // Error if the datum witness was not provided
-                        case None =>
-                            liftF0(
-                              Left(TxBuildError.DatumWitnessNotProvided(utxo))
-                            )
-                        // Datum as a value
-                        //
-                        // Check if the provided datum hash matches the output datum hash and if so
-                        // add the datum to the witness set.
-                        case Some(DatumWitness.DatumValue(providedDatum)) =>
+                    datum match {
+                        case Datum.DatumInlined =>
+                            liftF0(Left(TxBuildError.DatumWitnessNotProvided(utxo)))
+                        case Datum.DatumValue(providedDatum) =>
                             // TODO: is that correct? Upstream Data.dataHash extension?
                             val computedHash: DataHash =
                                 DataHash.fromByteString(blake2b_224(serialiseData(providedDatum)))
+
                             if (datumHash == computedHash) {
-                                //
                                 modify0(
                                   unsafeCtxWitnessL
                                       .refocus(_.plutusData)
@@ -818,17 +918,17 @@ object TransactionBuilder:
     // MintAsset step
     // -------------------------------------------------------------------------
 
-    def useMintAssetWitness(
+    def useMint(
         scriptHash: ScriptHash,
         assetName: AssetName,
         amount: Long,
-        witness: CredentialWitness
+        witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ): BuilderM[Unit] =
         for {
             _ <- useCredentialWitness(
               CredentialAction.Minting(scriptHash),
               Credential.ScriptHash(scriptHash),
-              Some(witness)
+              witness
             )
             _ <- modify0(ctx => {
                 val currentMint = ctx |> unsafeCtxBodyL.refocus(_.mint).get
@@ -869,73 +969,84 @@ object TransactionBuilder:
 
     def useCertificateWitness(
         cert: Certificate,
-        mbWitness: Option[CredentialWitness]
-    ): BuilderM[Unit] =
-        cert match {
-            // FIXME: verify
-            case Certificate.UnregCert(credential, _) =>
-                for {
-                    _ <- (credential, mbWitness) match {
-                        case (Credential.KeyHash(_), Some(witness)) =>
-                            liftF0(
-                              Left(
-                                TxBuildError.UnneededDeregisterWitness(
-                                  StakeCredential(credential),
-                                  witness
-                                )
-                              )
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
+    ): BuilderM[Unit] = cert match {
+        // FIXME: verify
+        case Certificate.UnregCert(credential, _) =>
+            for {
+                _ <- (credential, witness) match {
+                    // Credential.KeyHash
+                    case (Credential.KeyHash(_), PubKeyWitness) => pure0(())
+                    case (Credential.KeyHash(_), witness: TwoArgumentPlutusScriptWitness) =>
+                        liftF0(
+                          Left(
+                            TxBuildError.UnneededDeregisterWitness(
+                              StakeCredential(credential),
+                              witness
                             )
-                        case (Credential.KeyHash(_), None) =>
-                            pure0(())
-                        case (Credential.ScriptHash(_), None) =>
-                            liftF0(
-                              Left(
-                                TxBuildError.WrongCredentialType(
-                                  CredentialAction.StakeCert(cert),
-                                  ExpectedWitnessType.PubKeyHashWitness(),
-                                  credential
-                                )
-                              )
+                          )
+                        )
+                    case (Credential.KeyHash(_), witness: NativeScriptWitness) =>
+                      liftF0(
+                        Left(
+                          TxBuildError.UnneededDeregisterWitness(
+                            StakeCredential(credential),
+                            witness
+                          )
+                        )
+                      )
+                    // Credential.ScriptHash
+                    case (Credential.ScriptHash(_), PubKeyWitness) =>
+                        liftF0(
+                          Left(
+                            TxBuildError.WrongCredentialType(
+                              CredentialAction.StakeCert(cert),
+                              WitnessKind.KeyBased,
+                              credential
                             )
-                        case (Credential.ScriptHash(scriptHash), Some(witness)) =>
-                            assertScriptHashMatchesWitness(scriptHash, witness.scriptWitness)
-                    }
-                    _ <- useCredentialWitness(
-                      CredentialAction.StakeCert(cert),
-                      credential,
-                      mbWitness
-                    )
-                } yield ()
-            case Certificate.StakeDelegation(credential, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            // FIXME: verify
-            case Certificate.RegCert(_, _) =>
-                pure0(())
-            case Certificate.PoolRegistration(_, _, _, _, _, _, _, _, _) =>
-                pure0(())
-            case Certificate.PoolRetirement(_, _) =>
-                pure0(())
-            case Certificate.VoteDelegCert(credential, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.StakeVoteDelegCert(credential, _, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.StakeRegDelegCert(credential, _, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.VoteRegDelegCert(credential, _, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.StakeVoteRegDelegCert(credential, _, _, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.AuthCommitteeHotCert(_, _) =>
-                pure0(()) // not supported
-            case Certificate.ResignCommitteeColdCert(_, _) =>
-                pure0(()) // not supported
-            case Certificate.RegDRepCert(credential, _, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.UnregDRepCert(credential, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-            case Certificate.UpdateDRepCert(credential, _) =>
-                useCredentialWitness(CredentialAction.StakeCert(cert), credential, mbWitness)
-        }
+                          )
+                        )
+                    case (Credential.ScriptHash(scriptHash), witness: TwoArgumentPlutusScriptWitness) =>
+                        assertScriptHashMatchesSource(scriptHash, witness.scriptSource)
+                    case (Credential.ScriptHash(scriptHash), witness: NativeScriptWitness) =>
+                        assertScriptHashMatchesSource(scriptHash, witness.scriptSource)
+                }
+                _ <- useCredentialWitness(
+                  CredentialAction.StakeCert(cert),
+                  credential,
+                  witness
+                )
+            } yield ()
+        case Certificate.StakeDelegation(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        // FIXME: verify
+        case Certificate.RegCert(_, _) =>
+            pure0(())
+        case Certificate.PoolRegistration(_, _, _, _, _, _, _, _, _) =>
+            pure0(())
+        case Certificate.PoolRetirement(_, _) =>
+            pure0(())
+        case Certificate.VoteDelegCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.StakeVoteDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.StakeRegDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.VoteRegDelegCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.StakeVoteRegDelegCert(credential, _, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.AuthCommitteeHotCert(_, _) =>
+            pure0(()) // not supported
+        case Certificate.ResignCommitteeColdCert(_, _) =>
+            pure0(()) // not supported
+        case Certificate.RegDRepCert(credential, _, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.UnregDRepCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+        case Certificate.UpdateDRepCert(credential, _) =>
+            useCredentialWitness(CredentialAction.StakeCert(cert), credential, witness)
+     }
 
     // -------------------------------------------------------------------------
     // WithdrawRewards step
@@ -944,7 +1055,7 @@ object TransactionBuilder:
     def useWithdrawRewardsWitness(
         stakeCredential: StakeCredential,
         amount: Coin,
-        witness: Option[CredentialWitness]
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ): BuilderM[Unit] =
         for {
             ctx <- StateT.get[[X] =>> Either[TxBuildError, X], Context]
@@ -985,8 +1096,8 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
 
     def useProposalWitness(
-        proposal: ProposalProcedure,
-        mbWitness: Option[CredentialWitness]
+          proposal: ProposalProcedure,
+          witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ): BuilderM[Unit] = {
         def getPolicyHash(govAction: GovAction): Option[ScriptHash] = govAction match {
             case GovAction.ParameterChange(_, _, policyHash)  => policyHash
@@ -994,19 +1105,15 @@ object TransactionBuilder:
             case _                                            => None
         }
 
-        (getPolicyHash(proposal.govAction), mbWitness) match {
-            case (None, Some(witness)) =>
-                StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                  Left(TxBuildError.UnneededProposalPolicyWitness(proposal, witness))
-                )
-            case (Some(policyHash), witness) =>
+        getPolicyHash(proposal.govAction) match {
+            case None =>
+                pure0(())
+            case Some(policyHash) =>
                 useCredentialWitness(
                   CredentialAction.Proposing(proposal),
                   Credential.ScriptHash(policyHash),
                   witness
                 )
-            case (None, None) =>
-                pure0(())
         }
     }
 
@@ -1015,21 +1122,22 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
 
     def useVotingProcedureWitness(
-        voter: Voter,
-        mbWitness: Option[CredentialWitness]
+         voter: Voter,
+         witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ): BuilderM[Unit] =
         for {
             cred <- voter match {
                 case Voter.StakingPoolKey(poolKeyHash) =>
                     val credential = Credential.KeyHash(poolKeyHash)
-                    mbWitness match {
-                        case Some(witness) =>
+                    witness match {
+                        case _: PubKeyWitness.type => pure0(credential)
+                        case witness: TwoArgumentPlutusScriptWitness =>
                             liftF0(
                               Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
                             )
-                        case None =>
-                            pure0(
-                              credential
+                        case witness: NativeScriptWitness =>
+                            liftF0(
+                              Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
                             )
                     }
                 case Voter.ConstitutionalCommitteeHotKey(credential) =>
@@ -1049,7 +1157,7 @@ object TransactionBuilder:
                       Credential.ScriptHash(scriptHash)
                     )
             }
-            _ <- useCredentialWitness(CredentialAction.Voting(voter), cred, mbWitness)
+            _ <- useCredentialWitness(CredentialAction.Voting(voter), cred, witness)
         } yield ()
 
     // -------------------------------------------------------------------------
@@ -1059,204 +1167,121 @@ object TransactionBuilder:
     def useCredentialWitness(
         credAction: CredentialAction,
         cred: Credential,
-        mbWitness: Option[CredentialWitness]
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ): BuilderM[Unit] =
-        for {
-            _ <- mbWitness match {
-                // Pubkey credential witness: add to expected signers
-                case None =>
-                    val pkhw: ExpectedWitnessType[CredentialWitness] =
-                        ExpectedWitnessType.PubKeyHashWitness()
-                    for {
-                        _ <- assertCredentialType(
-                          credAction,
-                          pkhw,
-                          cred
-                        )
-                        // Add key hash to expected signers
-                        _ <- cred match {
-                            case Credential.KeyHash(keyHash) =>
-                                modify0(
-                                  Focus[Context](_.expectedSigners)
-                                      .modify(_ + ExpectedSigner(keyHash))
-                                )
-                            case _ =>
-                                liftF0(
-                                  Left(
-                                    TxBuildError.WrongCredentialType(
-                                      credAction,
-                                      pkhw,
-                                      cred
-                                    )
-                                  )
-                                )
-                        }
-                    } yield ()
-                case Some(
-                      witness @ CredentialWitness.NativeScriptCredential(nsWitness)
-                    ) =>
-                    for {
-                        _ <- assertCredentialType(
-                          credAction,
-                          ExpectedWitnessType.ScriptHashWitness(witness),
-                          cred
-                        )
-                        _ <- useNativeScriptWitness(nsWitness)
-                    } yield ()
-                case Some(
-                      witness @ CredentialWitness.PlutusScriptCredential(
-                        plutusScriptWitness,
-                        redeemerDatum
-                      )
-                    ) =>
-                    for {
-                        _ <- assertCredentialType(
-                          credAction,
-                          ExpectedWitnessType.ScriptHashWitness(witness),
-                          cred
-                        )
-                        _ <- usePlutusScriptWitness(plutusScriptWitness)
-                        _ <- {
-                            val redeemer = DetachedRedeemer(
-                              datum = redeemerDatum,
-                              purpose = credAction match {
-                                  case CredentialAction.Withdrawal(address) =>
-                                      val stakeAddress = address match {
-                                          case ShelleyAddress(_, _, _)           => ??? // FIXME:
-                                          case stakeAddress @ StakeAddress(_, _) => stakeAddress
-                                          case ByronAddress(_)                   => ??? // FIXME:
-                                      }
-                                      RedeemerPurpose.ForReward(
-                                        RewardAccount(stakeAddress)
-                                      )
-                                  case CredentialAction.StakeCert(cert) =>
-                                      RedeemerPurpose.ForCert(cert)
-                                  case CredentialAction.Minting(scriptHash) =>
-                                      RedeemerPurpose.ForMint(scriptHash)
-                                  case CredentialAction.Voting(voter) =>
-                                      RedeemerPurpose.ForVote(voter)
-                                  case CredentialAction.Proposing(proposal) =>
-                                      RedeemerPurpose.ForPropose(proposal)
-                              }
-                            )
-                            modify0(ctx =>
-                                ctx.focus(_.redeemers)
-                                    .modify(redeemers => appendDistinct(redeemer, redeemers))
-                            )
-                        }
-                    } yield ()
-            }
-        } yield ()
+     for {
+        _ <- witness match {
+            // Pubkey credential witness: add to expected signers
+            case PubKeyWitness =>
 
-    /** To use a native script, we have 3 options:
-      *
-      * @param scriptWitness
-      * @return
-      */
-    def useNativeScriptWitness(scriptWitness: ScriptSource[Script.Native]): BuilderM[Unit] =
-        for {
-            // Regardless of how the witness is passed, add the additional signers
-            _ <- modify0(
-              Focus[Context](_.expectedSigners).modify(_ ++ scriptWitness.additionalSigners)
-            )
-
-            _ <- scriptWitness match {
-                case ScriptSource.ScriptValue(ns, _) =>
-                    modify0(
-                      // Add the native script to the witness set
-                      unsafeCtxWitnessL
-                          .refocus(_.nativeScripts)
-                          .modify(s => appendDistinct(ns, s.toList).toSet)
+                for {
+                    _ <- assertCredentialType(
+                      credAction,
+                      PubKeyWitness,
+                      cred
                     )
-                // Script should already be attached, see [[assertAttachedScriptExists]]
-                case ScriptSource.AttachedScript(_) => pure0(())
-
-            }
-        } yield ()
-
-    def usePlutusScriptWitness(
-        scriptWitness: ScriptSource[PlutusScript]
-    ): BuilderM[Unit] =
-        for {
-            // Add script's additional signers to txBody.requiredSigners
-            _ <- modify0(
-              (Focus[Context](_.transaction) >>> txBodyL)
-                  .refocus(_.requiredSigners)
-                  .modify((s: TaggedOrderedSet[AddrKeyHash]) =>
-                      TaggedOrderedSet.from(
-                        s.toSortedSet ++ scriptWitness.additionalSigners.map(_.hash)
-                      )
-                  )
-            )
-
-            // Add to expected signers
-            _ <- modify0(
-              Focus[Context](_.expectedSigners).modify(_ ++ scriptWitness.additionalSigners)
-            )
-
-            _ <- scriptWitness match {
-                case ScriptSource.ScriptValue(ps: PlutusScript, _) =>
-                    // Add the script value to the appropriate field
-                    ps match {
-                        case (v1: Script.PlutusV1) =>
+                    // Add key hash to expected signers
+                    _ <- cred match {
+                        case Credential.KeyHash(keyHash) =>
                             modify0(
-                              unsafeCtxWitnessL
-                                  .refocus(_.plutusV1Scripts)
-                                  .modify(s => Set.from(appendDistinct(v1, s.toSeq)))
+                              Focus[Context](_.expectedSigners)
+                                  .modify(_ + ExpectedSigner(keyHash))
                             )
-                        case (v2: Script.PlutusV2) =>
-                            modify0(
-                              unsafeCtxWitnessL
-                                  .refocus(_.plutusV2Scripts)
-                                  .modify(s => Set.from(appendDistinct(v2, s.toSeq)))
-                            )
-                        case (v3: Script.PlutusV3) =>
-                            modify0(
-                              unsafeCtxWitnessL
-                                  .refocus(_.plutusV3Scripts)
-                                  .modify(s => Set.from(appendDistinct(v3, s.toSeq)))
+                        case _ =>
+                            liftF0(
+                              Left(
+                                TxBuildError.WrongCredentialType(
+                                  credAction,
+                                  WitnessKind.KeyBased,
+                                  cred
+                                )
+                              )
                             )
                     }
-                // Script should already be attached, see [[assertAttachedScriptExists]]
-                case ScriptSource.AttachedScript(_) => pure0(())
-            }
-        } yield ()
+                } yield ()
+            case witness: NativeScriptWitness =>
+                for {
+                    _ <- assertCredentialType(
+                      credAction,
+                      witness,
+                      cred
+                    )
+                    _ <- useNativeScript(witness.scriptSource, witness.additionalSigners)
+                } yield ()
+            case witness: TwoArgumentPlutusScriptWitness =>
+                for {
+                    _ <- assertCredentialType(
+                      credAction,
+                      witness,
+                      cred
+                    )
+                    _ <- usePlutusScript(witness.scriptSource,  witness.additionalSigners)
+                    _ <- {
+                        val detachedRedeemer = DetachedRedeemer(
+                          datum = witness.redeemer,
+                          purpose = credAction match {
+                              case CredentialAction.Withdrawal(address) =>
+                                  val stakeAddress = address match {
+                                      case ShelleyAddress(_, _, _)           => ??? // FIXME:
+                                      case stakeAddress @ StakeAddress(_, _) => stakeAddress
+                                      case ByronAddress(_)                   => ??? // FIXME:
+                                  }
+                                  RedeemerPurpose.ForReward(
+                                    RewardAccount(stakeAddress)
+                                  )
+                              case CredentialAction.StakeCert(cert) =>
+                                  RedeemerPurpose.ForCert(cert)
+                              case CredentialAction.Minting(scriptHash) =>
+                                  RedeemerPurpose.ForMint(scriptHash)
+                              case CredentialAction.Voting(voter) =>
+                                  RedeemerPurpose.ForVote(voter)
+                              case CredentialAction.Proposing(proposal) =>
+                                  RedeemerPurpose.ForPropose(proposal)
+                          }
+                        )
+                        modify0(ctx =>
+                            ctx.focus(_.redeemers)
+                                .modify(redeemers => appendDistinct(detachedRedeemer, redeemers))
+                        )
+                    }
+                } yield ()
+        }
+     } yield ()
 
-    def assertCredentialType(
+    def assertCredentialType[A <: PubKeyWitness.type | NativeScriptWitness | TwoArgumentPlutusScriptWitness ](
         action: CredentialAction,
-        expectedType: ExpectedWitnessType[CredentialWitness],
+        witness: A,
         cred: Credential
-    ): BuilderM[Unit] = {
-        val wrongCredErr = TxBuildError.WrongCredentialType(action, expectedType, cred)
-        expectedType match {
-            case ExpectedWitnessType.ScriptHashWitness(witness) =>
+     )(using hwk: HasWitnessKind[A]): BuilderM[Unit] = {
+
+       val wrongCredErr = TxBuildError.WrongCredentialType(action, hwk.witnessKind, cred)
+
+        val result: BuilderM[Unit] = witness match {
+            case PubKeyWitness =>
+                cred.keyHashOption match {
+                    case Some(_) => pure0(())
+                    case None => liftF0(Left(wrongCredErr))
+                }
+
+            case witness: NativeScriptWitness =>
                 for {
                     scriptHash <- cred.scriptHashOption match {
-                        case Some(hash) =>
-                            StateT
-                                .pure[[X] =>> Either[TxBuildError, X], Context, ScriptHash](
-                                  hash
-                                )
-                        case None =>
-                            StateT.liftF[[X] =>> Either[
-                              TxBuildError,
-                              X
-                            ], Context, ScriptHash](
-                              Left(wrongCredErr)
-                            )
+                        case Some(hash) => pure0(hash)
+                        case None => liftF0(Left(wrongCredErr))
                     }
-                    _ <- assertScriptHashMatchesWitness(scriptHash, witness.scriptWitness)
+                    _ <- assertScriptHashMatchesSource(scriptHash, witness.scriptSource)
                 } yield ()
-            case ExpectedWitnessType.PubKeyHashWitness() =>
-                cred.keyHashOption match {
-                    case Some(_) =>
-                        pure0(())
-                    case None =>
-                        StateT.liftF[[X] =>> Either[TxBuildError, X], Context, Unit](
-                          Left(wrongCredErr)
-                        )
-                }
+
+            case witness: TwoArgumentPlutusScriptWitness =>
+                for {
+                    scriptHash <- cred.scriptHashOption match {
+                        case Some(hash) => pure0(hash)
+                        case None => liftF0(Left(wrongCredErr))
+                    }
+                    _ <- assertScriptHashMatchesSource(scriptHash, witness.scriptSource)
+                } yield ()
         }
+        result
     }
 
     /** Given a script hash, check the context to ensure that a script matching the given script
@@ -1287,20 +1312,23 @@ object TransactionBuilder:
 
     /** Assert that the given script hash either matches the script provided directly, or is
       * otherwise already attached to the transaction as a CIP-33 script or as a pre-existing
-      * witness
+      * witness.
       * @param neededScriptHash
       * @param scriptWitness
       * @return
       */
-    def assertScriptHashMatchesWitness(
+    def assertScriptHashMatchesSource(
         neededScriptHash: ScriptHash,
-        scriptWitness: ScriptSource[Script]
+        scriptWitness: ScriptSource[PlutusScript | Script.Native]
     ): BuilderM[Unit] =
         scriptWitness match {
-            // Direct script
-            case ScriptSource.ScriptValue(script, _) =>
+            case ScriptSource.NativeValue(script) =>
                 assertScriptHashMatchesScript(neededScriptHash, script)
-            case ScriptSource.AttachedScript(_) => assertAttachedScriptExists(neededScriptHash)
+
+            case ScriptSource.NativeAttached => ??? //assertAttachedScriptExists(neededScriptHash)
+            case ScriptSource.PlutusValue(script) =>
+                assertScriptHashMatchesScript(neededScriptHash, script)
+            case ScriptSource.PlutusAttached => ???
         }
 
     def assertScriptHashMatchesScript(
@@ -1343,7 +1371,7 @@ object TransactionBuilder:
                       Left(TxBuildError.WrongNetworkId(addr))
                     )
                 else pure0(())
-        } yield res
+        } yield ()
 
 // -------------------------------------------------------------------------
 // Errors
@@ -1382,8 +1410,7 @@ object TxBuildError {
 
     case class DatumIsMissing(utxo: TransactionUnspentOutput) extends TxBuildError {
         override def explain: String =
-            "`OutputWitness` is incompatible with the given output." +
-                s" The output does not contain a datum: $utxo"
+            "Given witness to spend an output requires a datum that is missing: $utxo"
     }
 
     case class IncorrectDatumHash(
@@ -1411,7 +1438,7 @@ object TxBuildError {
     }
 
     case class WrongOutputType(
-        expectedType: ExpectedWitnessType[WitnessForSpend],
+        expectedType: WitnessKind,
         utxo: TransactionUnspentOutput
     ) extends TxBuildError {
         override def explain: String =
@@ -1421,29 +1448,30 @@ object TxBuildError {
 
     case class WrongCredentialType(
         action: CredentialAction,
-        expectedType: ExpectedWitnessType[CredentialWitness],
+        expectedType: WitnessKind,
         cred: Credential
     ) extends TxBuildError {
         override def explain: String =
-            s"${action.explain} ($action) requires a ${expectedType.explain} witness: $cred"
+            s"${action.explain} ($action) requires a ${expectedType} witness: $cred"
     }
 
+    // TODO: no reason to have TransactionUnspentOutput here
     case class DatumWitnessNotProvided(utxo: TransactionUnspentOutput) extends TxBuildError {
         override def explain: String =
-            "The UTxO you are trying to spend contains a datum hash. " +
-                s"A matching `DatumWitness` is required. Use `getDatumByHash`. UTxO: $utxo"
+            "The output you are trying to spend contains a datum hash, you need to provide " +
+                s"a `DatumValue`, output: $utxo"
     }
 
-    case class UnneededDatumWitness(utxo: TransactionUnspentOutput, witness: DatumWitness)
+    case class DatumValueForUtxoWithInlineDatum(utxo: TransactionUnspentOutput, datum: Datum)
         extends TxBuildError {
-        override def explain: String = "You've provided an optional `DatumWitness`," +
-            " but the output you are spending already contains an inline datum (not just a datum hash)." +
-            s" You should omit the provided datum witness. You provided: $witness for the UTxO: $utxo"
+        override def explain: String =
+            "You can't provide datum value for a utxo with inlined datum: " +
+                s"You tried to provide: $datum for the UTxO: $utxo"
     }
 
     case class UnneededDeregisterWitness(
         stakeCredential: StakeCredential,
-        witness: CredentialWitness
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ) extends TxBuildError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, " +
@@ -1452,7 +1480,7 @@ object TxBuildError {
                 s"credential: $stakeCredential. Provided witness: $witness"
     }
 
-    case class UnneededSpoVoteWitness(cred: Credential, witness: CredentialWitness)
+    case class UnneededSpoVoteWitness(cred: Credential, witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness)
         extends TxBuildError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, but the corresponding Voter is " +
@@ -1462,7 +1490,7 @@ object TxBuildError {
 
     case class UnneededProposalPolicyWitness(
         proposal: ProposalProcedure,
-        witness: CredentialWitness
+        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ) extends TxBuildError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, but the corresponding proposal" +

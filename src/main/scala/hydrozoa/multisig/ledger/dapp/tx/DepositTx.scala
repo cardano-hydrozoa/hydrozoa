@@ -1,25 +1,23 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.TransactionBuilderStep._
-import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.TransactionBuilderStep.*
+import hydrozoa.lib.tx.{TxBuildError, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError._
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
+import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
-
+import scalus.cardano.ledger.txbuilder.{TxBalancingError, BuilderContext, LowLevelTxBuilder}
 import cats.data.NonEmptyList
+import hydrozoa.lib.tx.PubKeyWitness
 
-import scala.util.{Failure, Success}
-
+import scala.util.{Success, Failure}
 import io.bullet.borer.Cbor
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
@@ -98,7 +96,7 @@ object DepositTx {
 
         val steps = Seq(
           // Deposit Output
-          Pay(
+          SendOutput(
             Babbage(
               address = recipe.headAddress,
               value = depositValue,
@@ -107,7 +105,7 @@ object DepositTx {
             )
           ),
           // Change Output
-          Pay(
+          SendOutput(
             Babbage(
               address = recipe.changeAddress,
               value = Value.zero,
@@ -115,12 +113,12 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
                 SpendOutput(
                   TransactionUnspentOutput(utxo._1, utxo._2),
-                  None
+                  PubKeyWitness
                 )
             )
 

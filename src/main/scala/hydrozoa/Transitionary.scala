@@ -569,4 +569,3 @@ def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
     }
 
 }
-

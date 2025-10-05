@@ -10,7 +10,14 @@ import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, build}
 import hydrozoa.lib.tx.TransactionBuilderStep._
 import hydrozoa.lib.tx.TxBuildError._
 import hydrozoa.lib.tx._
-import hydrozoa.{emptyTransaction, txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
+import hydrozoa.{
+    emptyTransaction,
+    txBodyL,
+    txInputsL,
+    txRedeemersL,
+    txReferenceInputsL,
+    txRequiredSignersL
+}
 
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -181,7 +188,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
                     spendPkhUtxoStep.utxo.output.address.keyHashOption.get.asInstanceOf[AddrKeyHash]
                   )
                 )
-            |> resolvedUtxosL.modify((r : ResolvedUtxos) => ResolvedUtxos( r.utxos + pkhUtxo.toTuple))
+            |> resolvedUtxosL.modify((r: ResolvedUtxos) => ResolvedUtxos(r.utxos + pkhUtxo.toTuple))
 
     // testBuilderSteps "PKH output" [ SpendOutput pkhUtxo Nothing ] $
     //      anyNetworkTx # _body <<< _inputs .~ [ input1 ]
@@ -282,7 +289,11 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
               .replace(redeemers(unitRedeemer(Spend, 0)))
           |> expectedSignersL.replace(psRefWitnessExpectedSigners)
           |> resolvedUtxosL
-              .replace(fromRight(ResolvedUtxos.empty.addUtxos(Seq(script1Utxo, utxoWithScript1ReferenceScript))))
+              .replace(
+                fromRight(
+                  ResolvedUtxos.empty.addUtxos(Seq(script1Utxo, utxoWithScript1ReferenceScript))
+                )
+              )
           |> ctxRedeemersL
               .replace(
                 List(unitDRedeemer(RedeemerPurpose.ForSpend(script1Utxo.input)))
@@ -321,7 +332,11 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
                     )
                   )
               |> resolvedUtxosL
-                  .replace(fromRight(ResolvedUtxos.empty.addUtxos(Seq(script1Utxo, utxoWithScript1ReferenceScript))))
+                  .replace(
+                    fromRight(
+                      ResolvedUtxos.empty.addUtxos(Seq(script1Utxo, utxoWithScript1ReferenceScript))
+                    )
+                  )
               |> ctxRedeemersL.replace(
                 List(unitDRedeemer(RedeemerPurpose.ForSpend(script1Utxo.input)))
               )
@@ -440,7 +455,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     //      anyNetworkTx # _body <<< _outputs .~ [ pkhOutput ]
     testBuilderSteps(
       label = "Pay #1",
-      steps = List(Pay(pkhOutput)),
+      steps = List(SendOutput(pkhOutput)),
       expected = Context.empty(Mainnet).toTuple
           |> transactionL
               .andThen(txBodyL.refocus(_.outputs))
@@ -528,7 +543,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
         assertEquals(
           obtained = built.toTuple |> resolvedUtxosL.get,
-            ResolvedUtxos(Map(script1Utxo.toTuple))
+          ResolvedUtxos(Map(script1Utxo.toTuple))
         )
 
         assertEquals(
@@ -546,7 +561,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
         assertEquals(
           obtained = built.toTuple |> resolvedUtxosL.get,
-            ResolvedUtxos(Map(pkhUtxo.toTuple))
+          ResolvedUtxos(Map(pkhUtxo.toTuple))
         )
 
         assertEquals(

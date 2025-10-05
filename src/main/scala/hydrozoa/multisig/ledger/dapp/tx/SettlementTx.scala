@@ -1,24 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.ScriptSource.ScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, Pay, SpendOutput}
-import hydrozoa.lib.tx._
+import hydrozoa.lib.tx.TransactionBuilderStep.{SpendOutput, ModifyAuxData, SendOutput}
+import hydrozoa.lib.tx.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo, RolloutUtxo}
 import hydrozoa.{addDummyVKeys, removeDummyVKeys}
-
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
-import scalus.cardano.ledger.txbuilder._
-
-import cats.implicits._
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.txbuilder.*
+import cats.implicits.*
+import hydrozoa.lib.tx.ScriptSource.NativeValue
 
 import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
@@ -83,20 +81,17 @@ object SettlementTx {
                     utxo._1,
                     utxo._2
                   ),
-                  witness = Some(
-                    WitnessForSpend.NativeScriptOutput(
-                      ScriptValue(
-                        recipe.headNativeScript.script,
-                        recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
-                            .map(ExpectedSigner(_))
-                      )
+                  witness = NativeScriptWitness(
+                      NativeValue(recipe.headNativeScript.script),
+                      recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
+                          .map(ExpectedSigner(_))
+                      
                     )
                   )
                 )
-            )
                 ++ Seq(
                   // Treasury Output
-                  Pay(
+                  SendOutput(
                     Babbage(
                       address = headAddress,
                       value = treasuryValue,
@@ -107,7 +102,7 @@ object SettlementTx {
                   ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
                 ) ++ {
                     if recipe.utxosWithdrawn.isEmpty then Seq.empty
-                    else Seq(Pay(Babbage(address = headAddress, value = withdrawnValue)))
+                    else Seq(SendOutput(Babbage(address = headAddress, value = withdrawnValue)))
                 }
 
         for {
