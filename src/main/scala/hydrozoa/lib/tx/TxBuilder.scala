@@ -1,7 +1,7 @@
 package hydrozoa.lib.tx
 
 /** This module contains declarative transaction building types and utilities ported from
-  * purescript-cardano-transaction-builder with some modifications and additions.
+  * purescript-cardano-transaction-builder with significant modifications and additions.
   *   - The main entry-point: [[TransactionBuilder.build]]
   *   - The definition of steps: [[TransactionBuilderStep]]
   */
@@ -548,22 +548,7 @@ object TransactionBuilder:
 
     private def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match {
 
-        case step @ TransactionBuilderStep.Spend(utxo, witness) =>
-            for {
-                _ <- assertNetworkId(utxo.output.address)
-                _ <- modify0(
-                  // Add Input
-                  unsafeCtxBodyL
-                      .refocus(_.inputs)
-                      .modify(inputs =>
-                          TaggedOrderedSet.from(appendDistinct(utxo.input, inputs.toSeq))
-                      )
-                )
-                // Add to resolvedUtxos
-                _ <- Context.addResolvedUtxo(utxo)
-                // Handle to witness
-                _ <- useSpendingWitness(witness, utxo)
-            } yield ()
+        case spend: TransactionBuilderStep.Spend => useSpend(spend)
 
         case TransactionBuilderStep.Send(output) =>
             for {
@@ -667,109 +652,105 @@ object TransactionBuilder:
     }
 
     // -------------------------------------------------------------------------
-    // SpendOutput step
+    // Spend step
     // -------------------------------------------------------------------------
 
     /** Tries to modify the transaction to make it consume a given output and add the requisite
-      * signature(s) to the Context's _.expectedSigners. Uses an [[WitnessForSpend]] to try to
-      * satisfy spending requirements.
+      * signature(s) to the Context's _.expectedSigners. Uses witness to try to satisfy spending
+      * requirements.
       */
-    def useSpendingWitness(
-        witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness,
-        utxo: TransactionUnspentOutput
-    ): BuilderM[Unit] =
-        witness match {
-            // Case 1: Key-locked input
-            // Add the pubkey hash to ctx.expectedSigners
-            case _: PubKeyWitness.type => {
-                // val pkhw = ExpectedWitnessType.PubKeyHashWitness[PubKeyWitness.type]()
-                for {
-                    // Extract the key hash, erroring if not a Shelley PKH address
-                    keyHash <- liftF0(utxo.output.address match {
-                        case sa: ShelleyAddress =>
-                            sa.payment match {
-                                case kh: ShelleyPaymentPart.Key => Right(kh.hash)
-                                case _: ShelleyPaymentPart.Script =>
-                                    Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
-                            }
-                        case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
-                    })
-                    // Add the Key hash to expectedSigners
-                    _ <- modify0(
-                      Focus[Context](_.expectedSigners)
-                          .modify(_ + ExpectedSigner(keyHash))
-                    )
-                } yield ()
+    private def useSpend(
+        spend: TransactionBuilderStep.Spend
+    ): BuilderM[Unit] = {
+
+        val utxo = spend.utxo
+        val witness = spend.witness
+        
+        // Extract the key hash, erroring if not a Shelley PKH address
+        def getPaymentVerificationKeyHash(address: Address): BuilderM[AddrKeyHash] =
+            liftF0(address match {
+                case sa: ShelleyAddress =>
+                    sa.payment match {
+                        case kh: ShelleyPaymentPart.Key => Right(kh.hash)
+                        case _: ShelleyPaymentPart.Script =>
+                            Left(
+                                TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
+                            )
+                    }
+                case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
+                }
+            )
+
+        def getPaymentScriptHash(address: Address): BuilderM[ScriptHash] =
+            liftF0(address match {
+                case sa: ShelleyAddress =>
+                    sa.payment match {
+                        case s: ShelleyPaymentPart.Script => Right(s.hash)
+                        case _: ShelleyPaymentPart.Key =>
+                            Left(
+                                TxBuildError
+                                    .WrongOutputType(WitnessKind.ScriptBased, utxo)
+                            )
+
+                    }
+                case _ =>
+                    Left(TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo))
+            })
+
+        for {
+            _ <- assertNetworkId(utxo.output.address)
+            // Add input
+            _ <- modify0(
+              unsafeCtxBodyL
+                  .refocus(_.inputs)
+                  .modify(inputs => TaggedOrderedSet.from(appendDistinct(utxo.input, inputs.toSeq)))
+            )
+            // Add utxo to resolvedUtxos
+            _ <- Context.addResolvedUtxo(utxo)
+            // Handle the witness
+            _ <- witness match {
+                // Case 1: Key-locked input
+                case _: PubKeyWitness.type =>
+                    for {
+                        // Extract the key hash, erroring if not a Shelley PKH address
+                        keyHash <- getPaymentVerificationKeyHash(utxo.output.address)
+                        _ <- usePubKeyWitness(ExpectedSigner(keyHash))
+                    } yield ()
+                // Case 2: Native script-locked input
+                // Ensure the hash matches the witness, handle the output components,
+                // defer to witness handling
+                case native: NativeScriptWitness =>
+                    for {
+                        scriptHash <- getPaymentScriptHash(utxo.output.address)
+                        _ <- assertScriptHashMatchesSource(scriptHash, native.scriptSource)
+                        _ <- useNativeScript(native.scriptSource, native.additionalSigners)
+                    } yield ()
+
+                // Case 3: Plutus script-locked input
+                // Ensure the hash matches the witness, handle the output components,
+                // defer to witness handling
+                case plutus: ThreeArgumentPlutusScriptWitness =>
+                    for {
+                        scriptHash <- getPaymentScriptHash(utxo.output.address)
+                        _ <- assertScriptHashMatchesSource(scriptHash, plutus.scriptSource)
+                        _ <- usePlutusScript(plutus.scriptSource,plutus.additionalSigners)
+
+                        detachedRedeemer = DetachedRedeemer(
+                          plutus.redeemer,
+                          RedeemerPurpose.ForSpend(utxo.input)
+                        )
+                        _ <- modify0(ctx =>
+                            ctx.focus(_.redeemers)
+                                .modify(r => appendDistinct(detachedRedeemer, r))
+                        )
+                        _ <- useDatum(utxo, plutus.datum)
+                    } yield ()
             }
-            // Case 2: Native script-locked input
-            // Ensure the hash matches the witness, handle the output components, defer to witness handling
-            case nativeScriptWitness: NativeScriptWitness => {
-                // val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
-                for {
-                    // Extract the script hash, throwing an error on anything but a Shelley Script Addrress
-                    scriptHash <- liftF0(utxo.output.address match {
-                        case sa: ShelleyAddress =>
-                            sa.payment match {
-                                case s: ShelleyPaymentPart.Script => Right(s.hash)
-                                case _: ShelleyPaymentPart.Key =>
-                                    Left(
-                                      TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo)
-                                    )
+        } yield ()
+    }
 
-                            }
-                        case _ => Left(TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo))
-                    })
-
-                    _ <- assertScriptHashMatchesSource(scriptHash, nativeScriptWitness.scriptSource)
-
-                    _ <- useNativeScript(
-                      nativeScriptWitness.scriptSource,
-                      nativeScriptWitness.additionalSigners
-                    )
-                } yield ()
-            }
-
-            // Case 3: Plutus script-locked input
-            // Ensure the hash matches the witness, handle the output components, defer to witness handling
-            case plutusWitness: ThreeArgumentPlutusScriptWitness => {
-                // val shw = ExpectedWitnessType.ScriptHashWitness[WitnessForSpend](outputWitness)
-                for {
-                    // TODO: Factor out
-                    // Extract the script hash, throwing an error on anything but a Shelley Script Addrress
-                    scriptHash <- liftF0(utxo.output.address match {
-                        case sa: ShelleyAddress =>
-                            sa.payment match {
-                                case s: ShelleyPaymentPart.Script => Right(s.hash)
-                                case _: ShelleyPaymentPart.Key =>
-                                    Left(
-                                      TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo)
-                                    )
-
-                            }
-                        case _ => Left(TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo))
-                    })
-
-                    _ <- assertScriptHashMatchesSource(scriptHash, plutusWitness.scriptSource)
-
-                    _ <- usePlutusScript(
-                      plutusWitness.scriptSource,
-                      plutusWitness.additionalSigners
-                    )
-
-                    detachedRedeemer = DetachedRedeemer(
-                      plutusWitness.redeemer,
-                      RedeemerPurpose.ForSpend(utxo.input)
-                    )
-                    _ <- modify0(ctx =>
-                        ctx.focus(_.redeemers)
-                            .modify(r => appendDistinct(detachedRedeemer, r))
-                    )
-                    _ <- useDatum(utxo, plutusWitness.datum)
-                } yield ()
-            }
-        }
-
-    def useDatum(
+    private def useDatum(
+        // TODO: this is used for errors only, I think utxoId should be sufficient
         utxo: TransactionUnspentOutput,
         datum: Datum
     ): BuilderM[Unit] =
@@ -1091,10 +1072,7 @@ object TransactionBuilder:
                         // Add key hash to expected signers
                         _ <- cred match {
                             case Credential.KeyHash(keyHash) =>
-                                modify0(
-                                  Focus[Context](_.expectedSigners)
-                                      .modify(_ + ExpectedSigner(keyHash))
-                                )
+                                usePubKeyWitness(ExpectedSigner(keyHash))
                             case _ =>
                                 liftF0(
                                   Left(
@@ -1268,6 +1246,10 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
     // ScriptSource
     // -------------------------------------------------------------------------
+
+    def usePubKeyWitness(expectedSigner: ExpectedSigner): BuilderM[Unit] =
+        modify0(Focus[Context](_.expectedSigners).modify(_ + expectedSigner))
+
 
     def useNativeScript(
         nativeScript: ScriptSource[Script.Native],
