@@ -58,7 +58,12 @@ object TransactionBuilderStep {
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
     case class Send(output: TransactionOutput) extends TransactionBuilderStep
 
-    /** Mint/burn tokens using a native/plutus script. Additive - sum monoid over amount. */
+    /** Mint/burn tokens using a native/plutus script. Additive - sum monoid over amount.
+      *
+      * WARNING: If you do a reciprocal pair of mint/burn of the same amount (i.e., Mint 4, Mint
+      * -4), you will nullify the mint amount, but the additionalSigners/requiredSigners/witnesses
+      * will not be removed.
+      */
     case class Mint(
         scriptHash: ScriptHash,
         assetName: AssetName,
@@ -261,16 +266,16 @@ object TransactionBuilder:
 
     object HasWitnessKind:
         given HasWitnessKind[PubKeyWitness.type] with
-            override def witnessKind = WitnessKind.KeyBased
+            override def witnessKind: WitnessKind = WitnessKind.KeyBased
 
         given HasWitnessKind[NativeScriptWitness] with
-            override def witnessKind = WitnessKind.ScriptBased
+            override def witnessKind: WitnessKind = WitnessKind.ScriptBased
 
         given HasWitnessKind[TwoArgumentPlutusScriptWitness] with
-            override def witnessKind = WitnessKind.ScriptBased
+            override def witnessKind: WitnessKind = WitnessKind.ScriptBased
 
         given HasWitnessKind[ThreeArgumentPlutusScriptWitness] with
-            override def witnessKind = WitnessKind.ScriptBased
+            override def witnessKind: WitnessKind = WitnessKind.ScriptBased
 
     /** A wrapper around a UTxO set that prevents adding conflicting pairs */
     case class ResolvedUtxos private (utxos: UTxO) {
@@ -665,7 +670,7 @@ object TransactionBuilder:
 
         val utxo = spend.utxo
         val witness = spend.witness
-        
+
         // Extract the key hash, erroring if not a Shelley PKH address
         def getPaymentVerificationKeyHash(address: Address): BuilderM[AddrKeyHash] =
             liftF0(address match {
@@ -674,12 +679,11 @@ object TransactionBuilder:
                         case kh: ShelleyPaymentPart.Key => Right(kh.hash)
                         case _: ShelleyPaymentPart.Script =>
                             Left(
-                                TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
+                              TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
                             )
                     }
                 case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
-                }
-            )
+            })
 
         def getPaymentScriptHash(address: Address): BuilderM[ScriptHash] =
             liftF0(address match {
@@ -688,8 +692,8 @@ object TransactionBuilder:
                         case s: ShelleyPaymentPart.Script => Right(s.hash)
                         case _: ShelleyPaymentPart.Key =>
                             Left(
-                                TxBuildError
-                                    .WrongOutputType(WitnessKind.ScriptBased, utxo)
+                              TxBuildError
+                                  .WrongOutputType(WitnessKind.ScriptBased, utxo)
                             )
 
                     }
@@ -733,7 +737,7 @@ object TransactionBuilder:
                     for {
                         scriptHash <- getPaymentScriptHash(utxo.output.address)
                         _ <- assertScriptHashMatchesSource(scriptHash, plutus.scriptSource)
-                        _ <- usePlutusScript(plutus.scriptSource,plutus.additionalSigners)
+                        _ <- usePlutusScript(plutus.scriptSource, plutus.additionalSigners)
 
                         detachedRedeemer = DetachedRedeemer(
                           plutus.redeemer,
@@ -845,9 +849,13 @@ object TransactionBuilder:
                       Left(TxBuildError.CollateralWithTokens(utxo))
                     )
                 else pure0(())
-            addr = utxo.output.address
-            _ <- addr.keyHashOption.match {
-                case Some(_: AddrKeyHash) => pure0(())
+            addr : ShelleyAddress <- utxo.output.address match {
+                case sa: ShelleyAddress  => pure0(sa)
+                case by: ByronAddress    => liftF0(Left(ByronAddressesNotSupported(by)))
+                case stake: StakeAddress => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
+            }
+            _ <- addr.payment match {
+                case ShelleyPaymentPart.Key(_: AddrKeyHash) => pure0(())
                 case _                    => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
             }
         } yield ()
@@ -1182,14 +1190,16 @@ object TransactionBuilder:
       * otherwise already attached to the transaction as a CIP-33 script or as a pre-existing
       * witness.
       * @param neededScriptHash
-      * @param scriptWitness
+      *   The script hash we are expecting to find
+      * @param scriptSource
+      *   Where we should look for the script
       * @return
       */
-    def assertScriptHashMatchesSource(
+    private def assertScriptHashMatchesSource(
         neededScriptHash: ScriptHash,
-        scriptWitness: ScriptSource[PlutusScript | Script.Native]
+        scriptSource: ScriptSource[PlutusScript | Script.Native]
     ): BuilderM[Unit] =
-        scriptWitness match {
+        scriptSource match {
             case ScriptSource.NativeScriptValue(script) =>
                 assertScriptHashMatchesScript(neededScriptHash, script)
             case ScriptSource.NativeScriptAttached =>
@@ -1199,7 +1209,7 @@ object TransactionBuilder:
             case ScriptSource.PlutusScriptAttached => assertAttachedScriptExists(neededScriptHash)
         }
 
-    def assertScriptHashMatchesScript(
+    private def assertScriptHashMatchesScript(
         scriptHash: ScriptHash,
         script: Script
     ): BuilderM[Unit] = {
@@ -1220,7 +1230,7 @@ object TransactionBuilder:
     /** Given a script hash, check the context to ensure that a script matching the given script
       * hash is attached to the transaction either as a CIP-33 ref script or in the witness set
       */
-    def assertAttachedScriptExists(scriptHash: ScriptHash): BuilderM[Unit] =
+    private def assertAttachedScriptExists(scriptHash: ScriptHash): BuilderM[Unit] =
         for {
             ctx <- get0
             resolvedScripts <- liftF0(
@@ -1247,11 +1257,10 @@ object TransactionBuilder:
     // ScriptSource
     // -------------------------------------------------------------------------
 
-    def usePubKeyWitness(expectedSigner: ExpectedSigner): BuilderM[Unit] =
+    private def usePubKeyWitness(expectedSigner: ExpectedSigner): BuilderM[Unit] =
         modify0(Focus[Context](_.expectedSigners).modify(_ + expectedSigner))
 
-
-    def useNativeScript(
+    private def useNativeScript(
         nativeScript: ScriptSource[Script.Native],
         additionalSigners: Set[ExpectedSigner]
     ): BuilderM[Unit] =
@@ -1274,7 +1283,7 @@ object TransactionBuilder:
             }
         } yield ()
 
-    def usePlutusScript(
+    private def usePlutusScript(
         plutusScript: ScriptSource[PlutusScript],
         additionalSigners: Set[ExpectedSigner]
     ): BuilderM[Unit] =
@@ -1299,19 +1308,19 @@ object TransactionBuilder:
                 case ScriptSource.PlutusScriptValue(ps: PlutusScript) =>
                     // Add the script value to the appropriate field
                     ps match {
-                        case (v1: Script.PlutusV1) =>
+                        case v1: Script.PlutusV1 =>
                             modify0(
                               unsafeCtxWitnessL
                                   .refocus(_.plutusV1Scripts)
                                   .modify(s => Set.from(appendDistinct(v1, s.toSeq)))
                             )
-                        case (v2: Script.PlutusV2) =>
+                        case v2: Script.PlutusV2 =>
                             modify0(
                               unsafeCtxWitnessL
                                   .refocus(_.plutusV2Scripts)
                                   .modify(s => Set.from(appendDistinct(v2, s.toSeq)))
                             )
-                        case (v3: Script.PlutusV3) =>
+                        case v3: Script.PlutusV3 =>
                             modify0(
                               unsafeCtxWitnessL
                                   .refocus(_.plutusV3Scripts)
@@ -1329,7 +1338,7 @@ object TransactionBuilder:
 
     /** Ensure that the network id of the address matches the network id of the builder context.
       */
-    def assertNetworkId(addr: Address): BuilderM[Unit] =
+    private def assertNetworkId(addr: Address): BuilderM[Unit] =
         for {
             context: Context <- get0
             addrNetwork <- addr.getNetwork match
@@ -1426,9 +1435,9 @@ object TxBuildError {
         cred: Credential
     ) extends TxBuildError {
         override def explain: String =
-            s"${action.explain} ($action) requires a ${expectedType} witness: $cred"
+            s"${action.explain} ($action) requires a $expectedType witness: $cred"
     }
-    
+
     case class DatumWitnessNotProvided(utxo: TransactionUnspentOutput) extends TxBuildError {
         override def explain: String =
             "The output you are trying to spend contains a datum hash, you need to provide " +
