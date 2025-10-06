@@ -494,6 +494,59 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           )
     )
 
+    val mintSigners = Set(ExpectedSigner(genAddrKeyHash.sample.get))
+    // Mint the given amount of tokens from script 1
+    def mintScript1(amount: Long): Mint =
+        Mint(
+          scriptHash = scriptHash1,
+          assetName = AssetName.empty,
+          amount = amount,
+          witness = TwoArgumentPlutusScriptWitness(
+            scriptSource = PlutusScriptValue(script1),
+            redeemer = Data.List(List.empty),
+            additionalSigners = mintSigners
+          )
+        )
+
+    testBuilderSteps(
+      label = "Mint 0 directly",
+      steps = List(mintScript1(0)),
+      expected = Context.empty(Mainnet).toTuple
+    )
+
+    testBuilderSteps(
+      label = "Mint 0 via reciprocal mint/burn",
+      steps = List(mintScript1(5), mintScript1(-5)),
+      expected = Context.empty(Mainnet).toTuple
+    )
+
+    testBuilderSteps(
+      label = "Mint/burn monoid",
+      steps = List(mintScript1(1), mintScript1(1), mintScript1(-5)),
+      expected = Context.empty(Mainnet).toTuple
+          |> (transactionL >>> txBodyL.refocus(_.mint))
+              .replace(Some(TxBodyMint(MultiAsset.from((scriptHash1, AssetName.empty, -3L)))))
+          |> transactionL.refocus(_.witnessSet.plutusV1Scripts).modify(_ + script1)
+          |> (transactionL >>> txBodyL
+              .refocus(_.requiredSigners))
+              .replace(TaggedOrderedSet.from(mintSigners.map(_.hash)))
+          |> expectedSignersL.replace(mintSigners)
+          |> transactionL
+              .refocus(_.witnessSet.redeemers)
+              .replace(
+                Some(KeepRaw(
+                  Redeemers(
+                    Redeemer(
+                      tag = RedeemerTag.Mint,
+                      index = 0,
+                      data = Data.List(List.empty),
+                      exUnits = ExUnits.zero
+                    ))
+                  )
+                )
+              )
+    )
+
     // ================================================================
     // Subgroup: reference utxos
     // ================================================================
