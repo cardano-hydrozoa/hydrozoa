@@ -1,10 +1,18 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend}
+import hydrozoa.lib.tx.TransactionBuilderStep.{
+    AddCollateral,
+    Fee,
+    ReferenceOutput,
+    Send,
+    Spend,
+    ValidityEndSlot
+}
 import hydrozoa.lib.tx.{
     ExpectedSigner,
     ScriptSource,
@@ -44,13 +52,12 @@ final case class VoteTx(
 object VoteTx {
 
     case class Recipe(
-        voteUtxo: OwnVoteUtxo, // The vote UTXO to spend
-        // TODO: use rule-based treasury utxo
-        treasuryUtxo: RuleBasedTreasuryUtxo, // Treasury UTXO for reference
+        voteUtxo: OwnVoteUtxo,
+        treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
         signatures: List[Ed25519Signature],
-        ttl: Long,
+        validityEndSlot: Long,
         context: BuilderContext
     )
 
@@ -119,7 +126,6 @@ object VoteTx {
 
         // Build the transaction
         for {
-
             context <- TransactionBuilder
                 .build(
                   Mainnet,
@@ -129,8 +135,9 @@ object VoteTx {
                     Spend(
                       TransactionUnspentOutput(voteInput, voteOutput),
                       ThreeArgumentPlutusScriptWitness(
-                        // TODO: use a reference utxo? Rule-based regime scripts will be deployed as reference script,
-                        //  though nodes don't necessarily need to resolve those utxos, they may reconstruct them based manually.
+                        // TODO: use a reference utxo
+                        //  Rule-based regime scripts will be deployed as reference script with well-known coordinates.
+                        //  So in practice we don't need to resolve them, we can just reconstruct them manually.
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         redeemer.toData,
                         DatumInlined,
@@ -152,20 +159,15 @@ object VoteTx {
                         recipe.collateralUtxo.input,
                         recipe.collateralUtxo.output
                       )
-                    )
+                    ),
+                    Fee(Coin(1_000_000)),
+                    ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
                 .left
                 .map(SomeBuilderError(_))
 
-            // TODO: now we have no way of aceessing the tx, which is not what we want
-            // unbalancedTx1 = unbalancedTx
-            //    // set TTL
-            //    .focus(_.body.value.ttl)
-            //    .replace(Some(recipe.ttl))
-            //    // TODO: remove - fake coins
-            //    .focus(_.body.value.fee)
-            //    .replace(Coin(100000))
+            _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 
             finalized <- context
                 .finalizeContext(

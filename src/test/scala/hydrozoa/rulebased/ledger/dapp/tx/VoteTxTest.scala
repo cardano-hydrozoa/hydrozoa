@@ -78,9 +78,9 @@ def genTreasuryUnresolvedDatum(
 ): Gen[UnresolvedDatum] =
     for {
         deadlineVoting <- Gen
-            .choose(600, 1800)
+            .choose(600_000, 1800_000)
             .map(BigInt(_))
-            .map(_.abs + Instant.now().getEpochSecond())
+            .map(System.currentTimeMillis() + _.abs)
         setup = TrustedSetup
             .takeSrsG2(10)
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
@@ -170,7 +170,7 @@ def genVoteUtxo(
 def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
     for {
         blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
-        timeCreation <- Gen.choose(1750000000L, 1760000000L).map(BigInt(_))
+        timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
         versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
         commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
     } yield OnchainBlockHeader(
@@ -270,7 +270,7 @@ def genVoteTxRecipe(
       blockHeader = blockHeader,
       signatures = signatures,
       // TODO: now sure how to do that properly
-      ttl = 666,
+      validityEndSlot = 200,
       context = context
     )
 
@@ -289,10 +289,11 @@ class VoteTxTest extends munit.ScalaCheckSuite {
     property("Vote tx builds")(
       Prop.forAll(genVoteTxRecipe()) { recipe =>
           VoteTx.build(recipe) match {
-              case Left(e) => throw RuntimeException(s"Build failed $e")
+              case Left(e) =>
+                  throw RuntimeException(s"Build failed $e")
               case Right(tx) =>
+                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
                   ()
-              // println(HexUtil.encodeHexString(tx.tx.toCbor))
           }
       }
     )

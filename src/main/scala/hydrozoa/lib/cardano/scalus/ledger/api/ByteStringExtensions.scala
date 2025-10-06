@@ -1,7 +1,7 @@
 package hydrozoa.lib.cardano.scalus.ledger.api
 
-import scalus._
-import scalus.builtin.Builtins._
+import scalus.*
+import scalus.builtin.Builtins.*
 import scalus.builtin.{Builtins, ByteString}
 
 @Compile

@@ -1,17 +1,14 @@
 package hydrozoa.multisig.protocol
 
+import cats.effect.{Deferred, IO}
+import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
-
-import com.suprnation.actor.ActorRef.ActorRef
-
-import cats.effect.{Deferred, IO}
-import cats.syntax.all._
-
 import scala.concurrent.duration.FiniteDuration
 
 object LedgerProtocol {

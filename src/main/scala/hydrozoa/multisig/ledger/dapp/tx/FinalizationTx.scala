@@ -1,18 +1,16 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa._
+import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata => MD}
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger._
-import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
-
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,

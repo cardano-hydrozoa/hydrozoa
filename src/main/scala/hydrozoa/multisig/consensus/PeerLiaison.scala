@@ -1,15 +1,12 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison._
-import hydrozoa.multisig.protocol.ConsensusProtocol._
-import hydrozoa.multisig.protocol.PersistenceProtocol._
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
-
-import com.suprnation.actor.Actor.{Actor, Receive}
-
 import cats.effect.{Deferred, IO, Ref}
-import cats.implicits._
-
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
 

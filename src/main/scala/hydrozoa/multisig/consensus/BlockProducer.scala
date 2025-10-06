@@ -1,14 +1,12 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer._
-import hydrozoa.multisig.protocol.ConsensusProtocol._
-import hydrozoa.multisig.protocol.PersistenceProtocol._
-import hydrozoa.multisig.protocol.types.{AckBlock, Block, Peer}
-
-import com.suprnation.actor.Actor.{Actor, Receive}
-
 import cats.effect.{Deferred, IO, Ref}
-import cats.implicits._
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.types.{AckBlock, Block, Peer}
 
 import BlockProducer.{Config, ConnectionsPending}
 
