@@ -186,10 +186,10 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
       expected = pubKeyInput1Expected
     )
 
-    testBuilderSteps(
-      label = "PKH output x2 -> 1",
+    testBuilderStepsFail(
+      label = "PKH output x2",
       steps = List(Spend(pkhUtxo, PubKeyWitness), Spend(pkhUtxo, PubKeyWitness)),
-      expected = pubKeyInput1Expected
+      error = TxBuildError.InputAlreadyExists(pkhUtxo.input)
     )
 
     testBuilderStepsFail(
@@ -508,10 +508,10 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           )
         )
 
-    testBuilderSteps(
+    testBuilderStepsFail(
       label = "Mint 0 directly",
       steps = List(mintScript1(0)),
-      expected = Context.empty(Mainnet).toTuple
+      error = TxBuildError.CannotMintZero(scriptHash1, AssetName.empty)
     )
 
     testBuilderSteps(
@@ -534,17 +534,22 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           |> transactionL
               .refocus(_.witnessSet.redeemers)
               .replace(
-                Some(KeepRaw(
-                  Redeemers(
-                    Redeemer(
-                      tag = RedeemerTag.Mint,
-                      index = 0,
-                      data = Data.List(List.empty),
-                      exUnits = ExUnits.zero
-                    ))
+                Some(
+                  KeepRaw(
+                    Redeemers(
+                      Redeemer(
+                        tag = RedeemerTag.Mint,
+                        index = 0,
+                        data = Data.List(List.empty),
+                        exUnits = ExUnits.zero
+                      )
+                    )
                   )
                 )
               )
+          |> ctxRedeemersL.replace(
+            List(DetachedRedeemer(datum = Data.List(List.empty), purpose = ForMint(scriptHash1)))
+          )
     )
 
     // ================================================================

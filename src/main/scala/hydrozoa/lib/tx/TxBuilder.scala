@@ -45,9 +45,9 @@ sealed trait TransactionBuilderStep
   */
 object TransactionBuilderStep {
 
-    /** Spend any utxo. An attempt to spend the same utxo twice will error. If a reference script is
-      * used, the containing utxo should be added beforehand with [[ReferenceOutput]] or [[Spend]]
-      * steps.
+    /** Spend any utxo. An attempt to consume (reference or spend) the same utxo twice will error.
+      * If a reference script is used, the containing utxo should be added beforehand with
+      * [[ReferenceOutput]] or [[Spend]] steps.
       */
     case class Spend(
         utxo: TransactionUnspentOutput,
@@ -58,7 +58,11 @@ object TransactionBuilderStep {
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
     case class Send(output: TransactionOutput) extends TransactionBuilderStep
 
-    /** Mint/burn tokens using a native/plutus script. Additive - sum monoid over amount.
+    /** Mint/burn tokens using a native/plutus script. Additive - sum monoid over amount. You should
+      * determine your aggregate mint amount _outside_ of the builder. Chaining steps together to
+      * calculate the mint amount.
+      *
+      * WARNING: If you explicitly pass amount == 0, this will return a Left.
       *
       * WARNING: If you do a reciprocal pair of mint/burn of the same amount (i.e., Mint 4, Mint
       * -4), you will nullify the mint amount, but the additionalSigners/requiredSigners/witnesses
@@ -71,8 +75,8 @@ object TransactionBuilderStep {
         witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ) extends TransactionBuilderStep
 
-    /** Add a [[TransactionUnspentOutput]] as a CIP-31 reference input. Doesn't allow the same utxo
-      * being referenced several times.
+    /** Add a [[TransactionUnspentOutput]] as a CIP-31 reference input. Consuming the same UTxO
+      * twice (reference or spend) is an error
       *
       * The reason that action is represented as a step is that reference utxos should be added to
       * the context and also may be required to create a [[WitnessForSpend]].
@@ -538,7 +542,6 @@ object TransactionBuilder:
                   }
                 )
                 // Replace the transaction in the context, keeping the rest
-                // TODO: Keeping detached redeemers might not work as expected, add test
                 _ <- modify0(Focus[Context](_.transaction).replace(res))
             } yield ()
         }
@@ -572,6 +575,7 @@ object TransactionBuilder:
         case TransactionBuilderStep.ReferenceOutput(utxo) =>
             for {
                 _ <- assertNetworkId(utxo.output.address)
+                _ <- assertInputDoesNotAlreadyExist(utxo.input)
 
                 _ <- modify0(
                   // Add the referenced utxo id to the tx body
@@ -703,6 +707,8 @@ object TransactionBuilder:
 
         for {
             _ <- assertNetworkId(utxo.output.address)
+            _ <- assertInputDoesNotAlreadyExist(utxo.input)
+
             // Add input
             _ <- modify0(
               unsafeCtxBodyL
@@ -818,6 +824,10 @@ object TransactionBuilder:
         witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ): BuilderM[Unit] =
         for {
+            _ <-
+                if amount == 0
+                then liftF0(Left(TxBuildError.CannotMintZero(scriptHash, assetName)))
+                else pure0(())
             _ <- useNonSpendingWitness(
               Operation.Minting(scriptHash),
               Credential.ScriptHash(scriptHash),
@@ -827,11 +837,35 @@ object TransactionBuilder:
                 val currentMint = ctx |> unsafeCtxBodyL.refocus(_.mint).get
                 val thisMint = MultiAsset.asset(scriptHash, assetName, amount)
 
-                val newMint = currentMint match {
-                    case None           => Some(thisMint)
-                    case Some(existing) => Some(existing + thisMint)
+                val newMint : Option[Mint] = currentMint match {
+                    // We checked above that amount != 0, so this should be safe.
+                    case None => Some(Mint(thisMint))
+                    case Some(existing) => {
+                        val newOuterMap = existing.assets.updatedWith(scriptHash)({
+                            // If the script hash doesn't exist in the map, we add it.
+                            case None => Some(SortedMap(assetName -> amount))
+                            // If it does exist, we update the underlying map.
+                            case Some(assetMap) => {
+                                val newInnerMap = assetMap.updatedWith(assetName){
+                                    // If the assetName doesn't exist in the underlying map, we set it.
+                                    // If it does, we add the existing and new amounts together and
+                                    // check if they're zero. If they are, we delete the key
+                                    case None => Some(amount)
+                                    case Some(currentAmount) => {
+                                        val newVal = currentAmount + amount
+                                        if newVal == 0 then None else Some(newVal)
+                                    }
+                                }
+
+                                if newInnerMap.isEmpty then None else Some(newInnerMap)
+                            }
+                        })
+                        if newOuterMap.isEmpty
+                        then None
+                        else Some(Mint(MultiAsset.safe(newOuterMap)))
+                    }
                 }
-                ctx |> unsafeCtxBodyL.refocus(_.mint).replace(newMint.map(Mint.apply))
+                ctx |> unsafeCtxBodyL.refocus(_.mint).replace(newMint)
             })
         } yield ()
 
@@ -849,14 +883,14 @@ object TransactionBuilder:
                       Left(TxBuildError.CollateralWithTokens(utxo))
                     )
                 else pure0(())
-            addr : ShelleyAddress <- utxo.output.address match {
+            addr: ShelleyAddress <- utxo.output.address match {
                 case sa: ShelleyAddress  => pure0(sa)
                 case by: ByronAddress    => liftF0(Left(ByronAddressesNotSupported(by)))
                 case stake: StakeAddress => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
             }
             _ <- addr.payment match {
                 case ShelleyPaymentPart.Key(_: AddrKeyHash) => pure0(())
-                case _                    => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
+                case _ => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
             }
         } yield ()
 
@@ -1263,7 +1297,7 @@ object TransactionBuilder:
     private def useNativeScript(
         nativeScript: ScriptSource[Script.Native],
         additionalSigners: Set[ExpectedSigner]
-    ): BuilderM[Unit] =
+    ): BuilderM[Unit] = {
         for {
             // Regardless of how the witness is passed, add the additional signers
             _ <- modify0(
@@ -1281,6 +1315,18 @@ object TransactionBuilder:
                 // Script should already be attached, see [[assertAttachedScriptExists]]
                 case ScriptSource.NativeScriptAttached => pure0(())
             }
+        } yield ()
+    }
+
+    /** Returns Left if the input already exists in txBody.inputs or txBody.refInputs */
+    private def assertInputDoesNotAlreadyExist(input: TransactionInput): BuilderM[Unit] =
+        for {
+            state <- get0
+            _ <-
+                if (state.transaction.body.value.inputs.toSortedSet ++ state.transaction.body.value.referenceInputs.toSortedSet)
+                        .contains(input)
+                then liftF0(Left(TxBuildError.InputAlreadyExists(input)))
+                else pure0(())
         } yield ()
 
     private def usePlutusScript(
@@ -1366,6 +1412,21 @@ object TxBuildError {
     case class Unimplemented(description: String) extends TxBuildError {
         override def explain: String = s"$description is not yet implemented. If you need it, " +
             s"submit a request at $bugTrackerUrl."
+    }
+
+    // TODO: Remove this error and just use a nonzero type
+    case class CannotMintZero(scriptHash: ScriptHash, assetName: AssetName) extends TxBuildError {
+        override def explain: String =
+            s"You cannot pass a \"amount = zero\" to a mint step, but we recieved it for" +
+                s"(policyId, assetName) == ($scriptHash, $assetName)." +
+                s"\n You should not use the Mint step to calculate your mint amounts."
+    }
+
+    // TODO: more verbose error -- we'll need to pass more information from the assertion/step.
+    case class InputAlreadyExists(input: TransactionInput) extends TxBuildError {
+        override def explain: String =
+            s"The transaction input $input already exists in the transaction as " +
+                s"either an input or reference input."
     }
 
     case class ResolvedUtxosIncoherence(
@@ -1569,3 +1630,87 @@ object NetworkExtensions:
   */
 def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct
+
+//////////////////////////////////////////////////////////
+// Interface sketch
+
+// Notes:
+//
+// The reasons I wanted this trait is:
+//  - Uniform interface for building transactions
+//  - Make it clearer what things are common to all transactions, and what aren't.
+//
+//  What I don't like is that we can't _really_ separate into a
+//
+//  recipe
+//  --recipeToSteps--> steps
+//  --balance--> unbalanced tx
+//  --finalize--> finalized tx
+//  --augmentTx--> augmentedTx
+//
+//  pipeline in a particularly smooth way unless we allow each step of the pipeline to emit additional state -- or
+//  perhaps just
+//
+//      `recipeToSteps(recipe : Recipe) : (Seq[Steps], OtherStuff)`
+//  and
+//      `augmentTx(tx : Transaction, otherStuff : OtherStuff)`
+//
+//  would be enough for practical cases (how often do you need specific information from balancing, fees, or
+//  ledger rule validation for augmenting the Tx?). It could be an interesting exercise, but seems like future/intern
+//  work; we don't get much tangible benefit besides better structure and an explicit indication of what information
+//  the build process (implicitly) carries around.
+//
+//  An alternative could be to provide enough information in the metadata of _each_ transaction that
+//  we could always parse a raw `Transaction` into the augmented form. But in this case, we're still throwing
+//  away intermediate info that we could use, and we previously decided that not all "augmented transactions` need to
+//  be parseable.
+//
+//  Thus, I think we could _maybe_ define some utility functions for balancing/finalization using RecipeType,
+//  but that's probably about it.
+trait BuildableTx:
+    type TxType
+    type RecipeType <: BuilderRecipe
+    type ErrorType >: BuildError
+    def augmentTx(tx: Transaction): TxType
+    def recipeToSteps(recipe: RecipeType): Seq[TransactionBuilderStep]
+    final def build(recipe: RecipeType, diffHandler: DiffHandler): Either[ErrorType, TxType] =
+        for {
+            unbalanced <- TransactionBuilder
+                .build(recipe.network, recipeToSteps(recipe))
+                .left
+                .map(BuildError.StepError(_))
+            finalized <- unbalanced
+                .finalizeContext(
+                  protocolParams = recipe.protocolParams,
+                  diffHandler = diffHandler,
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
+                )
+                .left
+                .map({
+                    case balancingError: TxBalancingError =>
+                        BuildError.BalancingError(balancingError)
+                    case validationError: TransactionException =>
+                        BuildError.ValidationError(validationError)
+                })
+        } yield augmentTx(finalized.transaction)
+
+trait BuilderRecipe:
+    val network: Network
+    val protocolParams: ProtocolParams
+    val evaluator: PlutusScriptEvaluator
+    val validators: Seq[Validator]
+
+enum BuildError:
+    case StepError(e: TxBuildError)
+    case BalancingError(e: TxBalancingError)
+    case ValidationError(e: TransactionException)
+
+trait ParseableTx:
+    type ParseConfig
+    type ParseError
+    type TxType
+    def parse(
+        expectedConfiguration: ParseConfig,
+        txSerialized: Array[Byte]
+    ): Either[ParseError, TxType]
