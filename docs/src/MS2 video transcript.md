@@ -51,7 +51,7 @@ we have this refund transaction.
 It's a post-dated multi-sign transaction,
 multi-signed by all the peers, which spends the deposit UTXO from the head native script
 and sends back the funds to the user.
-cccordingly to the user's indicated refund address and the refund datum that the user requested to be set.
+accordingly to the user's indicated refund address and the refund datum that the user requested to be set.
 
 The next transaction type is settlement.
 The purpose of settlement is to absorb some deposits into the head's treasury
@@ -132,7 +132,7 @@ Because now that we've resolved what the latest block was
 and we know what the latest ledger state was,
 this is when we allow people to start withdrawing funds from the treasury.
 And note that withdrawal here is a single sign transaction,
-which means that the peers don't have to gather up all the other peers' signatures.
+which means that the peers don't have to gather all the other peers' signatures.
 
 In order to withdraw any funds from then on, you can withdraw
 simply by proving that the UTXOs you're trying to withdraw
@@ -144,10 +144,10 @@ This way the peers can progressively withdraw more and more UTXOs,
 and eventually they'll probably end up with an empty treasury
 and this means that all the UTXOs have been withdrawn.
 
-At that point threy can clean up the residuals of the head.
+At that point the peers can clean up the residuals of the head.
 The treasury UTXO can be spent, burning all of the beacon tokens and all the vote tokens.
 
-_These are basically all the bookkeeping internal protocol tokens of the Hydrazoa head._
+_These are basically all the bookkeeping internal protocol tokens of the Hydrozoa head._
 
 You'll burn them all to kind of clean up you know, your state on the Cardano ledger.
 And if there are any funds remaining in the treasury UTXO,
