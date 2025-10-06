@@ -1,31 +1,33 @@
-package hydrozoa.rulebased.ledger.l1.script.plutus
+package hydrozoa.rulebased.ledger.dapp.script.plutus
 
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Removed, Continuing}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Unresolved, Resolved}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
-import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, VoteDatum}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
+    Continuing,
+    Removed
+}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import scalus.*
-import scalus.builtin.Builtins.{serialiseData, blake2b_224, verifyEd25519Signature}
+import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
-import scalus.builtin.{ByteString, ToData, FromData, Data}
+import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.Network
+import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
-import scalus.prelude.Option.{Some, None}
-import scalus.prelude.{fail, require, Validator, !==, Option, ===, List, SortedMap, log}
+import scalus.prelude.Option.{None, Some}
+import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
-import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import com.bloxbean.cardano.client.util.HexUtil
-import scalus.cardano.ledger.Language
-import scalus.cardano.ledger.Script
+
+import VoteState.VoteDatum
+import VoteState.VoteStatus
 
 @Compile
 object DisputeResolutionValidator extends Validator {
@@ -153,7 +155,8 @@ object DisputeResolutionValidator extends Validator {
 
     // Utility to decide which vote is higher
     private def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{NoVote, Vote}
+        import VoteStatus.NoVote
+        import VoteStatus.Vote
         a match {
             case NoVote => b
             case Vote(ad) =>
@@ -232,7 +235,6 @@ object DisputeResolutionValidator extends Validator {
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
                 tx.validRange.to.boundType match {
-                    case Finite(toTime) =>
                     case Finite(toTime) =>
                         require(toTime <= treasuryDatum.deadlineVoting, VoteTimeValidityCheck)
                     case _ => fail(VoteTimeValidityCheck)
@@ -498,7 +500,6 @@ object DisputeResolutionScript {
     // Various encoding formats available natively in Scalus
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
-    private def compiledDoubleCborEncoded: Array[Byte] = compiledDeBruijnedProgram.doubleCborEncoded
 
     def compiledCbor = compiledDeBruijnedProgram.cborEncoded
 

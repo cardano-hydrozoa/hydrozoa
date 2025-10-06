@@ -1,4 +1,4 @@
-package hydrozoa.rulebased.ledger.l1.state
+package hydrozoa.rulebased.ledger.dapp.state
 
 import scalus.Compile
 import scalus.builtin.{ByteString, Data, FromData, ToData}

@@ -1,9 +1,9 @@
-package hydrozoa.rulebased.ledger.l1.dapp.utxo
+package hydrozoa.rulebased.ledger.dapp.utxo
 
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData, toData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage

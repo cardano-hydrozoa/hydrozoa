@@ -1,4 +1,4 @@
-package hydrozoa.rulebased.ledger.l1.script.plutus
+package hydrozoa.rulebased.ledger.dapp.script.plutus
 
 import munit.FunSuite
 import scalus.cardano.ledger.ScriptHash

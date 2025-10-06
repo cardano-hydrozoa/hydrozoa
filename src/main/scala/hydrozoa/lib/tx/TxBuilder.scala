@@ -674,12 +674,11 @@ object TransactionBuilder:
                         case kh: ShelleyPaymentPart.Key => Right(kh.hash)
                         case _: ShelleyPaymentPart.Script =>
                             Left(
-                                TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
+                              TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
                             )
                     }
                 case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
-                }
-            )
+            })
 
         def getPaymentScriptHash(address: Address): BuilderM[ScriptHash] =
             liftF0(address match {
@@ -688,8 +687,8 @@ object TransactionBuilder:
                         case s: ShelleyPaymentPart.Script => Right(s.hash)
                         case _: ShelleyPaymentPart.Key =>
                             Left(
-                                TxBuildError
-                                    .WrongOutputType(WitnessKind.ScriptBased, utxo)
+                              TxBuildError
+                                  .WrongOutputType(WitnessKind.ScriptBased, utxo)
                             )
 
                     }
@@ -733,7 +732,7 @@ object TransactionBuilder:
                     for {
                         scriptHash <- getPaymentScriptHash(utxo.output.address)
                         _ <- assertScriptHashMatchesSource(scriptHash, plutus.scriptSource)
-                        _ <- usePlutusScript(plutus.scriptSource,plutus.additionalSigners)
+                        _ <- usePlutusScript(plutus.scriptSource, plutus.additionalSigners)
 
                         detachedRedeemer = DetachedRedeemer(
                           plutus.redeemer,
@@ -1249,7 +1248,6 @@ object TransactionBuilder:
 
     def usePubKeyWitness(expectedSigner: ExpectedSigner): BuilderM[Unit] =
         modify0(Focus[Context](_.expectedSigners).modify(_ + expectedSigner))
-
 
     def useNativeScript(
         nativeScript: ScriptSource[Script.Native],

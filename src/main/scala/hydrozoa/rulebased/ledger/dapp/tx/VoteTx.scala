@@ -1,23 +1,29 @@
-package hydrozoa.rulebased.ledger.l1.tx
+package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.lib.tx.ScriptSource
-import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ExpectedSigner
-import hydrozoa.lib.tx.ThreeArgumentPlutusScriptWitness
-import hydrozoa.lib.tx.TransactionBuilderStep.{ReferenceOutput, AddCollateral, Spend, Send}
-import hydrozoa.lib.tx.{TxBuildError, TransactionBuilder, TransactionUnspentOutput}
-import hydrozoa.rulebased.ledger.l1.dapp.utxo.{OwnVoteUtxo, VoteUtxoCast}
-import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{VoteRedeemer, DisputeRedeemer, OnchainBlockHeader}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.NoVote
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, VoteDatum, VoteDetails}
-import monocle.syntax.all.*
-import scalus.builtin.Data.{toData, fromData}
+import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend}
+import hydrozoa.lib.tx.{
+    ExpectedSigner,
+    ScriptSource,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput,
+    TxBuildError
+}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
+    DisputeRedeemer,
+    OnchainBlockHeader,
+    VoteRedeemer
+}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
+import scala.util.{Failure, Success, Try}
+import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
@@ -26,9 +32,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.prelude.List as SList
-import scalus.serialization.cbor.Cbor as ScalusCbor
-
-import scala.util.{Try, Success, Failure}
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
 
 final case class VoteTx(
@@ -144,46 +147,54 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo)),
-                    AddCollateral(TransactionUnspentOutput(recipe.collateralUtxo.input, recipe.collateralUtxo.output))
+                    AddCollateral(
+                      TransactionUnspentOutput(
+                        recipe.collateralUtxo.input,
+                        recipe.collateralUtxo.output
+                      )
+                    )
                   )
                 )
                 .left
                 .map(SomeBuilderError(_))
 
             // TODO: now we have no way of aceessing the tx, which is not what we want
-            //unbalancedTx1 = unbalancedTx
+            // unbalancedTx1 = unbalancedTx
             //    // set TTL
             //    .focus(_.body.value.ttl)
             //    .replace(Some(recipe.ttl))
             //    // TODO: remove - fake coins
             //    .focus(_.body.value.fee)
             //    .replace(Coin(100000))
-            
-            finalized <-  context.finalizeContext(
-            protocolParams = recipe.context.protocolParams,
-            diffHandler = new ChangeOutputDiffHandler(recipe.context.protocolParams, 0).changeOutputDiffHandler,
-            evaluator = recipe.context.evaluator,
-            validators = recipe.context.validators
-            )
-            .left
-            .map({
-                case balanceError: TxBalancingError => SomeBalancingError(balanceError)
-                case validationError: TransactionException =>
-                    SomeTransactionException(validationError)
-            })
 
-        } yield
-            VoteTx(
-              voteUtxoSpent = recipe.voteUtxo,
-              voteUtxoProduced = VoteUtxoCast(
-                Utxo[L1](
-                  UtxoId[L1](finalized.transaction.id, 0), // Vote output is at index 0
-                  Output[L1](
-                    finalized.transaction.body.value.outputs(0).value.asInstanceOf[Babbage]
-                  ) // The updated vote output
+            finalized <- context
+                .finalizeContext(
+                  protocolParams = recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    0
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
                 )
-              ),
-              tx = finalized.transaction
+                .left
+                .map({
+                    case balanceError: TxBalancingError => SomeBalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        SomeTransactionException(validationError)
+                })
+
+        } yield VoteTx(
+          voteUtxoSpent = recipe.voteUtxo,
+          voteUtxoProduced = VoteUtxoCast(
+            Utxo[L1](
+              UtxoId[L1](finalized.transaction.id, 0), // Vote output is at index 0
+              Output[L1](
+                finalized.transaction.body.value.outputs(0).value.asInstanceOf[Babbage]
+              ) // The updated vote output
             )
+          ),
+          tx = finalized.transaction
+        )
     }
 }

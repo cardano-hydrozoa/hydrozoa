@@ -2,29 +2,28 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import com.bloxbean.cardano.client.util.HexUtil
-import com.typesafe.scalalogging.Logger
+//import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.utxo.OwnVoteUtxo
+import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.l1.dapp.utxo.RuleBasedTreasuryUtxo
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{
+import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     BlockTypeL2,
     OnchainBlockHeader,
     cip67DisputeTokenPrefix,
     given
 }
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.script.plutus.{
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
     DisputeResolutionScript,
     RuleBasedTreasuryScript,
     RuleBasedTreasuryValidator
 }
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.UnresolvedDatum
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.tx.VoteTx
-import hydrozoa.rulebased.ledger.l1.tx.VoteTx.BuildError
-import hydrozoa.rulebased.ledger.l1.tx.VoteTx.BuildError.SomeBalancingError
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
+import VoteTx.BuildError
+import VoteTx.BuildError.SomeBalancingError
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -193,9 +192,9 @@ def signBlockHeader(
 
 def genCollateralUtxo(peer: TestPeer): Gen[(TransactionInput, Babbage)] =
     for {
-        txId <- genTxId
+        input <- genTransactionInput
     } yield (
-      txId,
+      input,
       Babbage(
         address = peer.address,
         value = Value(Coin(5_000_000L)),
@@ -276,7 +275,7 @@ def genVoteTxRecipe(
     )
 
 class VoteTxTest extends munit.ScalaCheckSuite {
-    private val log = Logger(getClass)
+    // private val log = Logger(getClass)
 
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)

@@ -1,36 +1,42 @@
-package hydrozoa.rulebased.ledger.l1.script.plutus
+package hydrozoa.rulebased.ledger.dapp.script.plutus
 
+import hydrozoa.AddressL1
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import scalus.builtin.FromData
-import scalus.builtin.ToData
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Withdraw, Deinit, Resolve}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Unresolved, Resolved}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{Vote, NoVote}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, VoteDatum}
-import hydrozoa.{VerificationKeyBytes, AddressL1, PosixTime as HPosixTime}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
+    Deinit,
+    Resolve,
+    Withdraw
+}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
+    Resolved,
+    Unresolved
+}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
+import scalus.builtin.{
+    BLS12_381_G1_Element,
+    BLS12_381_G2_Element,
+    ByteString,
+    Data,
+    FromData,
+    ToData
+}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, ScriptHash}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
-import scalus.prelude.Option.{Some, None}
 import scalus.prelude.*
+import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G2
 import scalus.prelude.crypto.bls12_381.G2.scale
-import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
-import scalus.builtin.BLS12_381_G1_Element
-import scalus.builtin.BLS12_381_G2_Element
-import scalus.builtin.ByteString
-import scalus.builtin.Data
 import scalus.uplc.DeBruijnedProgram
 
 @Compile
