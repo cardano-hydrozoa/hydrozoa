@@ -807,7 +807,7 @@ object TransactionBuilder:
     // MintAsset step
     // -------------------------------------------------------------------------
 
-    def useMint(
+    private def useMint(
         scriptHash: ScriptHash,
         assetName: AssetName,
         amount: Long,
@@ -836,7 +836,7 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
 
     /** Ensure that the output is a pubkey output containing only ada. */
-    def assertAdaOnlyPubkeyUtxo(utxo: TransactionUnspentOutput): BuilderM[Unit] =
+    private def assertAdaOnlyPubkeyUtxo(utxo: TransactionUnspentOutput): BuilderM[Unit] =
         for {
             _ <-
                 if !utxo.output.value.assets.isEmpty
@@ -1338,7 +1338,7 @@ object TransactionBuilder:
                     liftF0(
                       Left(TxBuildError.ByronAddressesNotSupported(addr))
                     )
-            res <-
+            _ <-
                 if context.network != addrNetwork
                 then
                     liftF0(
@@ -1428,8 +1428,7 @@ object TxBuildError {
         override def explain: String =
             s"${action.explain} ($action) requires a ${expectedType} witness: $cred"
     }
-
-    // TODO: no reason to have TransactionUnspentOutput here
+    
     case class DatumWitnessNotProvided(utxo: TransactionUnspentOutput) extends TxBuildError {
         override def explain: String =
             "The output you are trying to spend contains a datum hash, you need to provide " +
