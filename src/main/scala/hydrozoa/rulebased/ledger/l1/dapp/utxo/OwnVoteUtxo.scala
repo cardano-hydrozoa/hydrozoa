@@ -1,6 +1,7 @@
-package hydrozoa.multisig.ledger.dapp.utxo
+package hydrozoa.rulebased.ledger.l1.dapp.utxo
 
-import hydrozoa.{L1, Utxo}
+import hydrozoa.L1
+import hydrozoa.Utxo
 import scalus.cardano.ledger.AddrKeyHash
 
 final case class OwnVoteUtxo(

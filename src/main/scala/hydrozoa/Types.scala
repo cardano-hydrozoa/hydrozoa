@@ -37,14 +37,11 @@ prefer to do this is by:
     L2; etc.
  * */
 
-//import hydrozoa.infra.transitionary.toScalusLedger
-
-import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, ToData}
 import scalus.cardano.address.{Address => SAddress, Network, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 
 import scalus.ledger.api.v3
