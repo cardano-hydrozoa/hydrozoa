@@ -1,7 +1,6 @@
 package hydrozoa.lib.tx
 
 import hydrozoa.lib.optics.*
-import hydrozoa.lib.tx.ExpectedWitnessType.ScriptHashWitness
 import hydrozoa.lib.tx.RedeemerPurpose.{ForMint, ForCert}
 import hydrozoa.lib.tx.ScriptSource.*
 import hydrozoa.lib.tx.TransactionBuilder.{Context, build, ResolvedUtxos}
@@ -9,6 +8,7 @@ import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TxBuildError.*
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
+import hydrozoa.lib.tx.TransactionBuilder.WitnessKind
 import hydrozoa.{
     txRedeemersL,
     txInputsL,
@@ -25,10 +25,10 @@ import scalus.cardano.address.{Network, ShelleyPaymentPart, ShelleyAddress}
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Hash.given
-import scalus.cardano.ledger.RedeemerTag.{Spend, Cert}
+import scalus.cardano.ledger.RedeemerTag
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
+import scalus.cardano.ledger.{Mint as TxBodyMint, *}
 import scalus.|>
 
 import scala.collection.immutable.{SortedMap, SortedSet}
@@ -38,15 +38,6 @@ import monocle.{Focus, Lens}
 import org.scalacheck.Gen
 import test.TestPeer.Alice
 import test.*
-
-// private def addInput(input: TransactionInput): Transaction => Transaction =
-//     txBodyL
-//         .refocus(_.inputs)
-//         .modify((is: TaggedOrderedSet[TransactionInput]) =>
-//             TaggedOrderedSet.from(
-//               is.toSortedSet + input
-//             )
-//         )
 
 class TxBuilderTest extends munit.ScalaCheckSuite {
 
@@ -175,7 +166,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // Group: "SpendOutput"
     ///////////////////////////////////////////////////////////////
 
-    val spendPkhUtxoStep = TransactionBuilderStep.SpendOutput(pkhUtxo, PubKeyWitness)
+    val spendPkhUtxoStep = TransactionBuilderStep.Spend(pkhUtxo, PubKeyWitness)
     val pubKeyInput1Expected: ContextTuple =
         Context.empty(Mainnet).toTuple
             |> transactionL
@@ -191,43 +182,37 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
 
     testBuilderSteps(
       label = "PKH Output",
-      steps = List(SpendOutput(pkhUtxo, PubKeyWitness)),
+      steps = List(Spend(pkhUtxo, PubKeyWitness)),
       expected = pubKeyInput1Expected
     )
 
     testBuilderSteps(
       label = "PKH output x2 -> 1",
-      steps = List(SpendOutput(pkhUtxo, PubKeyWitness), SpendOutput(pkhUtxo, PubKeyWitness)),
+      steps = List(Spend(pkhUtxo, PubKeyWitness), Spend(pkhUtxo, PubKeyWitness)),
       expected = pubKeyInput1Expected
     )
 
     testBuilderStepsFail(
       label = "PKH output with wrong witness #1",
-      steps = List(SpendOutput(pkhUtxo, nsWitness)),
+      steps = List(Spend(pkhUtxo, nsWitness)),
       error = WrongOutputType(WitnessKind.ScriptBased, pkhUtxo)
     )
 
     testBuilderStepsFail(
       label = "PKH output with wrong witness #2",
-      steps = List(SpendOutput(pkhUtxo, plutusScript1RefSpentWitness)),
+      steps = List(Spend(pkhUtxo, plutusScript1RefSpentWitness)),
       error = WrongOutputType(WitnessKind.ScriptBased, pkhUtxo)
     )
 
-    //  testBuilderStepsFail "SKH output with wrong witness #1"
-    //      [ SpendOutput skhUtxo (Just nsWitness) ] $
-    //      IncorrectScriptHash (Left ns) scriptHash1
     testBuilderStepsFail(
       label = "SKH output with wrong witness #1",
-      steps = List(SpendOutput(skhUtxo, nsWitness)),
+      steps = List(Spend(skhUtxo, nsWitness)),
       error = IncorrectScriptHash(ns, scriptHash1)
     )
 
-    // testBuilderStepsFail "SKH output with wrong witness #2"
-    //    [ SpendOutput skhUtxo (Just plutusScriptWitness) ] $
-    //    IncorrectScriptHash (Right script2) scriptHash1
     testBuilderStepsFail(
       label = "SKH output with wrong witness #2",
-      steps = List(SpendOutput(skhUtxo, plutusScript2Witness)),
+      steps = List(Spend(skhUtxo, plutusScript2Witness)),
       error = IncorrectScriptHash(script2, scriptHash1)
     )
 
@@ -252,7 +237,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
 
     testBuilderStepsFail(
       label = "Try to spend output with wrong network in address",
-      steps = List(SpendOutput(pkhUtxo, PubKeyWitness), SpendOutput(pkhUtxoTestNet, PubKeyWitness)),
+      steps = List(Spend(pkhUtxo, PubKeyWitness), Spend(pkhUtxoTestNet, PubKeyWitness)),
       error = WrongNetworkId(pkhUtxoTestNet.output.address)
     )
 
@@ -264,7 +249,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
       label = "Spending with ref script from referenced utxo",
       steps = List(
         ReferenceOutput(utxo = utxoWithScript1ReferenceScript),
-        SpendOutput(utxo = script1Utxo, witness = plutusScript1RefWitness)
+        Spend(utxo = script1Utxo, witness = plutusScript1RefWitness)
       ),
       expected = Context.empty(Mainnet).toTuple
           |> (transactionL >>> txInputsL)
@@ -274,7 +259,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
           |> (transactionL >>> txRequiredSignersL)
               .replace(TaggedOrderedSet.from(psRefWitnessExpectedSigners.map(_.hash)))
           |> (transactionL >>> txRedeemersL)
-              .replace(redeemers(unitRedeemer(Spend, 0)))
+              .replace(redeemers(unitRedeemer(RedeemerTag.Spend, 0)))
           |> expectedSignersL.replace(psRefWitnessExpectedSigners)
           |> resolvedUtxosL
               .replace(
@@ -295,8 +280,8 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "Spending with ref script from consumed utxo",
       steps = List(
-        SpendOutput(utxo = utxoWithScript1ReferenceScript),
-        SpendOutput(utxo = script1Utxo, witness = plutusScript1RefSpentWitness)
+        Spend(utxo = utxoWithScript1ReferenceScript),
+        Spend(utxo = script1Utxo, witness = plutusScript1RefSpentWitness)
       ),
       expected = {
           val ctx1 = Context.empty(Mainnet).toTuple
@@ -338,7 +323,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
               )
 
           ctx1 |> (transactionL >>> txRedeemersL)
-              .replace(redeemers(unitRedeemer(Spend, redeemerIndex)))
+              .replace(redeemers(unitRedeemer(RedeemerTag.Spend, redeemerIndex)))
       }
     )
 
@@ -346,7 +331,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // denotes a utxo carrying script2 in its scriptRef.
     testBuilderStepsFail(
       label = "Script Output with mismatched script ref in spent utxo",
-      steps = List(SpendOutput(utxo = script1Utxo, witness = plutusScript2RefWitness)),
+      steps = List(Spend(utxo = script1Utxo, witness = plutusScript2RefWitness)),
       error = AttachedScriptNotFound(script1.scriptHash)
     )
 
@@ -375,7 +360,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
         val txInput = genTransactionInput.sample.get
 
         val step =
-            TransactionBuilderStep.SpendOutput(
+            TransactionBuilderStep.Spend(
               utxo = TransactionUnspentOutput(
                 txInput,
                 Babbage(
@@ -398,7 +383,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     test("Signers work for PS spend")({
         val txInput = genTransactionInput.sample.get
         val step =
-            TransactionBuilderStep.SpendOutput(
+            TransactionBuilderStep.Spend(
               utxo = TransactionUnspentOutput(
                 txInput,
                 Babbage(
@@ -437,11 +422,9 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // Group: "Pay"
     // =======================================================================
 
-    //     testBuilderSteps "#1" [ Pay pkhOutput ] $
-    //      anyNetworkTx # _body <<< _outputs .~ [ pkhOutput ]
     testBuilderSteps(
       label = "Pay #1",
-      steps = List(SendOutput(pkhOutput)),
+      steps = List(Send(pkhOutput)),
       expected = Context.empty(Mainnet).toTuple
           |> transactionL
               .andThen(txBodyL.refocus(_.outputs))
@@ -458,7 +441,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "MintAsset #1",
       steps = List(
-        MintAsset(
+        Mint(
           scriptHash = scriptHash1,
           assetName = AssetName(ByteString.fromHex("deadbeef")),
           amount = 1L,
@@ -476,7 +459,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
               .refocus(_.mint)
               .replace(
                 Some(
-                  Mint(
+                  TxBodyMint(
                     MultiAsset(
                       SortedMap.from(
                         List(
@@ -585,7 +568,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
               .replace(Set(script1)) |>
           transactionL
               .refocus(_.witnessSet.redeemers)
-              .replace(redeemers(unitRedeemer(Cert, 0)))
+              .replace(redeemers(unitRedeemer(RedeemerTag.Cert, 0)))
           |>
           transactionL
               .andThen(txBodyL)
@@ -641,7 +624,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     // =======================================================================
     testBuilderSteps(
       label = "ModifyAuxData: id",
-      steps = List(ModifyAuxData(identity)),
+      steps = List(ModifyAuxiliaryData(identity)),
       expected = Context.empty(Mainnet).toTuple
     )
 
@@ -677,7 +660,7 @@ def resolvedUtxosL: Lens[ContextTuple, ResolvedUtxos] = Focus[ContextTuple](_._5
 
 val unitRedeemer: Redeemer =
     Redeemer(
-      tag = Spend,
+      tag = RedeemerTag.Spend,
       index = 0,
       data = ByteString.fromHex("").toData,
       exUnits = ExUnits.zero

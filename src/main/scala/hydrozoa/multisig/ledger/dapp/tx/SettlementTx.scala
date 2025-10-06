@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, SendOutput, SpendOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -75,7 +75,7 @@ object SettlementTx {
         val steps =
             // Spend Treasury and Deposits
             utxos.toSeq.map(utxo =>
-                SpendOutput(
+                Spend(
                   TransactionUnspentOutput(
                     utxo._1,
                     utxo._2
@@ -89,7 +89,7 @@ object SettlementTx {
             )
                 ++ Seq(
                   // Treasury Output
-                  SendOutput(
+                  Send(
                     Babbage(
                       address = headAddress,
                       value = treasuryValue,
@@ -97,10 +97,10 @@ object SettlementTx {
                       scriptRef = None
                     )
                   ),
-                  ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
+                  ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
                 ) ++ {
                     if recipe.utxosWithdrawn.isEmpty then Seq.empty
-                    else Seq(SendOutput(Babbage(address = headAddress, value = withdrawnValue)))
+                    else Seq(Send(Babbage(address = headAddress, value = withdrawnValue)))
                 }
 
         for {

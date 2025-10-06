@@ -94,7 +94,7 @@ object DepositTx {
 
         val steps = Seq(
           // Deposit Output
-          SendOutput(
+          Send(
             Babbage(
               address = recipe.headAddress,
               value = depositValue,
@@ -103,7 +103,7 @@ object DepositTx {
             )
           ),
           // Change Output
-          SendOutput(
+          Send(
             Babbage(
               address = recipe.changeAddress,
               value = Value.zero,
@@ -111,10 +111,10 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxiliaryData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
-                SpendOutput(
+                Spend(
                   TransactionUnspentOutput(utxo._1, utxo._2),
                   PubKeyWitness
                 )

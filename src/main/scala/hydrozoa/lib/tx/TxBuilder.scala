@@ -13,6 +13,7 @@ import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
 import hydrozoa.lib.tx.Datum.DatumValue
+import hydrozoa.lib.tx.TransactionBuilder.{Operation, WitnessKind}
 import hydrozoa.lib.tx.TxBuildError.*
 import io.bullet.borer.Cbor
 import monocle.*
@@ -40,50 +41,25 @@ sealed trait TransactionBuilderStep
 
 /** Steps to build the transaction:
   *   - generally non-commutative, so the order matters
-  *   - fail-fast
+  *   - some are additive (e.g. [[Mint]]), some are not, e.g., ([[Spend]])
   */
 object TransactionBuilderStep {
 
-    /** Spend a utxo - utxos should be unique. TODO: add tests. If spending witness uses a reference
-      * utxo for a script, that should be added beforehand with [[ReferenceOutput]] or
-      * [[SpendOutput]] step (the latter is rare).
-      *
-      *   - Endos (StateT effect):
-      *     - Must add utxo to resolved utxos
-      *     - Must add utxo.input to txBody inputs
-      *     - Must add expected signers:
-      *       - If pubkey, pubkey signer
-      *       - If plutus/native scripts, additional signers from script witness
-      *     - Must add plutus data for plutus scripts (datums, redeemers)
-      *     - (...)
-      *   - Asserts (Either effect):
-      *     - Must have coherent networkId
-      *     - Must have coherent witness (script has must match script addr)
-      *     - (...)
-      *
-      * case class SpendOutpuytSpec( spentOutputNotReferenced : SpentOutputNotReferencedProof,
-      * spentOutputNotAlreadySpent : SpentOutputNotAlreadySpentProof, (...))
-      *
-      * case class SpendOutputRecipe (utxo: TransactionUnspentOutput, witness: Option[OutputWitness]
-      *
-      * spendOutput(recipe : SpendOutputRecipe) = BuilderM[SpendOutputSpec]
-      *
-      * N.B.: Using the an update monad (https://chrispenner.ca/posts/update-monad) would be more
-      * sutiable than state. There are a restricted set endomorphisms on the Context that we would
-      * want to restrict to ensure invariants are satisfied.
+    /** Spend any utxo. An attempt to spend the same utxo twice will error. If a reference script is
+      * used, the containing utxo should be added beforehand with [[ReferenceOutput]] or [[Spend]]
+      * steps.
       */
-    case class SpendOutput(
+    case class Spend(
         utxo: TransactionUnspentOutput,
-        /** Pass None for pubkey outputs only */
         witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness =
             PubKeyWitness
     ) extends TransactionBuilderStep
 
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
-    case class SendOutput(output: TransactionOutput) extends TransactionBuilderStep
+    case class Send(output: TransactionOutput) extends TransactionBuilderStep
 
-    /** Mint/burn tokens using a native/plutus script. */
-    case class MintAsset(
+    /** Mint/burn tokens using a native/plutus script. Additive - sum monoid over amount. */
+    case class Mint(
         scriptHash: ScriptHash,
         assetName: AssetName,
         amount: Long,
@@ -91,9 +67,10 @@ object TransactionBuilderStep {
     ) extends TransactionBuilderStep
 
     /** Add a [[TransactionUnspentOutput]] as a CIP-31 reference input. Doesn't allow the same utxo
-      * being referenced several times. The reason that action is represented as a step is that
-      * reference utxos should be added to the context and also may be required to create a
-      * [[WitnessForSpend]].
+      * being referenced several times.
+      *
+      * The reason that action is represented as a step is that reference utxos should be added to
+      * the context and also may be required to create a [[WitnessForSpend]].
       *
       * @param utxo
       *   any utxo
@@ -108,7 +85,7 @@ object TransactionBuilderStep {
         utxo: TransactionUnspentOutput
     ) extends TransactionBuilderStep
 
-    case class ModifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
+    case class ModifyAuxiliaryData(f: Option[AuxiliaryData] => Option[AuxiliaryData])
         extends TransactionBuilderStep
 
     case class IssueCertificate(
@@ -136,7 +113,6 @@ object TransactionBuilderStep {
         witness: PubKeyWitness.type | NativeScriptWitness | TwoArgumentPlutusScriptWitness =
             PubKeyWitness
     ) extends TransactionBuilderStep
-
 }
 
 // -----------------------------------------------------------------------------
@@ -155,11 +131,15 @@ object TransactionBuilderStep {
   */
 sealed trait Witness
 
+/** Use this value to indicate there will be a signature. The corresponding verification key hash
+  * will be tracked automatically in the context.
+  */
 case object PubKeyWitness extends Witness
 
+/** Witnesses for native scripts. Can appear several times, but with the same [[additionalSigners]].
+  */
 case class NativeScriptWitness(
     scriptSource: ScriptSource[Script.Native],
-    // TODO: should be the same if used multiple times
     additionalSigners: Set[ExpectedSigner]
 ) extends Witness
 
@@ -234,59 +214,6 @@ case class ExpectedSigner(hash: AddrKeyHash)
 // Transaction Builder
 // -----------------------------------------------------------------------------
 
-/** Represents different types for credentil actions (except spending which goes separetely).
-  */
-sealed trait CredentialAction:
-    def explain: String
-
-object CredentialAction {
-    case class StakeCert(cert: Certificate) extends CredentialAction:
-        override def explain: String = "This stake certificate"
-    // TODO: should be address: StakeAddress?
-    case class Withdrawal(address: Address) extends CredentialAction:
-        override def explain: String = "This stake rewards withdrawal"
-    case class Minting(scriptHash: PolicyId) extends CredentialAction:
-        override def explain: String = "This mint"
-    case class Voting(voter: Voter) extends CredentialAction:
-        override def explain: String = "This voting procedure"
-    case class Proposing(proposal: ProposalProcedure) extends CredentialAction:
-        override def explain: String = "This voting proposal"
-}
-
-/** Represents a type of [[Witness]], i.e., whether it's a key-based or a script-based one.
-  */
-sealed trait ExpectedWitnessType[A <: Witness] {
-    def explain: String
-}
-
-object ExpectedWitnessType {
-    case class ScriptHashWitness[A <: Witness](witness: A) extends ExpectedWitnessType[A]:
-        override def explain: String = "ScriptHash"
-
-    case class PubKeyHashWitness[A <: Witness]() extends ExpectedWitnessType[A]:
-        override def explain: String = "PubKeyHash"
-}
-
-trait HasWitnessKind[A]:
-    def witnessKind: WitnessKind
-
-enum WitnessKind:
-    case KeyBased
-    case ScriptBased
-
-object HasWitnessKind:
-    given HasWitnessKind[PubKeyWitness.type] with
-        override def witnessKind = WitnessKind.KeyBased
-
-    given HasWitnessKind[NativeScriptWitness] with
-        override def witnessKind = WitnessKind.ScriptBased
-
-    given HasWitnessKind[TwoArgumentPlutusScriptWitness] with
-        override def witnessKind = WitnessKind.ScriptBased
-
-    given HasWitnessKind[ThreeArgumentPlutusScriptWitness] with
-        override def witnessKind = WitnessKind.ScriptBased
-
 object TransactionBuilder:
 
     /** Builder is a state monad over Context. */
@@ -297,6 +224,53 @@ object TransactionBuilder:
     private def liftF0[A] = StateT.liftF[[X] =>> Either[TxBuildError, X], Context, A]
     private def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
     private def get0 = StateT.get[[X] =>> Either[TxBuildError, X], Context]
+
+    /** Represents different types of authorized operations (except the spending, which goes
+      * separately).
+      */
+    sealed trait Operation:
+        def explain: String
+
+    object Operation {
+        case class Minting(scriptHash: PolicyId) extends Operation:
+            override def explain: String = "This mint"
+
+        case class CertificateOperation(cert: Certificate) extends Operation:
+            override def explain: String = "This stake certificate"
+
+        // TODO: should be `address: StakeAddress`?
+        case class Withdraw(address: Address) extends Operation:
+            override def explain: String = "This stake rewards withdrawal"
+
+        case class Proposing(proposal: ProposalProcedure) extends Operation:
+            override def explain: String = "This voting proposal"
+
+        case class Voting(voter: Voter) extends Operation:
+            override def explain: String = "Voting procedure"
+    }
+
+    /** TODO: this is a good candidate to be removed, we use it only in
+      * `assertCredentialMatchesWitness`.
+      */
+    trait HasWitnessKind[A]:
+        def witnessKind: WitnessKind
+
+    enum WitnessKind:
+        case KeyBased
+        case ScriptBased
+
+    object HasWitnessKind:
+        given HasWitnessKind[PubKeyWitness.type] with
+            override def witnessKind = WitnessKind.KeyBased
+
+        given HasWitnessKind[NativeScriptWitness] with
+            override def witnessKind = WitnessKind.ScriptBased
+
+        given HasWitnessKind[TwoArgumentPlutusScriptWitness] with
+            override def witnessKind = WitnessKind.ScriptBased
+
+        given HasWitnessKind[ThreeArgumentPlutusScriptWitness] with
+            override def witnessKind = WitnessKind.ScriptBased
 
     /** A wrapper around a UTxO set that prevents adding conflicting pairs */
     case class ResolvedUtxos private (utxos: UTxO) {
@@ -574,7 +548,7 @@ object TransactionBuilder:
 
     private def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match {
 
-        case step @ TransactionBuilderStep.SpendOutput(utxo, witness) =>
+        case step @ TransactionBuilderStep.Spend(utxo, witness) =>
             for {
                 _ <- assertNetworkId(utxo.output.address)
                 _ <- modify0(
@@ -591,7 +565,7 @@ object TransactionBuilder:
                 _ <- useSpendingWitness(witness, utxo)
             } yield ()
 
-        case TransactionBuilderStep.SendOutput(output) =>
+        case TransactionBuilderStep.Send(output) =>
             for {
                 _ <- assertNetworkId(output.address)
                 _ <- modify0(
@@ -602,7 +576,7 @@ object TransactionBuilder:
                 )
             } yield ()
 
-        case TransactionBuilderStep.MintAsset(scriptHash, assetName, amount, mintWitness) =>
+        case TransactionBuilderStep.Mint(scriptHash, assetName, amount, mintWitness) =>
             useMint(scriptHash, assetName, amount, mintWitness)
 
         case TransactionBuilderStep.ReferenceOutput(utxo) =>
@@ -636,7 +610,7 @@ object TransactionBuilder:
                 )
             } yield ()
 
-        case TransactionBuilderStep.ModifyAuxData(f) =>
+        case TransactionBuilderStep.ModifyAuxiliaryData(f) =>
             modify0(
               Focus[Context](_.transaction)
                   .refocus(_.auxiliaryData)
@@ -860,7 +834,7 @@ object TransactionBuilder:
     ): BuilderM[Unit] =
         for {
             _ <- useNonSpendingWitness(
-              CredentialAction.Minting(scriptHash),
+              Operation.Minting(scriptHash),
               Credential.ScriptHash(scriptHash),
               witness
             )
@@ -934,7 +908,7 @@ object TransactionBuilder:
                         liftF0(
                           Left(
                             TxBuildError.WrongCredentialType(
-                              CredentialAction.StakeCert(cert),
+                              Operation.CertificateOperation(cert),
                               WitnessKind.KeyBased,
                               credential
                             )
@@ -949,13 +923,13 @@ object TransactionBuilder:
                         assertScriptHashMatchesSource(scriptHash, witness.scriptSource)
                 }
                 _ <- useNonSpendingWitness(
-                  CredentialAction.StakeCert(cert),
+                  Operation.CertificateOperation(cert),
                   credential,
                   witness
                 )
             } yield ()
         case Certificate.StakeDelegation(credential, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         // FIXME: verify
         case Certificate.RegCert(_, _) =>
             pure0(())
@@ -964,25 +938,23 @@ object TransactionBuilder:
         case Certificate.PoolRetirement(_, _) =>
             pure0(())
         case Certificate.VoteDelegCert(credential, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.StakeVoteDelegCert(credential, _, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.StakeRegDelegCert(credential, _, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.VoteRegDelegCert(credential, _, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.StakeVoteRegDelegCert(credential, _, _, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
-        case Certificate.AuthCommitteeHotCert(_, _) =>
-            pure0(()) // not supported
-        case Certificate.ResignCommitteeColdCert(_, _) =>
-            pure0(()) // not supported
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
+        case Certificate.AuthCommitteeHotCert(_, _)    => pure0(()) // not supported
+        case Certificate.ResignCommitteeColdCert(_, _) => pure0(()) // not supported
         case Certificate.RegDRepCert(credential, _, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.UnregDRepCert(credential, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
         case Certificate.UpdateDRepCert(credential, _) =>
-            useNonSpendingWitness(CredentialAction.StakeCert(cert), credential, witness)
+            useNonSpendingWitness(Operation.CertificateOperation(cert), credential, witness)
     }
 
     // -------------------------------------------------------------------------
@@ -1022,7 +994,7 @@ object TransactionBuilder:
             )
 
             _ <- useNonSpendingWitness(
-              CredentialAction.Withdrawal(rewardAccount.address),
+              Operation.Withdraw(rewardAccount.address),
               stakeCredential.credential,
               witness
             )
@@ -1047,7 +1019,7 @@ object TransactionBuilder:
                 pure0(())
             case Some(policyHash) =>
                 useNonSpendingWitness(
-                  CredentialAction.Proposing(proposal),
+                  Operation.Proposing(proposal),
                   Credential.ScriptHash(policyHash),
                   witness
                 )
@@ -1094,7 +1066,7 @@ object TransactionBuilder:
                       Credential.ScriptHash(scriptHash)
                     )
             }
-            _ <- useNonSpendingWitness(CredentialAction.Voting(voter), cred, witness)
+            _ <- useNonSpendingWitness(Operation.Voting(voter), cred, witness)
         } yield ()
 
     // -------------------------------------------------------------------------
@@ -1102,7 +1074,7 @@ object TransactionBuilder:
     // -------------------------------------------------------------------------
 
     def useNonSpendingWitness(
-        credAction: CredentialAction,
+        credAction: Operation,
         cred: Credential,
         witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
     ): BuilderM[Unit] =
@@ -1156,7 +1128,7 @@ object TransactionBuilder:
                             val detachedRedeemer = DetachedRedeemer(
                               datum = witness.redeemer,
                               purpose = credAction match {
-                                  case CredentialAction.Withdrawal(address) =>
+                                  case Operation.Withdraw(address) =>
                                       val stakeAddress = address match {
                                           case ShelleyAddress(_, _, _)           => ??? // FIXME:
                                           case stakeAddress @ StakeAddress(_, _) => stakeAddress
@@ -1165,13 +1137,13 @@ object TransactionBuilder:
                                       RedeemerPurpose.ForReward(
                                         RewardAccount(stakeAddress)
                                       )
-                                  case CredentialAction.StakeCert(cert) =>
+                                  case Operation.CertificateOperation(cert) =>
                                       RedeemerPurpose.ForCert(cert)
-                                  case CredentialAction.Minting(scriptHash) =>
+                                  case Operation.Minting(scriptHash) =>
                                       RedeemerPurpose.ForMint(scriptHash)
-                                  case CredentialAction.Voting(voter) =>
+                                  case Operation.Voting(voter) =>
                                       RedeemerPurpose.ForVote(voter)
-                                  case CredentialAction.Proposing(proposal) =>
+                                  case Operation.Proposing(proposal) =>
                                       RedeemerPurpose.ForPropose(proposal)
                               }
                             )
@@ -1189,7 +1161,7 @@ object TransactionBuilder:
     def assertCredentialMatchesWitness[
         A <: PubKeyWitness.type | NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ](
-        action: CredentialAction,
+        action: Operation,
         witness: A,
         cred: Credential
     )(using hwk: HasWitnessKind[A]): BuilderM[Unit] = {
@@ -1316,10 +1288,7 @@ object TransactionBuilder:
                           .modify(s => appendDistinct(ns, s.toList).toSet)
                     )
                 // Script should already be attached, see [[assertAttachedScriptExists]]
-                // case ScriptSource.NativeAttachedScript(_) => pure0(())
-                // FIXME: Should not happen
-                case ScriptSource.PlutusScriptValue(_) => ???
-                // case ScriptSource.PlutusAttachedScript => ???
+                case ScriptSource.NativeScriptAttached => pure0(())
             }
         } yield ()
 
@@ -1470,7 +1439,7 @@ object TxBuildError {
     }
 
     case class WrongCredentialType(
-        action: CredentialAction,
+        action: Operation,
         expectedType: WitnessKind,
         cred: Credential
     ) extends TxBuildError {
@@ -1605,7 +1574,8 @@ object NetworkExtensions:
         case v if v >= 2 && v <= 15 => Some(Network.Other(v.toByte))
         case _                      => None
 
-/** Append en element to sequence and return distinct values only, preservin the order.element.
+/** Append an element to a sequence, returning distinct values only and preserving the order of
+  * elements.
   */
 def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct

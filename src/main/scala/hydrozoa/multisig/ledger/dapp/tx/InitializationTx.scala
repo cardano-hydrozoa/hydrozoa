@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, SendOutput, SpendOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.lib.tx.{
     ExpectedSigner,
     NativeScriptWitness,
@@ -125,14 +125,14 @@ object InitializationTx {
                   Mainnet,
                   recipe.seedUtxos
                       .map(utxo =>
-                          SpendOutput(
+                          Spend(
                             TransactionUnspentOutput.apply(utxo._1, utxo._2),
                             PubKeyWitness
                           )
                       )
                       .toList
                       ++ List(
-                        MintAsset(
+                        Mint(
                           headNativeScript.script.scriptHash,
                           headTokenName,
                           1,
@@ -141,11 +141,11 @@ object InitializationTx {
                             headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
                           )
                         ),
-                        SendOutput(
+                        Send(
                           Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
                         ),
-                        SendOutput(Babbage(recipe.changeAddress, Value.zero, None, None)),
-                        ModifyAuxData(_ => Some((MD.apply(Initialization, headAddress))))
+                        Send(Babbage(recipe.changeAddress, Value.zero, None, None)),
+                        ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
                       )
                 )
                 .left
