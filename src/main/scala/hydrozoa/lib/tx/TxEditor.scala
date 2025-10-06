@@ -1,24 +1,26 @@
 package hydrozoa.lib.tx
 
-/*
- Transaction editing utilities with automatic redeemer re-indexing.
-
- According to the ledger spec, redeemers, which are stored in a
- `TransactionWitnessSet`, contain pointers to various transaction parts.
- The pointers are just numbers corresponding to indices in arrays.
-
- For example, a redeemer for spending a UTxO locked at a script address
- contains an index of the corresponding input. It's not very convenient
- because of the need to keep the indices correct while modifying the transaction.
-
- For example, if a new mint is added, all mint redeemer indices may have to
- be updated. This module automates these updates by providing a better API
- for modifying transactions that lets the developer abstract away from the indices.
-
- The main functions are `editTransaction` and `editTransactionSafe`.
- */
+/** Transaction editing utilities with automatic redeemer re-indexing.
+  *
+  * According to the ledger spec, redeemers, which are stored in a `TransactionWitnessSet`, contain
+  * pointers to various transaction parts. The pointers are just numbers corresponding to indices in
+  * arrays.
+  *
+  * For example, a redeemer for spending a UTxO locked at a script address contains an index of the
+  * corresponding input. It's not very convenient because of the need to keep the indices correct
+  * while modifying the transaction.
+  *
+  * For example, if a new mint is added, all mint redeemer indices may have to be updated. This
+  * module automates these updates by providing a better API for modifying transactions that lets
+  * the developer abstract away from the indices.
+  *
+  * The main functions are `editTransaction` and `editTransactionSafe`.
+  */
 
 import cats.implicits.*
+import hydrozoa.lib
+import monocle.Lens
+import monocle.Monocle.{focus, refocus}
 import scalus.builtin.Data
 import scalus.cardano.ledger.*
 
@@ -76,17 +78,6 @@ case class RedeemersContext(
     certs: Vector[Certificate],
     proposals: Vector[ProposalProcedure],
     voters: Vector[Voter]
-)
-
-// ============================================================================
-// EditableTransaction
-// ============================================================================
-
-/** A transaction with redeemers detached.
-  */
-case class EditableTransaction(
-    transaction: Transaction,
-    redeemers: Vector[DetachedRedeemer]
 )
 
 // ============================================================================
@@ -179,6 +170,17 @@ object RedeemerManagement {
 }
 
 // ============================================================================
+// EditableTransaction
+// ============================================================================
+
+/** A transaction with redeemers detached.
+  */
+case class EditableTransaction(
+    transaction: Transaction,
+    redeemers: Vector[DetachedRedeemer]
+)
+
+// ============================================================================
 // Transaction conversion functions
 // ============================================================================
 
@@ -206,7 +208,9 @@ object TransactionConversion {
             if invalidRedeemers.isEmpty then None
             else Some(KeepRaw.apply(Redeemers.from(invalidRedeemers)))
         )
-        val updatedTx = tx.copy(witnessSet = updatedWitnessSet)
+
+        val updatedTx =
+            tx.focus(_.witnessSet).replace(updatedWitnessSet)
 
         EditableTransaction(updatedTx, redeemers)
     }
@@ -214,7 +218,9 @@ object TransactionConversion {
     /** Detach transaction redeemers. Removes redeemers from the witness set and places them
       * alongside the transaction. Fails if there are redeemers that do not point to anything.
       */
-    def toEditableTransactionSafe(tx: Transaction): Either[Redeemer, EditableTransaction] = {
+    def toEditableTransactionSafe(
+        tx: Transaction
+    ): Either[Redeemer, EditableTransaction] = {
         val ctx = RedeemersContext.fromTransaction(tx)
 
         for {
@@ -227,15 +233,18 @@ object TransactionConversion {
                         }
             }
 
-            updatedWitnessSet = tx.witnessSet.copy(redeemers = None)
-            updatedTx = tx.copy(witnessSet = TransactionWitnessSet.empty)
+            updatedTx = tx
+                .focus(_.witnessSet)
+                .replace(TransactionWitnessSet.empty)
         } yield EditableTransaction(updatedTx, redeemers.toVector)
     }
 
     /** Re-attach transaction redeemers. Fails if there are detached redeemers that are not valid
       * (do not point to anything in the transaction).
       */
-    def fromEditableTransactionSafe(editable: EditableTransaction): Option[Transaction] = {
+    def fromEditableTransactionSafe(
+        editable: EditableTransaction
+    ): Option[Transaction] = {
         val ctx = RedeemersContext.fromTransaction(editable.transaction)
 
         RedeemerManagement.attachRedeemers(ctx, editable.redeemers) match {
@@ -250,7 +259,9 @@ object TransactionConversion {
                         if allRedeemers.isEmpty then None
                         else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
                     )
-                val updatedTx = editable.transaction.copy(witnessSet = updatedWitnessSet)
+                val updatedTx = editable.transaction
+                    .focus(_.witnessSet)
+                    .replace(updatedWitnessSet)
                 Some(updatedTx)
         }
     }
@@ -272,7 +283,9 @@ object TransactionConversion {
                 if allRedeemers.isEmpty then None
                 else Some(KeepRaw.apply(Redeemers.from(allRedeemers)))
             )
-        val updatedTx = editable.transaction.copy(witnessSet = updatedWitnessSet)
+        val updatedTx = editable.transaction
+            .focus(_.witnessSet)
+            .replace(updatedWitnessSet)
         updatedTx
     }
 }
@@ -302,7 +315,9 @@ object TransactionEditor {
       * @return
       *   target transaction
       */
-    def editTransaction(f: Transaction => Transaction)(tx: Transaction): Transaction = {
+    def editTransaction(
+        f: Transaction => Transaction
+    )(tx: Transaction): Transaction = {
         val editableTx = TransactionConversion.toEditableTransaction(tx)
         val processedTransaction = f(editableTx.transaction)
         val newEditableTx = TransactionConversion.toEditableTransaction(processedTransaction)
@@ -328,7 +343,9 @@ object TransactionEditor {
       */
     def editTransactionSafe(
         f: Transaction => Transaction
-    )(tx: Transaction): Either[Redeemer, Transaction] = {
+    )(
+        tx: Transaction
+    ): Either[Redeemer, Transaction] = {
         for {
             editableTx <- TransactionConversion.toEditableTransactionSafe(tx)
             processedTx = f(editableTx.transaction)

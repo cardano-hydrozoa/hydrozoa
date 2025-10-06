@@ -1,6 +1,6 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.syntax.all.*
+import cats.syntax.all._
 
 object Batch {
     type Id = Id.Id

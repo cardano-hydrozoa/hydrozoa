@@ -1,24 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxData, Pay, SpendOutput}
-import hydrozoa.lib.tx.{OutputWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.{addDummyVKeys, removeDummyVKeys}
+import scala.collection
+import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
-
-import scala.collection
-import scala.language.{implicitConversions, reflectiveCalls}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -75,19 +75,21 @@ object SettlementTx {
         val steps =
             // Spend Treasury and Deposits
             utxos.toSeq.map(utxo =>
-                SpendOutput(
+                Spend(
                   TransactionUnspentOutput(
                     utxo._1,
                     utxo._2
                   ),
-                  witness = Some(
-                    OutputWitness.NativeScriptOutput(ScriptValue(recipe.headNativeScript.script))
+                  witness = NativeScriptWitness(
+                    NativeScriptValue(recipe.headNativeScript.script),
+                    recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
+                        .map(ExpectedSigner(_))
                   )
                 )
             )
                 ++ Seq(
                   // Treasury Output
-                  Pay(
+                  Send(
                     Babbage(
                       address = headAddress,
                       value = treasuryValue,
@@ -95,20 +97,20 @@ object SettlementTx {
                       scriptRef = None
                     )
                   ),
-                  ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
+                  ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
                 ) ++ {
                     if recipe.utxosWithdrawn.isEmpty then Seq.empty
-                    else Seq(Pay(Babbage(address = headAddress, value = withdrawnValue)))
+                    else Seq(Send(Babbage(address = headAddress, value = withdrawnValue)))
                 }
 
         for {
             unbalanced <- TransactionBuilder
-                .buildTransaction(steps)
+                .build(Mainnet, steps)
                 .left
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, unbalanced),
+                  initial = addDummyVKeys(unbalanced.expectedSigners.size, unbalanced.transaction),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

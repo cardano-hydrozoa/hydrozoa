@@ -1,10 +1,14 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
-import hydrozoa.AddressL1
-import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension._
+import hydrozoa.lib.cardano.scalus.{Scalar => ScalusScalar}
+import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.{
+    Resolved,
+    Unresolved
+}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
     Deinit,
     Resolve,
@@ -14,23 +18,25 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{
     Resolved,
     Unresolved
 }
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.*
-import scalus.builtin.*
-import scalus.builtin.Builtins.*
+import hydrozoa.{AddressL1, PosixTime => HPosixTime, VerificationKeyBytes}
+
+import scalus._
+import scalus.builtin.Builtins._
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, ScriptHash}
 import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v3.*
-import scalus.prelude.*
+import scalus.ledger.api.v3._
 import scalus.prelude.Option.{None, Some}
+import scalus.prelude._
 import scalus.prelude.crypto.bls12_381.G2
 import scalus.prelude.crypto.bls12_381.G2.scale
-import scalus.uplc.DeBruijnedProgram
+
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
+import com.bloxbean.cardano.client.util.HexUtil
 
 @Compile
 object RuleBasedTreasuryValidator extends Validator {

@@ -1,15 +1,16 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.IO
-import cats.effect.Ref
-import cats.implicits.*
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
+import hydrozoa.multisig.protocol.CardanoBackendProtocol._
+import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison._
+import hydrozoa.multisig.protocol.ConsensusProtocol._
+import hydrozoa.multisig.protocol.PersistenceProtocol._
+
+import com.suprnation.actor.Actor.{Actor, Receive}
+
+import cats.effect.{IO, Ref}
+import cats.implicits._
+
 import CardanoLiaison.{Config, ConnectionsPending}
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 
 /** Cardano actor:
   *
@@ -32,7 +33,7 @@ object CardanoLiaison {
 
 trait CardanoLiaison(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
-    private val state = State()
+    State()
 
     private final case class Subscribers()
 

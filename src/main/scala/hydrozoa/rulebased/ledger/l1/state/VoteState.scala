@@ -1,6 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.state
 
-import scalus.*
+import scalus._
 import scalus.builtin.Data.{FromData, ToData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash

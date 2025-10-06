@@ -9,7 +9,12 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
+import io.bullet.borer.Encoder
+import monocle.Monocle.some
 import monocle.syntax.all.*
+import monocle.{Focus, Lens}
+import scala.collection.immutable.SortedMap
+import scala.language.implicitConversions
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -27,9 +32,6 @@ import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
-
-import scala.collection.immutable.SortedMap
-import scala.language.implicitConversions
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
@@ -520,3 +522,47 @@ extension (self: TransactionOutput)
                     case None        => None
                 }
         }
+
+def keepRawL[A: Encoder](): Lens[KeepRaw[A], A] = {
+    val get: KeepRaw[A] => A = (kr => kr.value)
+    val replace: A => KeepRaw[A] => KeepRaw[A] = (a => kr => KeepRaw(a))
+    Lens[KeepRaw[A], A](get)(replace)
+}
+
+def txBodyL: Lens[Transaction, TransactionBody] = {
+    val get: Transaction => TransactionBody = tx =>
+        tx.focus(_.body).andThen(keepRawL[TransactionBody]()).get
+    val replace: TransactionBody => Transaction => Transaction = body =>
+        tx => tx.focus(_.body).andThen(keepRawL[TransactionBody]()).replace(body)
+    Lens(get)(replace)
+}
+
+def txInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+    txBodyL.refocus(_.inputs)
+}
+
+def txReferenceInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+    txBodyL.refocus(_.referenceInputs)
+}
+
+def txRequiredSignersL: Lens[Transaction, TaggedOrderedSet[AddrKeyHash]] = {
+    txBodyL.refocus(_.requiredSigners)
+}
+
+def txRedeemersL: Lens[Transaction, Option[KeepRaw[Redeemers]]] = {
+    Focus[Transaction](_.witnessSet.redeemers)
+}
+
+// N.B.: we can't just do this as an optic, because both Prisms and Optionals
+// are no-ops on non-matching branches.
+def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
+    tx |> txRedeemersL.get match {
+        case None => tx |> txRedeemersL.replace(Some(KeepRaw(Redeemers(redeemer))))
+        case Some(_) =>
+            tx |> (txRedeemersL
+                .andThen(some)
+                .andThen(keepRawL[Redeemers]()))
+                .modify(rs => Redeemers.from(rs.toSeq.appended(redeemer)))
+    }
+
+}

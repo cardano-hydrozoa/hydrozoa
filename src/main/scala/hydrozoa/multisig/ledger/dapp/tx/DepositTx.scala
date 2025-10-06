@@ -1,24 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import cats.syntax.all.*
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import io.bullet.borer.Cbor
+import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
-
-import scala.util.{Failure, Success}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -96,7 +94,7 @@ object DepositTx {
 
         val steps = Seq(
           // Deposit Output
-          Pay(
+          Send(
             Babbage(
               address = recipe.headAddress,
               value = depositValue,
@@ -105,7 +103,7 @@ object DepositTx {
             )
           ),
           // Change Output
-          Pay(
+          Send(
             Babbage(
               address = recipe.changeAddress,
               value = Value.zero,
@@ -113,41 +111,45 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxiliaryData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
-                SpendOutput(
+                Spend(
                   TransactionUnspentOutput(utxo._1, utxo._2),
-                  None
+                  PubKeyWitness
                 )
             )
 
         for {
-            b1 <- TransactionBuilder.buildTransaction(steps).left.map(SomeBuilderError(_))
-            balanced <- LowLevelTxBuilder
-                .balanceFeeAndChange(
-                  initial = addDummyVKeys(1, b1),
-                  changeOutputIdx = 1,
-                  protocolParams = recipe.context.protocolParams,
-                  resolvedUtxo = recipe.context.utxo,
-                  evaluator = recipe.context.evaluator
+            b1 <- TransactionBuilder
+                .build(recipe.context.network, steps)
+                .left
+                .map(SomeBuilderError(_))
+            finalized <- b1
+                .finalizeContext(
+                  recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    1
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
                 )
-                .map(tx => removeDummyVKeys(1, tx))
                 .left
-                .map(OtherScalusBalancingError(_))
-            validated <- recipe.context
-                .validate(balanced)
-                .left
-                .map(OtherScalusTransactionException(_))
+                .map({
+                    case balanceError: TxBalancingError => OtherScalusBalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        OtherScalusTransactionException(validationError)
+                })
         } yield DepositTx(
           depositProduced = DepositUtxo(
-            l1Input = TransactionInput(validated.id, 0),
+            l1Input = TransactionInput(finalized.transaction.id, 0),
             l1OutputAddress = recipe.headAddress,
             l1OutputDatum = recipe.datum,
             l1OutputValue = depositValue.coin,
             l1RefScript = None
           ),
-          tx = validated
+          tx = finalized.transaction
         )
 
     }

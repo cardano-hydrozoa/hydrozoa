@@ -1,12 +1,14 @@
 package hydrozoa.multisig.ledger
 
-import cats.effect.{IO, Ref}
 import hydrozoa.multisig.ledger.DappLedger.ErrorAddDeposit
 import hydrozoa.multisig.ledger.VirtualLedger.{ErrorApplyInternalTx, ErrorApplyWithdrawalTx}
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.tx.{InternalTx, WithdrawalTx}
-import scalus.cardano.ledger.*
+
+import scalus.cardano.ledger._
+
+import cats.effect.{IO, Ref}
 
 final case class JointLedger()(
     private val dappLedger: DappLedger,

@@ -3,8 +3,8 @@
 //  DockerPlugin
 //)
 
-val scalusVersion = "0.11.0+318-e6357570-SNAPSHOT"
-val bloxbeanVersion = "0.7.0-beta4"
+val scalusVersion = "0.11.0+330-31839bef-SNAPSHOT"
+val bloxbeanVersion = "0.7.0"
 
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")
 // Docker / packageName := "cardano-hydrozoa/hydrozoa"
@@ -54,17 +54,17 @@ lazy val core = (project in file("."))
         // "io.bullet" %% "borer-derivation" % "1.12.0",
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
-        "org.typelevel" %% "cats-effect" % "3.5.7",
+        "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1"
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
-        "org.scalameta" %% "munit" % "1.1.0" % Test,
-        "org.scalameta" %% "munit-scalacheck" % "1.1.0" % Test,
-        "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
+        "org.scalameta" %% "munit" % "1.2.0" % Test,
+        "org.scalameta" %% "munit-scalacheck" % "1.2.0" % Test,
+        "org.scalacheck" %% "scalacheck" % "1.19.0" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
-        "dev.optics" %% "monocle-core" % "3.1.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.1.0" % Test
+        "dev.optics" %% "monocle-core" % "3.3.0" % Test,
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
       )
     )
 // Integration tests
@@ -136,7 +136,7 @@ lazy val benchmark = (project in file("benchmark"))
         "-XX:+UseG1GC"
       ),
       libraryDependencies ++= Seq(
-        "org.scalacheck" %% "scalacheck" % "1.18.1",
+        "org.scalacheck" %% "scalacheck" % "1.19.0",
         "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )

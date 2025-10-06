@@ -1,10 +1,9 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
-import cats.syntax.group.*
-import hydrozoa.*
+import hydrozoa._
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension._
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
     Continuing,
     Removed
@@ -17,19 +16,22 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.*
+
+import scalus._
 import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{Language, Script, ScriptHash}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
-import scalus.ledger.api.v3.*
+import scalus.ledger.api.v3._
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
+
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
+import com.bloxbean.cardano.client.util.HexUtil
 
 @Compile
 object DisputeResolutionValidator extends Validator {

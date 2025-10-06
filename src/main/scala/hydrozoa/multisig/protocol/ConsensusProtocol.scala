@@ -1,9 +1,11 @@
 package hydrozoa.multisig.protocol
 
-import cats.effect.{Deferred, IO}
-import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.protocol.types.Block.*
+import hydrozoa.multisig.protocol.types.Block._
 import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
+
+import com.suprnation.actor.ActorRef.ActorRef
+
+import cats.effect.{Deferred, IO}
 
 import scala.concurrent.duration.FiniteDuration
 

@@ -1,12 +1,17 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
-import hydrozoa.lib.tx.CredentialWitness.NativeScriptCredential
-import hydrozoa.lib.tx.ScriptWitness.ScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{MintAsset, ModifyAuxData, Pay, SpendOutput}
-import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
+import hydrozoa.lib.tx.{
+    ExpectedSigner,
+    NativeScriptWitness,
+    PubKeyWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput,
+    TxBuildError
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
@@ -15,17 +20,17 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
     OtherScalusTransactionException,
     SomeBuilderError
 }
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
-
-import scala.collection.immutable.SortedMap
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -116,22 +121,31 @@ object InitializationTx {
         for {
 
             unbalancedTx <- TransactionBuilder
-                .buildTransaction(
+                .build(
+                  Mainnet,
                   recipe.seedUtxos
                       .map(utxo =>
-                          SpendOutput(TransactionUnspentOutput.apply(utxo._1, utxo._2), None)
+                          Spend(
+                            TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                            PubKeyWitness
+                          )
                       )
                       .toList
                       ++ List(
-                        MintAsset(
+                        Mint(
                           headNativeScript.script.scriptHash,
                           headTokenName,
                           1,
-                          NativeScriptCredential(ScriptValue(headNativeScript.script))
+                          NativeScriptWitness(
+                            NativeScriptValue(headNativeScript.script),
+                            headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
+                          )
                         ),
-                        Pay(Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)),
-                        Pay(Babbage(recipe.changeAddress, Value.zero, None, None)),
-                        ModifyAuxData(_ => Some((MD.apply(Initialization, headAddress))))
+                        Send(
+                          Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
+                        ),
+                        Send(Babbage(recipe.changeAddress, Value.zero, None, None)),
+                        ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
                       )
                 )
                 .left
@@ -141,7 +155,8 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(headNativeScript.numSigners, unbalancedTx),
+                  initial =
+                      addDummyVKeys(unbalancedTx.expectedSigners.size, unbalancedTx.transaction),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,

@@ -1,6 +1,6 @@
 package hydrozoa.lib.cardano.scalus.ledger.api
 
-import scalus.*
+import scalus._
 import scalus.builtin.{Data, FromData}
 import scalus.ledger.api.v2.OutputDatum.OutputDatum
 import scalus.ledger.api.v3.TxOut

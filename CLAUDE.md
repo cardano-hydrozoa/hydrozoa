@@ -119,9 +119,6 @@ nix develop
 1. File → New → Project from Existing Sources
 2. Select project directory
 3. Import project from external model → BSP → Sbt
-4. Enable IntelliJ MCP:
-   - Configure MCP settings in Settings → Tools → MCP
-   - This enables integration with Claude Code for enhanced development assistance
 
 ### Running Hydrozoa Network
 **Main class**: `hydrozoa.HydrozoaNode`
