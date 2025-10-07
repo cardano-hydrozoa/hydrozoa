@@ -543,7 +543,7 @@ object TransactionBuilder:
     ): Either[TxBuildError, Context] = {
         val modifyBuilderM: BuilderM[Unit] = {
             for {
-                _ <- processConstraints(steps)
+                _ <- processSteps(steps)
                 ctx0 <- get0
                 res <- liftF0(
                   TransactionConversion.fromEditableTransactionSafe(
@@ -566,10 +566,10 @@ object TransactionBuilder:
     trait HasBuilderEffect[A]:
         def runEffect(): BuilderM[Unit]
 
-    private def processConstraints(steps: Seq[TransactionBuilderStep]): BuilderM[Unit] =
-        steps.traverse_(processConstraint)
+    private def processSteps(steps: Seq[TransactionBuilderStep]): BuilderM[Unit] =
+        steps.traverse_(processStep)
 
-    private def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match {
+    private def processStep(step: TransactionBuilderStep): BuilderM[Unit] = step match {
 
         case spend: TransactionBuilderStep.Spend =>
             useSpend(spend)
