@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import hydrozoa.{addDummyVKeys, removeDummyVKeys}
+import hydrozoa.{addDummySignatures, removeDummySignatures}
 import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
@@ -110,13 +110,14 @@ object SettlementTx {
                 .map(BuildError.SomeBuilderError(_))
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(unbalanced.expectedSigners.size, unbalanced.transaction),
+                  initial =
+                      addDummySignatures(unbalanced.expectedSigners.size, unbalanced.transaction),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
                   evaluator = recipe.context.evaluator
                 )
-                .map(tx => removeDummyVKeys(recipe.headNativeScript.numSigners, tx))
+                .map(tx => removeDummySignatures(recipe.headNativeScript.numSigners, tx))
                 .left
                 .map(BuildError.OtherScalusBalancingError(_))
             validated <- recipe.context

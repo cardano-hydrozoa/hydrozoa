@@ -1,17 +1,14 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer._
-import hydrozoa.multisig.protocol.ConsensusProtocol._
-import hydrozoa.multisig.protocol.PersistenceProtocol._
-import hydrozoa.multisig.protocol._
-import hydrozoa.multisig.protocol.types.{LedgerEvent, Peer}
-
-import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.typelevel.actors.syntax.BroadcastSyntax._
-
 import cats.effect.{Deferred, IO, Ref}
-import cats.implicits._
-
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
+import hydrozoa.multisig.protocol.types.{LedgerEvent, Peer}
 import scala.collection.immutable.Queue
 
 import TransactionSequencer.{Config, ConnectionsPending}

@@ -1,9 +1,8 @@
 package hydrozoa.multisig.ledger.virtual
 
 import hydrozoa.multisig.ledger.VirtualLedger
-
+import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules._
 
 /*
 We define three mutators for the three L2 event types (Genesis, Transaction, Withdrawal).

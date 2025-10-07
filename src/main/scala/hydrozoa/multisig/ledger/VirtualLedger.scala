@@ -1,23 +1,18 @@
 package hydrozoa.multisig.ledger
 
+import cats.effect.*
+import cats.implicits.catsSyntaxFlatMapOps
+import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.ledger.VirtualLedger._
-import hydrozoa.multisig.ledger.virtual._
+import hydrozoa.multisig.ledger.VirtualLedger.*
+import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.{emptyContext, emptyState}
-
-import scalus.cardano.ledger._
-import scalus.cardano.ledger.rules.{State => ScalusState}
-
-import com.suprnation.actor.Actor.{Actor, Receive}
-
-import cats.effect._
-import cats.implicits.catsSyntaxFlatMapOps
-
-import scala.util.{Failure, Success}
-
 import io.bullet.borer.Cbor
+import scala.util.{Failure, Success}
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.rules.State as ScalusState
 
 private def toScalusState(state: State): ScalusState =
     emptyState.copy(utxo = state.activeUtxos)

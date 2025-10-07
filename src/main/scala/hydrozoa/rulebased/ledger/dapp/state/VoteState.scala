@@ -1,6 +1,6 @@
-package hydrozoa.rulebased.ledger.l1.state
+package hydrozoa.rulebased.ledger.dapp.state
 
-import scalus._
+import scalus.*
 import scalus.builtin.Data.{FromData, ToData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash
@@ -8,17 +8,23 @@ import scalus.prelude.{===, Eq, Option}
 
 @Compile
 object VoteState:
+
     case class VoteDatum(
         key: Key,
         link: Link,
         peer: Option[PubKeyHash],
         voteStatus: VoteStatus
-    ) derives FromData,
-          ToData
+    )
 
-    enum VoteStatus derives FromData, ToData:
+    given FromData[VoteDatum] = FromData.derived
+    given ToData[VoteDatum] = ToData.derived
+
+    enum VoteStatus:
         case NoVote
         case Vote(voteDetails: VoteDetails)
+
+    given FromData[VoteStatus] = FromData.derived
+    given ToData[VoteStatus] = ToData.derived
 
     given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
         a match
@@ -34,9 +40,11 @@ object VoteState:
 
     case class VoteDetails(
         commitment: KzgCommitment,
-        versionMinor: VersionMinor
-    ) derives FromData,
-          ToData
+        versionMinor: BigInt
+    )
+
+    given FromData[VoteDetails] = FromData.derived
+    given ToData[VoteDetails] = ToData.derived
 
     given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
         a.commitment == b.commitment && a.versionMinor == b.versionMinor
@@ -48,5 +56,4 @@ object VoteState:
     // G1 compressed point
     type KzgCommitment = ByteString
 
-    private type VersionMinor = BigInt
 end VoteState

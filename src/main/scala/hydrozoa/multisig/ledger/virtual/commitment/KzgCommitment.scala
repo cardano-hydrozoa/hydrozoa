@@ -1,16 +1,15 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
+import com.bloxbean.cardano.client.util.HexUtil
+import java.math.BigInteger
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.TxInInfo
+import scalus.prelude.List as SList
 import scalus.prelude.crypto.bls12_381.G1
-import scalus.prelude.{List => SList}
 import scalus.|>
-
-import com.bloxbean.cardano.client.util.HexUtil
-import java.math.BigInteger
 import supranational.blst.{P1, Scalar}
 
 object KzgCommitment {

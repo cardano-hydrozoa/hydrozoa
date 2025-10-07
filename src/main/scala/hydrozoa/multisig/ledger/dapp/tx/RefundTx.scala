@@ -76,13 +76,13 @@ object RefundTx {
 
                 LowLevelTxBuilder
                     .balanceFeeAndChange(
-                      initial = addDummyVKeys(recipe.headScript.numSigners, b1.tx),
+                      initial = addDummySignatures(recipe.headScript.numSigners, b1.tx),
                       changeOutputIdx = 0,
                       protocolParams = recipe.context.protocolParams,
                       resolvedUtxo = recipe.context.utxo,
                       evaluator = recipe.context.evaluator
                     )
-                    .map(tx => removeDummyVKeys(recipe.headScript.numSigners, tx))
+                    .map(tx => removeDummySignatures(recipe.headScript.numSigners, tx))
             }
 
             builder.map(tx => PostDated(depositSpent = recipe.depositTx.depositProduced, tx = tx))
