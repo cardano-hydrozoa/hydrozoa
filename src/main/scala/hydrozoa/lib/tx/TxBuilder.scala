@@ -383,19 +383,25 @@ object TransactionBuilder:
             protocolParams: ProtocolParams,
             evaluator: PlutusScriptEvaluator
         ): Either[TxBalancingError, Context] = {
-            val withVKeys: Transaction = addDummyVKeys(this.expectedSigners.size, this.transaction)
+            val txWithDummySignatures: Transaction =
+                addDummySignatures(this.expectedSigners.size, this.transaction)
+            // println(s"txWithDummySignatures=${HexUtil.encodeHexString(txWithDummySignatures.toCbor)}")
+
             for {
                 balanced <- LowLevelTxBuilder.balanceFeeAndChange(
-                  initial = withVKeys,
+                  initial = txWithDummySignatures,
                   diffHandler = diffHandler,
                   protocolParams = protocolParams,
                   resolvedUtxo = this.getUtxo,
                   evaluator = evaluator
                 )
-                withoutVKeys = removeDummyVKeys(this.expectedSigners.size, this.transaction)
-
+                txWithoutDummySignatures = removeDummySignatures(
+                  this.expectedSigners.size,
+                  balanced
+                )
+                // _ = println(HexUtil.encodeHexString(txWithoutDummySignatures.toCbor))
             } yield Context(
-              transaction = withoutVKeys,
+              transaction = txWithoutDummySignatures,
               redeemers = this.redeemers,
               network = this.network,
               expectedSigners = this.expectedSigners,
@@ -436,6 +442,7 @@ object TransactionBuilder:
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
+                // _ = println(HexUtil.encodeHexString(balancedCtx.transaction.toCbor))
                 validatedCtx <- balancedCtx.validate(validators, protocolParams)
             } yield validatedCtx
     }

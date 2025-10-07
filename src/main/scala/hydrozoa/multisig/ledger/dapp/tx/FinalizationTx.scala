@@ -62,13 +62,13 @@ object FinalizationTx {
 
             LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, b1.tx),
+                  initial = addDummySignatures(recipe.headNativeScript.numSigners, b1.tx),
                   changeOutputIdx = 0,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
                   evaluator = recipe.context.evaluator
                 )
-                .map(tx => removeDummyVKeys(recipe.headNativeScript.numSigners, tx))
+                .map(tx => removeDummySignatures(recipe.headNativeScript.numSigners, tx))
         }
 
         builder.map(tx => FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = tx))

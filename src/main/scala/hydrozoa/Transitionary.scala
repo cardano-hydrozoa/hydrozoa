@@ -484,12 +484,12 @@ extension (txBuilder: TxBuilder)
     }
 
 /** add at most 256 keys */
-def addDummyVKeys(numberOfKeys: Int, tx: Transaction): Transaction = {
+def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
     tx.focus(_.witnessSet.vkeyWitnesses).modify(_ ++ generateUniqueKeys(numberOfKeys))
 }
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
-def removeDummyVKeys(numberOfKeys: Int, tx: Transaction): Transaction = {
+def removeDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
     modifyWs(
       tx,
       ws => ws.copy(vkeyWitnesses = ws.vkeyWitnesses -- generateUniqueKeys(numberOfKeys))
