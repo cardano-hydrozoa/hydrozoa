@@ -86,6 +86,16 @@ object TransactionBuilderStep {
       */
     case class ReferenceOutput(utxo: TransactionUnspentOutput) extends TransactionBuilderStep
 
+    /** Set the minimal fee. */
+    case class Fee(fee: Coin) extends TransactionBuilderStep
+
+    /** Set transactions validity start slot, can be used once.
+      */
+    case class ValidityStartSlot(slot: Long) extends TransactionBuilderStep
+
+    /** Set transaction validity end slot (aka TTL), can be used once. */
+    case class ValidityEndSlot(slot: Long) extends TransactionBuilderStep
+
     /** Add a utxo as a collateral input. Utxo should contain ada only and be controlled by a key,
       * not a script. If you need set collateral outputs ot `totalCollateral` field, please use
       * optics.
@@ -382,19 +392,25 @@ object TransactionBuilder:
             protocolParams: ProtocolParams,
             evaluator: PlutusScriptEvaluator
         ): Either[TxBalancingError, Context] = {
-            val withVKeys: Transaction = addDummyVKeys(this.expectedSigners.size, this.transaction)
+            val txWithDummySignatures: Transaction =
+                addDummySignatures(this.expectedSigners.size, this.transaction)
+            // println(s"txWithDummySignatures=${HexUtil.encodeHexString(txWithDummySignatures.toCbor)}")
+
             for {
                 balanced <- LowLevelTxBuilder.balanceFeeAndChange(
-                  initial = withVKeys,
+                  initial = txWithDummySignatures,
                   diffHandler = diffHandler,
                   protocolParams = protocolParams,
                   resolvedUtxo = this.getUtxo,
                   evaluator = evaluator
                 )
-                withoutVKeys = removeDummyVKeys(this.expectedSigners.size, this.transaction)
-
+                txWithoutDummySignatures = removeDummySignatures(
+                  this.expectedSigners.size,
+                  balanced
+                )
+                // _ = println(HexUtil.encodeHexString(txWithoutDummySignatures.toCbor))
             } yield Context(
-              transaction = withoutVKeys,
+              transaction = txWithoutDummySignatures,
               redeemers = this.redeemers,
               network = this.network,
               expectedSigners = this.expectedSigners,
@@ -435,6 +451,7 @@ object TransactionBuilder:
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
+                // _ = println(HexUtil.encodeHexString(balancedCtx.transaction.toCbor))
                 validatedCtx <- balancedCtx.validate(validators, protocolParams)
             } yield validatedCtx
     }
@@ -588,6 +605,10 @@ object TransactionBuilder:
 
                 _ <- Context.addResolvedUtxo(utxo)
             } yield ()
+
+        case TransactionBuilderStep.Fee(fee)                => useFee(fee)
+        case TransactionBuilderStep.ValidityStartSlot(slot) => useValidityStartSlot(slot)
+        case TransactionBuilderStep.ValidityEndSlot(slot)   => useValidityEndSlot(slot)
 
         case TransactionBuilderStep.AddCollateral(utxo) =>
             for {
@@ -868,6 +889,62 @@ object TransactionBuilder:
                 ctx |> unsafeCtxBodyL.refocus(_.mint).replace(newMint)
             })
         } yield ()
+
+    // -------------------------------------------------------------------------
+    // Spend step
+    // -------------------------------------------------------------------------
+
+    private def useFee(fee: Coin): BuilderM[Unit] = for {
+        ctx <- get0
+        currentFee = ctx.transaction.body.value.fee.value
+        _ <- currentFee match {
+            case 0 =>
+                modify0(
+                  unsafeCtxBodyL
+                      .refocus(_.fee)
+                      .replace(fee)
+                )
+            case nonZero => liftF0(Left(TxBuildError.FeeAlreadySet(nonZero)))
+        }
+    } yield ()
+
+    // -------------------------------------------------------------------------
+    // ValidityStartSlot step
+    // -------------------------------------------------------------------------
+
+    private def useValidityStartSlot(slot: Long): BuilderM[Unit] = for {
+        ctx <- get0
+        currentValidityStartSlot = ctx.transaction.body.value.validityStartSlot
+        _ <- currentValidityStartSlot match {
+            case Some(existingSlot) =>
+                liftF0(Left(TxBuildError.ValidityStartSlotAlreadySet(existingSlot)))
+            case None =>
+                modify0(
+                  unsafeCtxBodyL
+                      .refocus(_.validityStartSlot)
+                      .replace(Some(slot))
+                )
+        }
+    } yield ()
+
+    // -------------------------------------------------------------------------
+    // ValidityEndSlot step
+    // -------------------------------------------------------------------------
+
+    private def useValidityEndSlot(slot: Long): BuilderM[Unit] = for {
+        ctx <- get0
+        currentValidityEndSlot = ctx.transaction.body.value.ttl
+        _ <- currentValidityEndSlot match {
+            case Some(existingSlot) =>
+                liftF0(Left(TxBuildError.ValidityEndSlotAlreadySet(existingSlot)))
+            case None =>
+                modify0(
+                  unsafeCtxBodyL
+                      .refocus(_.ttl)
+                      .replace(Some(slot))
+                )
+        }
+    } yield ()
 
     // -------------------------------------------------------------------------
     // AddCollateral step
@@ -1591,6 +1668,21 @@ object TxBuildError {
     case object ScriptResolutionError extends TxBuildError {
         override def explain: String =
             "An error was returned when trying to resolve scripts for the transaction."
+    }
+
+    case class FeeAlreadySet(currentFee: Long) extends TxBuildError {
+        override def explain: String =
+            s"The fee ($currentFee) is already set. You cannot set the fee more than once."
+    }
+
+    case class ValidityStartSlotAlreadySet(slot: Long) extends TxBuildError {
+        override def explain: String =
+            s"The validity start slot ($slot) is already set. You cannot set the validity start slot more than once."
+    }
+
+    case class ValidityEndSlotAlreadySet(slot: Long) extends TxBuildError {
+        override def explain: String =
+            s"The validity end slot ($slot) is already set. You cannot set the validity end slot more than once."
     }
 }
 

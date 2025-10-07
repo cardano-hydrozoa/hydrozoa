@@ -1,10 +1,8 @@
 package hydrozoa.multisig.protocol
 
-import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
-
-import com.suprnation.actor.ActorRef.NoSendActorRef
-
 import cats.effect.IO
+import com.suprnation.actor.ActorRef.NoSendActorRef
+import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
 
 object ManagerProtocol {
     object Manager {

@@ -1,8 +1,9 @@
 package hydrozoa.multisig.ledger.virtual
 
-import hydrozoa._
+import cats.syntax.all.*
+import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
+import io.bullet.borer.Cbor
 import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -10,13 +11,9 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Hash => SHash, _}
+import scalus.cardano.ledger.{Hash as SHash, *}
 import scalus.ledger.api.v3
-import scalus.prelude.{Option => SOption}
-
-import cats.syntax.all._
-
-import io.bullet.borer.Cbor
+import scalus.prelude.Option as SOption
 
 // A sum type for ledger events
 sealed trait L2Event:

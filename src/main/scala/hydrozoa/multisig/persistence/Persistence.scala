@@ -1,17 +1,14 @@
 package hydrozoa.multisig.persistence
 
-import hydrozoa.multisig.protocol.ConsensusProtocol._
-import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse._
-import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence._
-import hydrozoa.multisig.protocol._
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
-
+import cats.effect.{IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
-
-import cats.effect.{IO, Ref}
-import cats.implicits._
-
+import hydrozoa.multisig.protocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
 import scala.collection.immutable.TreeMap
 
 /** Persistence actor is a mock interface to a key-value store (e.g. RocksDB):

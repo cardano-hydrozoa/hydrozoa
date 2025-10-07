@@ -1,11 +1,9 @@
 package hydrozoa.lib.actor
 
-import com.suprnation.actor.ActorRef.ActorRef
-
 import cats.MonadError
 import cats.effect.Deferred
-import cats.syntax.all._
-
+import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
 import scala.reflect.ClassTag
 
 trait SyncRequest[F[+_], E <: Throwable, Response](implicit

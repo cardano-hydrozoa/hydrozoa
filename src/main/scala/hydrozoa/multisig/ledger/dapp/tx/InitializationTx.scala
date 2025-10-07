@@ -155,14 +155,16 @@ object InitializationTx {
 
             balanced <- LowLevelTxBuilder
                 .balanceFeeAndChange(
-                  initial =
-                      addDummyVKeys(unbalancedTx.expectedSigners.size, unbalancedTx.transaction),
+                  initial = addDummySignatures(
+                    unbalancedTx.expectedSigners.size,
+                    unbalancedTx.transaction
+                  ),
                   changeOutputIdx = 1,
                   protocolParams = recipe.context.protocolParams,
                   resolvedUtxo = recipe.context.utxo,
                   evaluator = recipe.context.evaluator
                 )
-                .map(removeDummyVKeys(headNativeScript.numSigners, _))
+                .map(removeDummySignatures(headNativeScript.numSigners, _))
                 .left
                 .map(OtherScalusBalancingError(_))
 

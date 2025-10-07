@@ -1,14 +1,12 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.protocol.CardanoBackendProtocol._
-import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison._
-import hydrozoa.multisig.protocol.ConsensusProtocol._
-import hydrozoa.multisig.protocol.PersistenceProtocol._
-
-import com.suprnation.actor.Actor.{Actor, Receive}
-
 import cats.effect.{IO, Ref}
-import cats.implicits._
+import cats.implicits.*
+import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
 
 import CardanoLiaison.{Config, ConnectionsPending}
 

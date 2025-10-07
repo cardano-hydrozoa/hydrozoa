@@ -33,9 +33,8 @@ package hydrozoa.multisig.ledger.virtual
   * can be found in `L2ConformanceValidator.scala`.
   */
 
-import hydrozoa._
-
-import scalus.cardano.ledger._
+import hydrozoa.*
+import scalus.cardano.ledger.*
 
 ////////////////////////////////////////
 // Layer 2 state transition system

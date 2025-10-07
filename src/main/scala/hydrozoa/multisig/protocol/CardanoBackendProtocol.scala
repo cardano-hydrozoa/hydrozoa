@@ -1,8 +1,7 @@
 package hydrozoa.multisig.protocol
 
-import com.suprnation.actor.ReplyingActorRef
-
 import cats.effect.IO
+import com.suprnation.actor.ReplyingActorRef
 
 object CardanoBackendProtocol {
     object CardanoBackend {
