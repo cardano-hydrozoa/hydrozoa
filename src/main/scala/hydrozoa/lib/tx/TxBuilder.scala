@@ -845,49 +845,156 @@ object TransactionBuilder:
         witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
     ): BuilderM[Unit] =
         for {
+            // Not allowed to mint 0
             _ <-
                 if amount == 0
                 then liftF0(Left(TxBuildError.CannotMintZero(scriptHash, assetName)))
                 else pure0(())
+
+            // Since we allow monoidal mints, only the final redeemer is kept. We have to remove the old redeemer
+            // before adding the new one, as well as if the monoidal sum of the amounts of this mint
+            // and the existing mint cause the policyId entry to be removed from the mint map.
+            removeRedeemer: BuilderM[Unit] =
+                modify0(
+                  Focus[Context](_.redeemers).modify(
+                    _.filter(detachedRedeemer =>
+                        detachedRedeemer.purpose match {
+                            case RedeemerPurpose.ForMint(hash) => hash != scriptHash
+                            case _                             => true
+                        }
+                    )
+                  )
+                )
+
+            _ <- removeRedeemer
+
+            // Common witness handling
             _ <- useNonSpendingWitness(
               Operation.Minting(scriptHash),
               Credential.ScriptHash(scriptHash),
               witness
             )
-            _ <- modify0(ctx => {
-                val currentMint = ctx |> unsafeCtxBodyL.refocus(_.mint).get
-                val thisMint = MultiAsset.asset(scriptHash, assetName, amount)
 
-                val newMint : Option[Mint] = currentMint match {
-                    // We checked above that amount != 0, so this should be safe.
-                    case None => Some(Mint(thisMint))
-                    case Some(existing) => {
-                        val newOuterMap = existing.assets.updatedWith(scriptHash)({
-                            // If the script hash doesn't exist in the map, we add it.
-                            case None => Some(SortedMap(assetName -> amount))
-                            // If it does exist, we update the underlying map.
-                            case Some(assetMap) => {
-                                val newInnerMap = assetMap.updatedWith(assetName){
-                                    // If the assetName doesn't exist in the underlying map, we set it.
-                                    // If it does, we add the existing and new amounts together and
-                                    // check if they're zero. If they are, we delete the key
-                                    case None => Some(amount)
-                                    case Some(currentAmount) => {
-                                        val newVal = currentAmount + amount
-                                        if newVal == 0 then None else Some(newVal)
-                                    }
+            // This is the tricky part. We handle `Mint` steps monoidally, so we can end up with
+            // reciprocal mints/burns (i.e., +5, -5) that can do one of 3 main things:
+            // 1.) If a mint for the given policyId does not already exist, it creates a new entry.
+            // 2.) If a mint for the given policyId already exists, but no entry for the given asset name exists,
+            //     it creates it.
+            // 3.) If an entry exists for both the policyId and the assetname, it adds the amount in the step to
+            //     the existing amount in the map.
+            //
+            //
+            // In addition
+            //  - Case (1) can:
+            //    - a.) turn a `None : Option[Mint]` into a `Some`.
+            //    - b.) add the policyId to an existing non-empty map
+            //  - Case (3) can either:
+            //    - a.) remove a policyId in the map entirely (if the sum of the amounts are 0 are there are no other
+            //          assets in the map)
+            //    - b.) Turn a `Some(mint) : Option[Mint]` into a `None`, if (a) is true and there were, in addition,
+            //          no other policies left in the map.
+            //
+            // When case (3a) is true, the redeemer corresponding to the policyId must also be removed from the
+            // detached redeemers set in the context.
+            ctx <- get0
+            currentMint = ctx |> unsafeCtxBodyL.refocus(_.mint).get
+            thisMint = MultiAsset.asset(scriptHash, assetName, amount)
+            replaceMint = (newMint: Option[Mint]) =>
+                modify0(unsafeCtxBodyL.refocus(_.mint).replace(newMint))
+
+            _ <- currentMint match {
+                // In this case the mint map was originally completely empty.
+                case None =>
+                    // Above, we check that the amount != 0. Thus:
+                    // Case (1, a) -- create an entirely new, non-empty map
+                    replaceMint(Some(Mint(thisMint)))
+
+                // If this is "Some", we know we have a non-empty mint map -- at least one policyId with at least 1
+                // asset.
+                case Some((existing: Mint)) =>
+                    existing.assets.get(scriptHash) match {
+                        // No current entry for the script hash; this means that "currentAmount" would be 0
+                        // (by invariants of the Mint type) and thus newAmount != 0. So we can add it to the existing map.
+                        case None =>
+                            // Case (1, b)
+                            replaceMint(
+                              Some(
+                                Mint(
+                                  MultiAsset(
+                                    existing.assets
+                                        .updated(scriptHash, SortedMap(assetName -> amount))
+                                  )
+                                )
+                              )
+                            )
+
+                        // There is a current entry for the script hash; thus, we need to look at the inner
+                        // map to decide what to do.
+                        case Some(innerMap) =>
+                            innerMap.get(assetName) match {
+                                // No current entry for the asset name, but there must be at least one other
+                                // asset name associated with the script hash (by the invariants of the Mint type).
+                                // Thus, currentAmount == 0, amount != 0 => newAmount != 0
+                                case None => {
+                                    // Case 2: add a new asset name to an existing policy map
+                                    val newInnerMap = innerMap.updated(assetName, amount)
+                                    val newOuterMap =
+                                        existing.assets.updated(scriptHash, newInnerMap)
+                                    replaceMint(Some(Mint(MultiAsset(newOuterMap))))
                                 }
+                                case Some(currentAmount) =>
+                                    val newAmount: Long = currentAmount + amount
+                                    val newInnerMap: SortedMap[AssetName, Long] =
+                                        if newAmount == 0
+                                        then innerMap.removed(assetName)
+                                        else innerMap.updated(assetName, newAmount)
 
-                                if newInnerMap.isEmpty then None else Some(newInnerMap)
+                                    if newInnerMap.isEmpty
+                                        // The new inner map is empty -- this means that we must remove the policyId
+                                        // from the outer map, and the corresponding redeemer from the Context
+                                    then {
+                                        val newOuterMap = existing.assets.removed(scriptHash)
+                                        val removeRedeemer = modify0(
+                                          Focus[Context](_.redeemers).modify(
+                                            _.filter(detachedRedeemer =>
+                                                detachedRedeemer.purpose match {
+                                                    case RedeemerPurpose.ForMint(hash) =>
+                                                        hash != scriptHash
+                                                    case _ => true
+                                                }
+                                            )
+                                          )
+                                        )
+
+                                        if newOuterMap.isEmpty
+                                        then {
+                                            // The new outerMap is empty. Thus, we have to set the TxBody Mint field to None
+                                            // and remove the redeemer from the context
+                                            for {
+                                                _ <- replaceMint(None)
+                                                _ <- removeRedeemer
+
+                                            } yield ()
+                                        } else
+                                            for {
+                                                // The new outer map is NOT empty. Thus we must only replace the current
+                                                // outer map with OUR outer map, and remove our redeemer
+                                                _ <- replaceMint(
+                                                  Some(Mint(MultiAsset(newOuterMap)))
+                                                )
+                                                _ <- removeRedeemer
+                                            } yield ()
+                                    }
+                                    // In this case, the new inner map is NOT empty. Thus, we only must replace
+                                    // the outer map with the updated inner map.
+                                    else {
+                                        val newOuterMap =
+                                            existing.assets.updated(scriptHash, newInnerMap)
+                                        replaceMint(Some(Mint(MultiAsset(newOuterMap))))
+                                    }
                             }
-                        })
-                        if newOuterMap.isEmpty
-                        then None
-                        else Some(Mint(MultiAsset.safe(newOuterMap)))
                     }
-                }
-                ctx |> unsafeCtxBodyL.refocus(_.mint).replace(newMint)
-            })
+            }
         } yield ()
 
     // -------------------------------------------------------------------------
@@ -1494,16 +1601,16 @@ object TxBuildError {
     // TODO: Remove this error and just use a nonzero type
     case class CannotMintZero(scriptHash: ScriptHash, assetName: AssetName) extends TxBuildError {
         override def explain: String =
-            s"You cannot pass a \"amount = zero\" to a mint step, but we recieved it for" +
+            "You cannot pass a \"amount = zero\" to a mint step, but we recieved it for" +
                 s"(policyId, assetName) == ($scriptHash, $assetName)." +
-                s"\n You should not use the Mint step to calculate your mint amounts."
+                "\n You should not use the Mint step to calculate your mint amounts."
     }
 
     // TODO: more verbose error -- we'll need to pass more information from the assertion/step.
     case class InputAlreadyExists(input: TransactionInput) extends TxBuildError {
         override def explain: String =
             s"The transaction input $input already exists in the transaction as " +
-                s"either an input or reference input."
+                "either an input or reference input."
     }
 
     case class ResolvedUtxosIncoherence(

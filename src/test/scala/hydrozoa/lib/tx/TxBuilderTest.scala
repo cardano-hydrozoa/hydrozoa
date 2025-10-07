@@ -1,43 +1,34 @@
 package hydrozoa.lib.tx
 
 import hydrozoa.lib.optics.*
-import hydrozoa.lib.tx.RedeemerPurpose.{ForMint, ForCert}
-import hydrozoa.lib.tx.ScriptSource.*
-import hydrozoa.lib.tx.TransactionBuilder.{Context, build, ResolvedUtxos}
-import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.TxBuildError.*
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.TransactionBuilder.WitnessKind
-import hydrozoa.{
-    txRedeemersL,
-    txInputsL,
-    txRequiredSignersL,
-    emptyTransaction,
-    txReferenceInputsL,
-    txBodyL
-}
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.Network.{Testnet, Mainnet}
-import scalus.cardano.address.ShelleyDelegationPart.{Null, Key}
-import scalus.cardano.address.{Network, ShelleyPaymentPart, ShelleyAddress}
-import scalus.cardano.ledger.Certificate.UnregCert
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Hash.given
-import scalus.cardano.ledger.RedeemerTag
-import scalus.cardano.ledger.Timelock.AllOf
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Mint as TxBodyMint, *}
-import scalus.|>
-
-import scala.collection.immutable.{SortedMap, SortedSet}
+import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
+import hydrozoa.lib.tx.ScriptSource.*
+import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, WitnessKind, build}
+import hydrozoa.lib.tx.TransactionBuilderStep.*
+import hydrozoa.lib.tx.TxBuildError.*
+import hydrozoa.{emptyTransaction, txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
 import org.scalacheck.Gen
-import test.TestPeer.Alice
+import scala.collection.immutable.{SortedMap, SortedSet}
+import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
+import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.Certificate.UnregCert
+import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.Hash.given
+import scalus.cardano.ledger.Mint as TxBodyMint
+import scalus.cardano.ledger.Timelock.AllOf
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{RedeemerTag, *}
+import scalus.|>
 import test.*
+import test.TestPeer.Alice
 
 class TxBuilderTest extends munit.ScalaCheckSuite {
 
@@ -496,14 +487,14 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
 
     val mintSigners = Set(ExpectedSigner(genAddrKeyHash.sample.get))
     // Mint the given amount of tokens from script 1
-    def mintScript1(amount: Long): Mint =
+    def mintScript1(amount: Long, redeemer: Data = Data.List(List.empty)): Mint =
         Mint(
           scriptHash = scriptHash1,
           assetName = AssetName.empty,
           amount = amount,
           witness = TwoArgumentPlutusScriptWitness(
             scriptSource = PlutusScriptValue(script1),
-            redeemer = Data.List(List.empty),
+            redeemer = redeemer,
             additionalSigners = mintSigners
           )
         )
@@ -517,7 +508,66 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "Mint 0 via reciprocal mint/burn",
       steps = List(mintScript1(5), mintScript1(-5)),
+      expected =
+          // NOTE: In the case of reciprocal mint/burns, we don't strip script witnesses or signatures because
+          // we don't currently track the purposes associated with these objects.
+          Context.empty(Mainnet).toTuple
+              |> transactionL.refocus(_.witnessSet.plutusV1Scripts).modify(_ + script1)
+              |> (transactionL >>> txBodyL
+                  .refocus(_.requiredSigners))
+                  .replace(TaggedOrderedSet.from(mintSigners.map(_.hash)))
+              |> expectedSignersL.replace(mintSigners)
+    )
+
+    testBuilderSteps(
+      label = "Mint 0 via reciprocal mint/burn with different redeemers",
+      steps = List(mintScript1(5), mintScript1(-5, Data.List(List(Data.List(List.empty))))),
+      expected =
+          // NOTE: In the case of reciprocal mint/burns, we don't strip script witnesses or signatures because
+          // we don't currently track the purposes associated with these objects.
+          Context.empty(Mainnet).toTuple
+              |> transactionL.refocus(_.witnessSet.plutusV1Scripts).modify(_ + script1)
+              |> (transactionL >>> txBodyL
+                  .refocus(_.requiredSigners))
+                  .replace(TaggedOrderedSet.from(mintSigners.map(_.hash)))
+              |> expectedSignersL.replace(mintSigners)
+    )
+
+    testBuilderSteps(
+      label = "Monoidal mint with same policy id but different redeemers",
+      steps = List(mintScript1(1), mintScript1(1, Data.List(List(Data.List(List.empty))))),
       expected = Context.empty(Mainnet).toTuple
+          |> (transactionL >>> txBodyL.refocus(_.mint))
+              .replace(Some(TxBodyMint(MultiAsset.from((scriptHash1, AssetName.empty, 2L)))))
+          |> transactionL.refocus(_.witnessSet.plutusV1Scripts).modify(_ + script1)
+          |> (transactionL >>> txBodyL
+              .refocus(_.requiredSigners))
+              .replace(TaggedOrderedSet.from(mintSigners.map(_.hash)))
+          |> expectedSignersL.replace(mintSigners)
+          |> transactionL
+              .refocus(_.witnessSet.redeemers)
+              .replace(
+                Some(
+                  KeepRaw(
+                    Redeemers(
+                      Redeemer(
+                        tag = RedeemerTag.Mint,
+                        index = 0,
+                        data = Data.List(List(Data.List(List.empty))),
+                        exUnits = ExUnits.zero
+                      )
+                    )
+                  )
+                )
+              )
+          |> ctxRedeemersL.replace(
+            List(
+              DetachedRedeemer(
+                datum = Data.List(List(Data.List(List.empty))),
+                purpose = ForMint(scriptHash1)
+              )
+            )
+          )
     )
 
     testBuilderSteps(
