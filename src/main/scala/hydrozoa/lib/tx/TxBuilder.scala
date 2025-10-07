@@ -1867,9 +1867,29 @@ def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
 //  Thus, I think we could _maybe_ define some utility functions for balancing/finalization using RecipeType,
 //  but that's probably about it.
 trait BuildableTx:
+    // RWST: ReaderT[Recipe, StateT[InternalData, ExceptT[ErrorType, [_]]], []]
+    // Basically, we want:
+    // - a ReaderT with the Recipe
+    // - A StateT with the InternalData and steps
+    // - An ExceptT the can throw BuildErrors
+    // - A WriterT than can log the effects that were run
+    // 
+    // The build stages than proceed as follows: 
+    //  - 1.) Pre-processing: lift a computation `Recipe -> InternalData` into the monad stack.
+    //        This extracts all data that is necessary for deciding which steps to run and 
+    //        to make available for the final post-processing
+    //  - 2.) Step definition: lift a computation `(Recipe, InternalData) -> Seq(Steps)
+    //        into the monad. This actually defines the computation we need to run
+    //  - 3.) Run the computation itself, balancing and finalizing
+    //  - 4.) Post-processing: this is where we combine the results of 1 + 3 to 
+    //        return an "augmented transaction"
+    
     type TxType
+    type InternalData
     type RecipeType <: BuilderRecipe
     type ErrorType >: BuildError
+    def preprocess(recipe: RecipeType): InternalData
+    
     def augmentTx(tx: Transaction): TxType
     def recipeToSteps(recipe: RecipeType): Seq[TransactionBuilderStep]
     final def build(recipe: RecipeType, diffHandler: DiffHandler): Either[ErrorType, TxType] =
@@ -1900,6 +1920,7 @@ trait BuilderRecipe:
     val evaluator: PlutusScriptEvaluator
     val validators: Seq[Validator]
 
+// These are the errors that can be thrown by a higher-level TxBuilder. It needs a better name
 enum BuildError:
     case StepError(e: TxBuildError)
     case BalancingError(e: TxBalancingError)

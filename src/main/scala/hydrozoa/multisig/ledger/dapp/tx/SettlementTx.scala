@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -10,6 +11,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.{addDummySignatures, removeDummySignatures}
+
 import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
@@ -19,6 +21,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -38,12 +41,9 @@ object SettlementTx {
         context: BuilderContext
     )
 
-    enum BuildError:
-        case SomeBuilderError(e: TxBuildError)
-        case OtherScalusBalancingError(e: TxBalancingError)
-        case OtherScalusTransactionException(e: TransactionException)
-
     def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
+        //////////////////////////////////////////////////////
+        // Data extraction
 
         val headAddress = recipe.headNativeScript.address(recipe.context.network)
 
@@ -72,64 +72,75 @@ object SettlementTx {
 
         val treasuryValue: Value = inputsValue - withdrawnValue
 
-        val steps =
-            // Spend Treasury and Deposits
-            utxos.toSeq.map(utxo =>
-                Spend(
-                  TransactionUnspentOutput(
-                    utxo._1,
-                    utxo._2
-                  ),
-                  witness = NativeScriptWitness(
-                    NativeScriptValue(recipe.headNativeScript.script),
-                    recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
-                        .map(ExpectedSigner(_))
-                  )
-                )
-            )
-                ++ Seq(
-                  // Treasury Output
-                  Send(
-                    Babbage(
-                      address = headAddress,
-                      value = treasuryValue,
-                      datumOption = Some(Inline(treasuryDatum.toData)),
-                      scriptRef = None
-                    )
-                  ),
-                  ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
-                ) ++ {
-                    if recipe.utxosWithdrawn.isEmpty then Seq.empty
-                    else Seq(Send(Babbage(address = headAddress, value = withdrawnValue)))
-                }
+        /////////////////////////////////////////////////////////////
+        // Step definition
 
+        val spendRecipeAndDeposits: Seq[Spend] = utxos.toSeq.map(utxo =>
+            Spend(
+              TransactionUnspentOutput(
+                utxo._1,
+                utxo._2
+              ),
+              witness = NativeScriptWitness(
+                NativeScriptValue(recipe.headNativeScript.script),
+                recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
+                    .map(ExpectedSigner(_))
+              )
+            )
+        )
+
+        val createTreasuryOutput =
+            Send(
+              Babbage(
+                address = headAddress,
+                value = treasuryValue,
+                datumOption = Some(Inline(treasuryDatum.toData)),
+                scriptRef = None
+              )
+            )
+
+        val modifyAuxiliaryData =
+            ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
+
+        // N.B.: Withdrawals may be empty
+        val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
+
+        val steps = spendRecipeAndDeposits
+            .appended(createTreasuryOutput)
+            .appended(modifyAuxiliaryData)
+            .appendedAll(createWithdrawals)
+
+        //////////////////////////////////////////////////////////////////////////////
+        // Build and finalize
         for {
             unbalanced <- TransactionBuilder
-                .build(Mainnet, steps)
+                .build(recipe.context.network, steps)
                 .left
-                .map(BuildError.SomeBuilderError(_))
-            balanced <- LowLevelTxBuilder
-                .balanceFeeAndChange(
-                  initial =
-                      addDummySignatures(unbalanced.expectedSigners.size, unbalanced.transaction),
-                  changeOutputIdx = 0,
-                  protocolParams = recipe.context.protocolParams,
-                  resolvedUtxo = recipe.context.utxo,
-                  evaluator = recipe.context.evaluator
+                .map(BuildError.StepError(_))
+            finalized <- unbalanced
+                .finalizeContext(
+                  recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    0
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
                 )
-                .map(tx => removeDummySignatures(recipe.headNativeScript.numSigners, tx))
                 .left
-                .map(BuildError.OtherScalusBalancingError(_))
-            validated <- recipe.context
-                .validate(balanced)
-                .left
-                .map(BuildError.OtherScalusTransactionException(_))
+                .map({
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        ValidationError(validationError)
+                })
 
+            /////////////////////////////////////////////////////////////////////////
+            // Post-process result
         } yield (
           SettlementTx(
             treasurySpent = recipe.treasuryUtxo,
             treasuryProduced = recipe.treasuryUtxo.copy(
-              txId = TransactionInput(transactionId = validated.id, index = 0),
+              txId = TransactionInput(transactionId = finalized.transaction.id, index = 0),
               value = treasuryValue,
               datum = treasuryDatum
             ),
@@ -139,11 +150,14 @@ object SettlementTx {
                 else
                     Some(
                       RolloutUtxo(
-                        (TransactionInput(validated.id, 1), validated.body.value.outputs(1).value)
+                        (
+                          TransactionInput(finalized.transaction.id, 1),
+                          finalized.transaction.body.value.outputs(1).value
+                        )
                       )
                     )
             ,
-            tx = validated
+            tx = finalized.transaction
           )
         )
 

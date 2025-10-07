@@ -2,27 +2,17 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{
-    ExpectedSigner,
-    NativeScriptWitness,
-    PubKeyWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput,
-    TxBuildError
-}
+import hydrozoa.lib.tx.{BuildError, ExpectedSigner, NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
-import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.BuildError.{
-    OtherScalusBalancingError,
-    OtherScalusTransactionException,
-    SomeBuilderError
-}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
@@ -31,6 +21,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -78,12 +69,10 @@ object InitializationTx {
         txSerialized: Array[Byte]
     ): Either[ParseError, InitializationTx] = ???
 
-    enum BuildError:
-        case SomeBuilderError(e: TxBuildError)
-        case OtherScalusBalancingError(e: TxBalancingError)
-        case OtherScalusTransactionException(e: TransactionException)
-
     def build(recipe: Recipe): Either[BuildError, InitializationTx] = {
+        ////////////////////////////////////////////////////////////
+        // Data extraction
+
         // Construct head native script directly from the list of peers
         val headNativeScript = HeadMultisigScript(recipe.peers)
 
@@ -103,88 +92,78 @@ object InitializationTx {
 
         val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
-        //// Change Output
-        //// TODO: let x be the imbalace of the transaction
-        //// if 0 <= x < minAda, then we should pay to treasury
-        //// if minAda <= x, then we should use a change output
-        // .addOutputs(
-        //  List(
-        //    Babbage(
-        //      address = recipe.changeAddress,
-        //      value = Value.zero,
-        //      datumOption = None,
-        //      scriptRef = None
-        //    )
-        //  )
-        // )
+        /////////////////////////////////////////////////////////
+        // Steps
+        val spendSeedUtxos: Seq[Spend] = recipe.seedUtxos
+            .map(utxo =>
+                Spend(
+                  TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                  PubKeyWitness
+                )
+            )
+            .toList
 
+        val mintBeaconToken = Mint(
+          headNativeScript.script.scriptHash,
+          headTokenName,
+          1,
+          NativeScriptWitness(
+            NativeScriptValue(headNativeScript.script),
+            headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
+          )
+        )
+
+        val createTreasury: Send = Send(
+          Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
+        )
+
+        val createChangeOutput = Send(Babbage(recipe.changeAddress, Value.zero, None, None))
+
+        val modifyAuxiliaryData =
+            ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
+
+        val steps = spendSeedUtxos
+            .appended(mintBeaconToken)
+            .appended(createTreasury)
+            .appended(createChangeOutput)
+            .appended(modifyAuxiliaryData)
+
+        
+        ////////////////////////////////////////////////////////////
+        // Build and finalize
         for {
 
-            unbalancedTx <- TransactionBuilder
+            unbalanced <- TransactionBuilder
                 .build(
-                  Mainnet,
-                  recipe.seedUtxos
-                      .map(utxo =>
-                          Spend(
-                            TransactionUnspentOutput.apply(utxo._1, utxo._2),
-                            PubKeyWitness
-                          )
-                      )
-                      .toList
-                      ++ List(
-                        Mint(
-                          headNativeScript.script.scriptHash,
-                          headTokenName,
-                          1,
-                          NativeScriptWitness(
-                            NativeScriptValue(headNativeScript.script),
-                            headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
-                          )
-                        ),
-                        Send(
-                          Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
-                        ),
-                        Send(Babbage(recipe.changeAddress, Value.zero, None, None)),
-                        ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
-                      )
+                  recipe.context.network,
+                  steps
                 )
                 .left
-                .map(SomeBuilderError(_))
-
-            // _ = println(HexUtil.encodeHexString(unbalancedTx.toCbor))
-
-            balanced <- LowLevelTxBuilder
-                .balanceFeeAndChange(
-                  initial = addDummySignatures(
-                    unbalancedTx.expectedSigners.size,
-                    unbalancedTx.transaction
-                  ),
-                  changeOutputIdx = 1,
-                  protocolParams = recipe.context.protocolParams,
-                  resolvedUtxo = recipe.context.utxo,
-                  evaluator = recipe.context.evaluator
-                )
-                .map(removeDummySignatures(headNativeScript.numSigners, _))
-                .left
-                .map(OtherScalusBalancingError(_))
-
-            validated <- recipe.context
-                .validate(balanced)
-                .left
-                .map(OtherScalusTransactionException(_))
+                .map(BuildError.StepError(_))
+            
+            finalized <- unbalanced.finalizeContext(
+                protocolParams = recipe.context.protocolParams,
+                diffHandler = new ChangeOutputDiffHandler(recipe.context.protocolParams, 1).changeOutputDiffHandler,
+                evaluator = recipe.context.evaluator,
+                validators = recipe.context.validators
+            ).left.map({
+                case balanceError: TxBalancingError => BalancingError(balanceError)
+                case validationError: TransactionException =>
+                    ValidationError(validationError)
+            })
 
         } yield (InitializationTx(
           treasuryProduced = TreasuryUtxo(
             headTokenName = headTokenName,
             txId = TransactionInput(
-              transactionId = validated.id,
+              transactionId = finalized.transaction.id,
               index = 0
             ),
             addr = headAddress,
             datum = datum,
             value = headValue
           ),
-          tx = validated
+          tx = finalized.transaction
         ))
     }
 }

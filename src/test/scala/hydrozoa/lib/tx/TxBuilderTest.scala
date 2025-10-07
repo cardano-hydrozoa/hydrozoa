@@ -8,7 +8,14 @@ import hydrozoa.lib.tx.ScriptSource.*
 import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, WitnessKind, build}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TxBuildError.*
-import hydrozoa.{emptyTransaction, txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
+import hydrozoa.{
+    emptyTransaction,
+    txBodyL,
+    txInputsL,
+    txRedeemersL,
+    txReferenceInputsL,
+    txRequiredSignersL
+}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
@@ -22,10 +29,9 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Hash.given
-import scalus.cardano.ledger.Mint as TxBodyMint
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{RedeemerTag, *}
+import scalus.cardano.ledger.{Mint as TxBodyMint, RedeemerTag, *}
 import scalus.|>
 import test.*
 import test.TestPeer.Alice
@@ -432,7 +438,7 @@ class TxBuilderTest extends munit.ScalaCheckSuite {
     testBuilderSteps(
       label = "MintAsset #1",
       steps = List(
-        Mint(
+        TransactionBuilderStep.Mint(
           scriptHash = scriptHash1,
           assetName = AssetName(ByteString.fromHex("deadbeef")),
           amount = 1L,

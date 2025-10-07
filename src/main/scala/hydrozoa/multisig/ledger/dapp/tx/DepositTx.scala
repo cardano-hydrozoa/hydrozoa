@@ -1,14 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{BuildError, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
+
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
@@ -83,11 +84,6 @@ object DepositTx {
 
     }
 
-    enum BuildError:
-        case SomeBuilderError(e: TxBuildError)
-        case OtherScalusBalancingError(e: TxBalancingError)
-        case OtherScalusTransactionException(e: TransactionException)
-
     def build(recipe: Recipe): Either[BuildError, DepositTx] = {
         val depositValue: Value =
             Value(coin = recipe.depositAmount)
@@ -121,11 +117,11 @@ object DepositTx {
             )
 
         for {
-            b1 <- TransactionBuilder
+            unbalanced <- TransactionBuilder
                 .build(recipe.context.network, steps)
                 .left
-                .map(SomeBuilderError(_))
-            finalized <- b1
+                .map(StepError(_))
+            finalized <- unbalanced
                 .finalizeContext(
                   recipe.context.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
@@ -137,9 +133,9 @@ object DepositTx {
                 )
                 .left
                 .map({
-                    case balanceError: TxBalancingError => OtherScalusBalancingError(balanceError)
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
                     case validationError: TransactionException =>
-                        OtherScalusTransactionException(validationError)
+                        ValidationError(validationError)
                 })
         } yield DepositTx(
           depositProduced = DepositUtxo(
