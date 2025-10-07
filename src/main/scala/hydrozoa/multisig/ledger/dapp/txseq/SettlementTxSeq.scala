@@ -4,10 +4,20 @@ import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput}
+import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import scalus.cardano.ledger.Coin
+import scalus.cardano.ledger.TransactionInput
+import scalus.cardano.ledger.TransactionOutput
 
 object SettlementTxSeq {
+
+    def build(args: Args): Result =
+        val (i1, deposits) = unfold(args)
+        val i2 = traverseFee(i1)
+        val seq = traverseInput(i2)
+        Result(seq, deposits)
 
     case class Args(
         majorVersion: Int,
@@ -17,51 +27,72 @@ object SettlementTxSeq {
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo
     )
-    
+
+    case class Result(
+        txSeq: SettlementTxSeq,
+        deposits: Deposits
+    )
+
+    case class Deposits(
+        depositsAbsorbed: List[DepositUtxo],
+        depositsPostponed: List[DepositUtxo]
+    )
+
+    // -------------------------------------------------------------------------
+    // 1. unfold
+    // -------------------------------------------------------------------------
+
+    def unfold(args: Args): (Intermediate1, Deposits) = ???
+
     case class Intermediate1(
         settlementTx: Coin => SettlementTx,
         fallbackTx: TreasuryUtxo => FallbackTx,
         rolloutTxs: List[Coin => (RolloutUtxo => RolloutTx, Coin)]
     )
+
+    // -------------------------------------------------------------------------
+    // 2. traverse fee
+    // -------------------------------------------------------------------------
+
+    def traverseFee(intermediate1: Intermediate1): Intermediate2 = ???
+
+    case class Intermediate2(
+        settlementTx: SettlementTx,
+        fallbackTx: TreasuryUtxo => FallbackTx,
+        rolloutTxs: List[RolloutUtxo => RolloutTx]
+    )
+
+    // -------------------------------------------------------------------------
+    // 3. traverse input
+    // -------------------------------------------------------------------------
+
+    def traverseInput(intermediate2: Intermediate2): SettlementTxSeq =
+        for {
+            _ <- ???
+        } yield SettlementTxSeq(
+          settlementTx = ???,
+          fallbackTx = ???,
+          rolloutTxs = ???
+        )
+        
+    case class SettlementTxSeq(
+        settlementTx: SettlementTx,
+        fallbackTx: FallbackTx,
+        rolloutTxs: List[RolloutTx]
+    )
+
+    // -------------------------------------------------------------------------
     
     object SettlementTx {
         def build(args: Args)(coin: Coin): SettlementTx = {
             ???
         }
     }
-    
+
     object RolloutTx {
         def build(args: Any)(coin: Coin): (RolloutUtxo => RolloutTx, Coin) = {
             ???
         }
     }
 
-    case class Result(
-        settlementTx: SettlementTx,
-        fallbackTx: FallbackTx,
-        rolloutTxs: List[RolloutTx],
-        depositsAbsorbed: NonEmptyList[DepositUtxo],
-        depositsPostponed: List[DepositUtxo]
-    )
-
-    def run(recipe: SettlementTx.Recipe) = {
-
-        // Unfinished settlement tx with
-        //  - treasury input/output
-        //  - native script (implicitly)
-        //  - dummy signatures (implicitly)
-        //  - limited number of deposits as tx inputs
-        //  - dummy maximum rollout output
-        //  - as many withdrawals
-
-        /*
-
-     (AdaRequired -> SettlementT,
-      [AdaRequired -> RolloutTx],
-      ProducedTreasury -> FallbackTx
-     )
-
-         */
-
-    }
 }
