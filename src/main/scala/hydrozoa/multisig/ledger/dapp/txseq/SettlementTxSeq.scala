@@ -4,10 +4,8 @@ import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import scalus.cardano.ledger.TransactionInput
-import scalus.cardano.ledger.TransactionOutput
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput}
 
 object SettlementTxSeq {
 
@@ -19,6 +17,24 @@ object SettlementTxSeq {
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo
     )
+    
+    case class Intermediate1(
+        settlementTx: Coin => SettlementTx,
+        fallbackTx: TreasuryUtxo => FallbackTx,
+        rolloutTxs: List[Coin => (RolloutUtxo => RolloutTx, Coin)]
+    )
+    
+    object SettlementTx {
+        def build(args: Args)(coin: Coin): SettlementTx = {
+            ???
+        }
+    }
+    
+    object RolloutTx {
+        def build(args: Any)(coin: Coin): (RolloutUtxo => RolloutTx, Coin) = {
+            ???
+        }
+    }
 
     case class Result(
         settlementTx: SettlementTx,
