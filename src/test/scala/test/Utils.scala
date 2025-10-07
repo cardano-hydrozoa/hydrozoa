@@ -1,25 +1,27 @@
 package test
 
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
-import monocle.syntax.all.*
-import org.scalacheck.*
-import org.scalacheck.Gen.{const, posNum}
+
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.*
+import scalus.cardano.ledger._
+import scalus.cardano.ledger.rules._
 import scalus.cardano.ledger.txbuilder.{BuilderContext, UtxoProvider}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.prelude.Option as SOption
+import scalus.prelude.{Option => SOption}
 import scalus.uplc.eval.ExBudget
-import test.TestPeer.Alice
 
 import scala.language.postfixOps
+
+import monocle.syntax.all._
+import org.scalacheck.Gen.{const, posNum}
+import org.scalacheck._
+import test.TestPeer.Alice
 
 val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
@@ -62,7 +64,7 @@ def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
     )
 }
 
-val genTxId: Gen[TransactionInput] =
+val genTransactionInput: Gen[TransactionInput] =
     for {
         txId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         index <- posNum[Int] // we subtract one below to get a non-negative
@@ -110,7 +112,7 @@ def genAdaOnlyPubKeyUtxo(
     params: ProtocolParams = blockfrost544Params
 ): Gen[(TransactionInput, Babbage)] =
     for {
-        txId <- genTxId
+        txId <- genTransactionInput
         value <- genAdaOnlyValue
     } yield (
       txId,

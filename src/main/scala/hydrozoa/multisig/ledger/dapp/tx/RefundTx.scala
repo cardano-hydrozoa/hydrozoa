@@ -1,22 +1,19 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.*
+import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.BuildError.*
+import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.*
-import scalus.cardano.address.Network
+import scala.language.implicitConversions
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.txbuilder.{
-    BuilderContext,
-    LowLevelTxBuilder,
-    SelectInputs,
-    TxBalancingError
-}
-
-import scala.language.implicitConversions
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -48,7 +45,10 @@ object RefundTx {
             validityStartSlot: Slot
         )
 
-        def build(recipe: Recipe): Either[TxBalancingError, PostDated] = {
+        def build(recipe: Recipe): Either[BuildError, PostDated] = {
+            /////////////////////////////////////////////////////////////////////
+            // Data extraction
+
             val deposit = recipe.depositTx.depositProduced
             // NB: Fee is paid from deposit itself
             val depositDatum = deposit._3
@@ -59,37 +59,62 @@ object RefundTx {
                   value = Value(deposit._4),
                   datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
                 )
-            val requiredSigners = recipe.headScript.requiredSigners
 
-            val builder = {
-                val b1 = recipe.context.buildNewTx
-                    .attachNativeScript(script = recipe.headScript.script, index = 0)
-                    .selectInputs(
-                      SelectInputs.particular(
-                        Set(TransactionInput(recipe.depositTx.tx.id, recipe.txIx))
-                      )
-                    )
-                    .addOutputs(Seq(refundOutput))
-                    .validFrom(recipe.validityStartSlot)
-                    .setAuxData(
-                      MD(
-                        MD.L1TxTypes.RefundPostDated,
-                        recipe.headScript.address(recipe.context.network)
-                      )
-                    )
+            /////////////////////////////////////////////////////////////////////
+            // Step definitions
 
-                LowLevelTxBuilder
-                    .balanceFeeAndChange(
-                      initial = addDummyVKeys(recipe.headScript.numSigners, b1.tx),
-                      changeOutputIdx = 0,
-                      protocolParams = recipe.context.protocolParams,
-                      resolvedUtxo = recipe.context.utxo,
-                      evaluator = recipe.context.evaluator
-                    )
-                    .map(tx => removeDummyVKeys(recipe.headScript.numSigners, tx))
-            }
+            val spendDeposit = Spend(
+              utxo = TransactionUnspentOutput(recipe.depositTx.depositProduced.toUtxo),
+              witness = NativeScriptWitness(
+                scriptSource = NativeScriptValue(recipe.headScript.script),
+                additionalSigners =
+                    recipe.headScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+              )
+            )
 
-            builder.map(tx => PostDated(depositSpent = recipe.depositTx.depositProduced, tx = tx))
+            val createRefund: Send = Send(refundOutput)
+
+            val setValidity = ValidityStartSlot(recipe.validityStartSlot.slot)
+
+            val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
+                Some(
+                  MD(
+                    MD.L1TxTypes.RefundPostDated,
+                    recipe.headScript.address(recipe.context.network)
+                  )
+                )
+            )
+
+            val steps = List(spendDeposit, createRefund, setValidity, modifyAuxiliaryData)
+
+            //////////////////////////////////////////////////////////////////////
+            // Build and finalize
+
+            for {
+                unbalanced <- TransactionBuilder
+                    .build(recipe.context.network, steps)
+                    .left
+                    .map(StepError(_))
+                finalized <- unbalanced
+                    .finalizeContext(
+                      recipe.context.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        recipe.context.protocolParams,
+                        0
+                      ).changeOutputDiffHandler,
+                      evaluator = recipe.context.evaluator,
+                      validators = recipe.context.validators
+                    )
+                    .left
+                    .map({
+                        case balanceError: TxBalancingError => BalancingError(balanceError)
+                        case validationError: TransactionException =>
+                            ValidationError(validationError)
+                    })
+            } yield PostDated(
+              depositSpent = recipe.depositTx.depositProduced,
+              tx = finalized.transaction
+            )
         }
 
     }

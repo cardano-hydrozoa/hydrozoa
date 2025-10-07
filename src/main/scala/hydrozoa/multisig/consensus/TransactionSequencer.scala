@@ -1,20 +1,17 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.Deferred
-import cats.effect.IO
-import cats.effect.Ref
+import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
-import com.suprnation.actor.Actor.Actor
-import com.suprnation.actor.Actor.Receive
+import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-
-import scala.collection.immutable.Queue
-import TransactionSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
+import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, Peer}
+import scala.collection.immutable.Queue
+
+import TransactionSequencer.{Config, ConnectionsPending}
 
 /** Transaction sequencer receives local submissions of new ledger events and emits them
   * sequentially into the consensus system.

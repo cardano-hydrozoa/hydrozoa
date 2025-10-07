@@ -7,7 +7,6 @@ import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-
 import scalus.cardano.ledger.Timelock.{AllOf, Signature}
 
 case class HeadMultisigScript(private val script0: Script.Native) {

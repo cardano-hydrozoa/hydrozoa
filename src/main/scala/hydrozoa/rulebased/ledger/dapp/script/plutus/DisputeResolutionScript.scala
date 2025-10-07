@@ -1,52 +1,63 @@
-package hydrozoa.rulebased.ledger.l1.script.plutus
+package hydrozoa.rulebased.ledger.dapp.script.plutus
 
-import cats.syntax.group.*
-import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
-    Continuing,
-    Removed
-}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
-    TreasuryDatum,
-    cip67BeaconTokenPrefix
-}
-import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.cardano.address.Network
-//import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryScript.plutusScript
 import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
+    Continuing,
+    Removed
+}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import scalus.*
 import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, Eq, List, Option, SortedMap, Validator, fail, log, require}
+import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
+import scalus.uplc.DeBruijnedProgram
+
+import VoteState.VoteDatum
+import VoteState.VoteStatus
 
 @Compile
 object DisputeResolutionValidator extends Validator {
 
     // Redeemer
-    enum DisputeRedeemer derives FromData, ToData:
+    enum DisputeRedeemer:
         case Vote(voteRedeemer: VoteRedeemer)
         case Tally(tallyRedeemer: TallyRedeemer)
         case Resolve
 
-    case class VoteRedeemer(
-        blockHeader: BlockHeader,
-        multisig: List[Signature]
-    ) derives FromData,
-          ToData
+    given FromData[DisputeRedeemer] = FromData.derived
+    given ToData[DisputeRedeemer] = ToData.derived
 
-    case class BlockHeader(
+    case class VoteRedeemer(
+        blockHeader: OnchainBlockHeader,
+        multisig: List[Signature]
+    )
+
+    given FromData[VoteRedeemer] = FromData.derived
+    given ToData[VoteRedeemer] = ToData.derived
+
+    /** After an attempt to make types form hydrozoa.multisig.protocol.types onchain-compatible we
+      * decided to go for having a separate type to use onchain. Mostly because opaque types don't
+      * seem to work well with deriving machinery.
+      *
+      * TODO: implement the function: onchainBlockHeader :: BlockHeaderMinor -> OnchainBlockHeader
+      *
+      * NB: The signing function should use this type.
+      */
+    case class OnchainBlockHeader(
         blockNum: BigInt,
         blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
         timeCreation: PosixTime, // the same
@@ -56,17 +67,26 @@ object DisputeResolutionValidator extends Validator {
     ) derives FromData,
           ToData
 
+    given FromData[OnchainBlockHeader] = FromData.derived
+    given ToData[OnchainBlockHeader] = ToData.derived
+
     // EdDSA / ed25519 signature
     private type Signature = ByteString
 
-    enum TallyRedeemer derives FromData, ToData:
-        case Continuing
-        case Removed
-
-    enum BlockTypeL2 derives CanEqual, FromData, ToData:
+    enum BlockTypeL2:
         case Minor
         case Major
         case Final
+
+    given FromData[BlockTypeL2] = FromData.derived
+    given ToData[BlockTypeL2] = ToData.derived
+
+    enum TallyRedeemer:
+        case Continuing
+        case Removed
+
+    given FromData[TallyRedeemer] = FromData.derived
+    given ToData[TallyRedeemer] = ToData.derived
 
     inline def cip67DisputeTokenPrefix = hex"00d950b0"
 
@@ -135,7 +155,8 @@ object DisputeResolutionValidator extends Validator {
 
     // Utility to decide which vote is higher
     private def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{NoVote, Vote}
+        import VoteStatus.NoVote
+        import VoteStatus.Vote
         a match {
             case NoVote => b
             case Vote(ad) =>
@@ -204,7 +225,7 @@ object DisputeResolutionValidator extends Validator {
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
                 val treasuryDatum =
-                    treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                    treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
                         case _                           => fail(VoteTreasuryDatum)
                     }
@@ -226,11 +247,10 @@ object DisputeResolutionValidator extends Validator {
                   treasuryDatum.peers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
                 )
-
-                List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                @annotation.unused
+                val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
                     require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                ): Unit
-
+                )
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
                   voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor,
@@ -379,7 +399,7 @@ object DisputeResolutionValidator extends Validator {
                     // headMp and disputeId must match the corresponding fields of the Unresolved
                     // datum in treasury
                     val treasuryDatum =
-                        treasuryReference.resolved.inlineDatumOfType[TreasuryDatum] match {
+                        treasuryReference.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                             case Unresolved(unresolvedDatum) => unresolvedDatum
                             case _                           => fail(TreasuryDatumIsUnresolved)
                         }
@@ -449,7 +469,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[TreasuryDatum] match {
+                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
                         case Unresolved(unresolvedDatum) => unresolvedDatum
                         case _                           => fail(ResolveDatumIsUnresolved)
                     }
@@ -461,21 +481,46 @@ object DisputeResolutionValidator extends Validator {
 
 }
 
+/** Native Scalus implementation for DisputeResolutionScript Eliminates dependency on Bloxbean for
+  * script creation
+  */
 object DisputeResolutionScript {
-    lazy val sir = Compiler.compile(DisputeResolutionValidator.validate)
-    lazy val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    // Compile the validator to Scalus Intermediate Representation (SIR)
+    // Using def instead of lazy val to avoid stack overflow during tests
+    private def compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
 
-    // TODO: can we use Scalus for that?
-    lazy val plutusScript: PlutusV3Script = PlutusV3Script
-        .builder()
-        .`type`("PlutusScriptV3")
-        .cborHex(script.doubleCborHex)
-        .build()
-        .asInstanceOf[PlutusV3Script]
+    // Convert to optimized UPLC with error traces for PlutusV3
+    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    private def compiledPlutusV3Program = compiledUplc.plutusV3
 
-    lazy val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    // Native Scalus PlutusScript - no Bloxbean dependency needed
+    private def compiledDeBruijnedProgram: DeBruijnedProgram =
+        compiledPlutusV3Program.deBruijnedProgram
 
-    lazy val scriptHashString: String = HexUtil.encodeHexString(plutusScript.getScriptHash)
+    // Various encoding formats available natively in Scalus
+    // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
+    def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+
+    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+
+    def compiledPlutusV3Script =
+        Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
+
+    //// Hex representations - use the main program methods
+    // private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+
+    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+
+    // Generate .plutus file if needed
+    def writePlutusFile(path: String): Unit = {
+        compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
+    }
+
+    //// For compatibility with existing code that expects hex representation
+    // def getScriptHex: String = compiledDoubleCborHex
+
+    // For compatibility with code that expects script hash as byte array
+    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
     def address(n: Network): AddressL1 = ???
 }

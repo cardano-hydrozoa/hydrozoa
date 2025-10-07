@@ -37,19 +37,16 @@ prefer to do this is by:
     L2; etc.
  * */
 
-//import hydrozoa.infra.transitionary.toScalusLedger
-//import hydrozoa.l1.multisig.state.MultisigUtxoTag
-import io.bullet.borer.Cbor
-import scalus.builtin.Data.{fromData, toData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.address.{Network, ShelleyAddress, Address as SAddress}
+import scala.language.implicitConversions
+import scalus.builtin.Builtins.blake2b_224
+import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data, ToData}
+import scalus.cardano.address.{Address as SAddress, Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v3
-import scalus.builtin.Builtins.blake2b_224
-import scala.collection.mutable
-import scala.language.implicitConversions
+import scalus.ledger.api.v3.PubKeyHash
 
 /** Cardano network layers.
   */
@@ -264,6 +261,7 @@ extension (utxo: UTxO)
 // A verification key of a peer, used on both L1 and L2
 case class VerificationKeyBytes(bytes: ByteString) {
     def verKeyHash: AddrKeyHash = Hash(blake2b_224(bytes))
+    def pubKeyHash: PubKeyHash = PubKeyHash(blake2b_224(bytes))
 }
 
 object VerificationKeyBytes:

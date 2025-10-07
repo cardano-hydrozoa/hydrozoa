@@ -4,20 +4,19 @@ import cats.*
 import cats.effect.{Deferred, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import com.suprnation.actor.SupervisorStrategy.Escalate
+import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
-import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
+import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
+import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
-
+import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
 
 import MultisigRegimeManager.Config
-import hydrozoa.multisig.protocol.types.Peer
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */

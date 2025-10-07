@@ -1,22 +1,28 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
+import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
+import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
+import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
+import hydrozoa.lib.tx.{
+    BuildError,
+    ExpectedSigner,
+    NativeScriptWitness,
+    TransactionBuilder,
+    TransactionBuilderStep,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.txbuilder.{
-    BuilderContext,
-    LowLevelTxBuilder,
-    SelectInputs,
-    TxBalancingError
-}
-
-import scala.collection.immutable.SortedMap
-import scala.language.implicitConversions
+import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,
@@ -34,51 +40,72 @@ object FinalizationTx {
         context: BuilderContext
     )
 
-    def build(recipe: Recipe): Either[TxBalancingError, FinalizationTx] = {
-        val beaconTokenBurn =
-            MultiAsset(
-              SortedMap.from(
-                Seq(
-                  (
-                    recipe.headNativeScript.policyId,
-                    SortedMap.from(Seq((recipe.headTokenName, -1.toLong)))
-                  )
-                )
+    def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
+        val beaconTokenBurn: TransactionBuilderStep.Mint =
+            TransactionBuilderStep.Mint(
+              recipe.headNativeScript.policyId,
+              recipe.headTokenName,
+              -1L,
+              NativeScriptWitness(
+                NativeScriptValue(recipe.headNativeScript.script),
+                recipe.headNativeScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
               )
             )
 
-        val valueWithdrawn: Value =
-            recipe.utxosWithdrawn.foldLeft(Value.zero)((s, w) => s + w._2.value)
+        val createWithdrawnUtxos: Seq[Send] =
+            recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
 
-        lazy val builder = {
-            val b1 = recipe.context.buildNewTx
-                .attachNativeScript(recipe.headNativeScript.script, index = 0)
-                // change output
-                .addEmptyOutput(
-                  address = recipe.headNativeScript.address(recipe.context.network)
-                )
-                .withInputs((Set(recipe.treasuryUtxo.toUtxo._1)))
-                .addMint(beaconTokenBurn)
-                .addOutputs(recipe.utxosWithdrawn.toSeq.map(_._2))
-                .setAuxData(
-                  MD(
-                    MD.L1TxTypes.Finalization,
-                    recipe.headNativeScript.address(recipe.context.network)
-                  )
-                )
+        val spendTreasury: Spend = Spend(
+          utxo = TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo),
+          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
+        )
 
-            LowLevelTxBuilder
-                .balanceFeeAndChange(
-                  initial = addDummyVKeys(recipe.headNativeScript.numSigners, b1.tx),
-                  changeOutputIdx = 0,
+        val addChangeOutput: Send = Send(
+          Babbage(
+            recipe.headNativeScript.address(recipe.context.network),
+            Value.zero,
+            None,
+            None
+          )
+        )
+
+        val addMetaData = ModifyAuxiliaryData(_ =>
+            Some(
+              MD(
+                MD.L1TxTypes.Finalization,
+                recipe.headNativeScript.address(recipe.context.network)
+              )
+            )
+        )
+
+        val steps: Seq[TransactionBuilderStep] = createWithdrawnUtxos
+            .appended(beaconTokenBurn)
+            .appended(spendTreasury)
+            .appended(addChangeOutput)
+            .appended(addMetaData)
+
+        for {
+            unbalanced <- TransactionBuilder
+                .build(recipe.context.network, steps)
+                .left
+                .map(StepError(_))
+            finalized <- unbalanced
+                .finalizeContext(
                   protocolParams = recipe.context.protocolParams,
-                  resolvedUtxo = recipe.context.utxo,
-                  evaluator = recipe.context.evaluator
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    1
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
                 )
-                .map(tx => removeDummyVKeys(recipe.headNativeScript.numSigners, tx))
-        }
-
-        builder.map(tx => FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = tx))
+                .left
+                .map({
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        ValidationError(validationError)
+                })
+        } yield FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
     }
 
 }

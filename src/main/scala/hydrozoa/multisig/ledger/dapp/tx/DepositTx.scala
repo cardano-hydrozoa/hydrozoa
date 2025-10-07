@@ -1,16 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import cats.syntax.all.*
+import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{BuildError, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.tx.DepositTx.BuildError.*
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{addDummyVKeys, removeDummyVKeys}
 import io.bullet.borer.Cbor
+import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -18,8 +17,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
-
-import scala.util.{Failure, Success}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -86,18 +83,13 @@ object DepositTx {
 
     }
 
-    enum BuildError:
-        case SomeBuilderError(e: TxBuildError)
-        case OtherScalusBalancingError(e: TxBalancingError)
-        case OtherScalusTransactionException(e: TransactionException)
-
     def build(recipe: Recipe): Either[BuildError, DepositTx] = {
         val depositValue: Value =
             Value(coin = recipe.depositAmount)
 
         val steps = Seq(
           // Deposit Output
-          Pay(
+          Send(
             Babbage(
               address = recipe.headAddress,
               value = depositValue,
@@ -106,7 +98,7 @@ object DepositTx {
             )
           ),
           // Change Output
-          Pay(
+          Send(
             Babbage(
               address = recipe.changeAddress,
               value = Value.zero,
@@ -114,21 +106,21 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxData(_ => Some(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxiliaryData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
-                SpendOutput(
+                Spend(
                   TransactionUnspentOutput(utxo._1, utxo._2),
-                  None
+                  PubKeyWitness
                 )
             )
-        
+
         for {
-            b1 <- TransactionBuilder
+            unbalanced <- TransactionBuilder
                 .build(recipe.context.network, steps)
                 .left
-                .map(SomeBuilderError(_))
-            finalized <- b1
+                .map(StepError(_))
+            finalized <- unbalanced
                 .finalizeContext(
                   recipe.context.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
@@ -140,9 +132,9 @@ object DepositTx {
                 )
                 .left
                 .map({
-                    case balanceError: TxBalancingError => OtherScalusBalancingError(balanceError)
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
                     case validationError: TransactionException =>
-                        OtherScalusTransactionException(validationError)
+                        ValidationError(validationError)
                 })
         } yield DepositTx(
           depositProduced = DepositUtxo(

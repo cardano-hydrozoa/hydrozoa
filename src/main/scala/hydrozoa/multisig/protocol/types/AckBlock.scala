@@ -1,9 +1,10 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.syntax.all.*
-import AckBlock.Fields.*
 import cats.effect.IO
+import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
+
+import AckBlock.Fields.*
 
 enum AckBlock:
     def id: AckBlock.Id

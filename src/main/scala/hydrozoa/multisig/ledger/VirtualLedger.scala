@@ -10,10 +10,9 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.{emptyContext, emptyState}
 import io.bullet.borer.Cbor
+import scala.util.{Failure, Success}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.State as ScalusState
-
-import scala.util.{Failure, Success}
 
 private def toScalusState(state: State): ScalusState =
     emptyState.copy(utxo = state.activeUtxos)

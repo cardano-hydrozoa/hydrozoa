@@ -1,28 +1,22 @@
-package hydrozoa.rulebased.ledger.l1.script.plutus
+package hydrozoa.rulebased.ledger.dapp.script.plutus
 
-import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script
-import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{NoVote, Vote}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryDatum.{
-    Resolved,
-    Unresolved
-}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
+import hydrozoa.AddressL1
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
+import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
+import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
+import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
     Deinit,
     Resolve,
     Withdraw
 }
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{
-    TreasuryDatum,
-    UnresolvedDatum
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
+    Resolved,
+    Unresolved
 }
-import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
-import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
-import hydrozoa.{AddressL1, VerificationKeyBytes, PosixTime as HPosixTime}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
@@ -36,58 +30,17 @@ import scalus.builtin.{
     ToData
 }
 import scalus.cardano.address.Network
+import scalus.cardano.ledger.{Language, ScriptHash}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
+import scalus.prelude.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.crypto.bls12_381.G2
 import scalus.prelude.crypto.bls12_381.G2.scale
-import scalus.prelude.{*, given}
+import scalus.uplc.DeBruijnedProgram
 
 @Compile
 object RuleBasedTreasuryValidator extends Validator {
-    // EdDSA / ed25519 Cardano verification key
-    private type VerificationKey = ByteString
-
-    // The result of `bls12_381_G2_compress` function
-    private type MembershipProof = ByteString
-
-    // Datum
-    enum TreasuryDatum:
-        case Unresolved(unresolvedDatum: UnresolvedDatum)
-        case Resolved(resolvedDatum: ResolvedDatum)
-
-    given FromData[TreasuryDatum] = FromData.derived
-
-    given ToData[TreasuryDatum] = ToData.derived
-
-    type L2ConsensusParamsH32 = ByteString
-
-    case class UnresolvedDatum(
-        headMp: PolicyId,
-        disputeId: TokenName,
-        peers: List[VerificationKey],
-        peersN: BigInt,
-        deadlineVoting: PosixTime,
-        versionMajor: BigInt,
-        params: L2ConsensusParamsH32,
-        setup: List[ByteString]
-    )
-
-    given FromData[UnresolvedDatum] = FromData.derived
-
-    given ToData[UnresolvedDatum] = ToData.derived
-
-    case class ResolvedDatum(
-        headMp: PolicyId,
-        utxosActive: MembershipProof,
-        version: (BigInt, BigInt),
-        params: L2ConsensusParamsH32,
-        setup: List[ByteString]
-    )
-
-    given FromData[ResolvedDatum] = FromData.derived
-
-    given ToData[ResolvedDatum] = ToData.derived
 
     // Script redeemer
     enum TreasuryRedeemer:
@@ -169,8 +122,8 @@ object RuleBasedTreasuryValidator extends Validator {
         log("TreasuryValidator")
 
         // Parse datum
-        val treasuryDatum: TreasuryDatum = datum match
-            case Some(d) => d.to[TreasuryDatum]
+        val treasuryDatum: RuleBasedTreasuryDatum = datum match
+            case Some(d) => d.to[RuleBasedTreasuryDatum]
             case None    => fail(DatumIsMissing)
 
         redeemer.to[TreasuryRedeemer] match
@@ -220,9 +173,10 @@ object RuleBasedTreasuryValidator extends Validator {
                   ResolveValueShouldBePreserved
                 )
 
-                val treasuryOutputDatum = treasuryOutput.inlineDatumOfType[TreasuryDatum] match
-                    case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
-                    case Resolved(d)   => d
+                val treasuryOutputDatum =
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
+                        case Unresolved(_) => fail(ResolveNeedsResolvedDatumInOutput)
+                        case Resolved(d)   => d
 
                 val voteDatum = voteInput.inlineDatumOfType[VoteDatum]
 
@@ -351,7 +305,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Accumulator updated commitment
                 val Resolved(outputResolvedDatum) =
-                    treasuryOutput.inlineDatumOfType[TreasuryDatum]: @unchecked
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum]: @unchecked
 
                 require(
                   outputResolvedDatum.utxosActive == proof,
@@ -458,40 +412,41 @@ object RuleBasedTreasuryValidator extends Validator {
 }
 
 object RuleBasedTreasuryScript {
-    val sir = Compiler.compile(RuleBasedTreasuryValidator.validate)
-    val script = sir.toUplcOptimized(generateErrorTraces = true).plutusV3
+    // Compile the validator to Scalus Intermediate Representation (SIR)
+    // Using def instead of lazy val to avoid stack overflow during tests
+    private def compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
 
-    // TODO: can we use Scalus for that?
-    val plutusScript: PlutusV3Script = PlutusV3Script
-        .builder()
-        .`type`("PlutusScriptV3")
-        .cborHex(script.doubleCborHex)
-        .build()
-        .asInstanceOf[PlutusV3Script]
+    // Convert to optimized UPLC with error traces for PlutusV3
+    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
 
-    val scriptHash: ByteString = ByteString.fromArray(plutusScript.getScriptHash)
+    private def compiledPlutusV3Program = compiledUplc.plutusV3
 
-    lazy val scriptHashString: String = HexUtil.encodeHexString(plutusScript.getScriptHash)
+    // Native Scalus PlutusScript - no Bloxbean dependency needed
+    private def compiledDeBruijnedProgram: DeBruijnedProgram =
+        compiledPlutusV3Program.deBruijnedProgram
+
+    // Various encoding formats available natively in Scalus
+    // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
+    def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+
+    private def compiledDoubleCborEncoded: Array[Byte] = compiledDeBruijnedProgram.doubleCborEncoded
+
+    // Hex representations - use the main program methods
+    private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+
+    def compiledScriptHash =
+        ScriptHash.fromByteString(blake2b_224(ByteString.fromArray(compiledDoubleCborEncoded)))
+
+    // Generate .plutus file if needed
+    def writePlutusFile(path: String): Unit = {
+        compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
+    }
+
+    // For compatibility with existing code that expects hex representation
+    def getScriptHex: String = compiledDoubleCborHex
+
+    // For compatibility with code that expects script hash as byte array
+    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
     def address(n: Network): AddressL1 = ???
 }
-
-def mkTreasuryDatumUnresolved(
-    headMp: PolicyId,
-    disputeId: TokenName,
-    peers: List[VerificationKeyBytes],
-    deadlineVoting: HPosixTime,
-    versionMajor: BigInt,
-    params: Unit // TODO: L2ConsensusParamsH32
-): TreasuryDatum =
-    UnresolvedDatum(
-      headMp = headMp,
-      disputeId = disputeId,
-      peers = peers.map(_.bytes),
-      peersN = peers.length,
-      deadlineVoting = deadlineVoting,
-      versionMajor = versionMajor,
-      params = ???,
-      // TODO: magic number, arguably should be a parameter
-      setup = TrustedSetup.takeSrsG2(10).map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
-    ) |> Unresolved.apply
