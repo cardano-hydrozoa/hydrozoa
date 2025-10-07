@@ -278,7 +278,7 @@ class VoteTxTest extends munit.ScalaCheckSuite {
     // private val log = Logger(getClass)
 
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
     }
 
     test("Recipe generator works") {

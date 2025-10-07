@@ -1,25 +1,19 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
-import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.BuildError.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
 import scala.language.implicitConversions
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{
-    BuilderContext,
-    LowLevelTxBuilder,
-    SelectInputs,
-    TxBalancingError
-}
+import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -95,7 +89,7 @@ object RefundTx {
 
             //////////////////////////////////////////////////////////////////////
             // Build and finalize
-            
+
             for {
                 unbalanced <- TransactionBuilder
                     .build(recipe.context.network, steps)

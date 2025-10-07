@@ -15,7 +15,7 @@ import scala.collection.immutable.SortedSet
 import monocle.syntax.all._
 import monocle.{Focus, Lens}
 
-class TxEditorTest extends munit.ScalaCheckSuite {
+class TransactionEditorTest extends munit.ScalaCheckSuite {
 
     val oneInput: Transaction = {
         val l1 = txBodyL

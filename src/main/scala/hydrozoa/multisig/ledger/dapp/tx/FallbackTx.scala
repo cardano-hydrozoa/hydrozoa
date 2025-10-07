@@ -1,28 +1,27 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
-import hydrozoa.lib.tx.*
-import hydrozoa.multisig.ledger.DappLedger.{Tx, create}
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkVoteTokenName
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
+import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.TxBalancingError
-import scalus.cardano.ledger.*
 import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.List as SList
-
-import scala.collection.immutable.SortedMap
 
 final case class FallbackTx(
     treasurySpent: TreasuryUtxo,
@@ -89,7 +88,7 @@ object FallbackTx {
         def mkDefVoteDatum(i: Int, unit: Unit): VoteDatum = ???
         def mkVoteDatum(i: Int, i1: Int, hash: AddrKeyHash): VoteDatum = ???
 
-        val defaultVoteUtxo = mkVoteOutput(mkDefVoteDatum(recipe.headScript.numSigners, ()))
+        mkVoteOutput(mkDefVoteDatum(recipe.headScript.numSigners, ()))
 
         val voteUtxos: List[TransactionOutput] =
             recipe.headScript.requiredSigners.toSortedSet.toList.zipWithIndex.map((peer, key) =>

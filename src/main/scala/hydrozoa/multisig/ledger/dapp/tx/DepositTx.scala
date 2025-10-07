@@ -3,13 +3,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{BuildError, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{BuildError, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
-
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress

@@ -31,6 +31,6 @@ object Token {
     }
 
     // FIXME: This is wrong
-    def mkVoteTokenName(multisigTreasuryInput : TransactionInput): AssetName =
-        AssetName(ByteString.fromBigIntBigEndian(BigInt(CIP67Tags.dispute),2))
+    def mkVoteTokenName(multisigTreasuryInput: TransactionInput): AssetName =
+        AssetName(ByteString.fromBigIntBigEndian(BigInt(CIP67Tags.dispute), 2))
 }

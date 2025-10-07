@@ -223,9 +223,7 @@ object Datum {
 /** An [[AddrKeyHash]] that is expected to sign some [[Transaction]].
   *
   * The purpose for signing is not presently tracked. For a sketch, see commit
-  * https://github.com/cardano-hydrozoa/hydrozoa/commit/1a8c9c73fbfb33e79456a0a8b9f08688ef39b749.
-  *
-  * TODO: shall we use [[AddrKeyHash]] in the steps?
+  * https://github.com/cardano-hydrozoa/hydrozoa/commit/1a8c9c73fbfb33e79456a0a8b9f08688ef39b749
   */
 case class ExpectedSigner(hash: AddrKeyHash)
 
@@ -330,7 +328,7 @@ object TransactionBuilder:
 
     /** An opaque context in which the builder operates.
       *
-      * TODO: make a class, remove toTuple()
+      * TODO: make a class, remove toTuple()?
       */
     case class Context private[TransactionBuilder] (
         transaction: Transaction,
@@ -573,112 +571,44 @@ object TransactionBuilder:
 
     private def processConstraint(step: TransactionBuilderStep): BuilderM[Unit] = step match {
 
-        case spend: TransactionBuilderStep.Spend => useSpend(spend)
+        case spend: TransactionBuilderStep.Spend =>
+            useSpend(spend)
 
-        case TransactionBuilderStep.Send(output) =>
-            for {
-                _ <- assertNetworkId(output.address)
-                _ <- modify0(
-                  unsafeCtxBodyL
-                      .refocus(_.outputs)
-                      // Intentionally not using pushUnique: we can create multiple outputs of the same shape
-                      .modify(outputs => outputs.toSeq :+ Sized(output))
-                )
-            } yield ()
+        case send: TransactionBuilderStep.Send =>
+            useSend(send)
 
-        case TransactionBuilderStep.Mint(scriptHash, assetName, amount, mintWitness) =>
-            useMint(scriptHash, assetName, amount, mintWitness)
+        case mint: TransactionBuilderStep.Mint =>
+            useMint(mint)
 
-        case TransactionBuilderStep.ReferenceOutput(utxo) =>
-            for {
-                _ <- assertNetworkId(utxo.output.address)
-                _ <- assertInputDoesNotAlreadyExist(utxo.input)
+        case referenceOutput: TransactionBuilderStep.ReferenceOutput =>
+            useReferenceOutput(referenceOutput)
 
-                _ <- modify0(
-                  // Add the referenced utxo id to the tx body
-                  unsafeCtxBodyL
-                      .refocus(_.referenceInputs)
-                      .modify(inputs =>
-                          TaggedOrderedSet.from(appendDistinct(utxo.input, inputs.toSeq))
-                      )
-                )
+        case fee: TransactionBuilderStep.Fee =>
+            useFee(fee.fee)
 
-                _ <- Context.addResolvedUtxo(utxo)
-            } yield ()
+        case validityStartSlot: TransactionBuilderStep.ValidityStartSlot =>
+            useValidityStartSlot(validityStartSlot.slot)
 
-        case TransactionBuilderStep.Fee(fee)                => useFee(fee)
-        case TransactionBuilderStep.ValidityStartSlot(slot) => useValidityStartSlot(slot)
-        case TransactionBuilderStep.ValidityEndSlot(slot)   => useValidityEndSlot(slot)
+        case validityEndSlot: TransactionBuilderStep.ValidityEndSlot =>
+            useValidityEndSlot(validityEndSlot.slot)
 
-        case TransactionBuilderStep.AddCollateral(utxo) =>
-            for {
-                _ <- assertNetworkId(utxo.output.address)
-                _ <- assertAdaOnlyPubkeyUtxo(utxo)
-                _ <- Context.addResolvedUtxo(utxo)
-                _ <- modify0(
-                  // Add the collateral utxo to the tx body
-                  unsafeCtxBodyL
-                      .refocus(_.collateralInputs)
-                      .modify(inputs =>
-                          TaggedOrderedSet.from(appendDistinct(utxo.input, inputs.toSeq))
-                      )
-                )
-            } yield ()
+        case addCollateral: TransactionBuilderStep.AddCollateral =>
+            useAddCollateral(addCollateral)
 
-        case TransactionBuilderStep.ModifyAuxiliaryData(f) =>
-            modify0(
-              Focus[Context](_.transaction)
-                  .refocus(_.auxiliaryData)
-                  .modify(f(_))
-            )
+        case modifyAuxiliaryData: TransactionBuilderStep.ModifyAuxiliaryData =>
+            useModifyAuxiliaryData(modifyAuxiliaryData)
 
-        case TransactionBuilderStep.IssueCertificate(cert, witness) =>
-            for {
-                _ <- modify0(
-                  unsafeCtxBodyL
-                      .refocus(_.certificates)
-                      .modify(certificates =>
-                          TaggedSet.from(appendDistinct(cert, certificates.toIndexedSeq))
-                      )
-                )
-                _ <- useCertificateWitness(cert, witness)
-            } yield ()
+        case issueCertificate: TransactionBuilderStep.IssueCertificate =>
+            useIssueCertificate(issueCertificate)
 
-        case TransactionBuilderStep.WithdrawRewards(stakeCredential, amount, witness) =>
-            useWithdrawRewardsWitness(stakeCredential, amount, witness)
+        case withdrawRewards: TransactionBuilderStep.WithdrawRewards =>
+            useWithdrawRewards(withdrawRewards)
 
-        case TransactionBuilderStep.SubmitProposal(proposal, witness) =>
-            for {
-                _ <- modify0(
-                  unsafeCtxBodyL
-                      .refocus(_.proposalProcedures)
-                      .modify(proposals =>
-                          TaggedOrderedSet.from(appendDistinct(proposal, proposals.toSeq))
-                      )
-                )
-                _ <- useProposalWitness(proposal, witness)
-            } yield ()
+        case submitProposal: TransactionBuilderStep.SubmitProposal =>
+            useSubmitProposal(submitProposal)
 
-        case TransactionBuilderStep.SubmitVotingProcedure(voter, votes, witness) =>
-            for {
-                _ <- modify0(
-                  unsafeCtxBodyL
-                      .refocus(_.votingProcedures)
-                      .modify(procedures => {
-                          val currentProcedures = procedures
-                              .map(_.procedures)
-                              .getOrElse(
-                                SortedMap.empty[Voter, SortedMap[GovActionId, VotingProcedure]]
-                              )
-                          Some(
-                            VotingProcedures(
-                              currentProcedures + (voter -> SortedMap.from(votes))
-                            )
-                          )
-                      })
-                )
-                _ <- useVotingProcedureWitness(voter, witness)
-            } yield ()
+        case submitVotingProcedure: TransactionBuilderStep.SubmitVotingProcedure =>
+            useSubmitVotingProcedure(submitVotingProcedure)
     }
 
     // -------------------------------------------------------------------------
@@ -835,15 +765,32 @@ object TransactionBuilder:
         } yield ()
 
     // -------------------------------------------------------------------------
+    // Send step
+    // -------------------------------------------------------------------------
+
+    private def useSend(send: TransactionBuilderStep.Send): BuilderM[Unit] =
+        for {
+            _ <- assertNetworkId(send.output.address)
+            _ <- modify0(
+              unsafeCtxBodyL
+                  .refocus(_.outputs)
+                  // Intentionally not using pushUnique: we can create multiple outputs of the same shape
+                  .modify(outputs => outputs.toSeq :+ Sized(send.output))
+            )
+        } yield ()
+
+    // -------------------------------------------------------------------------
     // MintAsset step
     // -------------------------------------------------------------------------
 
     private def useMint(
-        scriptHash: ScriptHash,
-        assetName: AssetName,
-        amount: Long,
-        witness: NativeScriptWitness | TwoArgumentPlutusScriptWitness
-    ): BuilderM[Unit] =
+        mint: TransactionBuilderStep.Mint
+    ): BuilderM[Unit] = {
+        val scriptHash = mint.scriptHash
+        val assetName = mint.assetName
+        val amount = mint.amount
+        val witness = mint.witness
+
         for {
             // Not allowed to mint 0
             _ <-
@@ -996,9 +943,35 @@ object TransactionBuilder:
                     }
             }
         } yield ()
+    }
 
     // -------------------------------------------------------------------------
-    // Spend step
+    // ReferenceOutput step
+    // -------------------------------------------------------------------------
+
+    private def useReferenceOutput(
+        referenceOutput: TransactionBuilderStep.ReferenceOutput
+    ): BuilderM[Unit] =
+        for {
+            _ <- assertNetworkId(referenceOutput.utxo.output.address)
+            _ <- assertInputDoesNotAlreadyExist(referenceOutput.utxo.input)
+
+            _ <- modify0(
+              // Add the referenced utxo id to the tx body
+              unsafeCtxBodyL
+                  .refocus(_.referenceInputs)
+                  .modify(inputs =>
+                      TaggedOrderedSet.from(
+                        appendDistinct(referenceOutput.utxo.input, inputs.toSeq)
+                      )
+                  )
+            )
+
+            _ <- Context.addResolvedUtxo(referenceOutput.utxo)
+        } yield ()
+
+    // -------------------------------------------------------------------------
+    // Fee step
     // -------------------------------------------------------------------------
 
     private def useFee(fee: Coin): BuilderM[Unit] = for {
@@ -1057,6 +1030,23 @@ object TransactionBuilder:
     // AddCollateral step
     // -------------------------------------------------------------------------
 
+    private def useAddCollateral(
+        addCollateral: TransactionBuilderStep.AddCollateral
+    ): BuilderM[Unit] =
+        for {
+            _ <- assertNetworkId(addCollateral.utxo.output.address)
+            _ <- assertAdaOnlyPubkeyUtxo(addCollateral.utxo)
+            _ <- Context.addResolvedUtxo(addCollateral.utxo)
+            _ <- modify0(
+              // Add the collateral utxo to the tx body
+              unsafeCtxBodyL
+                  .refocus(_.collateralInputs)
+                  .modify(inputs =>
+                      TaggedOrderedSet.from(appendDistinct(addCollateral.utxo.input, inputs.toSeq))
+                  )
+            )
+        } yield ()
+
     /** Ensure that the output is a pubkey output containing only ada. */
     private def assertAdaOnlyPubkeyUtxo(utxo: TransactionUnspentOutput): BuilderM[Unit] =
         for {
@@ -1079,8 +1069,37 @@ object TransactionBuilder:
         } yield ()
 
     // -------------------------------------------------------------------------
+    // ModifyAuxiliaryData step
+    // -------------------------------------------------------------------------
+
+    private def useModifyAuxiliaryData(
+        modifyAuxiliaryData: TransactionBuilderStep.ModifyAuxiliaryData
+    ): BuilderM[Unit] =
+        modify0(
+          Focus[Context](_.transaction)
+              .refocus(_.auxiliaryData)
+              .modify(modifyAuxiliaryData.f(_))
+        )
+
+    // -------------------------------------------------------------------------
     // IssueCertificate step
     // -------------------------------------------------------------------------
+
+    private def useIssueCertificate(
+        issueCertificate: TransactionBuilderStep.IssueCertificate
+    ): BuilderM[Unit] =
+        for {
+            _ <- modify0(
+              unsafeCtxBodyL
+                  .refocus(_.certificates)
+                  .modify(certificates =>
+                      TaggedSet.from(
+                        appendDistinct(issueCertificate.cert, certificates.toIndexedSeq)
+                      )
+                  )
+            )
+            _ <- useCertificateWitness(issueCertificate.cert, issueCertificate.witness)
+        } yield ()
 
     def useCertificateWitness(
         cert: Certificate,
@@ -1168,15 +1187,13 @@ object TransactionBuilder:
     // WithdrawRewards step
     // -------------------------------------------------------------------------
 
-    def useWithdrawRewardsWitness(
-        stakeCredential: StakeCredential,
-        amount: Coin,
-        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
+    def useWithdrawRewards(
+        withdrawRewards: TransactionBuilderStep.WithdrawRewards
     ): BuilderM[Unit] =
         for {
             ctx <- get0
 
-            rewardAccount = stakeCredential.credential match {
+            rewardAccount = withdrawRewards.stakeCredential.credential match {
                 case Credential.KeyHash(keyHash) =>
                     // Convert AddrKeyHash to StakeKeyHash - they're likely the same underlying type?
                     val stakeKeyHash = keyHash.asInstanceOf[StakeKeyHash]
@@ -1194,7 +1211,8 @@ object TransactionBuilder:
                       val currentWithdrawals = withdrawals.map(_.withdrawals).getOrElse(Map.empty)
                       Some(
                         Withdrawals(
-                          SortedMap.from(currentWithdrawals + (rewardAccount -> amount))
+                          SortedMap
+                              .from(currentWithdrawals + (rewardAccount -> withdrawRewards.amount))
                         )
                       )
                   })
@@ -1202,8 +1220,8 @@ object TransactionBuilder:
 
             _ <- useNonSpendingWitness(
               Operation.Withdraw(rewardAccount.address),
-              stakeCredential.credential,
-              witness
+              withdrawRewards.stakeCredential.credential,
+              withdrawRewards.witness
             )
         } yield ()
 
@@ -1211,69 +1229,102 @@ object TransactionBuilder:
     // SubmitProposal step
     // -------------------------------------------------------------------------
 
-    def useProposalWitness(
-        proposal: ProposalProcedure,
-        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
-    ): BuilderM[Unit] = {
-        def getPolicyHash(govAction: GovAction): Option[ScriptHash] = govAction match {
-            case GovAction.ParameterChange(_, _, policyHash)  => policyHash
-            case GovAction.TreasuryWithdrawals(_, policyHash) => policyHash
-            case _                                            => None
-        }
+    private def useSubmitProposal(
+        submitProposal: TransactionBuilderStep.SubmitProposal
+    ): BuilderM[Unit] =
+        for {
+            _ <- modify0(
+              unsafeCtxBodyL
+                  .refocus(_.proposalProcedures)
+                  .modify(proposals =>
+                      TaggedOrderedSet.from(
+                        appendDistinct(submitProposal.proposal, proposals.toSeq)
+                      )
+                  )
+            )
+            _ <- {
+                def getPolicyHash(govAction: GovAction): Option[ScriptHash] = govAction match {
+                    case GovAction.ParameterChange(_, _, policyHash)  => policyHash
+                    case GovAction.TreasuryWithdrawals(_, policyHash) => policyHash
+                    case _                                            => None
+                }
 
-        getPolicyHash(proposal.govAction) match {
-            case None =>
-                pure0(())
-            case Some(policyHash) =>
-                useNonSpendingWitness(
-                  Operation.Proposing(proposal),
-                  Credential.ScriptHash(policyHash),
-                  witness
-                )
-        }
-    }
+                getPolicyHash(submitProposal.proposal.govAction) match {
+                    case None =>
+                        pure0(())
+                    case Some(policyHash) =>
+                        useNonSpendingWitness(
+                          Operation.Proposing(submitProposal.proposal),
+                          Credential.ScriptHash(policyHash),
+                          submitProposal.witness
+                        )
+                }
+            }
+        } yield ()
 
     // -------------------------------------------------------------------------
     // SubmitVotingProcedure step
     // -------------------------------------------------------------------------
 
-    def useVotingProcedureWitness(
-        voter: Voter,
-        witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
+    private def useSubmitVotingProcedure(
+        submitVotingProcedure: TransactionBuilderStep.SubmitVotingProcedure
     ): BuilderM[Unit] =
         for {
-            cred <- voter match {
-                case Voter.StakingPoolKey(poolKeyHash) =>
-                    val credential = Credential.KeyHash(poolKeyHash)
-                    witness match {
-                        case _: PubKeyWitness.type => pure0(credential)
-                        case witness: TwoArgumentPlutusScriptWitness =>
-                            liftF0(
-                              Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
-                            )
-                        case witness: NativeScriptWitness =>
-                            liftF0(
-                              Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
-                            )
-                    }
-                case Voter.ConstitutionalCommitteeHotKey(credential) =>
-                    pure0(
-                      Credential.KeyHash(credential)
-                    )
-                case Voter.ConstitutionalCommitteeHotScript(scriptHash) =>
-                    pure0(
-                      Credential.ScriptHash(scriptHash)
-                    )
-                case Voter.DRepKey(credential) =>
-                    pure0(
-                      Credential.KeyHash(credential)
-                    )
-                case Voter.DRepScript(scriptHash) =>
-                    pure0(
-                      Credential.ScriptHash(scriptHash)
-                    )
-            }
-            _ <- useNonSpendingWitness(Operation.Voting(voter), cred, witness)
+            _ <- modify0(
+              unsafeCtxBodyL
+                  .refocus(_.votingProcedures)
+                  .modify(procedures => {
+                      val currentProcedures = procedures
+                          .map(_.procedures)
+                          .getOrElse(
+                            SortedMap.empty[Voter, SortedMap[GovActionId, VotingProcedure]]
+                          )
+                      Some(
+                        VotingProcedures(
+                          currentProcedures + (submitVotingProcedure.voter -> SortedMap
+                              .from(submitVotingProcedure.votes))
+                        )
+                      )
+                  })
+            )
+            _ <- for {
+                cred <- submitVotingProcedure.voter match {
+                    case Voter.StakingPoolKey(poolKeyHash) =>
+                        val credential = Credential.KeyHash(poolKeyHash)
+                        submitVotingProcedure.witness match {
+                            case _: PubKeyWitness.type => pure0(credential)
+                            case witness: TwoArgumentPlutusScriptWitness =>
+                                liftF0(
+                                  Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
+                                )
+                            case witness: NativeScriptWitness =>
+                                liftF0(
+                                  Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
+                                )
+                        }
+                    case Voter.ConstitutionalCommitteeHotKey(credential) =>
+                        pure0(
+                          Credential.KeyHash(credential)
+                        )
+                    case Voter.ConstitutionalCommitteeHotScript(scriptHash) =>
+                        pure0(
+                          Credential.ScriptHash(scriptHash)
+                        )
+                    case Voter.DRepKey(credential) =>
+                        pure0(
+                          Credential.KeyHash(credential)
+                        )
+                    case Voter.DRepScript(scriptHash) =>
+                        pure0(
+                          Credential.ScriptHash(scriptHash)
+                        )
+                }
+                _ <- useNonSpendingWitness(
+                  Operation.Voting(submitVotingProcedure.voter),
+                  cred,
+                  submitVotingProcedure.witness
+                )
+            } yield ()
         } yield ()
 
     // -------------------------------------------------------------------------
@@ -1873,23 +1924,23 @@ trait BuildableTx:
     // - A StateT with the InternalData and steps
     // - An ExceptT the can throw BuildErrors
     // - A WriterT than can log the effects that were run
-    // 
-    // The build stages than proceed as follows: 
+    //
+    // The build stages than proceed as follows:
     //  - 1.) Pre-processing: lift a computation `Recipe -> InternalData` into the monad stack.
-    //        This extracts all data that is necessary for deciding which steps to run and 
+    //        This extracts all data that is necessary for deciding which steps to run and
     //        to make available for the final post-processing
     //  - 2.) Step definition: lift a computation `(Recipe, InternalData) -> Seq(Steps)
     //        into the monad. This actually defines the computation we need to run
     //  - 3.) Run the computation itself, balancing and finalizing
-    //  - 4.) Post-processing: this is where we combine the results of 1 + 3 to 
+    //  - 4.) Post-processing: this is where we combine the results of 1 + 3 to
     //        return an "augmented transaction"
-    
+
     type TxType
     type InternalData
     type RecipeType <: BuilderRecipe
     type ErrorType >: BuildError
     def preprocess(recipe: RecipeType): InternalData
-    
+
     def augmentTx(tx: Transaction): TxType
     def recipeToSteps(recipe: RecipeType): Seq[TransactionBuilderStep]
     final def build(recipe: RecipeType, diffHandler: DiffHandler): Either[ErrorType, TxType] =

@@ -36,7 +36,7 @@ import scalus.|>
 import test.*
 import test.TestPeer.Alice
 
-class TxBuilderTest extends munit.ScalaCheckSuite {
+class TransactionBuilderTest extends munit.ScalaCheckSuite {
 
     /** Test that the builder steps fail with the expected error
       *

@@ -4,7 +4,14 @@ import hydrozoa.*
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{BuildError, ExpectedSigner, NativeScriptWitness, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{
+    BuildError,
+    ExpectedSigner,
+    NativeScriptWitness,
+    TransactionBuilder,
+    TransactionBuilderStep,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -32,7 +39,7 @@ object FinalizationTx {
         headTokenName: AssetName,
         context: BuilderContext
     )
-    
+
     def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
         val beaconTokenBurn: TransactionBuilderStep.Mint =
             TransactionBuilderStep.Mint(
@@ -71,26 +78,34 @@ object FinalizationTx {
             )
         )
 
-        val steps : Seq[TransactionBuilderStep] = createWithdrawnUtxos
+        val steps: Seq[TransactionBuilderStep] = createWithdrawnUtxos
             .appended(beaconTokenBurn)
             .appended(spendTreasury)
             .appended(addChangeOutput)
             .appended(addMetaData)
-        
+
         for {
-            unbalanced <- TransactionBuilder.build(recipe.context.network, steps).left.map(StepError(_))
-            finalized <- unbalanced.finalizeContext(
-                protocolParams = recipe.context.protocolParams,
-                diffHandler = new ChangeOutputDiffHandler(recipe.context.protocolParams, 1).changeOutputDiffHandler,
-                evaluator = recipe.context.evaluator,
-                validators = recipe.context.validators
-                ).left.map({
-                case balanceError: TxBalancingError => BalancingError(balanceError)
-                case validationError: TransactionException =>
-                    ValidationError(validationError)
-            })
+            unbalanced <- TransactionBuilder
+                .build(recipe.context.network, steps)
+                .left
+                .map(StepError(_))
+            finalized <- unbalanced
+                .finalizeContext(
+                  protocolParams = recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    1
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
+                )
+                .left
+                .map({
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        ValidationError(validationError)
+                })
         } yield FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
     }
 
-    
 }

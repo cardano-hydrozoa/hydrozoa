@@ -5,17 +5,22 @@ import hydrozoa.*
 import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{BuildError, ExpectedSigner, NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput, TxBuildError}
+import hydrozoa.lib.tx.{
+    BuildError,
+    ExpectedSigner,
+    NativeScriptWitness,
+    PubKeyWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -128,7 +133,6 @@ object InitializationTx {
             .appended(createChangeOutput)
             .appended(modifyAuxiliaryData)
 
-        
         ////////////////////////////////////////////////////////////
         // Build and finalize
         for {
@@ -140,17 +144,23 @@ object InitializationTx {
                 )
                 .left
                 .map(BuildError.StepError(_))
-            
-            finalized <- unbalanced.finalizeContext(
-                protocolParams = recipe.context.protocolParams,
-                diffHandler = new ChangeOutputDiffHandler(recipe.context.protocolParams, 1).changeOutputDiffHandler,
-                evaluator = recipe.context.evaluator,
-                validators = recipe.context.validators
-            ).left.map({
-                case balanceError: TxBalancingError => BalancingError(balanceError)
-                case validationError: TransactionException =>
-                    ValidationError(validationError)
-            })
+
+            finalized <- unbalanced
+                .finalizeContext(
+                  protocolParams = recipe.context.protocolParams,
+                  diffHandler = new ChangeOutputDiffHandler(
+                    recipe.context.protocolParams,
+                    1
+                  ).changeOutputDiffHandler,
+                  evaluator = recipe.context.evaluator,
+                  validators = recipe.context.validators
+                )
+                .left
+                .map({
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
+                    case validationError: TransactionException =>
+                        ValidationError(validationError)
+                })
 
         } yield (InitializationTx(
           treasuryProduced = TreasuryUtxo(
