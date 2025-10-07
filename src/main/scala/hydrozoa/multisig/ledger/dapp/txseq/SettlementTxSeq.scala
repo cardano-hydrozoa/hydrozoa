@@ -67,29 +67,21 @@ object SettlementTxSeq {
     // -------------------------------------------------------------------------
 
     def traverseInput(intermediate2: Intermediate2): SettlementTxSeq = {
-
-        def statefulTraversal: State[RolloutUtxo, List[RolloutTx]] = {
-            def completeInput(cont: RolloutUtxo => RolloutTx): State[RolloutUtxo, RolloutTx] =
-                for {
-                    rolloutUtxo: RolloutUtxo <- State.get
-                    tx: RolloutTx = cont(rolloutUtxo)
-                    _ <- tx.rolloutProduced.traverse_(State.set)
-                } yield tx
-            intermediate2.rolloutTxs.traverse(completeInput)
+        def completeInput(
+            mRolloutUtxo: Option[RolloutUtxo],
+            cont: RolloutUtxo => RolloutTx
+        ): (Option[RolloutUtxo], RolloutTx) = {
+            // TODO: getting from option throws if empty. Need to make `traverseInput` total.
+            val tx = cont(mRolloutUtxo.get)
+            (tx.rolloutProduced, tx)
         }
 
-        val rolloutTxs =
-            intermediate2.settlementTx.rolloutProduced.map(
-              statefulTraversal.run(_).value._2
-            ) match {
-                case None           => List.empty
-                case Some(rollouts) => rollouts
-            }
+        import intermediate2.*
 
         SettlementTxSeq(
-          settlementTx = intermediate2.settlementTx,
-          fallbackTx = intermediate2.fallbackTx(intermediate2.settlementTx.treasuryProduced),
-          rolloutTxs = rolloutTxs
+          settlementTx = settlementTx,
+          fallbackTx = fallbackTx(settlementTx.treasuryProduced),
+          rolloutTxs = rolloutTxs.mapAccumulate(settlementTx.rolloutProduced)(completeInput)._2
         )
     }
 
