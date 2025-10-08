@@ -47,14 +47,31 @@ object SettlementTxSeq {
     case class Intermediate1(
         settlementTx: Coin => SettlementTx,
         fallbackTx: TreasuryUtxo => FallbackTx,
-        rolloutTxs: List[Coin => (RolloutUtxo => RolloutTx, Coin)]
+        rolloutTxs: List[Coin => (Coin, RolloutUtxo => RolloutTx)]
     )
 
     // -------------------------------------------------------------------------
     // 2. traverse fee
     // -------------------------------------------------------------------------
 
-    def traverseFee(intermediate1: Intermediate1): Intermediate2 = ???
+    def traverseFee(intermediate1: Intermediate1): Intermediate2 = {
+        def completeFee(
+            coin: Coin,
+            cont: Coin => (Coin, RolloutUtxo => RolloutTx)
+        ): (Coin, RolloutUtxo => RolloutTx) = {
+            cont(coin)
+        }
+
+        import intermediate1.*
+
+        val (totalCoin, newRolloutTxs) = rolloutTxs.reverse.mapAccumulate(Coin(0))(completeFee)
+
+        Intermediate2(
+          settlementTx = settlementTx(totalCoin),
+          fallbackTx = fallbackTx,
+          rolloutTxs = newRolloutTxs.reverse
+        )
+    }
 
     case class Intermediate2(
         settlementTx: SettlementTx,
