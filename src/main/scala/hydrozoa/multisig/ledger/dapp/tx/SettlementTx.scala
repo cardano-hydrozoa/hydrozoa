@@ -34,10 +34,10 @@ object SettlementTx {
         deposits: List[DepositUtxo],
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo,
-        rolloutTokenName : AssetName,
+        rolloutTokenName: AssetName,
         headNativeScript: HeadMultisigScript,
         // The reference script for the HNS should live inside the multisig regime witness UTxO
-        headNativeScriptReferenceInput : TransactionUnspentOutput,
+        headNativeScriptReferenceInput: TransactionUnspentOutput,
         context: BuilderContext
     )
 
@@ -45,7 +45,7 @@ object SettlementTx {
         //////////////////////////////////////////////////////
         // Data extraction
 
-        val headAddress = recipe.headNativeScript.address(recipe.context.network)
+        val headAddress = recipe.headNativeScript.mkAddress(recipe.context.network)
 
         val utxos =
             recipe.deposits

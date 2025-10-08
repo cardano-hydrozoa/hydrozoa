@@ -5,7 +5,14 @@ import hydrozoa.*
 import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{BuildError, ExpectedSigner, NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    BuildError,
+    ExpectedSigner,
+    NativeScriptWitness,
+    PubKeyWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token
@@ -85,7 +92,7 @@ object InitializationTx {
             headNativeScript.script.scriptHash -> SortedMap(headTokenName -> 1L)
           )
         )
-        val headAddress: ShelleyAddress = headNativeScript.address(recipe.context.network)
+        val headAddress: ShelleyAddress = headNativeScript.mkAddress(recipe.context.network)
         // Head output (L1) sits at the head address with the initial deposit from the seed utxo
         // and beacon, as well as the initial datum.
         val headValue: Value =

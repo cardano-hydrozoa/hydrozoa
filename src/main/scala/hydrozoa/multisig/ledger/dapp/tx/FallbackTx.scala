@@ -107,8 +107,8 @@ object FallbackTx {
               recipe.treasuryUtxo.asUtxo,
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners =
-                    recipe.headScript.requiredSigners)
+                additionalSigners = recipe.headScript.requiredSigners
+              )
             )
 
         val createDisputeTreasury = Send(

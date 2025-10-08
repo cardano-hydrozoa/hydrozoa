@@ -135,10 +135,14 @@ def genSettlementRecipe(
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
         deposits <- Gen.listOf(
-          genDepositUtxo(network = network, params = params, headAddr = Some(hns.address(network)))
+          genDepositUtxo(
+            network = network,
+            params = params,
+            headAddr = Some(hns.mkAddress(network))
+          )
         )
 
-        utxo <- genTreasuryUtxo(headAddr = Some(hns.address(network)), network = network)
+        utxo <- genTreasuryUtxo(headAddr = Some(hns.mkAddress(network)), network = network)
         treasuryInputAda = utxo.value.coin
 
         withdrawals <- Gen
@@ -151,10 +155,11 @@ def genSettlementRecipe(
       utxosWithdrawn = Map.from(withdrawals),
       treasuryUtxo = utxo,
       headNativeScript = hns,
-      context =
-          unsignedTxBuilderContext(utxo = Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))),
-        rolloutTokenName = ???,
-        headNativeScriptReferenceInput = ???
+      context = unsignedTxBuilderContext(utxo =
+          Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))
+      ),
+      rolloutTokenName = ???,
+      headNativeScriptReferenceInput = ???
     )).suchThat(r => {
         val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin

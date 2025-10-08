@@ -180,7 +180,8 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
               case Left(e) => throw RuntimeException(s"Build failed $e")
               case Right(tx) =>
                   val headMultisigScript = HeadMultisigScript(recipe.peers)
-                  val headTokenName = CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
+                  val headTokenName =
+                      CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
 
                   val bytes = tx.tx.toCbor
                   given OriginalCborByteArray = OriginalCborByteArray(bytes)
@@ -218,7 +219,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                           (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
                       }
                       && tx.tx.auxiliaryData.contains(
-                        MD.apply(Initialization, headMultisigScript.address(Mainnet))
+                        MD.apply(Initialization, headMultisigScript.mkAddress(Mainnet))
                       )
                       :| "Unexpected metadata"
           }

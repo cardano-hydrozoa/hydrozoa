@@ -62,7 +62,7 @@ object FinalizationTx {
 
         val addChangeOutput: Send = Send(
           Babbage(
-            recipe.headNativeScript.address(recipe.context.network),
+            recipe.headNativeScript.mkAddress(recipe.context.network),
             Value.zero,
             None,
             None
@@ -73,7 +73,7 @@ object FinalizationTx {
             Some(
               MD(
                 MD.L1TxTypes.Finalization,
-                recipe.headNativeScript.address(recipe.context.network)
+                recipe.headNativeScript.mkAddress(recipe.context.network)
               )
             )
         )
