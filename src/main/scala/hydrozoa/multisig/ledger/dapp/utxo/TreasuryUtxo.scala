@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.lib.tx.TransactionUnspentOutput
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
@@ -16,8 +17,8 @@ final case class TreasuryUtxo(
     datum: TreasuryUtxo.Datum,
     value: Value
 ) {
-    def toUtxo: (TransactionInput, Babbage) =
-        (
+    val asUtxo: TransactionUnspentOutput =
+        TransactionUnspentOutput(
           txId,
           Babbage(
             address = addr,

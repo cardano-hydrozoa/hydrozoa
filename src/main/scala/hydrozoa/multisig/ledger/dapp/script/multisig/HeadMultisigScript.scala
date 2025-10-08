@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 import cats.*
 import cats.data.*
 import hydrozoa.VerificationKeyBytes
+import hydrozoa.lib.tx.ExpectedSigner
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -18,12 +19,12 @@ case class HeadMultisigScript(private val script0: Script.Native) {
           delegation = Null
         )
     val policyId: PolicyId = script.scriptHash
-    val requiredSigners: TaggedOrderedSet[AddrKeyHash] =
-        TaggedOrderedSet.from(
+    val requiredSigners: Set[ExpectedSigner] =
+        Set.from(
           script.script
               .asInstanceOf[Timelock.AllOf]
               .scripts
-              .map(_.asInstanceOf[Signature].keyHash)
+              .map(keyHash => ExpectedSigner(keyHash.asInstanceOf[Signature].keyHash))
         )
     val numSigners: Int = requiredSigners.toSeq.size
 }

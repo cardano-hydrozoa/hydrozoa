@@ -34,7 +34,10 @@ object SettlementTx {
         deposits: List[DepositUtxo],
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo,
+        rolloutTokenName : AssetName,
         headNativeScript: HeadMultisigScript,
+        // The reference script for the HNS should live inside the multisig regime witness UTxO
+        headNativeScriptReferenceInput : TransactionUnspentOutput,
         context: BuilderContext
     )
 
@@ -72,7 +75,7 @@ object SettlementTx {
         /////////////////////////////////////////////////////////////
         // Step definition
 
-        val spendRecipeAndDeposits: Seq[Spend] = utxos.toSeq.map(utxo =>
+        val spendTreasuryAndDeposits: Seq[Spend] = utxos.toSeq.map(utxo =>
             Spend(
               TransactionUnspentOutput(
                 utxo._1,
@@ -80,8 +83,7 @@ object SettlementTx {
               ),
               witness = NativeScriptWitness(
                 NativeScriptValue(recipe.headNativeScript.script),
-                recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
-                    .map(ExpectedSigner(_))
+                recipe.headNativeScript.requiredSigners
               )
             )
         )
@@ -102,7 +104,7 @@ object SettlementTx {
         // N.B.: Withdrawals may be empty
         val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
 
-        val steps = spendRecipeAndDeposits
+        val steps = spendTreasuryAndDeposits
             .appended(createTreasuryOutput)
             .appended(modifyAuxiliaryData)
             .appendedAll(createWithdrawals)

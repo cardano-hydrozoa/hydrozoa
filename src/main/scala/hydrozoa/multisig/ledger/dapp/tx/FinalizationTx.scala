@@ -48,7 +48,7 @@ object FinalizationTx {
               -1L,
               NativeScriptWitness(
                 NativeScriptValue(recipe.headNativeScript.script),
-                recipe.headNativeScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+                recipe.headNativeScript.requiredSigners
               )
             )
 
@@ -56,7 +56,7 @@ object FinalizationTx {
             recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
 
         val spendTreasury: Spend = Spend(
-          utxo = TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo),
+          utxo = recipe.treasuryUtxo.asUtxo,
           witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
         )
 

@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
@@ -16,6 +15,7 @@ import scalus.cardano.ledger.txbuilder.TxBalancingError
 import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.lib.tx.BuildError
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 
 import scala.collection.immutable.SortedMap
 import io.bullet.borer.Cbor
@@ -38,7 +38,7 @@ val minInitTreasuryAda: Coin = {
             (
               genPolicyId.sample.get,
               SortedMap(
-                (mkHeadTokenName(NonEmptyList.one(genAdaOnlyPubKeyUtxo(Alice).sample.get._1)), 1L)
+                (CIP67.TokenNames(genAdaOnlyPubKeyUtxo(Alice).sample.get._1).headTokenName, 1L)
               )
             )
           )
@@ -180,7 +180,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
               case Left(e) => throw RuntimeException(s"Build failed $e")
               case Right(tx) =>
                   val headMultisigScript = HeadMultisigScript(recipe.peers)
-                  val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
+                  val headTokenName = CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
 
                   val bytes = tx.tx.toCbor
                   given OriginalCborByteArray = OriginalCborByteArray(bytes)
@@ -193,20 +193,20 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                   && (tx.tx.body.value.outputs.size === 2) :| "Initialization tx should have a treasury output and" +
                       "change output"
                       &&
-                      (tx.treasuryProduced.toUtxo._2 ==
+                      (tx.treasuryProduced.asUtxo._2 ==
                           tx.tx.body.value.outputs.head.value) :|
                       "treasury output in InitializationTx value not coherent with actual transaction produced"
                       && (
                         tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script
                       ) :| "Head multisig script not as expected"
                       && (tx.treasuryProduced.headTokenName == headTokenName) :| "Unexpected head token name in treasury output"
-                      && (tx.treasuryProduced.toUtxo._2.value.assets.assets
+                      && (tx.treasuryProduced.asUtxo._2.value.assets.assets
                           .get(headMultisigScript.policyId)
                           .get(
                             headTokenName
                           ) === 1L) :| "treasury output does not contain correct head token"
                       && {
-                          val actual = tx.treasuryProduced.toUtxo._2.value
+                          val actual = tx.treasuryProduced.asUtxo._2.value
                           val expected = Value(
                             coin = recipe.initialDeposit,
                             multiAsset = MultiAsset(assets =

@@ -1,27 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa._
+import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.prelude.{Option => SOption}
-
-import cats._
-import cats.data._
-
+import scalus.prelude.Option as SOption
+import cats.*
+import cats.data.*
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import io.bullet.borer.Cbor
-import org.scalacheck.{Gen, Prop, Test => ScalaCheckTest}
-import test._
+import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import test.*
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
@@ -74,9 +71,8 @@ def genDepositUtxo(
 
 val genHeadTokenName: Gen[AssetName] =
     for {
-        txIds <- Gen.nonEmptyListOf(genTransactionInput)
-        ne = NonEmptyList.fromListUnsafe(txIds)
-    } yield Token.mkHeadTokenName(ne)
+        ti <- genTransactionInput
+    } yield CIP67.TokenNames(ti).headTokenName
 
 val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
     for {
@@ -115,7 +111,7 @@ def genTreasuryUtxo(
             addr = scriptAddr,
             datum = datum,
             value = Value(Coin(0L)) + treasuryToken
-          ).toUtxo._2,
+          ).asUtxo._2,
           params
         ).value.coin
 
@@ -156,7 +152,9 @@ def genSettlementRecipe(
       treasuryUtxo = utxo,
       headNativeScript = hns,
       context =
-          unsignedTxBuilderContext(utxo = Map.from(deposits.map(_.toUtxo).appended(utxo.toUtxo)))
+          unsignedTxBuilderContext(utxo = Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))),
+        rolloutTokenName = ???,
+        headNativeScriptReferenceInput = ???
     )).suchThat(r => {
         val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin

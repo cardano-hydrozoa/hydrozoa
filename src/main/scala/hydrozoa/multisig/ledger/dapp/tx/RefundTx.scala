@@ -68,7 +68,7 @@ object RefundTx {
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
                 additionalSigners =
-                    recipe.headScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+                    recipe.headScript.requiredSigners
               )
             )
 
