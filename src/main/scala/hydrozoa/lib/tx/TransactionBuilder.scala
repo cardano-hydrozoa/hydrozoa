@@ -456,7 +456,7 @@ object TransactionBuilder:
 
     object Context:
         def empty(networkId: Network) = Context(
-          transaction = emptyTransaction,
+          transaction = Transaction.empty,
           redeemers = Seq.empty,
           network = networkId,
           expectedSigners = Set.empty,

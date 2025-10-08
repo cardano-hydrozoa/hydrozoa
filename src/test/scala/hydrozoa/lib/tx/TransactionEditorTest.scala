@@ -15,7 +15,7 @@ import monocle.{Focus, Lens}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
-class TransactionEditorTests extends AnyFunSuite, ScalaCheckPropertyChecks {
+class TransactionEditorTest extends AnyFunSuite, ScalaCheckPropertyChecks {
 
     val oneInput: Transaction = {
         val l1 = txBodyL

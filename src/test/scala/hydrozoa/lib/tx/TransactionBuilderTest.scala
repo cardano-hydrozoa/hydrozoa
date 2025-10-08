@@ -12,7 +12,6 @@ import hydrozoa.lib.tx.TransactionBuilder.WitnessKind
 import hydrozoa.lib.tx.TransactionBuilder.build
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TxBuildError.*
-import hydrozoa.emptyTransaction
 import hydrozoa.txBodyL
 import hydrozoa.txInputsL
 import hydrozoa.txRedeemersL
@@ -51,7 +50,7 @@ import test.*
 import test.TestPeer.Alice
 import org.scalatest.funsuite.AnyFunSuite
 
-class TxBuilderTests extends AnyFunSuite, ScalaCheckPropertyChecks {
+class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
 
     /** Test that the builder steps fail with the expected error
       *
@@ -864,7 +863,7 @@ val script2: Script.PlutusV1 =
         .to[Script.PlutusV1]
         .value
 
-val anyNetworkTx: Transaction = emptyTransaction
+val anyNetworkTx: Transaction = Transaction.empty
 
 // See: https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/test/CSLHex.purs#L109
 val testnetTransaction: Transaction =
