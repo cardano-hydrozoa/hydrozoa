@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
@@ -33,10 +32,11 @@ import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, 
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.prelude.List as SList
@@ -58,7 +58,10 @@ object VoteTx {
         blockHeader: OnchainBlockHeader,
         signatures: List[Ed25519Signature],
         validityEndSlot: Long,
-        context: BuilderContext
+        network: Network,
+        protocolParams: ProtocolParams,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator]
     )
 
     enum BuildError:
@@ -128,7 +131,7 @@ object VoteTx {
         for {
             context <- TransactionBuilder
                 .build(
-                  Mainnet,
+                  recipe.network,
                   List(
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
@@ -167,17 +170,17 @@ object VoteTx {
                 .left
                 .map(SomeBuilderError(_))
 
-            _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
+            // _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 
             finalized <- context
                 .finalizeContext(
-                  protocolParams = recipe.context.protocolParams,
+                  protocolParams = recipe.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.context.protocolParams,
+                    recipe.protocolParams,
                     0
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.context.evaluator,
-                  validators = recipe.context.validators
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
                 )
                 .left
                 .map({

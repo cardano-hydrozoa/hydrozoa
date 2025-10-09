@@ -14,11 +14,13 @@ import scala.collection
 import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -35,14 +37,17 @@ object SettlementTx {
         utxosWithdrawn: Map[TransactionInput, TransactionOutput],
         treasuryUtxo: TreasuryUtxo,
         headNativeScript: HeadMultisigScript,
-        context: BuilderContext
+        network: Network,
+        protocolParams: ProtocolParams,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator]
     )
 
     def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
         //////////////////////////////////////////////////////
         // Data extraction
 
-        val headAddress = recipe.headNativeScript.address(recipe.context.network)
+        val headAddress = recipe.headNativeScript.address(recipe.network)
 
         val utxos =
             recipe.deposits
@@ -111,18 +116,18 @@ object SettlementTx {
         // Build and finalize
         for {
             unbalanced <- TransactionBuilder
-                .build(recipe.context.network, steps)
+                .build(recipe.network, steps)
                 .left
                 .map(BuildError.StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
-                  recipe.context.protocolParams,
+                  recipe.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.context.protocolParams,
+                    recipe.protocolParams,
                     0
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.context.evaluator,
-                  validators = recipe.context.validators
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
                 )
                 .left
                 .map({

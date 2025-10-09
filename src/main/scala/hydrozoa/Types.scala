@@ -2,13 +2,13 @@ package hydrozoa
 
 /** This package defines wrapped types that primarily help to distinguish between similar values
   * that can appear at both L1 and L2, but where the semantics of those values change depending on
-  * the layer. The underlying types are, where possible, using the upstream scalus types.
+  * the layer. The underlying types are, where possible, using the upstream Scalus types.
   *
   * The mechanism to define the types was derived by a response from by Claude Sonnet 4 on
   * 2025-08-08. It is as follows:
   *   - Each wrapped type is defined as an opaque type synonym associated with an object. Use a type
   *     synonym should ensure zero runtime overhead, similar to a haskell newtype (as contrasted
-  *     with a case class, which would be akin to wrapping a type using a `data` delcaration in
+  *     with a case class, which would be akin to wrapping a type using a `data` declaration in
   *     haskell)
   *   - an `apply` method is defined for each type
   *   - a `Conversion[$type, $wrappedType]` given is defined. This allows using methods from the
@@ -35,7 +35,7 @@ prefer to do this is by:
     to a limited set of boundaries. In particular, our tx builders would need to produce L1 tagged types; serialization
     boundaries need to produce both L1/L2 tagged types; bloxbean/blockfrost chain queries produce L1; L2 ledger produces
     L2; etc.
- * */
+ */
 
 import scala.language.implicitConversions
 import scalus.builtin.Builtins.blake2b_224
@@ -70,6 +70,7 @@ object Address:
     /** Assumes a Shelley address and that the developer is asserting the correct layer */
     def unsafeFromBech32[L <: AnyLayer](addr: String): Address[L] =
         Address[L](SAddress.fromBech32(addr).asInstanceOf[ShelleyAddress])
+
     extension [L <: AnyLayer](addr: Address[L])
         def untagged: ShelleyAddress = identity[ShelleyAddress](addr)
 
@@ -269,6 +270,7 @@ object VerificationKeyBytes:
         new VerificationKeyBytes(ByteString.fromArray(IArray.genericWrapArray(bytes).toArray))
 
 // A signing key of a peer, used on both L1 and L2
+// TODO: why ByteString? This is never used onchain.
 case class SigningKeyBytes(bytes: ByteString)
 
 // UDiffTime
@@ -283,7 +285,8 @@ type PosixTime = BigInt
 // FIXME: move to another module
 def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
 
-// FIXME: should be parameter
+// FIXME: should be a parameter
 val networkL1static = Network.Testnet
 
+// FIXME: should be a parameter
 val hydrozoaL2Network = Network.Testnet

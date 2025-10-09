@@ -21,10 +21,11 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
@@ -41,7 +42,10 @@ object InitializationTx {
         seedUtxos: NonEmptyList[(TransactionInput, TransactionOutput)],
         initialDeposit: Coin,
         peers: NonEmptyList[VerificationKeyBytes],
-        context: BuilderContext,
+        network: Network,
+        protocolParams: ProtocolParams,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator],
         changeAddress: ShelleyAddress
     )
 
@@ -89,11 +93,11 @@ object InitializationTx {
             headNativeScript.script.scriptHash -> SortedMap(headTokenName -> 1L)
           )
         )
-        val headAddress: ShelleyAddress = headNativeScript.address(recipe.context.network)
+        val headAddress: ShelleyAddress = headNativeScript.address(recipe.network)
         // Head output (L1) sits at the head address with the initial deposit from the seed utxo
         // and beacon, as well as the initial datum.
         val headValue: Value =
-            Value(coin = recipe.initialDeposit, multiAsset = headToken)
+            Value(coin = recipe.initialDeposit, assets = headToken)
 
         val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
@@ -139,7 +143,7 @@ object InitializationTx {
 
             unbalanced <- TransactionBuilder
                 .build(
-                  recipe.context.network,
+                  recipe.network,
                   steps
                 )
                 .left
@@ -147,13 +151,13 @@ object InitializationTx {
 
             finalized <- unbalanced
                 .finalizeContext(
-                  protocolParams = recipe.context.protocolParams,
+                  protocolParams = recipe.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.context.protocolParams,
+                    recipe.protocolParams,
                     1
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.context.evaluator,
-                  validators = recipe.context.validators
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
                 )
                 .left
                 .map({

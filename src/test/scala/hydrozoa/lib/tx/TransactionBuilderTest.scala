@@ -8,35 +8,31 @@ import hydrozoa.lib.tx.ScriptSource.*
 import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, WitnessKind, build}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TxBuildError.*
-import hydrozoa.{
-    emptyTransaction,
-    txBodyL,
-    txInputsL,
-    txRedeemersL,
-    txReferenceInputsL,
-    txRequiredSignersL
-}
+import hydrozoa.{txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.collection.immutable.{SortedMap, SortedSet}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Hash.given
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Mint as TxBodyMint, RedeemerTag, *}
+import scalus.cardano.ledger.{Mint as TxBodyMint, *}
 import scalus.|>
 import test.*
 import test.TestPeer.Alice
 
-class TransactionBuilderTest extends munit.ScalaCheckSuite {
+class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
 
     /** Test that the builder steps fail with the expected error
       *
@@ -48,36 +44,39 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
         label: String,
         steps: Seq[TransactionBuilderStep],
         error: TxBuildError
-    )(implicit loc: munit.Location): Unit =
-        test(label)({
+    ): Unit =
+        test(label) {
             val res = TransactionBuilder.build(Mainnet, steps)
-            assertEquals(obtained = res, expected = Left(error))
-        })
+            assert(res == Left(error))
+        }
 
     def testBuilderSteps(
         label: String,
         steps: Seq[TransactionBuilderStep],
-        expected: ContextTuple
-    )(implicit loc: munit.Location): Unit =
-        test(label)({
+        expected: (
+            Transaction,
+            Seq[DetachedRedeemer],
+            Network,
+            Set[ExpectedSigner],
+            ResolvedUtxos
+        )
+    ): Unit =
+        test(label) {
             val res = TransactionBuilder.build(Mainnet, steps)
-            assertEquals(
-              obtained = res.map(_.toTuple),
-              expected = Right(expected)
-            )
-        })
+            assert(res.map(_.toTuple) == Right(expected))
+        }
 
     val pkhUtxo = TransactionUnspentOutput(input = input1, output = pkhOutput)
     val skhUtxo = TransactionUnspentOutput(input1, skhOutput)
 
     val ns: Script.Native = Script.Native(AllOf(IndexedSeq.empty))
     val nsSigners: Set[ExpectedSigner] =
-        Gen.listOf(genAddrKeyHash).sample.get.toSet.map(ExpectedSigner(_))
+        Gen.listOf(arbitrary[AddrKeyHash]).sample.get.toSet.map(ExpectedSigner(_))
 
     val nsWitness = NativeScriptWitness(NativeScriptValue(ns), nsSigners)
 
     val script2Signers: Set[ExpectedSigner] =
-        Gen.listOf(genAddrKeyHash).sample.get.toSet.map(ExpectedSigner(_))
+        Gen.listOf(arbitrary[AddrKeyHash]).sample.get.toSet.map(ExpectedSigner(_))
 
     val plutusScript2Witness =
         ThreeArgumentPlutusScriptWitness(
@@ -118,7 +117,7 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
 
     // Expected Signers for the plutus script1 ref witness
     val psRefWitnessExpectedSigners: Set[ExpectedSigner] =
-        Gen.listOf(genAddrKeyHash).sample.get.toSet.map(ExpectedSigner(_))
+        Gen.listOf(arbitrary[AddrKeyHash]).sample.get.toSet.map(ExpectedSigner(_))
 
     private def setRefScript(
         script: Script,
@@ -340,21 +339,22 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
       {
           // Check that the transaction step adds the correct signer
           val tx = build(Mainnet, List(spendPkhUtxoStep))
-          assertEquals(
-            obtained = tx.map(_.expectedSigners),
-            expected = Right(
-              Set(
-                ExpectedSigner(
-                  spendPkhUtxoStep.utxo.output.address.keyHashOption.get.asInstanceOf[AddrKeyHash]
+          assert(
+            tx.map(_.expectedSigners) ==
+                Right(
+                  Set(
+                    ExpectedSigner(
+                      spendPkhUtxoStep.utxo.output.address.keyHashOption.get
+                          .asInstanceOf[AddrKeyHash]
+                    )
+                  )
                 )
-              )
-            )
           )
       }
     )
 
     test("Signers works for NS spend")({
-        val txInput = genTransactionInput.sample.get
+        val txInput = arbitrary[TransactionInput].sample.get
 
         val step =
             TransactionBuilderStep.Spend(
@@ -371,14 +371,15 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
             )
 
         // Signers are what we expect for a transaction built with this step
-        assertEquals(
-          obtained = build(Mainnet, List(step)).map(_.expectedSigners),
-          expected = Right((step.witness.asInstanceOf[NativeScriptWitness].additionalSigners))
+        assert(
+          build(Mainnet, List(step)).map(_.expectedSigners) ==
+              Right((step.witness.asInstanceOf[NativeScriptWitness].additionalSigners))
         )
     })
 
     test("Signers work for PS spend")({
-        val txInput = genTransactionInput.sample.get
+        val txInput = arbitrary[TransactionInput].sample.get
+
         val step =
             TransactionBuilderStep.Spend(
               utxo = TransactionUnspentOutput(
@@ -397,22 +398,23 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
         val built = fromRight(build(Mainnet, List(step)))
 
         // Signers are what we expect for a transaction built with this step
-        assertEquals(
-          obtained = built.expectedSigners,
-          expected = step.witness.asInstanceOf[ThreeArgumentPlutusScriptWitness].additionalSigners
+        assert(
+          built.expectedSigners ==
+              step.witness.asInstanceOf[ThreeArgumentPlutusScriptWitness].additionalSigners
         )
 
         // signers are added to the `requiredSigners` field in tx body
-        assertEquals(
-          obtained =
-              built.toTuple |> transactionL.andThen(txBodyL).refocus(_.requiredSigners).get |> (s =>
-                  s.toSortedSet.toSet
-              ),
-          expected = step.witness
-              .asInstanceOf[ThreeArgumentPlutusScriptWitness]
-              .additionalSigners
-              .map(_.hash)
-        )
+        val obtained =
+            built.toTuple |> transactionL.andThen(txBodyL).refocus(_.requiredSigners).get |> (s =>
+                s.toSortedSet.toSet
+            )
+
+        val expected = step.witness
+            .asInstanceOf[ThreeArgumentPlutusScriptWitness]
+            .additionalSigners
+            .map(_.hash)
+
+        assert(obtained == expected)
     })
 
     // =======================================================================
@@ -625,14 +627,13 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
     test("Referencing a utxo adds the utxo to resolvedUtxos and tx body") {
         val steps = List(ReferenceOutput(utxo = script1Utxo))
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
-        assertEquals(
-          obtained = built.toTuple |> resolvedUtxosL.get,
-          ResolvedUtxos(Map(script1Utxo.toTuple))
+        assert(
+          (built.toTuple |> resolvedUtxosL.get) == ResolvedUtxos(Map(script1Utxo.toTuple))
         )
 
-        assertEquals(
-          obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.referenceInputs).get,
-          expected = TaggedOrderedSet.from(List(script1Utxo.input))
+        assert(
+          (built.toTuple |> transactionL.andThen(txBodyL).refocus(_.referenceInputs).get) ==
+              TaggedOrderedSet.from(List(script1Utxo.input))
         )
     }
 
@@ -643,21 +644,20 @@ class TransactionBuilderTest extends munit.ScalaCheckSuite {
     test("Adding a utxo as collateral adds the utxo to resolvedUtxos and tx body") {
         val steps = List(AddCollateral(utxo = pkhUtxo))
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
-        assertEquals(
-          obtained = built.toTuple |> resolvedUtxosL.get,
-          ResolvedUtxos(Map(pkhUtxo.toTuple))
+        assert(
+          (built.toTuple |> resolvedUtxosL.get) == ResolvedUtxos(Map(pkhUtxo.toTuple))
         )
 
-        assertEquals(
-          obtained = built.toTuple |> transactionL.andThen(txBodyL).refocus(_.collateralInputs).get,
-          expected = TaggedOrderedSet.from(List(pkhUtxo.input))
+        assert(
+          (built.toTuple |> transactionL.andThen(txBodyL).refocus(_.collateralInputs).get) ==
+              TaggedOrderedSet.from(List(pkhUtxo.input))
         )
     }
 
     test("A script based utxo can't be used as a collateral") {
         val step = AddCollateral(utxo = script1Utxo)
         val res = TransactionBuilder.build(Mainnet, List(step))
-        assertEquals(obtained = res, expected = Left(TxBuildError.CollateralNotPubKey(script1Utxo)))
+        assert(res == Left(TxBuildError.CollateralNotPubKey(script1Utxo)))
     }
 
     // =======================================================================
@@ -845,7 +845,7 @@ val script2: Script.PlutusV1 =
         .to[Script.PlutusV1]
         .value
 
-val anyNetworkTx: Transaction = emptyTransaction
+val anyNetworkTx: Transaction = Transaction.empty
 
 // See: https://github.com/mlabs-haskell/purescript-cardano-types/blob/348fbbefa8bec5050e8492f5a9201ac5bb17c9d9/test/CSLHex.purs#L109
 val testnetTransaction: Transaction =
