@@ -21,6 +21,8 @@ import cats.data._
 
 import io.bullet.borer.Cbor
 import org.scalacheck.{Gen, Prop, Test => ScalaCheckTest}
+import org.scalacheck.Arbitrary.arbitrary
+import scalus.cardano.ledger.ArbitraryInstances.given
 import test._
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
@@ -48,7 +50,7 @@ def genDepositUtxo(
     headAddr: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         headAddr_ = headAddr.getOrElse(genScriptAddr(network).sample.get)
         dd <- genDepositDatum(network)
 
@@ -74,7 +76,7 @@ def genDepositUtxo(
 
 val genHeadTokenName: Gen[AssetName] =
     for {
-        txIds <- Gen.nonEmptyListOf(genTransactionInput)
+        txIds <- Gen.nonEmptyListOf(arbitrary[TransactionInput])
         ne = NonEmptyList.fromListUnsafe(txIds)
     } yield Token.mkHeadTokenName(ne)
 
@@ -95,7 +97,7 @@ def genTreasuryUtxo(
     headAddr: Option[ShelleyAddress]
 ): Gen[TreasuryUtxo] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         headTn <- genHeadTokenName
 
         scriptAddr = headAddr.getOrElse({

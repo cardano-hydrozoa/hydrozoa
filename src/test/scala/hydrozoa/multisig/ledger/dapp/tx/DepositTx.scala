@@ -15,6 +15,9 @@ import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.{Test => ScalaCheckTest, _}
 import test._
 
+import org.scalacheck.Arbitrary.arbitrary
+import scalus.cardano.ledger.ArbitraryInstances.given
+
 var counter = AtomicLong(0L)
 
 def genDepositRecipe(
@@ -43,7 +46,7 @@ def genDepositRecipe(
           refundDatum = refundData
         )
 
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
 
         depositMinAda = {
             val candidate = Babbage(

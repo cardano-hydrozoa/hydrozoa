@@ -61,7 +61,9 @@ lazy val core = (project in file("."))
       libraryDependencies ++= Seq(
         "org.scalameta" %% "munit" % "1.2.0" % Test,
         "org.scalameta" %% "munit-scalacheck" % "1.2.0" % Test,
-        "org.scalacheck" %% "scalacheck" % "1.19.0" % Test,
+        //"org.scalacheck" %% "scalacheck" % "1.19.0" % Test,
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
@@ -136,7 +138,8 @@ lazy val benchmark = (project in file("benchmark"))
         "-XX:+UseG1GC"
       ),
       libraryDependencies ++= Seq(
-        "org.scalacheck" %% "scalacheck" % "1.19.0",
+        //"org.scalacheck" %% "scalacheck" % "1.19.0",
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )

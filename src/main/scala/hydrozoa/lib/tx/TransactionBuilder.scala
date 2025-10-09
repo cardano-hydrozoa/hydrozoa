@@ -1078,6 +1078,8 @@ object TransactionBuilder:
         modify0(
           Focus[Context](_.transaction)
               .refocus(_.auxiliaryData)
+              // In scalus 0.13 it's KeepRaw?
+              // .modify(a => modifyAuxiliaryData.f(a.map(_.value)).map(KeepRaw(_)))
               .modify(modifyAuxiliaryData.f(_))
         )
 

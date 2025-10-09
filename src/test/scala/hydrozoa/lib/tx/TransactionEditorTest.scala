@@ -1,21 +1,21 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
-import hydrozoa.lib.tx._
+import hydrozoa.lib.tx.TransactionEditor.{editTransactionSafe, editTransaction}
+import hydrozoa.lib.tx.*
 import hydrozoa.txBodyL
-
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.ledger.RedeemerTag.Spend
-import scalus.cardano.ledger._
+import scalus.cardano.ledger.*
 import scalus.|>
 
 import scala.collection.immutable.SortedSet
-
-import monocle.syntax.all._
+import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
-class TransactionEditorTest extends munit.ScalaCheckSuite {
+class TransactionEditorTests extends AnyFunSuite, ScalaCheckPropertyChecks {
 
     val oneInput: Transaction = {
         val l1 = txBodyL
@@ -40,7 +40,7 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
     }
 
     test("do nothing")({
-        assertEquals(obtained = editTransaction(identity)(oneInput), expected = oneInput)
+        assert(editTransaction(identity)(oneInput) == oneInput)
     })
 
     test("attach one input to the end")({
@@ -61,8 +61,8 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
               )
             )
 
-        assertEquals(
-          obtained = editTransaction(
+        assert(
+          editTransaction(
             txBodyL
                 .refocus(_.inputs)
                 .modify((i: TaggedOrderedSet[TransactionInput]) =>
@@ -70,8 +70,7 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
                 )
           )(
             oneInput
-          ),
-          expected = expectedTx
+          ) == expectedTx
         )
     })
 
@@ -94,11 +93,10 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
             anyNetworkTx |> l1 |> l2
         }
 
-        assertEquals(
-          obtained = editTransactionSafe(
+        assert(
+          editTransactionSafe(
             txBodyL.refocus(_.inputs).replace(TaggedOrderedSet(input1))
-          )(tx1),
-          expected = Right(tx2)
+          )(tx1) == Right(tx2)
         )
     })
 
@@ -154,11 +152,10 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
 
             anyNetworkTx |> l1 |> l2
         }
-        assertEquals(
-          expected = Right(tx2),
-          obtained = editTransactionSafe(
+        assert(
+          editTransactionSafe(
             txBodyL.refocus(_.inputs).replace(TaggedOrderedSet(input1))
-          )(tx1)
+          )(tx1) == Right(tx2)
         )
     })
 
@@ -214,9 +211,8 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
                     .replace(TaggedOrderedSet(input0, input2))
             anyNetworkTx |> l1 |> l2
         }
-        assertEquals(
-          expected = Right(tx2),
-          obtained = tx1 |> editTransactionSafe(
+        assert(
+          (tx1 |> editTransactionSafe(
             txBodyL
                 .refocus(_.inputs)
                 .replace(TaggedOrderedSet(input0, input2))
@@ -237,7 +233,7 @@ class TransactionEditorTest extends munit.ScalaCheckSuite {
                         )
                       )
                 )
-          )
+          )) == Right(tx2)
         )
     })
 }

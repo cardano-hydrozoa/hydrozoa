@@ -23,6 +23,9 @@ import org.scalacheck.Gen.{const, posNum}
 import org.scalacheck._
 import test.TestPeer.Alice
 
+import org.scalacheck.Arbitrary.arbitrary
+import scalus.cardano.ledger.ArbitraryInstances.given
+
 val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
 )
@@ -63,13 +66,6 @@ def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
       backendService = null
     )
 }
-
-val genTransactionInput: Gen[TransactionInput] =
-    for {
-        txId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
-        index <- posNum[Int] // we subtract one below to get a non-negative
-
-    } yield TransactionInput(transactionId = txId, index = index - 1)
 
 val genAddrKeyHash: Gen[AddrKeyHash] =
     genByteStringOfN(28).map(AddrKeyHash.fromByteString)
@@ -112,7 +108,7 @@ def genAdaOnlyPubKeyUtxo(
     params: ProtocolParams = blockfrost544Params
 ): Gen[(TransactionInput, Babbage)] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         value <- genAdaOnlyValue
     } yield (
       txId,

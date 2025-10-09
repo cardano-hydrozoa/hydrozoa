@@ -23,7 +23,6 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import VoteTx.BuildError
-import VoteTx.BuildError.SomeBalancingError
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -40,7 +39,8 @@ import scalus.prelude.{List as SList, Option as SOption}
 import scalus.|>
 import test.*
 
-import java.time.Instant
+import org.scalacheck.Arbitrary.arbitrary
+import scalus.cardano.ledger.ArbitraryInstances.given
 
 def genHeadParams: Gen[
   (
@@ -192,7 +192,7 @@ def signBlockHeader(
 
 def genCollateralUtxo(peer: TestPeer): Gen[(TransactionInput, Babbage)] =
     for {
-        input <- genTransactionInput
+        input <- arbitrary[TransactionInput]
     } yield (
       input,
       Babbage(
