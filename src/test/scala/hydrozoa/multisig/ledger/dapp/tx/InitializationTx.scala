@@ -6,7 +6,6 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.tx.BuildError
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo

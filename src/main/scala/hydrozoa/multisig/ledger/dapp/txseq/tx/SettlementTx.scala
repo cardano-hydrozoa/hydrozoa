@@ -14,8 +14,9 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{TxBalancingError, BuilderContext as ScalusBuilderContext}
+import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError, BuilderContext as ScalusBuilderContext}
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.rules.STS.Validator
 
 import scala.annotation.tailrec
 
@@ -119,7 +120,8 @@ object SettlementTx {
         headNativeScript: HeadMultisigScript,
         // The reference script for the HNS should live inside the multisig regime witness UTxO
         headNativeScriptReferenceInput: TransactionUnspentOutput,
-        context: ScalusBuilderContext
+        env: Environment,
+        validators: Seq[Validator]
     ) {
         import Builder.*
 
@@ -239,7 +241,7 @@ object SettlementTx {
                     else
                         Some(
                           Babbage(
-                            headNativeScript.mkAddress(context.network),
+                            headNativeScript.mkAddress(env.network),
                             valueRollout,
                             None,
                             None
@@ -255,7 +257,7 @@ object SettlementTx {
                         mbRolloutOutput.fold(treasuryUtxo.value)(treasuryUtxo.value - _.value)
 
                     Babbage(
-                      address = headNativeScript.mkAddress(context.network),
+                      address = headNativeScript.mkAddress(env.network),
                       value = newTreasuryVal,
                       datumOption = Some(Inline(newTreasuryDatum.toData)),
                       scriptRef = None
@@ -265,7 +267,7 @@ object SettlementTx {
                 lazy val settlementTxMetadata: AuxiliaryData =
                     MD(
                       MD.L1TxTypes.Settlement,
-                      headAddress = headNativeScript.mkAddress(context.network)
+                      headAddress = headNativeScript.mkAddress(env.network)
                     )
             }
 
@@ -354,7 +356,7 @@ object SettlementTx {
                 def build(
                     steps: List[TransactionBuilderStep]
                 ): Either[Error, TransactionBuilder.Context] =
-                    TransactionBuilder.build(context.network, steps).left.map(StepError(_))
+                    TransactionBuilder.build(env.network, steps).left.map(StepError(_))
 
                 def modify(
                     ctx: TransactionBuilder.Context,
@@ -378,13 +380,13 @@ object SettlementTx {
                         // Try to build, balance, and validate the resulting transaction
                         finalized <- addedRolloutOutput
                             .finalizeContext(
-                              protocolParams = context.protocolParams,
+                              protocolParams = env.protocolParams,
                               diffHandler = ChangeOutputDiffHandler(
-                                protocolParams = context.protocolParams,
+                                protocolParams = env.protocolParams,
                                 changeOutputIdx = 0
                               ).changeOutputDiffHandler,
-                              evaluator = context.evaluator,
-                              validators = context.validators
+                              evaluator = env.evaluator,
+                              validators = validators
                             )
                             .left
                             .map({

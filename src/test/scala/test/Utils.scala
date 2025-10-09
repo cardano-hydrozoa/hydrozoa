@@ -21,7 +21,7 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
-import scalus.cardano.ledger.txbuilder.{BuilderContext, UtxoProvider}
+import scalus.cardano.ledger.txbuilder.{BuilderContext, Environment, Wallet}
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
@@ -63,6 +63,13 @@ val testValidators: Seq[Validator] =
       OutsideValidityIntervalValidator,
       OutsideForecastValidator
     )
+
+val testTxBuilderEnvironment: Environment = Environment(
+  protocolParams = testProtocolParams,
+  evaluator = testEvaluator,
+  network = testNetwork,
+  era = Era.Conway
+)
 
 val genAddrKeyHash: Gen[AddrKeyHash] =
     genByteStringOfN(28).map(AddrKeyHash.fromByteString)

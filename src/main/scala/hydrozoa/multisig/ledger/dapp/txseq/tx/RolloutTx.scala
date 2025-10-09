@@ -15,8 +15,9 @@ import hydrozoa.{prebalancedDiffHandler, reportDiffHandler}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.ledger.txbuilder.{BuilderContext, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.{BuilderContext, Environment, TxBalancingError}
 
 final case class ROTx(
     rolloutSpent: RolloutUtxo,
@@ -28,7 +29,8 @@ object RolloutTx {
     final case class Builder(
         hnsReferenceOutput: TransactionUnspentOutput,
         headNativeScript: HeadMultisigScript,
-        ctx: BuilderContext
+        env: Environment,
+        validators: Seq[Validator]
     ) {
 
         import hydrozoa.lib.tx.*
@@ -229,7 +231,7 @@ object RolloutTx {
                     Some(
                       Send(
                         Babbage(
-                          address = headNativeScript.mkAddress(ctx.network),
+                          address = headNativeScript.mkAddress(env.network),
                           value = Value(nextRolloutCoin),
                           datumOption = None,
                           scriptRef = None
@@ -238,7 +240,7 @@ object RolloutTx {
                     )
 
             val setAuxData: ModifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(MD(MD.L1TxTypes.Rollout, headNativeScript.mkAddress(ctx.network)))
+                Some(MD(MD.L1TxTypes.Rollout, headNativeScript.mkAddress(env.network)))
             )
 
             case class Withdrawals(withdrawNow: Seq[Babbage], withdrawEarlier: Seq[Babbage])
@@ -258,7 +260,7 @@ object RolloutTx {
                   TransactionUnspentOutput(
                     mockTxId,
                     Babbage(
-                      address = headNativeScript.mkAddress(ctx.network),
+                      address = headNativeScript.mkAddress(env.network),
                       value = Value(
                         coin = Coin.zero
                       )
@@ -270,7 +272,7 @@ object RolloutTx {
             for {
                 // These steps never change
                 staticCtx <- TransactionBuilder
-                    .build(ctx.network, List(referenceHNS, setAuxData))
+                    .build(env.network, List(referenceHNS, setAuxData))
                     .left
                     .map(StepError(_))
 
@@ -293,9 +295,9 @@ object RolloutTx {
                     .map(StepError(_))
 
                 requiredAdaForPreviousRollout <- withWithdrawals.finalizeContext(
-                  ctx.protocolParams,
+                  env.protocolParams,
                   diffHandler = reportDiffHandler,
-                  evaluator = ctx.evaluator,
+                  evaluator = env.evaluator,
                   // Validators are empty since we're only looking at balance.
                   validators = List.empty
                 ) match
@@ -313,7 +315,7 @@ object RolloutTx {
                       TransactionUnspentOutput(
                         realPayoutTI,
                         Babbage(
-                          address = headNativeScript.mkAddress(ctx.network),
+                          address = headNativeScript.mkAddress(env.network),
                           value = Value(Coin(requiredAdaForPreviousRollout))
                         )
                       )
@@ -332,10 +334,10 @@ object RolloutTx {
                         finalized <-
                             unbalanced
                                 .finalizeContext(
-                                  ctx.protocolParams,
+                                  env.protocolParams,
                                   diffHandler = prebalancedDiffHandler, // Already balanced
-                                  evaluator = ctx.evaluator,
-                                  validators = ctx.validators
+                                  evaluator = env.evaluator,
+                                  validators = validators
                                 )
                                 .left
                                 .map({

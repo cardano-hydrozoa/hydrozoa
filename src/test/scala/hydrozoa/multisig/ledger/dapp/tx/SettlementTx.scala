@@ -156,11 +156,9 @@ def genSettlementRecipe(
             .listOf(genTestPeer)
             .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
 
-        context = unsignedTxBuilderContext(utxo =
-            Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))
-        )
+        env = testTxBuilderEnvironment
 
-        multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, context.network)
+        multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
 
     } yield SettlementTx.Recipe(
       majorVersion = majorVersion,
