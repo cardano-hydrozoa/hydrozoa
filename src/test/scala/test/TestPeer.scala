@@ -1,8 +1,14 @@
 package test
 
-import hydrozoa._
+import cats.data.NonEmptyList
+import com.bloxbean.cardano.client.account.Account
+import com.bloxbean.cardano.client.common.model.Network as BBNetwork
+import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
+import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
+import hydrozoa.*
 import hydrozoa.multisig.ledger.virtual.{L2EventTransaction, L2EventWithdrawal}
-
+import org.scalacheck.Gen
+import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network.Mainnet
@@ -16,23 +22,13 @@ import scalus.cardano.ledger.{
     KeepRaw,
     Sized,
     TaggedOrderedSet,
-    Transaction => STransaction,
+    Transaction as STransaction,
     TransactionBody,
     TransactionInput,
     TransactionOutput,
     TransactionWitnessSet,
     Value
 }
-
-import cats.data.NonEmptyList
-
-import scala.collection.mutable
-
-import com.bloxbean.cardano.client.account.Account
-import com.bloxbean.cardano.client.common.model.{Network => BBNetwork}
-import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
-import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import org.scalacheck.Gen
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)

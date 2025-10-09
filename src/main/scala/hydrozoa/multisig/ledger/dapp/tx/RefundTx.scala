@@ -10,10 +10,12 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import scala.language.implicitConversions
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -40,7 +42,10 @@ object RefundTx {
         case class Recipe(
             depositTx: DepositTx,
             txIx: Int,
-            context: BuilderContext,
+            network: Network,
+            protocolParams: ProtocolParams,
+            evaluator: PlutusScriptEvaluator,
+            validators: Seq[Validator],
             headScript: HeadMultisigScript,
             validityStartSlot: Slot
         )
@@ -54,8 +59,7 @@ object RefundTx {
             val depositDatum = deposit._3
             val refundOutput: TransactionOutput =
                 TransactionOutput(
-                  address =
-                      depositDatum.refundAddress.toScalusLedger(network = recipe.context.network),
+                  address = depositDatum.refundAddress.toScalusLedger(network = recipe.network),
                   value = Value(deposit._4),
                   datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
                 )
@@ -80,7 +84,7 @@ object RefundTx {
                 Some(
                   MD(
                     MD.L1TxTypes.RefundPostDated,
-                    recipe.headScript.address(recipe.context.network)
+                    recipe.headScript.address(recipe.network)
                   )
                 )
             )
@@ -92,18 +96,18 @@ object RefundTx {
 
             for {
                 unbalanced <- TransactionBuilder
-                    .build(recipe.context.network, steps)
+                    .build(recipe.network, steps)
                     .left
                     .map(StepError(_))
                 finalized <- unbalanced
                     .finalizeContext(
-                      recipe.context.protocolParams,
+                      recipe.protocolParams,
                       diffHandler = new ChangeOutputDiffHandler(
-                        recipe.context.protocolParams,
+                        recipe.protocolParams,
                         0
                       ).changeOutputDiffHandler,
-                      evaluator = recipe.context.evaluator,
-                      validators = recipe.context.validators
+                      evaluator = recipe.evaluator,
+                      validators = recipe.validators
                     )
                     .left
                     .map({

@@ -3,52 +3,34 @@ package hydrozoa.lib.tx
 import hydrozoa.lib.optics.*
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.RedeemerPurpose.ForCert
-import hydrozoa.lib.tx.RedeemerPurpose.ForMint
+import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptSource.*
-import hydrozoa.lib.tx.TransactionBuilder.Context
-import hydrozoa.lib.tx.TransactionBuilder.ResolvedUtxos
-import hydrozoa.lib.tx.TransactionBuilder.WitnessKind
-import hydrozoa.lib.tx.TransactionBuilder.build
+import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, WitnessKind, build}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.TxBuildError.*
-import hydrozoa.txBodyL
-import hydrozoa.txInputsL
-import hydrozoa.txRedeemersL
-import hydrozoa.txReferenceInputsL
-import hydrozoa.txRequiredSignersL
+import hydrozoa.{txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
-import monocle.Focus
-import monocle.Lens
+import monocle.{Focus, Lens}
 import org.scalacheck.Arbitrary.arbitrary
-import scalus.cardano.ledger.ArbitraryInstances.given
-
 import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-
-import scala.collection.immutable.SortedMap
-import scala.collection.immutable.SortedSet
+import scala.collection.immutable.{SortedMap, SortedSet}
 import scalus.builtin.Data.toData
-import scalus.builtin.ByteString
-import scalus.builtin.Data
-import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.Network.Testnet
-import scalus.cardano.address.ShelleyDelegationPart.Key
-import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.Network
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.address.ShelleyPaymentPart
+import scalus.builtin.{ByteString, Data}
+import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.ShelleyDelegationPart.{Key, Null}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.Certificate.UnregCert
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Timelock.AllOf
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.RedeemerTag
 import scalus.cardano.ledger.{Mint as TxBodyMint, *}
 import scalus.|>
 import test.*
 import test.TestPeer.Alice
-import org.scalatest.funsuite.AnyFunSuite
 
 class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
 

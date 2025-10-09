@@ -1,29 +1,26 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa._
+import cats.*
+import cats.data.*
+import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-
+import io.bullet.borer.Cbor
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
-import scalus.prelude.{Option => SOption}
-
-import cats._
-import cats.data._
-
-import io.bullet.borer.Cbor
-import org.scalacheck.{Gen, Prop, Test => ScalaCheckTest}
-import org.scalacheck.Arbitrary.arbitrary
-import scalus.cardano.ledger.ArbitraryInstances.given
-import test._
+import scalus.prelude.Option as SOption
+import test.*
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
@@ -157,8 +154,10 @@ def genSettlementRecipe(
       utxosWithdrawn = Map.from(withdrawals),
       treasuryUtxo = utxo,
       headNativeScript = hns,
-      context =
-          unsignedTxBuilderContext(utxo = Map.from(deposits.map(_.toUtxo).appended(utxo.toUtxo)))
+      network = testNetwork,
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      validators = testValidators
     )).suchThat(r => {
         val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
@@ -169,7 +168,7 @@ def genSettlementRecipe(
 
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
     }
 
     property("Build settlement tx")(

@@ -1,12 +1,8 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
-//import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     BlockTypeL2,
     OnchainBlockHeader,
@@ -22,7 +18,8 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.{
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import VoteTx.BuildError
+import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo}
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -39,8 +36,7 @@ import scalus.prelude.{List as SList, Option as SOption}
 import scalus.|>
 import test.*
 
-import org.scalacheck.Arbitrary.arbitrary
-import scalus.cardano.ledger.ArbitraryInstances.given
+import VoteTx.BuildError
 
 def genHeadParams: Gen[
   (
@@ -255,13 +251,12 @@ def genVoteTxRecipe(
 
         collateralUtxo <- genCollateralUtxo(peers.toList(voteDatum.key.intValue - 1))
 
-        // Create builder context
+        // Create builder context (not needed for Recipe anymore)
         allUtxos = Map(
           voteUtxo.utxo.input.untagged -> voteUtxo.utxo.output.untagged,
           treasuryUtxo.toUtxo._1 -> treasuryUtxo.toUtxo._2,
           collateralUtxo._1 -> collateralUtxo._2
         )
-        context = unsignedTxBuilderContext(allUtxos)
 
     } yield VoteTx.Recipe(
       voteUtxo = voteUtxo,
@@ -271,7 +266,10 @@ def genVoteTxRecipe(
       signatures = signatures,
       // TODO: now sure how to do that properly
       validityEndSlot = 200,
-      context = context
+      network = testNetwork,
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      validators = testValidators
     )
 
 class VoteTxTest extends munit.ScalaCheckSuite {

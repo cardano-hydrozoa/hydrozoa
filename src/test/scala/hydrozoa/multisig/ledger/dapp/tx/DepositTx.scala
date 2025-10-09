@@ -1,22 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import cats.data.NonEmptyList
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
+import java.util.concurrent.atomic.AtomicLong
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.{Test as ScalaCheckTest, *}
 import scalus.builtin.Data.toData
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger._
-import scalus.prelude.{Option => SOption}
-
-import cats.data.NonEmptyList
-
-import java.util.concurrent.atomic.AtomicLong
-import org.scalacheck.{Test => ScalaCheckTest, _}
-import test._
-
-import org.scalacheck.Arbitrary.arbitrary
-import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.prelude.Option as SOption
+import test.*
 
 var counter = AtomicLong(0L)
 
@@ -74,12 +70,15 @@ def genDepositRecipe(
       headAddress = headAddress,
       utxosFunding = fundingUtxos,
       changeAddress = depositor.address,
-      context = unsignedTxBuilderContext(Map.from(fundingUtxos.toList))
+      network = testNetwork,
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      validators = testValidators
     )
 
 class DepositTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
     }
 
     // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="

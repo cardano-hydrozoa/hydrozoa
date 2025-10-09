@@ -1,19 +1,18 @@
 package hydrozoa.lib.tx
 
-import hydrozoa.lib.tx.TransactionEditor.{editTransactionSafe, editTransaction}
 import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.TransactionEditor.{editTransaction, editTransactionSafe}
 import hydrozoa.txBodyL
-import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
-import scalus.cardano.ledger.RedeemerTag.Spend
-import scalus.cardano.ledger.*
-import scalus.|>
-
-import scala.collection.immutable.SortedSet
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.collection.immutable.SortedSet
+import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.RedeemerTag.Spend
+import scalus.|>
 
 class TransactionEditorTest extends AnyFunSuite, ScalaCheckPropertyChecks {
 

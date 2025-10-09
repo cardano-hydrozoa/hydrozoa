@@ -25,7 +25,6 @@ import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.*
-import scalus.cardano.ledger.txbuilder.TxBuilder.{modifyBody, modifyWs}
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
@@ -209,7 +208,7 @@ extension (v: v3.Value) {
           SortedMap.from(listToSeq(ma0.map(x => (x._1, SortedMap.from(listToSeq(x._2))))))
         )
 
-        Value(coin = coins, multiAsset = ma1)
+        Value(coin = coins, assets = ma1)
     }
 }
 
@@ -217,7 +216,7 @@ extension (v: v3.Value) {
 def singleton(policyId: PolicyId, assetName: AssetName, quantity: Int = 1): Value = {
     Value(
       coin = Coin(0L),
-      multiAsset = MultiAsset(assets = SortedMap((policyId, SortedMap((assetName, quantity)))))
+      assets = MultiAsset(assets = SortedMap((policyId, SortedMap((assetName, quantity)))))
     )
 }
 
@@ -441,24 +440,17 @@ extension [A](result: Result[A])
 //        }
 //    yield (utxo, datum)
 
+// Extension methods for TxBuilder - may need to be updated for new Scalus API
+// TODO: Update these extension methods to work with the new TxBuilder API structure
 extension (txBuilder: TxBuilder)
     def addMint(assets: MultiAsset): TxBuilder = {
-        txBuilder.copy(tx =
-            modifyBody(
-              txBuilder.tx,
-              b =>
-                  b.copy(mint = b.mint match {
-                      case None    => Some(Mint(assets))
-                      case Some(m) => Some(Mint(m + assets))
-                  })
-            )
-        )
+        // Note: txBuilder.tx no longer exists, need to find new API
+        ??? // TODO: Fix with new Scalus API
     }
 
     def addOutputs(outputs: Seq[TransactionOutput]): TxBuilder = {
-        txBuilder.copy(tx =
-            modifyBody(txBuilder.tx, b => b.copy(outputs = b.outputs ++ outputs.map(Sized(_))))
-        )
+        // Note: txBuilder.tx no longer exists, need to find new API
+        ??? // TODO: Fix with new Scalus API
     }
 
     /** Useful for mock or change utxos, 0 value, no datum, no script ref */
@@ -467,11 +459,13 @@ extension (txBuilder: TxBuilder)
     }
 
     def setAuxData(aux: AuxiliaryData): TxBuilder = {
-        txBuilder.copy(tx = modifyAuxiliaryData(txBuilder.tx, _ => Some(aux)))
+        // Note: txBuilder.tx no longer exists, need to find new API
+        ??? // TODO: Fix with new Scalus API
     }
 
     def modifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData]): TxBuilder = {
-        txBuilder.copy(tx = modifyAuxiliaryData(txBuilder.tx, f))
+        // Note: txBuilder.tx no longer exists, need to find new API
+        ??? // TODO: Fix with new Scalus API
     }
 
 /** add at most 256 keys */
@@ -481,10 +475,7 @@ def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
 def removeDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    modifyWs(
-      tx,
-      ws => ws.copy(vkeyWitnesses = ws.vkeyWitnesses -- generateUniqueKeys(numberOfKeys))
-    )
+    tx.focus(_.witnessSet.vkeyWitnesses).modify(_ -- generateUniqueKeys(numberOfKeys))
 }
 
 private def generateVKeyWitness(counter: Int): VKeyWitness = {
@@ -498,8 +489,8 @@ private def generateUniqueKeys(n: Int): Set[VKeyWitness] = {
 }
 
 def modifyAuxiliaryData(tx: Transaction, f: Option[AuxiliaryData] => Option[AuxiliaryData]) = {
-    val newAuxData = f(tx.auxiliaryData)
-    tx.copy(auxiliaryData = newAuxData)
+    val newAuxData = f(tx.auxiliaryData.map(_.value))
+    tx.copy(auxiliaryData = newAuxData.map(KeepRaw(_)))
 }
 
 extension (self: TransactionOutput)
