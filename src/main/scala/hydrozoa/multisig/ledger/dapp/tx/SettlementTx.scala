@@ -10,8 +10,6 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import scala.collection
-import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
@@ -19,6 +17,9 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+
+import scala.collection
+import scala.language.{implicitConversions, reflectiveCalls}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -32,7 +33,7 @@ object SettlementTx {
     case class Recipe(
         majorVersion: Int,
         deposits: List[DepositUtxo],
-        utxosWithdrawn: Map[TransactionInput, TransactionOutput],
+        utxosWithdrawn: List[Babbage],
         treasuryUtxo: TreasuryUtxo,
         rolloutTokenName: AssetName,
         headNativeScript: HeadMultisigScript,
@@ -53,7 +54,7 @@ object SettlementTx {
                 .toBuffer
 
         val withdrawnValue: Value =
-            recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
+            recipe.utxosWithdrawn.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
 
         //////////////
         // Datum
@@ -102,7 +103,7 @@ object SettlementTx {
             ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
 
         // N.B.: Withdrawals may be empty
-        val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
+        val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo))
 
         val steps = spendTreasuryAndDeposits
             .appended(createTreasuryOutput)

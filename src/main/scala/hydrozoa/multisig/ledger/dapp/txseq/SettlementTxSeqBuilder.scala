@@ -2,12 +2,11 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.implicits.*
 import hydrozoa.lib.tx.BuildError
+import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Recipe
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.dapp.txseq.tx as newtx
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import scalus.cardano.ledger.Coin
-
-import SettlementTx.Recipe
 
 /** This is the builder for the whole settlement sequence of transaction.
   *   - I remove all mentions of the FallbackTx, since now, when we decided to have a multisig
@@ -25,7 +24,6 @@ object SettlementTxSeqBuilder {
       * [[Recipe.deposits]] is not something that must be included into the settlement tx, but
       * rather a petition, so some may end up in `depositsPostponed` in [[Result]] type.
       *
-      *
       * @param args
       *   the recipe for building the settlement/rollout tx sequence
       * @return
@@ -35,7 +33,7 @@ object SettlementTxSeqBuilder {
         (i1, deposits) = unfolded
         i2 = traverseFee(i1)
         seq = traverseInput(i2)
-        } yield Result(seq, deposits)
+    } yield Result(seq, deposits)
 
     case class Result(
         txSeq: SettlementTxSeq,

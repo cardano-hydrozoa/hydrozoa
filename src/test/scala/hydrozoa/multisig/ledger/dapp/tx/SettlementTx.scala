@@ -151,31 +151,40 @@ def genSettlementRecipe(
             .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
 
         context = unsignedTxBuilderContext(utxo =
-            Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple)))
+            Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))
+        )
 
         multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, context.network)
 
     } yield SettlementTx.Recipe(
       majorVersion = majorVersion,
       deposits = deposits,
-      utxosWithdrawn = Map.from(withdrawals),
+      utxosWithdrawn = withdrawals.map(_._2),
       treasuryUtxo = utxo,
       headNativeScript = hns,
       context = context,
       rolloutTokenName = AssetName.fromHex("deadbeef"), // FIXME:
       headNativeScriptReferenceInput = multisigWitnessUtxo
     )).suchThat(r => {
-        val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
+        val withdrawnCoin = Coin(r.utxosWithdrawn.map(_.value.coin.value).sum)
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
         val treasuryInputAda = r.treasuryUtxo.value.coin
         withdrawnCoin + estimatedFee < treasuryInputAda + depositedCoin
     })
 }
 
-def genFakeMultisigWitnessUtxo(script: HeadMultisigScript, network: Network): Gen[TransactionUnspentOutput] = for {
-        utxoId <- Arbitrary.arbitrary[TransactionInput]
-        output = Babbage(script.mkAddress(network), Value.ada(2), None, Some(ScriptRef.apply(script.script)))
-    } yield TransactionUnspentOutput((utxoId, output))
+def genFakeMultisigWitnessUtxo(
+    script: HeadMultisigScript,
+    network: Network
+): Gen[TransactionUnspentOutput] = for {
+    utxoId <- Arbitrary.arbitrary[TransactionInput]
+    output = Babbage(
+      script.mkAddress(network),
+      Value.ada(2),
+      None,
+      Some(ScriptRef.apply(script.script))
+    )
+} yield TransactionUnspentOutput((utxoId, output))
 
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
@@ -183,19 +192,19 @@ class SettlementTxTest extends munit.ScalaCheckSuite {
     }
 
     property("Build settlement tx")(
-        Prop.forAll(genSettlementRecipe()) { recipe =>
-            SettlementTx.build(recipe) match {
-                case Left(e) => throw RuntimeException(s"Build failed $e")
-                case Right(tx) => {
-                    val cbor = tx.tx.toCbor
+      Prop.forAll(genSettlementRecipe()) { recipe =>
+          SettlementTx.build(recipe) match {
+              case Left(e) => throw RuntimeException(s"Build failed $e")
+              case Right(tx) => {
+                  val cbor = tx.tx.toCbor
 
-                    given OriginalCborByteArray = OriginalCborByteArray(cbor)
+                  given OriginalCborByteArray = OriginalCborByteArray(cbor)
 
-                    val roundTripped = Cbor.decode(cbor).to[Transaction].value
-                    assertEquals(obtained = roundTripped, expected = tx.tx)
-                }
-            }
+                  val roundTripped = Cbor.decode(cbor).to[Transaction].value
+                  assertEquals(obtained = roundTripped, expected = tx.tx)
+              }
+          }
 
-        }
+      }
     )
 }

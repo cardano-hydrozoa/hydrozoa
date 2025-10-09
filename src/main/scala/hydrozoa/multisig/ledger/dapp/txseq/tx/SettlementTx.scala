@@ -2,13 +2,17 @@ package hydrozoa.multisig.ledger.dapp.txseq.tx
 
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilder.Context
-import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import hydrozoa.lib.tx.{BuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
+import hydrozoa.lib.tx.{
+    BuildError,
+    TransactionBuilder,
+    TransactionBuilderStep,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Recipe
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, SettlementTx}
+import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, SettlementTx, Metadata as MD}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -18,7 +22,9 @@ import scalus.cardano.ledger.TransactionMetadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.TxBalancingError
-import scalus.cardano.ledger.{Coin, TransactionException, TransactionInput, TransactionMetadatumLabel, TransactionOutput, Value}
+import scalus.cardano.ledger.{Mint as SMint, *}
+
+import scala.annotation.tailrec
 
 object SettlementTx {
 
@@ -34,10 +40,20 @@ object SettlementTx {
         depositsPostponed: List[DepositUtxo]
     )
 
+    /** @param directPayouts
+      *   Payouts that fit directly as outputs to the settlement tx
+      * @param rolledoutPayouts
+      *   Payouts that must go to the rollout tx
+      */
+    case class Withdrawals(
+        directPayouts: List[Babbage],
+        rolledoutPayouts: List[Babbage]
+    )
+
     type Cont = Coin => SettlementTx
 
     case class PartialResult(
-        remainingPayouts: Map[TransactionInput, TransactionOutput],
+        remainingPayouts: List[Babbage],
         deposits: Deposits,
         cont: Cont
     )
@@ -101,16 +117,16 @@ object SettlementTx {
             directPayoutsAdded <-
                 if finished then Right((withDeposits, args.utxosWithdrawn))
                 // FIXME: call addDirectPayouts
-                else Right((withDeposits, args.utxosWithdrawn))
+                else builder.addDirectPayouts(withDeposits, args.utxosWithdrawn)
             (withPayouts, remainingPayouts) = directPayoutsAdded
-            ret: PartialResult <- Right(
-              PartialResult(
-                remainingPayouts,
-                deposits,
-                builder.finalizeSettlementTx(withPayouts)
-              )
-            )
-        } yield ret
+//            ret: PartialResult <- Right(
+//              PartialResult(
+//                remainingPayouts,
+//                deposits,
+//                builder.finalizeSettlementTx(withPayouts)
+//              )
+//            )
+        } yield ???
 
     }
 
@@ -125,7 +141,7 @@ object SettlementTx {
         val mkSettlementTxPessimistic: Either[BuildError, SettlementContext] = {
 
             val totalValueWithdrawn =
-                utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)(_ + _)
+                utxosWithdrawn.map(_.value).foldLeft(Value.zero)(_ + _)
 
             /////////////////////////////////////////////////////
             // Step Definition
@@ -348,8 +364,187 @@ object SettlementTx {
         // 3. adding direct payouts
         // -------------------------------------------------------------------------
 
-        // TODO
-        def addDirectPayouts = ???
+        /** Attempt to add as many direct payouts as possible to the transaction.
+          * @param context
+          *   The context with deposits already added
+          * @param utxosToWithdraw
+          *   A list of Babbage transaction outputs that must appear on L1. The order in which these
+          *   are provided is set by the dApp ledger (I think?) and must be formed of monotonic
+          *   subsequence in terms of event numbering for individual peers.
+          * @return
+          *   Left if ???, Right with a tuple containing the context with as many direct payouts as
+          *   possible and the remaining UTxOs that need to be rolled-out.
+          */
+        def addDirectPayouts(
+            context: SettlementContext,
+            utxosToWithdraw: List[Babbage]
+        ): Either[BuildError, (SettlementContext, Withdrawals)] = {
+            val withdrawals0 =
+                Withdrawals(directPayouts = List.empty, rolledoutPayouts = utxosToWithdraw)
+
+            /** Recursively loop over all UTxOs to withdraw, moving them from the rollout tx into
+              * the direct payouts via "trial payouts".
+              *
+              * @return
+              */
+            @tailrec
+            def loop(
+                state: SettlementContext,
+                withdrawals: Withdrawals
+            ): Either[BuildError, (SettlementContext, Withdrawals)] = {
+                withdrawals.rolledoutPayouts match {
+                    // There are still withdrawals getting rolled out, process one-by-one
+                    case w :: ws =>
+                        val newWithdrawals = Withdrawals(
+                          directPayouts = withdrawals.directPayouts :+ w,
+                          rolledoutPayouts = ws
+                        )
+                        // Trial payout
+                        tryAddPayout(state, w) match {
+                            // Trial successful, loop
+                            case Right(x) => loop(x, newWithdrawals)
+                            // Trial failed, either because the Tx became to big or for some other build failure
+                            case Left(err) =>
+                                err match
+                                    // Transaction became too big, this means that the state and withdrawals are
+                                    // correct.
+                                    case ValidationError(_: InvalidTransactionSizeException) =>
+                                        Right(state, withdrawals)
+                                    // Trial failed for some other reason -- return it.
+                                    case _ => Left(err)
+                        }
+                    // No more withdrawals to process, rollout UTxO is not needed
+                    case Nil => Right(state, withdrawals)
+                }
+            }
+            loop(context, withdrawals0)
+        }
+
+        def tryAddPayout(
+            ctx: SettlementContext,
+            toWithdraw: Babbage
+        ): Either[BuildError, SettlementContext] =
+            for {
+                // Trial this payout, see if it fits. We yield this if we are successful.
+                builderContextToKeep <- TransactionBuilder
+                    .modify(ctx.contextSoFar, Seq(Send(toWithdraw)))
+                    .left
+                    .map(StepError(_))
+
+                result = ctx.copy(contextSoFar = builderContextToKeep)
+
+                // Fake steps added for balancing
+                builderContextTemp <- TransactionBuilder
+                    .modify(builderContextToKeep, ctx.extraSteps)
+                    .left
+                    .map(StepError(_))
+
+                // Perform a trial balance, see what happens
+                _ <- builderContextTemp
+                    .finalizeContext(
+                      context.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        context.protocolParams,
+                        0
+                      ).changeOutputDiffHandler,
+                      evaluator = context.evaluator,
+                      validators = context.validators
+                    )
+                    .left
+                    .map({
+                        case balanceError: TxBalancingError =>
+                            BalancingError(balanceError)
+                        case validationError: TransactionException =>
+                            ValidationError(validationError)
+                    })
+            } yield result
+
+        /** Finalize the transaction if all withdrawals fit as direct payouts. In this case, there
+          * is no rollout UTxO created or token minted.
+          *
+          * See also [[prefinalizeWithRollout()]]
+          *
+          * @param ctx
+          * @return
+          */
+        def finalizeNoRollout(ctx: SettlementContext): Either[BuildError, Context] =
+            for {
+                withTreasury <- TransactionBuilder
+                    .modify(ctx.contextSoFar, Seq(ctx.mkNewTreasury))
+                    .left
+                    .map(StepError(_))
+
+                treasuryIndex = withTreasury.transaction.body.value.outputs.size - 1
+                finalized <- withTreasury
+                    .finalizeContext(
+                      context.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        context.protocolParams,
+                        treasuryIndex
+                      ).changeOutputDiffHandler,
+                      evaluator = context.evaluator,
+                      validators = context.validators
+                    )
+                    .left
+                    .map({
+                        case balanceError: TxBalancingError => BalancingError(balanceError)
+                        case validationError: TransactionException =>
+                            ValidationError(validationError)
+                    })
+            } yield finalized
+
+        /** If we need to add rollouts, then we need to create a _rollout chain_. We do this in the
+          * RolloutTx.scala module. finalizeWithRollout will produce a _function_ that takes the
+          * value of the _first_ rollout UTxO as an argument. This is then passed in to the
+          * arguments to [[RolloutTx.finalizeWithRollout]] as `mkSettlement`.
+          *
+          * See all [[finalizeNoRollout()]]
+          * @param ctx
+          * @param toRollout
+          * @return
+          *   A function awaiting the value for the first rollout transaction, see
+          *   [[makeRolloutChain]]
+          */
+        def prefinalizeWithRollout(
+            ctx: SettlementContext
+        ): Value => Either[BuildError, (Context, TransactionInput)] = firstRolloutValue => {
+
+            val sendFirstRollout: Send = Send(
+              Babbage(
+                address = headNativeScript.mkAddress(context.network),
+                value = firstRolloutValue,
+                datumOption = None,
+                scriptRef = None
+              )
+            )
+            for {
+                unbalanced <- TransactionBuilder
+                    .modify(ctx.contextSoFar, Seq(sendFirstRollout, ctx.mkNewTreasury))
+                    .left
+                    .map(StepError(_))
+
+                treasuryIndex = unbalanced.transaction.body.value.outputs.size - 1
+                rolloutIndex = unbalanced.transaction.body.value.outputs.size - 2
+
+                finalized <- unbalanced
+                    .finalizeContext(
+                      context.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        context.protocolParams,
+                        treasuryIndex
+                      ).changeOutputDiffHandler,
+                      evaluator = context.evaluator,
+                      validators = context.validators
+                    )
+                    .left
+                    .map({
+                        case balanceError: TxBalancingError => BalancingError(balanceError)
+                        case validationError: TransactionException =>
+                            ValidationError(validationError)
+                    })
+
+            } yield (finalized, TransactionInput(finalized.transaction.id, rolloutIndex))
+        }
 
         // -------------------------------------------------------------------------
         // ...
@@ -358,6 +553,7 @@ object SettlementTx {
         def finalizeSettlementTx(ctx: SettlementContext)(
             coin: Coin
         ): SettlementTx = {
+
             // Changes sendRolloutOutputStep, convert to Context and build the final transaction.
             ???
         }
