@@ -440,34 +440,6 @@ extension [A](result: Result[A])
 //        }
 //    yield (utxo, datum)
 
-// Extension methods for TxBuilder - may need to be updated for new Scalus API
-// TODO: Update these extension methods to work with the new TxBuilder API structure
-extension (txBuilder: TxBuilder)
-    def addMint(assets: MultiAsset): TxBuilder = {
-        // Note: txBuilder.tx no longer exists, need to find new API
-        ??? // TODO: Fix with new Scalus API
-    }
-
-    def addOutputs(outputs: Seq[TransactionOutput]): TxBuilder = {
-        // Note: txBuilder.tx no longer exists, need to find new API
-        ??? // TODO: Fix with new Scalus API
-    }
-
-    /** Useful for mock or change utxos, 0 value, no datum, no script ref */
-    def addEmptyOutput(address: ShelleyAddress): TxBuilder = {
-        addOutputs(List(Babbage(address = address, value = Value.zero)))
-    }
-
-    def setAuxData(aux: AuxiliaryData): TxBuilder = {
-        // Note: txBuilder.tx no longer exists, need to find new API
-        ??? // TODO: Fix with new Scalus API
-    }
-
-    def modifyAuxData(f: Option[AuxiliaryData] => Option[AuxiliaryData]): TxBuilder = {
-        // Note: txBuilder.tx no longer exists, need to find new API
-        ??? // TODO: Fix with new Scalus API
-    }
-
 /** add at most 256 keys */
 def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
     tx.focus(_.witnessSet.vkeyWitnesses).modify(_ ++ generateUniqueKeys(numberOfKeys))
