@@ -1,12 +1,8 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
-//import com.typesafe.scalalogging.Logger
 import hydrozoa.*
-import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     BlockTypeL2,
     OnchainBlockHeader,
@@ -22,8 +18,7 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.{
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import VoteTx.BuildError
-import VoteTx.BuildError.SomeBalancingError
+import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo}
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -40,7 +35,7 @@ import scalus.prelude.{List as SList, Option as SOption}
 import scalus.|>
 import test.*
 
-import java.time.Instant
+import VoteTx.BuildError
 
 def genHeadParams: Gen[
   (

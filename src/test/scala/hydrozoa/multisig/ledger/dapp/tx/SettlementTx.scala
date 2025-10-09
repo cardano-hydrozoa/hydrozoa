@@ -1,23 +1,24 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import cats.data.*
 import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
+import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import io.bullet.borer.Cbor
+import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.*
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
-import cats.*
-import cats.data.*
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import io.bullet.borer.Cbor
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
 import test.*
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
@@ -149,17 +150,20 @@ def genSettlementRecipe(
             .listOf(genTestPeer)
             .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
 
+        context = unsignedTxBuilderContext(utxo =
+            Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple)))
+
+        multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, context.network)
+
     } yield SettlementTx.Recipe(
       majorVersion = majorVersion,
       deposits = deposits,
       utxosWithdrawn = Map.from(withdrawals),
       treasuryUtxo = utxo,
       headNativeScript = hns,
-      context = unsignedTxBuilderContext(utxo =
-          Map.from(deposits.map(_.toUtxo).appended(utxo.asUtxo.toTuple))
-      ),
-      rolloutTokenName = ???,
-      headNativeScriptReferenceInput = ???
+      context = context,
+      rolloutTokenName = AssetName.fromHex("deadbeef"), // FIXME:
+      headNativeScriptReferenceInput = multisigWitnessUtxo
     )).suchThat(r => {
         val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
@@ -168,23 +172,30 @@ def genSettlementRecipe(
     })
 }
 
+def genFakeMultisigWitnessUtxo(script: HeadMultisigScript, network: Network): Gen[TransactionUnspentOutput] = for {
+        utxoId <- Arbitrary.arbitrary[TransactionInput]
+        output = Babbage(script.mkAddress(network), Value.ada(2), None, Some(ScriptRef.apply(script.script)))
+    } yield TransactionUnspentOutput((utxoId, output))
+
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
     }
 
     property("Build settlement tx")(
-      Prop.forAll(genSettlementRecipe()) { recipe =>
-          SettlementTx.build(recipe) match {
-              case Left(e) => throw RuntimeException(s"Build failed $e")
-              case Right(tx) => {
-                  val cbor = tx.tx.toCbor
-                  given OriginalCborByteArray = OriginalCborByteArray(cbor)
-                  val roundTripped = Cbor.decode(cbor).to[Transaction].value
-                  assertEquals(obtained = roundTripped, expected = tx.tx)
-              }
-          }
+        Prop.forAll(genSettlementRecipe()) { recipe =>
+            SettlementTx.build(recipe) match {
+                case Left(e) => throw RuntimeException(s"Build failed $e")
+                case Right(tx) => {
+                    val cbor = tx.tx.toCbor
 
-      }
+                    given OriginalCborByteArray = OriginalCborByteArray(cbor)
+
+                    val roundTripped = Cbor.decode(cbor).to[Transaction].value
+                    assertEquals(obtained = roundTripped, expected = tx.tx)
+                }
+            }
+
+        }
     )
 }

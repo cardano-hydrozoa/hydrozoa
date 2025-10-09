@@ -2,25 +2,13 @@ package hydrozoa.multisig.ledger.dapp.txseq.tx
 
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilder.Context
-import hydrozoa.lib.tx.TransactionBuilderStep.{
-    Mint,
-    ModifyAuxiliaryData,
-    ReferenceOutput,
-    Send,
-    Spend
-}
-import hydrozoa.lib.tx.{
-    BuildError,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.SettlementTx
+import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
+import hydrozoa.lib.tx.{BuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Recipe
-import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeqBuilder.HasContext
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, SettlementTx}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -28,18 +16,9 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionMetadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    Coin,
-    TransactionException,
-    TransactionInput,
-    TransactionMetadatumLabel,
-    TransactionOutput,
-    Value
-}
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.TxBalancingError
-
-import scala.annotation.tailrec
+import scalus.cardano.ledger.{Coin, TransactionException, TransactionInput, TransactionMetadatumLabel, TransactionOutput, Value}
 
 object SettlementTx {
 
@@ -70,12 +49,7 @@ object SettlementTx {
         contextSoFar: Context,
         mkNewTreasury: Send,
         sendRolloutOutputStep: Option[MintSendRollout]
-    )
-    // Maybe a given instance to keep SettlementContext just pure data?
-    // Not sure
-        extends HasContext {
-        override def getContext = ???
-
+    ) {
         def extraSteps: Seq[TransactionBuilderStep] =
             Seq(
               // NB: treasury output must be in position 0
@@ -108,57 +82,136 @@ object SettlementTx {
             x.fold(Seq.empty)(_.toSeq)
     }
 
-    def build(args: Recipe): PartialResult = {
+    def build(args: Recipe): Either[BuildError, PartialResult] = {
         val builder = Builder(args)
 
-        // Step 2. Adding deposits (if they exist). Outcomes:
-        //  - list of deposits is depleted -> try to add direct payouts
-        //  - some deposits don't fit the tx  -> return
-        // val (settlementTxWithDeposits, deposits): (SettlementContext, Deposits) = ???
-        //                    addDeposits(settlementTxPessimistic, args.deposits)
-
-        val eSettlementContext = for {
+        for {
+            // Step 1. Pessimistic settlement transaction
             pessimistic <- builder.mkSettlementTxPessimistic
+            // Step 2. Try to add as much deposits as we can
+            // Outcomes:
+            //  - list of deposits is depleted -> try to add direct payouts
+            //  - some deposits don't fit the tx -> return
             depositsAdded <- builder.addDeposits(pessimistic, args.deposits)
-            (withDeposits, newDeposits, finished) = depositsAdded
-            withPayouts <- if finished then Right(withDeposits) else ???
-        } yield withPayouts
+            (withDeposits, deposits, finished) = depositsAdded
+            // TODO: George: i think finished === deposits.depositsPostponed.nonEmpty
+            // Step 3. Add direct payouts. Outcomes:
+            //  - list of withdrawals is depleted -> no need to mint the token, no rollout utxo (effectively the end of the whole algorithm).
+            //  - some withdrawals don't fit
+            directPayoutsAdded <-
+                if finished then Right((withDeposits, args.utxosWithdrawn))
+                // FIXME: call addDirectPayouts
+                else Right((withDeposits, args.utxosWithdrawn))
+            (withPayouts, remainingPayouts) = directPayoutsAdded
+            ret: PartialResult <- Right(
+              PartialResult(
+                remainingPayouts,
+                deposits,
+                builder.finalizeSettlementTx(withPayouts)
+              )
+            )
+        } yield ret
 
-//        val ret: PartialResult =
-//            if deposits.depositsPostponed.nonEmpty
-//            then
-//                // some deposits don't fit the tx  -> return
-//                PartialResult(
-//                  args.utxosWithdrawn,
-//                  deposits,
-//                  builder.finalizeSettlementTx(settlementTxWithDeposits)
-//                )
-//            else {
-//                // list of deposits is depleted -> try to add direct payouts
-//                // Step 3. Add direct payouts. Outcomes:
-//                //  - list of withdrawals is depleted -> no need to mint the token, no rollout utxo (effectively the end of the whole algorithm).
-//                //  - some withdrawals don't fit
-//                val (settlementTxWithPayouts, remainingPayouts) = ??? // def addPayouts
-//                PartialResult(
-//                  remainingPayouts,
-//                  deposits,
-//                    builder.finalizeSettlementTx(settlementTxWithPayouts)
-//                )
-//            }
-//        ret
-        ???
     }
 
     class Builder(args: Recipe) {
         import args.*
 
-        // --- auxiliary functions
+        // -------------------------------------------------------------------------
+        // 1. pessimistic settlement
+        // -------------------------------------------------------------------------
 
-        /** Combines all withdrawals into one TransactionOutput, omitting datums. As long as we have
-          * one utxo for the _whole_ treasury, this is total.
-          */
-        def mkRolloutOutput(value: Value): TransactionOutput =
-            Babbage(headNativeScript.mkAddress(context.network), value, None, None)
+        /** We assume this transaction is always possible to build. */
+        val mkSettlementTxPessimistic: Either[BuildError, SettlementContext] = {
+
+            val totalValueWithdrawn =
+                utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)(_ + _)
+
+            /////////////////////////////////////////////////////
+            // Step Definition
+            val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
+
+            val consumeTreasury: Spend =
+                Spend(
+                  treasuryUtxo.asUtxo,
+                  headNativeScript.witness
+                )
+
+            val sendTreasury: Send = Send(
+              mkTreasuryOutput(treasuryUtxo, totalValueWithdrawn)
+            )
+
+            val mbMintSendRollout: Option[MintSendRollout] =
+                if utxosWithdrawn.nonEmpty
+                then {
+                    val mintRollout: Mint =
+                        Mint(
+                          scriptHash = headNativeScript.policyId,
+                          assetName = rolloutTokenName,
+                          amount = 1L,
+                          witness = headNativeScript.witness
+                        )
+                    val sendRollout: Send = Send(mkRolloutOutput(totalValueWithdrawn))
+                    Some(MintSendRollout(mintRollout, sendRollout))
+                } else None
+
+            val modifyAuxiliaryData =
+                ModifyAuxiliaryData(_ =>
+                    Some(
+                      MD(
+                        MD.L1TxTypes.Settlement,
+                        headAddress = headNativeScript.mkAddress(context.network)
+                      )
+                    )
+                )
+
+            val staticSteps: Seq[TransactionBuilderStep] = Seq(
+              referenceHNS, // Stays the same
+              consumeTreasury, // Stays the same
+              modifyAuxiliaryData // Stays the same
+            )
+
+            /////////////////////////////////////////////////////////
+            // Build and finalize
+            for {
+                builderContextToKeep <- TransactionBuilder
+                    .build(context.network, staticSteps)
+                    .left
+                    .map(StepError(_))
+
+                result = SettlementContext(
+                  contextSoFar = builderContextToKeep,
+                  mkNewTreasury = sendTreasury,
+                  sendRolloutOutputStep = mbMintSendRollout
+                )
+
+                // Fee Calculation
+                builderContextTemp <- TransactionBuilder
+                    .modify(builderContextToKeep, result.extraSteps)
+                    .left
+                    .map(StepError(_))
+
+                _ <- builderContextTemp
+                    .finalizeContext(
+                      context.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        context.protocolParams,
+                        0
+                      ).changeOutputDiffHandler,
+                      evaluator = context.evaluator,
+                      validators = context.validators
+                    )
+                    .left
+                    .map({
+                        case balanceError: TxBalancingError => BalancingError(balanceError)
+                        case validationError: TransactionException =>
+                            ValidationError(validationError)
+                    })
+
+                /////////////////////////////////////////////////////////////////////////
+                // Post-process result
+            } yield result
+        }
 
         def mkTreasuryOutput(treasuryUtxo: TreasuryUtxo, totalValueWithdrawn: Value) =
             // TODO: Pass the hash of the protocol parameters in the datum
@@ -174,7 +227,15 @@ object SettlementTx {
               scriptRef = None
             )
 
-        /** We assume this transaction is always possible to build. */
+        /** Combines all withdrawals into one TransactionOutput, omitting datums. As long as we have
+          * one utxo for the _whole_ treasury, this is total.
+          */
+        def mkRolloutOutput(value: Value): TransactionOutput =
+            Babbage(headNativeScript.mkAddress(context.network), value, None, None)
+
+        // -------------------------------------------------------------------------
+        // 2. adding deposits
+        // -------------------------------------------------------------------------
 
         /** Tries to add a deposit one by one until the list is exhausted or tx size limit is hit.
           *
@@ -283,96 +344,16 @@ object SettlementTx {
             } yield result
         }
 
-        val mkSettlementTxPessimistic: Either[BuildError, SettlementContext] = {
+        // -------------------------------------------------------------------------
+        // 3. adding direct payouts
+        // -------------------------------------------------------------------------
 
-            val totalValueWithdrawn =
-                utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)(_ + _)
+        // TODO
+        def addDirectPayouts = ???
 
-            /////////////////////////////////////////////////////
-            // Step Definition
-            val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
-
-            val consumeTreasury: Spend =
-                Spend(
-                  treasuryUtxo.asUtxo,
-                  headNativeScript.witness
-                )
-
-            val sendTreasury: Send = Send(
-              mkTreasuryOutput(treasuryUtxo, totalValueWithdrawn)
-            )
-
-            val mbMintSendRollout: Option[MintSendRollout] =
-                if utxosWithdrawn.nonEmpty
-                then {
-                    val mintRollout: Mint =
-                        Mint(
-                          scriptHash = headNativeScript.policyId,
-                          assetName = rolloutTokenName,
-                          amount = 1L,
-                          witness = headNativeScript.witness
-                        )
-                    val sendRollout: Send = Send(mkRolloutOutput(totalValueWithdrawn))
-                    Some(MintSendRollout(mintRollout, sendRollout))
-                } else None
-
-            val modifyAuxiliaryData =
-                ModifyAuxiliaryData(_ =>
-                    Some(
-                      MD(
-                        MD.L1TxTypes.Settlement,
-                        headAddress = headNativeScript.mkAddress(context.network)
-                      )
-                    )
-                )
-
-            val staticSteps: Seq[TransactionBuilderStep] = Seq(
-              referenceHNS, // Stays the same
-              consumeTreasury, // Stays the same
-              modifyAuxiliaryData // Stays the same
-            )
-
-            /////////////////////////////////////////////////////////
-            // Build and finalize
-            for {
-                builderContextToKeep <- TransactionBuilder
-                    .build(context.network, staticSteps)
-                    .left
-                    .map(StepError(_))
-
-                result = SettlementContext(
-                  contextSoFar = builderContextToKeep,
-                  mkNewTreasury = sendTreasury,
-                  sendRolloutOutputStep = mbMintSendRollout
-                )
-
-                // Fee Calculation
-                builderContextTemp <- TransactionBuilder
-                    .modify(builderContextToKeep, result.extraSteps)
-                    .left
-                    .map(StepError(_))
-
-                _ <- builderContextTemp
-                    .finalizeContext(
-                      context.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        context.protocolParams,
-                        0
-                      ).changeOutputDiffHandler,
-                      evaluator = context.evaluator,
-                      validators = context.validators
-                    )
-                    .left
-                    .map({
-                        case balanceError: TxBalancingError => BalancingError(balanceError)
-                        case validationError: TransactionException =>
-                            ValidationError(validationError)
-                    })
-
-                /////////////////////////////////////////////////////////////////////////
-                // Post-process result
-            } yield result
-        }
+        // -------------------------------------------------------------------------
+        // ...
+        // -------------------------------------------------------------------------
 
         def finalizeSettlementTx(ctx: SettlementContext)(
             coin: Coin
@@ -381,6 +362,5 @@ object SettlementTx {
             ???
         }
 
-        // --- end auxiliary functions
     }
 }

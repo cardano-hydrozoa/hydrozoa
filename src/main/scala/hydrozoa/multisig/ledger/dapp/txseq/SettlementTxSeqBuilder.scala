@@ -1,16 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.implicits.*
-import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
-import hydrozoa.multisig.ledger.dapp.tx.SettlementTx
+import hydrozoa.lib.tx.BuildError
+import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, SettlementTx}
+import hydrozoa.multisig.ledger.dapp.txseq.tx as newtx
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import scalus.cardano.ledger.Coin
-import scalus.cardano.ledger.TransactionInput
-import scalus.cardano.ledger.TransactionOutput
+
 import SettlementTx.Recipe
-import hydrozoa.lib.tx.TransactionBuilder.Context
-import hydrozoa.lib.tx.TransactionBuilder
-import hydrozoa.multisig.ledger.dapp.txseq.tx as newtx
 
 /** This is the builder for the whole settlement sequence of transaction.
   *   - I remove all mentions of the FallbackTx, since now, when we decided to have a multisig
@@ -28,15 +25,17 @@ object SettlementTxSeqBuilder {
       * [[Recipe.deposits]] is not something that must be included into the settlement tx, but
       * rather a petition, so some may end up in `depositsPostponed` in [[Result]] type.
       *
+      *
       * @param args
       *   the recipe for building the settlement/rollout tx sequence
       * @return
       */
-    def build(args: Recipe): Result =
-        val (i1, deposits) = unfold(args)
-        val i2 = traverseFee(i1)
-        val seq = traverseInput(i2)
-        Result(seq, deposits)
+    def build(args: Recipe): Either[BuildError, Result] = for {
+        unfolded <- unfold(args)
+        (i1, deposits) = unfolded
+        i2 = traverseFee(i1)
+        seq = traverseInput(i2)
+        } yield Result(seq, deposits)
 
     case class Result(
         txSeq: SettlementTxSeq,
@@ -52,17 +51,26 @@ object SettlementTxSeqBuilder {
     // 1. unfold
     // -------------------------------------------------------------------------
 
-    def unfold(args: Recipe): (UnfoldResult, newtx.SettlementTx.Deposits) = {
-        // Build a settlement tx as big as it can be
-        val settlement: newtx.SettlementTx.PartialResult = newtx.SettlementTx.build(args)
-        // Unfold rollouts
-        val rollouts = List.unfold(settlement.remainingPayouts)(newtx.RolloutTx.build)
+    /** @param args
+      * @return
+      */
+    def unfold(args: Recipe): Either[BuildError, (UnfoldResult, newtx.SettlementTx.Deposits)] =
+        for {
+            // Build a settlementPartialResult with the settlement tx (i.e. its building context)
+            // as big as it can be
+            settlementPartialResult: newtx.SettlementTx.PartialResult <- newtx.SettlementTx.build(
+              args
+            )
 
-        (
-          UnfoldResult(settlement.cont, rollouts),
-          settlement.deposits
+            //// TODO: Unfold rollouts
+            // val rollouts =
+            //    List.empty // List.unfold(settlementPartialResult.remainingPayouts)(newtx.RolloutTx.build)
+            rollouts = List.empty
+
+        } yield (
+          UnfoldResult(settlementPartialResult.cont, rollouts),
+          settlementPartialResult.deposits
         )
-    }
 
     case class UnfoldResult(
         settlementTx: newtx.SettlementTx.Cont,
@@ -77,6 +85,8 @@ object SettlementTxSeqBuilder {
       *   - add accumulated fees to the rollout output
       *   - plus some technical adjustments (see [[PartialResult2]])
       *   - recalculate fee
+      *
+      * TODO: add error handling
       *
       * @param unfoldResult
       *   result from the unfolding of the settlement and rollout txs
@@ -105,6 +115,9 @@ object SettlementTxSeqBuilder {
 
     /** Traverse from the left:
       *   - set real rollout input
+      *
+      * TODO: add error handling
+      *
       * @param traverseFeeResult
       *   result from the previous traversal (where we calculated the real fees)
       * @return
@@ -124,7 +137,4 @@ object SettlementTxSeqBuilder {
 
     // -------------------------------------------------------------------------
 
-    /** Something that has a tx builder context. */
-    trait HasContext:
-        def getContext: Context
 }
