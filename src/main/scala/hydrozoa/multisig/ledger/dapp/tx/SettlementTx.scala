@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -19,8 +18,8 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -129,12 +128,6 @@ object SettlementTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
 
             /////////////////////////////////////////////////////////////////////////
             // Post-process result

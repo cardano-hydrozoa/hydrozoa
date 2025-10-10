@@ -14,8 +14,8 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -109,12 +109,6 @@ object RefundTx {
                       evaluator = recipe.evaluator,
                       validators = recipe.validators
                     )
-                    .left
-                    .map({
-                        case balanceError: TxBalancingError => BalancingError(balanceError)
-                        case validationError: TransactionException =>
-                            ValidationError(validationError)
-                    })
             } yield PostDated(
               depositSpent = recipe.depositTx.depositProduced,
               tx = finalized.transaction

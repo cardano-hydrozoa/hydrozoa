@@ -161,12 +161,6 @@ object VoteTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
 
         } yield VoteTx(
           voteUtxoSpent = recipe.voteUtxo,

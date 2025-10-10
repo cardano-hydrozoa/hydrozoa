@@ -9,9 +9,11 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
+import hydrozoa.lib.tx.BuildError.{BalancingError, EvaluationError, ValidationError}
 import hydrozoa.lib.tx.Datum.DatumValue
 import hydrozoa.lib.tx.TransactionBuilder.{Operation, WitnessKind}
 import hydrozoa.lib.tx.TxBuildError.*
@@ -446,13 +448,23 @@ object TransactionBuilder:
             diffHandler: DiffHandler,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
-        ): Either[TransactionException | TxBalancingError, Context] =
+        ): Either[BuildError, Context] =
+            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+
             for {
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
-                // _ = println(HexUtil.encodeHexString(balancedCtx.transaction.toCbor))
+                .left
+                    .map({
+                        // TODO: split/update `case Failed(cause: Throwable)`, remove the cast
+                        case TxBalancingError.Failed(cause) => EvaluationError(cause.asInstanceOf[PlutusScriptEvaluationException])
+                        case e @ _ => BalancingError(e)
+                    })
+
                 validatedCtx <- balancedCtx.validate(validators, protocolParams)
+                    .left.map(ValidationError(_))
+
             } yield validatedCtx
     }
 
@@ -1889,6 +1901,28 @@ object NetworkExtensions:
 def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct
 
+/**
+ * These are the errors that can be thrown by a higher-level TxBuilder.
+ */
+enum BuildError:
+    case StepError(e: TxBuildError)
+    case EvaluationError(e: PlutusScriptEvaluationException)
+    case BalancingError(e: TxBalancingError)
+    case ValidationError(e: TransactionException)
+
+    override def toString: String = this match {
+        case StepError(e) => 
+            s"Step processing error: ${e.getClass.getSimpleName} - ${e.explain}"
+        case EvaluationError(e) =>
+            s"Script evaluation failed: ${e.getMessage}, execution trace: ${e.logs.mkString("<CR>")}"
+        case BalancingError(TxBalancingError.CantBalance(lastDiff)) =>
+            s"Can't balance: last diff $lastDiff"
+        case BalancingError(TxBalancingError.InsufficientFunds(diff, required)) =>
+            s"Insufficient funds: need $required more"
+        case ValidationError(e) =>
+            s"Transaction validation failed: ${e.getClass.getSimpleName} - ${e.getMessage}"
+    }
+
 //////////////////////////////////////////////////////////
 // Interface sketch
 
@@ -1964,13 +1998,6 @@ trait BuildableTx:
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balancingError: TxBalancingError =>
-                        BuildError.BalancingError(balancingError)
-                    case validationError: TransactionException =>
-                        BuildError.ValidationError(validationError)
-                })
         } yield augmentTx(finalized.transaction)
 
 trait BuilderRecipe:
@@ -1978,12 +2005,6 @@ trait BuilderRecipe:
     val protocolParams: ProtocolParams
     val evaluator: PlutusScriptEvaluator
     val validators: Seq[Validator]
-
-// These are the errors that can be thrown by a higher-level TxBuilder. It needs a better name
-enum BuildError:
-    case StepError(e: TxBuildError)
-    case BalancingError(e: TxBalancingError)
-    case ValidationError(e: TransactionException)
 
 trait ParseableTx:
     type ParseConfig

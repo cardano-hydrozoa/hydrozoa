@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -158,7 +157,7 @@ class VoteTxTest extends munit.ScalaCheckSuite {
               case Left(e) =>
                   throw RuntimeException(s"Build failed $e")
               case Right(tx) =>
-                  println(HexUtil.encodeHexString(tx.tx.toCbor))
+                  //println(HexUtil.encodeHexString(tx.tx.toCbor))
                   
                   // Verify VoteTx structure
                   assert(tx.voteUtxoSpent == recipe.voteUtxo, "Spent vote UTXO should match recipe input")

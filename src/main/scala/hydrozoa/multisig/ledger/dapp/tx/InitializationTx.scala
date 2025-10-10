@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.lib.tx.{
@@ -159,12 +158,6 @@ object InitializationTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
 
         } yield (InitializationTx(
           treasuryProduced = TreasuryUtxo(
@@ -181,71 +174,3 @@ object InitializationTx {
         ))
     }
 }
-
-/*
-
-This is the sketch of what we want to have:
-
-```scala
-
-// Everything is resolved
-case class Recipe(
-                   // The only seed utxo that affects the beacon token name
-                   seedUtxo: SpendOutput,
-                   // Other utxo to fund the treasury, maybe empty
-                   otherFundingUtxos: List[SpendOutput],
-                   // NB: currently the balancing of tokens is NOT supported
-                   // make a pair of commitment with its value
-                   utxosL2Value: Value,
-                   utxosL2Commitment: UtxoCommitment,
-                   peers: NonEmptyList[VerificationKeyBytes],
-                   // TODO: should be gone somewhere else
-                   context: BuilderContext,
-                   // If absent, the rest should go to the treasury utxo
-                   changeAddress: Option[ShelleyAddress]
-                 )
-
-val collateral = ???
-val fallbackFees = ???
-
-val outputsToSpend = seedUtxo :: otherFundingUtxos
-
-val headNativeScript = HeadMultisigScript(recipe.peers)
-val beaconTokenName = mkBeaconTokenName(recipe.seedUtxos.map(_._1))
-val multisigTokenName = mkMultisigTokenName(recipe.seedUtxos.map(_._1))
-val beaconToken, multisigToken: MultiAsset = ???
-
-val minTreasuryValue = utxosL2Value + beaconToken + minAda for the beacon token
-val minMultisigValue = multisigToken + collateral + fallbackFees + minAda for the multisig token
-
-val headAddress = ???
-val treasuryDatum = ??? // utxosL2Commitment
-
-
-// Pure building
-val (unbalancedTx, vkeys: Set[VerificationKeyBytes]) = buildTransaction(
-  outputsToSpend ++
-  List(
-    Pay(TrasactionOutput(headAddress, minTreasuryValue, treasuryDatum)),
-    Pay(TrasactionOutput(headAddress, minMultisigValue, None)),
-    Mint(beaconToken, headScriptCredentialWitness),
-    Mint(multisigToken, headScriptCredentialWitness),
-    Metadata() // additive
-  ))
-)
-
-// Final step - aux data hash + probably something else
-
-// TODO: bake it into a separate builder constructor Endo[Transaction]?
-unbalancedTx = unbalancedTx.editTransaction(List(
-  _.focus(_.metadata).replace(???),
-  if changeAddress then _.focus(_.budy.outputs).add(???)
-)
-
-// Should handle the corner case when the change is smaller than minAda
-// Should add and then remove all fake signatures under the hood
-// Consider required signatures from the tx body
-balancedTx = balanceFeeAndChange___(vkeys, changeOutputIdx = treasuryOutput | changeOutput)
-
-```
- */

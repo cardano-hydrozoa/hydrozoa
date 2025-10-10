@@ -5,15 +5,8 @@ import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
-    Deinit,
-    Resolve,
-    Withdraw
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
-    Resolved,
-    Unresolved
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
@@ -21,16 +14,9 @@ import scalus.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
-import scalus.builtin.{
-    BLS12_381_G1_Element,
-    BLS12_381_G2_Element,
-    ByteString,
-    Data,
-    FromData,
-    ToData
-}
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data, FromData, ToData}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{Language, ScriptHash}
+import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.*
@@ -429,21 +415,20 @@ object RuleBasedTreasuryScript {
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    private def compiledDoubleCborEncoded: Array[Byte] = compiledDeBruijnedProgram.doubleCborEncoded
+    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
 
-    // Hex representations - use the main program methods
-    private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
+    def compiledPlutusV3Script =
+        Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
 
-    def compiledScriptHash =
-        ScriptHash.fromByteString(blake2b_224(ByteString.fromArray(compiledDoubleCborEncoded)))
-
+    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {
         compiledPlutusV3Program.writePlutusFile(path, Language.PlutusV3)
     }
 
-    // For compatibility with existing code that expects hex representation
-    def getScriptHex: String = compiledDoubleCborHex
+    //// For compatibility with existing code that expects hex representation
+    //def getScriptHex: String = compiledDoubleCborHex
 
     // For compatibility with code that expects script hash as byte array
     def getScriptHash: Array[Byte] = compiledScriptHash.bytes

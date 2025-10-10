@@ -160,12 +160,6 @@ object TallyTx {
                   evaluator = evaluator,
                   validators = validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
 
         } yield TallyTx(
           continuingVoteUtxo = continuingVoteUtxo,
