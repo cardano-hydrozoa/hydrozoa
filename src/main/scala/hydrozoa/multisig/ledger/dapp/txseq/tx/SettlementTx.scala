@@ -118,7 +118,6 @@ object SettlementTx {
         context: ScalusBuilderContext
     ) {
         import Builder.*
-        import BuilderUtils.*
 
         type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
 
@@ -173,12 +172,12 @@ object SettlementTx {
         }
 
         def basePessimistic: Either[Error, BasePessimistic] =
-            import BuilderUtils.*
-            import BuilderUtils.PessimisticBase.*
+            import BuilderUtils.BasePessimistic.*
+            import BuilderUtils.TxBuilder.*
 
             for {
-                txBuilderContext <- TxBuilder.build(pessimisticSteps)
-                _ <- TxBuilder.finalizeTxBuilderContext(txBuilderContext, mbRolloutOutput)
+                txBuilderContext <- build(pessimisticSteps)
+                _ <- finalizeTxBuilderContext(txBuilderContext, mbRolloutOutput)
             } yield BasePessimistic(
               txBuilderContext = txBuilderContext,
               mbRolloutOutput = mbRolloutOutput
@@ -216,7 +215,20 @@ object SettlementTx {
             )
 
         object BuilderUtils {
-            object PessimisticBase {
+            object BasePessimistic {
+                lazy val pessimisticSteps =
+                    List(referenceHNS, consumeTreasury, sendTreasury, setSettlementMetadata)
+
+                lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
+
+                lazy val consumeTreasury: Spend =
+                    Spend(treasuryUtxo.asUtxo, headNativeScript.witness)
+
+                lazy val sendTreasury: Send = Send(treasuryOutput)
+
+                lazy val setSettlementMetadata =
+                    ModifyAuxiliaryData(_ => Some(settlementTxMetadata))
+                
                 lazy val mbRolloutOutput: Option[Babbage] = {
                     val valueRollout = payouts.map(_.value).foldLeft(Value.zero)(_ + _)
                     if valueRollout.isZero then None
@@ -231,7 +243,7 @@ object SettlementTx {
                         )
                 }
 
-                val newTreasuryDatum: TreasuryUtxo.Datum =
+                lazy val newTreasuryDatum: TreasuryUtxo.Datum =
                     mkMultisigTreasuryDatum(majorVersion, ByteString.empty)
 
                 lazy val treasuryOutput: Babbage = {
@@ -251,19 +263,6 @@ object SettlementTx {
                       MD.L1TxTypes.Settlement,
                       headAddress = headNativeScript.mkAddress(context.network)
                     )
-
-                lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
-
-                lazy val consumeTreasury: Spend =
-                    Spend(treasuryUtxo.asUtxo, headNativeScript.witness)
-
-                lazy val sendTreasury: Send = Send(treasuryOutput)
-
-                lazy val setSettlementMetadata =
-                    ModifyAuxiliaryData(_ => Some(settlementTxMetadata))
-
-                lazy val pessimisticSteps =
-                    List(referenceHNS, consumeTreasury, sendTreasury, setSettlementMetadata)
             }
 
             object AddDeposits {
@@ -319,6 +318,7 @@ object SettlementTx {
                     }
                 }
 
+                // TODO: Update mbRolloutOutput (subtracting the payout from it)
                 def tryAddPayout(
                     ctx: TransactionBuilder.Context,
                     mbRolloutOutput: Option[Babbage],
@@ -340,9 +340,9 @@ object SettlementTx {
                         case None =>
                             if rolloutFees == Coin(0) then Right(None)
                             else Left(RolloutFeesWithoutRolloutOutputError)
-                        case Some(sendRollout) =>
-                            import sendRollout.*
-                            Right(Some(sendRollout.copy(value = value + Value(rolloutFees))))
+                        case Some(rolloutOutput) =>
+                            import rolloutOutput.*
+                            Right(Some(rolloutOutput.copy(value = value + Value(rolloutFees))))
                     }
             }
 
@@ -415,7 +415,7 @@ object SettlementTx {
                   * IMPORTANT: This function assumes that:
                   *
                   *   - The treasury output exists and is the first output of the transaction.
-                  *     [[PessimisticBase.pessimisticSteps]] must satisfy this assumption.
+                  *     [[BasePessimistic.pessimisticSteps]] must satisfy this assumption.
                   *
                   *   - The rollout output is the last output of the transaction, if it exists.
                   *     [[TxBuilder.finalizeTxBuilderContext]] must satisfy this assumption.
@@ -447,7 +447,7 @@ object SettlementTx {
                   *
                   * IMPORTANT: This function assumes that:
                   *   - The treasury output exists and is the first output of the transaction.
-                  *     [[PessimisticBase.pessimisticSteps]] must satisfy this assumption.
+                  *     [[BasePessimistic.pessimisticSteps]] must satisfy this assumption.
                   */
                 def unsafeGetTreasuryProduced(state: HasTxBuilderContext): TreasuryUtxo = {
                     val tx = state.txBuilderContext.transaction
@@ -455,7 +455,7 @@ object SettlementTx {
 
                     treasuryUtxo.copy(
                       txId = TransactionInput(transactionId = tx.id, index = 0),
-                      datum = PessimisticBase.newTreasuryDatum,
+                      datum = BasePessimistic.newTreasuryDatum,
                       value = treasuryOutput.value
                     )
                 }
