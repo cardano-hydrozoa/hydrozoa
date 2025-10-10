@@ -1858,8 +1858,13 @@ case class TransactionUnspentOutput(input: TransactionInput, output: Transaction
     def toTuple: (TransactionInput, TransactionOutput) = (input, output)
 
 object TransactionUnspentOutput:
+    
     def apply(utxo: (TransactionInput, TransactionOutput)): TransactionUnspentOutput =
         TransactionUnspentOutput(utxo._1, utxo._2)
+
+    def fromUtxo[L <: AnyLayer](utxo: Utxo[L]): TransactionUnspentOutput = {
+        apply(utxo.input.untagged, utxo.output.untagged)
+    }
 
 // NOTE (Peter, 2025-09-23): this comes from https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/StakeCredential.purs
 case class StakeCredential(credential: Credential)

@@ -4,28 +4,10 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{
-    AddCollateral,
-    Fee,
-    ReferenceOutput,
-    Send,
-    Spend,
-    ValidityEndSlot
-}
-import hydrozoa.lib.tx.{
-    ExpectedSigner,
-    ScriptSource,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput,
-    TxBuildError
-}
+import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend, ValidityEndSlot}
+import hydrozoa.lib.tx.{BuildError, ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
-    DisputeRedeemer,
-    OnchainBlockHeader,
-    VoteRedeemer
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
@@ -64,15 +46,12 @@ object VoteTx {
         validators: Seq[Validator]
     )
 
-    enum BuildError:
-        case SomeBuilderError(e: TxBuildError)
-        case SomeBalancingError(e: TxBalancingError | PlutusScriptEvaluationException)
-        case SomeTransactionException(e: TransactionException)
+    enum VoteTxError:
         case InvalidVoteDatum(msg: String)
         case VoteAlreadyCast
 
-    def build(recipe: Recipe): Either[BuildError, VoteTx] = {
-        import BuildError.*
+    def build(recipe: Recipe): Either[BuildError | VoteTxError, VoteTx] = {
+        import VoteTxError.*
 
         // Extract current vote datum from the UTXO
         val voteOutput = recipe.voteUtxo.utxo.output.untagged
@@ -144,6 +123,7 @@ object VoteTx {
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         redeemer.toData,
                         DatumInlined,
+                        //Set.empty
                         Set(ExpectedSigner(recipe.voteUtxo.voter))
                       )
                     ),
@@ -163,12 +143,11 @@ object VoteTx {
                         recipe.collateralUtxo.output
                       )
                     ),
-                    Fee(Coin(1_000_000)),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
                 .left
-                .map(SomeBuilderError(_))
+                .map(StepError(_))
 
             // _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 
@@ -184,9 +163,9 @@ object VoteTx {
                 )
                 .left
                 .map({
-                    case balanceError: TxBalancingError => SomeBalancingError(balanceError)
+                    case balanceError: TxBalancingError => BalancingError(balanceError)
                     case validationError: TransactionException =>
-                        SomeTransactionException(validationError)
+                        ValidationError(validationError)
                 })
 
         } yield VoteTx(
