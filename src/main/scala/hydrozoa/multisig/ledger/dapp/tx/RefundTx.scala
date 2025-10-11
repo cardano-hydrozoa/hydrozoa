@@ -71,8 +71,7 @@ object RefundTx {
               utxo = TransactionUnspentOutput(recipe.depositTx.depositProduced.toUtxo),
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners =
-                    recipe.headScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+                additionalSigners = recipe.headScript.requiredSigners
               )
             )
 
@@ -84,7 +83,7 @@ object RefundTx {
                 Some(
                   MD(
                     MD.L1TxTypes.RefundPostDated,
-                    recipe.headScript.address(recipe.network)
+                    recipe.headScript.mkAddress(recipe.network)
                   )
                 )
             )

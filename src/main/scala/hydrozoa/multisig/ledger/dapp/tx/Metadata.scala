@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{
@@ -9,8 +8,8 @@ import scalus.cardano.ledger.{
     TransactionMetadatum,
     TransactionMetadatumLabel
 }
-
 import Metadata.L1TxTypes.*
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 
 object Metadata {
     // NOTE (from Peter to George): I assume we have these types somewhere else? They used to be in DappLedger.
@@ -48,7 +47,7 @@ object Metadata {
     def apply(txType: L1TxTypes, headAddress: ShelleyAddress): AuxiliaryData = {
         MD(
           Map(
-            TransactionMetadatumLabel(CIP67Tags.head) ->
+            TransactionMetadatumLabel(CIP67.Tags.head) ->
                 TransactionMetadatum.Map(entries =
                     Map(
                       TransactionMetadatum.Text(typeToString(txType))
@@ -78,7 +77,7 @@ object Metadata {
                 case _      => Left(AuxDataIsNotMetadata)
             }
             mv <- md.metadata
-                .get(TransactionMetadatumLabel(CIP67Tags.head))
+                .get(TransactionMetadatumLabel(CIP67.Tags.head))
                 .toRight(MissingCIP67Tag)
             mdMap <- mv match {
                 case m: TransactionMetadatum.Map => Right(m.entries)

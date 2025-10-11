@@ -3,6 +3,10 @@ package test
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import monocle.syntax.all.*
 import org.scalacheck.*
+import org.scalacheck.Gen.{const, posNum}
+import scala.language.postfixOps
+import monocle.syntax.all.*
+import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
 import scala.language.postfixOps
@@ -12,9 +16,12 @@ import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.*
+import scalus.cardano.ledger.txbuilder.{BuilderContext, Environment, Wallet}
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
@@ -56,6 +63,13 @@ val testValidators: Seq[Validator] =
       OutsideValidityIntervalValidator,
       OutsideForecastValidator
     )
+
+val testTxBuilderEnvironment: Environment = Environment(
+  protocolParams = testProtocolParams,
+  evaluator = testEvaluator,
+  network = testNetwork,
+  era = Era.Conway
+)
 
 val genAddrKeyHash: Gen[AddrKeyHash] =
     genByteStringOfN(28).map(AddrKeyHash.fromByteString)

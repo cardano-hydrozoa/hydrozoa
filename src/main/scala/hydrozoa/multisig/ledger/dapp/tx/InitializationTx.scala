@@ -15,10 +15,12 @@ import hydrozoa.lib.tx.{
 }
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
+import hydrozoa.multisig.ledger.dapp.token
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
@@ -87,13 +89,14 @@ object InitializationTx {
 
         // singleton beacon token minted by the native script with the TN being the hash of the
         // seed utxos
-        val headTokenName = mkHeadTokenName(recipe.seedUtxos.map(_._1))
+        // FIXME: This should just be a single seed UTxO
+        val headTokenName = CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
         val headToken: MultiAsset = MultiAsset(
           SortedMap(
             headNativeScript.script.scriptHash -> SortedMap(headTokenName -> 1L)
           )
         )
-        val headAddress: ShelleyAddress = headNativeScript.address(recipe.network)
+        val headAddress: ShelleyAddress = headNativeScript.mkAddress(recipe.network)
         // Head output (L1) sits at the head address with the initial deposit from the seed utxo
         // and beacon, as well as the initial datum.
         val headValue: Value =
@@ -118,7 +121,7 @@ object InitializationTx {
           1,
           NativeScriptWitness(
             NativeScriptValue(headNativeScript.script),
-            headNativeScript.requiredSigners.toSeq.toSet.map(ExpectedSigner(_))
+            headNativeScript.requiredSigners
           )
         )
 
