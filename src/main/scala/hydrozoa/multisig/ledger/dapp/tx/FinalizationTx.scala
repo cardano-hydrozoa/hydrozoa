@@ -18,11 +18,12 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scala.language.implicitConversions
-import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,
@@ -37,7 +38,10 @@ object FinalizationTx {
         treasuryUtxo: TreasuryUtxo,
         changeAddress: ShelleyAddress,
         headTokenName: AssetName,
-        context: BuilderContext
+        network: Network,
+        protocolParams: ProtocolParams,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator]
     )
 
     def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
@@ -62,7 +66,7 @@ object FinalizationTx {
 
         val addChangeOutput: Send = Send(
           Babbage(
-            recipe.headNativeScript.mkAddress(recipe.context.network),
+            recipe.headNativeScript.mkAddress(recipe.network),
             Value.zero,
             None,
             None
@@ -73,7 +77,7 @@ object FinalizationTx {
             Some(
               MD(
                 MD.L1TxTypes.Finalization,
-                recipe.headNativeScript.mkAddress(recipe.context.network)
+                recipe.headNativeScript.mkAddress(recipe.network)
               )
             )
         )
@@ -86,18 +90,18 @@ object FinalizationTx {
 
         for {
             unbalanced <- TransactionBuilder
-                .build(recipe.context.network, steps)
+                .build(recipe.network, steps)
                 .left
                 .map(StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
-                  protocolParams = recipe.context.protocolParams,
+                  protocolParams = recipe.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.context.protocolParams,
+                    recipe.protocolParams,
                     1
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.context.evaluator,
-                  validators = recipe.context.validators
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
                 )
                 .left
                 .map({

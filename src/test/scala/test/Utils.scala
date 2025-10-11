@@ -5,16 +5,25 @@ import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Gen.{const, posNum}
 import scala.language.postfixOps
+import monocle.syntax.all.*
+import org.scalacheck.*
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.Gen.const
+import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.*
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.txbuilder.{BuilderContext, UtxoProvider}
+import scalus.cardano.ledger.rules.*
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
@@ -33,40 +42,27 @@ val evaluator = PlutusScriptEvaluator(
   costModels = costModels
 )
 
-def unsignedTxBuilderContext(utxo: UTxO): BuilderContext = {
-
-    BuilderContext(
-      protocolParams = blockfrost544Params,
-      evaluator = evaluator,
-      network = Mainnet,
-      utxoProvider = UtxoProvider.from(utxo),
-      validators =
-          // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
-          List(
-            EmptyInputsValidator,
-            InputsAndReferenceInputsDisjointValidator,
-            AllInputsMustBeInUtxoValidator,
-            ValueNotConservedUTxOValidator,
-            // VerifiedSignaturesInWitnessesValidator,
-            // MissingKeyHashesValidator
-            MissingOrExtraScriptHashesValidator,
-            TransactionSizeValidator,
-            FeesOkValidator,
-            OutputsHaveNotEnoughCoinsValidator,
-            OutputsHaveTooBigValueStorageSizeValidator,
-            OutsideValidityIntervalValidator,
-            OutsideForecastValidator
-          ),
-      backendService = null
+// Individual parameters for Recipe constructors (replacing BuilderContext)
+val testNetwork: Network = Mainnet
+val testProtocolParams: ProtocolParams = blockfrost544Params
+val testEvaluator: PlutusScriptEvaluator = evaluator
+val testValidators: Seq[Validator] =
+    // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
+    List(
+      EmptyInputsValidator,
+      InputsAndReferenceInputsDisjointValidator,
+      AllInputsMustBeInUtxoValidator,
+      ValueNotConservedUTxOValidator,
+      // VerifiedSignaturesInWitnessesValidator,
+      // MissingKeyHashesValidator
+      MissingOrExtraScriptHashesValidator,
+      TransactionSizeValidator,
+      FeesOkValidator,
+      OutputsHaveNotEnoughCoinsValidator,
+      OutputsHaveTooBigValueStorageSizeValidator,
+      OutsideValidityIntervalValidator,
+      OutsideForecastValidator
     )
-}
-
-val genTransactionInput: Gen[TransactionInput] =
-    for {
-        txId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
-        index <- posNum[Int] // we subtract one below to get a non-negative
-
-    } yield TransactionInput(transactionId = txId, index = index - 1)
 
 val genAddrKeyHash: Gen[AddrKeyHash] =
     genByteStringOfN(28).map(AddrKeyHash.fromByteString)
@@ -109,7 +105,7 @@ def genAdaOnlyPubKeyUtxo(
     params: ProtocolParams = blockfrost544Params
 ): Gen[(TransactionInput, Babbage)] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         value <- genAdaOnlyValue
     } yield (
       txId,

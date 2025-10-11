@@ -19,6 +19,8 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo}
+import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
@@ -187,7 +189,7 @@ def signBlockHeader(
 
 def genCollateralUtxo(peer: TestPeer): Gen[(TransactionInput, Babbage)] =
     for {
-        input <- genTransactionInput
+        input <- arbitrary[TransactionInput]
     } yield (
       input,
       Babbage(
@@ -250,13 +252,12 @@ def genVoteTxRecipe(
 
         collateralUtxo <- genCollateralUtxo(peers.toList(voteDatum.key.intValue - 1))
 
-        // Create builder context
+        // Create builder context (not needed for Recipe anymore)
         allUtxos = Map(
           voteUtxo.utxo.input.untagged -> voteUtxo.utxo.output.untagged,
           treasuryUtxo.toUtxo._1 -> treasuryUtxo.toUtxo._2,
           collateralUtxo._1 -> collateralUtxo._2
         )
-        context = unsignedTxBuilderContext(allUtxos)
 
     } yield VoteTx.Recipe(
       voteUtxo = voteUtxo,
@@ -266,7 +267,10 @@ def genVoteTxRecipe(
       signatures = signatures,
       // TODO: now sure how to do that properly
       validityEndSlot = 200,
-      context = context
+      network = testNetwork,
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      validators = testValidators
     )
 
 class VoteTxTest extends munit.ScalaCheckSuite {

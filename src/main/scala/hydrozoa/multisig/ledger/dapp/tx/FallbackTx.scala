@@ -80,7 +80,7 @@ object FallbackTx {
         def mkVoteOutput(datum: VoteDatum): Babbage = {
             Babbage(
               address = recipe.disputeResolutionAddress,
-              value = Value(coin = voteUtxoAda, multiAsset = mkVoteToken(1)),
+              value = Value(coin = voteUtxoAda, assets = mkVoteToken(1)),
               datumOption = Some(Inline(datum.toData)),
               scriptRef = None
             )

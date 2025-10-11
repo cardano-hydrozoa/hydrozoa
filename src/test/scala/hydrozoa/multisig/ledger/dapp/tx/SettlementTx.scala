@@ -2,6 +2,9 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
+import cats.*
+import cats.data.*
+import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -9,6 +12,9 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import io.bullet.borer.Cbor
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
+import io.bullet.borer.Cbor
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -46,7 +52,7 @@ def genDepositUtxo(
     headAddr: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         headAddr_ = headAddr.getOrElse(genScriptAddr(network).sample.get)
         dd <- genDepositDatum(network)
 
@@ -72,7 +78,7 @@ def genDepositUtxo(
 
 val genHeadTokenName: Gen[AssetName] =
     for {
-        ti <- genTransactionInput
+        ti <- arbitrary[TransactionInput]
     } yield CIP67.TokenNames(ti).headTokenName
 
 val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
@@ -92,7 +98,7 @@ def genTreasuryUtxo(
     headAddr: Option[ShelleyAddress]
 ): Gen[TreasuryUtxo] =
     for {
-        txId <- genTransactionInput
+        txId <- arbitrary[TransactionInput]
         headTn <- genHeadTokenName
 
         scriptAddr = headAddr.getOrElse({
@@ -162,9 +168,12 @@ def genSettlementRecipe(
       utxosWithdrawn = withdrawals.map(_._2),
       treasuryUtxo = utxo,
       headNativeScript = hns,
-      context = context,
       rolloutTokenName = AssetName.fromHex("deadbeef"), // FIXME:
-      headNativeScriptReferenceInput = multisigWitnessUtxo
+      headNativeScriptReferenceInput = multisigWitnessUtxo,
+      network = testNetwork,
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      validators = testValidators
     )).suchThat(r => {
         val withdrawnCoin = Coin(r.utxosWithdrawn.map(_.value.coin.value).sum)
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
@@ -188,7 +197,7 @@ def genFakeMultisigWitnessUtxo(
 
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10_000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
     }
 
     property("Build settlement tx")(

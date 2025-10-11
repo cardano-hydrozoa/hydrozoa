@@ -71,7 +71,7 @@ object Metadata {
 
     def parse(tx: Transaction): Either[ParseError, (L1TxTypes, ShelleyAddress)] = {
         for {
-            ad: AuxiliaryData <- tx.auxiliaryData.toRight(MissingAuxData)
+            ad: AuxiliaryData <- tx.auxiliaryData.map(_.value).toRight(MissingAuxData)
             md: MD <- ad match {
                 case md: MD => Right(md)
                 case _      => Left(AuxDataIsNotMetadata)

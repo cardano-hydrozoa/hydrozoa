@@ -15,8 +15,10 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.address.Network
+import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{BuilderContext, LowLevelTxBuilder, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -32,8 +34,10 @@ object DepositTx {
         headAddress: ShelleyAddress,
         utxosFunding: NonEmptyList[(TransactionInput, TransactionOutput)],
         changeAddress: ShelleyAddress,
-        // FIXME: we don't need the whole context anymore, only the fields necessary for the low-level builder.
-        context: BuilderContext
+        network: Network,
+        protocolParams: ProtocolParams,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator]
     )
 
     sealed trait ParseError extends Throwable
@@ -117,18 +121,18 @@ object DepositTx {
 
         for {
             unbalanced <- TransactionBuilder
-                .build(recipe.context.network, steps)
+                .build(recipe.network, steps)
                 .left
                 .map(StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
-                  recipe.context.protocolParams,
+                  recipe.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.context.protocolParams,
+                    recipe.protocolParams,
                     1
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.context.evaluator,
-                  validators = recipe.context.validators
+                  evaluator = recipe.evaluator,
+                  validators = recipe.validators
                 )
                 .left
                 .map({

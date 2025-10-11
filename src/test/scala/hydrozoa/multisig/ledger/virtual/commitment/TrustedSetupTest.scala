@@ -1,10 +1,9 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
+import munit.FunSuite
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
 import scalus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.|>
-
-import munit.FunSuite
 import supranational.blst.{P1, P2}
 
 class TreasuryValidatorTest extends FunSuite:

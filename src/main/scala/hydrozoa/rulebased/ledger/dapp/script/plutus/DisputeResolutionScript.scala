@@ -60,6 +60,7 @@ object DisputeResolutionValidator extends Validator {
     case class OnchainBlockHeader(
         blockNum: BigInt,
         blockType: BlockTypeL2, // this field is not used directly, but it's needed to verify the signatures
+        // TODO: make it milliseconds
         timeCreation: PosixTime, // the same
         versionMajor: BigInt,
         versionMinor: BigInt,

@@ -28,8 +28,10 @@ import scalus.cardano.ledger.GovAction.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{Context as SContext, STS, State as SState, UtxoEnv}
-import scalus.cardano.ledger.txbuilder.wip.DiffHandler
 import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
+
+// Type alias for compatibility - DiffHandler is now a function type in new Scalus API
+type DiffHandler = (Long, Transaction) => Either[TxBalancingError, Transaction]
 import scalus.cardano.ledger.utils.{AllResolvedScripts, MinCoinSizedTransactionOutput}
 import scalus.|>
 
@@ -456,7 +458,7 @@ object TransactionBuilder:
 
     object Context:
         def empty(networkId: Network) = Context(
-          transaction = emptyTransaction,
+          transaction = Transaction.empty,
           redeemers = Seq.empty,
           network = networkId,
           expectedSigners = Set.empty,
@@ -1078,7 +1080,8 @@ object TransactionBuilder:
         modify0(
           Focus[Context](_.transaction)
               .refocus(_.auxiliaryData)
-              .modify(modifyAuxiliaryData.f(_))
+              // Fixed for Scalus 0.12.1+ - auxiliaryData is now wrapped in KeepRaw
+              .modify(a => modifyAuxiliaryData.f(a.map(_.value)).map(KeepRaw(_)))
         )
 
     // -------------------------------------------------------------------------

@@ -1,23 +1,38 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import scalus.builtin.BLS12_381_G1_Element
-import scalus.builtin.BLS12_381_G2_Element
-import scalus.builtin.ByteString
-import scalus.builtin.Data
+import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
+import munit.FunSuite
+import scala.io.Source
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
+import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
 import scalus.prelude.List
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
-
-import scala.io.Source
-import com.bloxbean.cardano.client.util.HexUtil
-import munit.FunSuite
 import supranational.blst.Scalar
 
 class RuleBasedTreasuryScriptTest extends FunSuite {
+
+    test("RuleBasedTreasuryScript object exists and can be referenced") {
+        assertNotEquals(RuleBasedTreasuryScript.toString, null)
+    }
+
+    test("Script compiles, size and hash is still the same") {
+        assertEquals(
+          RuleBasedTreasuryScript.compiledScriptHash,
+          ScriptHash.fromHex("26202127157a1791dc9c2c5f50a8961f242db793e37c328e13d2de52"),
+          "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
+        )
+
+        assertEquals(
+          RuleBasedTreasuryScript.flatEncoded.length,
+          9175,
+          "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
+        )
+
+    }
 
     test("Membership check: empty accumulator / subset") {
 
