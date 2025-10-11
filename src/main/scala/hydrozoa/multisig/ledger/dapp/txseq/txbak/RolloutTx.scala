@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.dapp.txseq.tx
+package hydrozoa.multisig.ledger.dapp.txseq.txbak
 
 import cats.*
 import cats.data.*
@@ -10,6 +10,7 @@ import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.txseq.tx.SettlementTx
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.{prebalancedDiffHandler, reportDiffHandler}
 import scalus.builtin.ByteString
@@ -19,7 +20,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.txbuilder.{BuilderContext, Environment, TxBalancingError}
 
-final case class ROTx(
+final case class RolloutTx(
     rolloutSpent: RolloutUtxo,
     rolloutProduced: Option[RolloutUtxo],
     override val tx: Transaction
@@ -64,7 +65,7 @@ object RolloutTx {
             mkSettlement: Coin => Either[BuildError, (SettlementTx, TransactionInput)]
         ): Either[
           BuildError | IncoherenceError,
-          (SettlementTx, NonEmptyList[ROTx])
+          (SettlementTx, NonEmptyList[RolloutTx])
         ] = {
 
             type RolloutM[A] =
@@ -128,7 +129,7 @@ object RolloutTx {
             }
 
             type RolloutKleisli =
-                Kleisli[[X] =>> Either[BuildError, X], TransactionInput, ROTx]
+                Kleisli[[X] =>> Either[BuildError, X], TransactionInput, RolloutTx]
 
             for {
                 finalRollout <- mockRollout(
@@ -187,7 +188,7 @@ object RolloutTx {
                       (
                           ePreviousRolloutTx: Either[
                             BuildError | IncoherenceError,
-                            ROTx
+                            RolloutTx
                           ],
                           k: RolloutKleisli
                       ) => {
@@ -351,7 +352,7 @@ object RolloutTx {
                           finalized.transaction.id,
                           finalized.transaction.body.value.outputs.size - 1
                         )
-                    } yield ROTx(
+                    } yield RolloutTx(
                       rolloutSpent = RolloutUtxo(spendRealRolloutInput.utxo.toTuple),
                       rolloutProduced =
                           sendNextRollout.map(send => RolloutUtxo(rolloutProducedTI, send.output)),
@@ -368,7 +369,7 @@ object RolloutTx {
 
         case class PartialRolloutInfo(
             // NOTE: The context MUST have the rollout utxo as the final output.
-            completeBuild: TransactionInput => Either[BuildError, ROTx],
+            completeBuild: TransactionInput => Either[BuildError, RolloutTx],
             requiredCoinForPreviousRolloutUtxO: Coin,
             remainingWithdrawalsReversed: Seq[Babbage]
         )
