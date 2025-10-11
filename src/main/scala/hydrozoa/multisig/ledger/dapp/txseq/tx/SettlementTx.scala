@@ -2,14 +2,10 @@ package hydrozoa.multisig.ledger.dapp.txseq.tx
 
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{
-    BuildError,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.{BuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{SettlementTx, Metadata as MD}
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import scalus.builtin.ByteString
@@ -22,6 +18,14 @@ import scalus.cardano.ledger.txbuilder.{TxBalancingError, BuilderContext as Scal
 import scalus.cardano.ledger.*
 
 import scala.annotation.tailrec
+
+final case class SettlementTx(
+    treasurySpent: TreasuryUtxo,
+    treasuryProduced: TreasuryUtxo,
+    depositsSpent: List[DepositUtxo],
+    rolloutProduced: Option[RolloutUtxo],
+    override val tx: Transaction
+) extends Tx
 
 object SettlementTx {
     object Builder {
@@ -429,7 +433,7 @@ object SettlementTx {
                           txBuilderContext,
                           mbRolloutOutput
                         )
-                    } yield hydrozoa.multisig.ledger.dapp.tx.SettlementTx(
+                    } yield SettlementTx(
                       treasurySpent = treasuryUtxo,
                       treasuryProduced = unsafeGetTreasuryProduced(state),
                       depositsSpent = state.absorbedDeposits,

@@ -7,8 +7,9 @@ import cats.syntax.all.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
 import hydrozoa.lib.tx.TransactionBuilder.Context
 import hydrozoa.lib.tx.TransactionUnspentOutput
+import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{SettlementTx, Metadata as MD, RolloutTx as ROTx}
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.{prebalancedDiffHandler, reportDiffHandler}
 import scalus.builtin.ByteString
@@ -16,6 +17,12 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.txbuilder.{BuilderContext, TxBalancingError}
+
+final case class ROTx(
+    rolloutSpent: RolloutUtxo,
+    rolloutProduced: Option[RolloutUtxo],
+    override val tx: Transaction
+) extends Tx
 
 object RolloutTx {
     final case class Builder(
@@ -97,23 +104,24 @@ object RolloutTx {
                     // The partial result related to the NEXT rollout transaction
                     nextPartialRes = state.head
 
-                    _ <-
-                        if nextPartialRes.remainingWithdrawalsReversed.isEmpty
-                        then pure0(())
-                        else
-                            for {
-                                thisPartialRes <- liftF0(
-                                  mockRollout(
-                                    toWithdrawReversed =
-                                        nextPartialRes.remainingWithdrawalsReversed,
-                                    nextRolloutCoin =
-                                        nextPartialRes.requiredCoinForPreviousRolloutUtxO
-                                  )
-                                )
-
-                                _ <- modify0(_.prepend(thisPartialRes))
-
-                            } yield (())
+                    // FIXME: Getting a weird type mismatch error here
+//                    _ <-
+//                        if nextPartialRes.remainingWithdrawalsReversed.isEmpty
+//                        then pure0(())
+//                        else
+//                            for {
+//                                thisPartialRes <- liftF0(
+//                                  mockRollout(
+//                                    toWithdrawReversed =
+//                                        nextPartialRes.remainingWithdrawalsReversed,
+//                                    nextRolloutCoin =
+//                                        nextPartialRes.requiredCoinForPreviousRolloutUtxO
+//                                  )
+//                                )
+//
+//                                _ <- modify0(_.prepend(thisPartialRes))
+//
+//                            } yield (())
                 } yield (())
             }
 
