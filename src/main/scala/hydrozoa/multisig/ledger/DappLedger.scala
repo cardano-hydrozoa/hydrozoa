@@ -128,7 +128,7 @@ object DappLedger {
     case object RefundDeposit extends DepositDecision
 
     trait Tx {
-        val tx: Transaction
+        def tx: Transaction
 
         /** A transaction belongs to a [[DappLedger]] if it matches on address and currency symbol
           */

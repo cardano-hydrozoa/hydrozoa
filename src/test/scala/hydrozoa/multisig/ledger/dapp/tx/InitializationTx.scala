@@ -209,7 +209,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                   val bytes = tx.tx.toCbor
                   given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
-                  //println(HexUtil.encodeHexString(bytes))
+                  // println(HexUtil.encodeHexString(bytes))
 
                   (tx.tx == Cbor
                       .decode(bytes)

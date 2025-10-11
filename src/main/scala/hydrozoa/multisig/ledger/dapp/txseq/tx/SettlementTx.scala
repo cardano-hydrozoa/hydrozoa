@@ -2,7 +2,12 @@ package hydrozoa.multisig.ledger.dapp.txseq.tx
 
 import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{BuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    BuildError,
+    TransactionBuilder,
+    TransactionBuilderStep,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -12,485 +17,466 @@ import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.TransactionOutput as TxOutput
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError, BuilderContext as ScalusBuilderContext}
+import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.STS.Validator
 
 import scala.annotation.tailrec
+import scala.collection.immutable.Queue
 
-final case class SettlementTx(
-    treasurySpent: TreasuryUtxo,
-    treasuryProduced: TreasuryUtxo,
-    depositsSpent: List[DepositUtxo],
-    rolloutProduced: Option[RolloutUtxo],
-    override val tx: Transaction
-) extends Tx
+enum SettlementTx extends Tx {
+    def treasurySpent: TreasuryUtxo
+    def treasuryProduced: TreasuryUtxo
+    def depositsSpent: Queue[DepositUtxo]
+    override def tx: Transaction
+
+    case NoPayouts(
+        override val treasurySpent: TreasuryUtxo,
+        override val treasuryProduced: TreasuryUtxo,
+        override val depositsSpent: Queue[DepositUtxo],
+        override val tx: Transaction
+    ) extends SettlementTx
+
+    case WithPayouts(
+        override val treasurySpent: TreasuryUtxo,
+        override val treasuryProduced: TreasuryUtxo,
+        override val depositsSpent: Queue[DepositUtxo],
+        override val rolloutProduced: RolloutUtxo,
+        override val tx: Transaction
+    ) extends SettlementTx, RolloutTx.HasRolloutProduced
+
+    def mbRolloutProduced: Option[RolloutUtxo] = this match {
+        case thisBuilder: WithPayouts =>
+            Some(thisBuilder.rolloutProduced)
+        case _ => None
+    }
+}
 
 object SettlementTx {
     object Builder {
-        final case class Result(
-            settlementTx: SettlementTx,
-            override val absorbedDeposits: List[DepositUtxo],
-            override val remainingDeposits: List[DepositUtxo]
-        ) extends HasDepositsPartition
+        import State.Fields.*
 
-        trait HasDepositsPartition {
-            def absorbedDeposits: List[DepositUtxo]
-            def remainingDeposits: List[DepositUtxo]
+        sealed trait HasFirstRolloutTxPartial {
+            def firstRolloutTxPartial: RolloutTx.Builder.State
         }
 
-        trait HasTxBuilderContext {
-            def txBuilderContext: TransactionBuilder.Context
-        }
+        enum Result extends State.Fields.HasDepositsPartition:
+            def settlementTx: SettlementTx
+            case NoPayouts(
+                override val settlementTx: SettlementTx.NoPayouts,
+                override val absorbedDeposits: Queue[DepositUtxo],
+                override val remainingDeposits: Queue[DepositUtxo]
+            )
 
-        trait HasMbRolloutOutput {
-            def mbRolloutOutput: Option[Babbage]
-        }
+            case WithPayouts(
+                override val settlementTx: SettlementTx.WithPayouts,
+                override val absorbedDeposits: Queue[DepositUtxo],
+                override val remainingDeposits: Queue[DepositUtxo],
+                isFirstRolloutMerged: IsFirstRolloutMerged
+            )
 
-        final case class BasePessimistic(
-            override val txBuilderContext: TransactionBuilder.Context,
-            override val mbRolloutOutput: Option[Babbage]
-        ) extends HasTxBuilderContext,
-              HasMbRolloutOutput
+        enum IsFirstRolloutMerged:
+            case Merged, NotMerged
 
-        final case class AddedDeposits(
-            override val absorbedDeposits: List[DepositUtxo],
-            override val remainingDeposits: List[DepositUtxo],
-            override val txBuilderContext: TransactionBuilder.Context,
-            override val mbRolloutOutput: Option[Babbage]
-        ) extends HasTxBuilderContext,
-              HasMbRolloutOutput,
-              HasDepositsPartition
+        enum State extends HasTxBuilderContext, HasDepositsPartition:
+            case InProgress(
+                override val txBuilderContext: TransactionBuilder.Context,
+                override val absorbedDeposits: Queue[DepositUtxo],
+                override val remainingDeposits: Queue[DepositUtxo]
+            ) extends State
 
-        final case class AddedPayouts(
-            remainingPayouts: List[Babbage],
-            override val txBuilderContext: TransactionBuilder.Context,
-            override val mbRolloutOutput: Option[Babbage]
-        ) extends HasTxBuilderContext,
-              HasMbRolloutOutput
+            case Finished(
+                override val txBuilderContext: TransactionBuilder.Context,
+                override val absorbedDeposits: Queue[DepositUtxo],
+                override val remainingDeposits: Queue[DepositUtxo]
+            ) extends State
 
-        object AddedDeposits {
+        object State {
+            object Fields {
+                sealed trait HasTxBuilderContext {
+                    def txBuilderContext: TransactionBuilder.Context
+                }
 
-            /** Convert from [[BasePessimistic]], providing a list of deposits to spend.
-              * @param state
-              *   The base pessimistic state to which we want to add deposits.
-              * @param deposits
-              *   The deposits to add to the state.
-              * @return
-              */
-            def apply(state: BasePessimistic, deposits: List[DepositUtxo]): AddedDeposits = {
-                import state.*
-                AddedDeposits(
-                  absorbedDeposits = List.empty,
-                  remainingDeposits = deposits,
-                  txBuilderContext = txBuilderContext,
-                  mbRolloutOutput = mbRolloutOutput
-                )
-            }
-        }
-
-        object AddedPayouts {
-
-            /** Convert from [[AddedDeposits]], providing a list of payouts to send.
-              * @param state
-              *   The base pessimistic state to which we want to add deposits.
-              * @param payouts
-              *   The payouts to add to the state.
-              * @return
-              */
-            def apply(state: AddedDeposits, payouts: List[Babbage]): AddedPayouts = {
-                import state.*
-                AddedPayouts(
-                  remainingPayouts = payouts,
-                  txBuilderContext = txBuilderContext,
-                  mbRolloutOutput = mbRolloutOutput
-                )
+                sealed trait HasDepositsPartition {
+                    def absorbedDeposits: Queue[DepositUtxo]
+                    def remainingDeposits: Queue[DepositUtxo]
+                }
             }
         }
     }
 
-    final case class Builder(
-        majorVersion: Int,
-        deposits: List[DepositUtxo],
-        payouts: List[Babbage],
-        treasuryUtxo: TreasuryUtxo,
-        rolloutTokenName: AssetName,
-        headNativeScript: HeadMultisigScript,
+    enum Builder:
+        def majorVersion: Int
+        def deposits: Queue[DepositUtxo]
+        def treasuryUtxo: TreasuryUtxo
+        def headNativeScript: HeadMultisigScript
         // The reference script for the HNS should live inside the multisig regime witness UTxO
-        headNativeScriptReferenceInput: TransactionUnspentOutput,
-        env: Environment,
-        validators: Seq[Validator]
-    ) {
+        def headNativeScriptReferenceInput: TransactionUnspentOutput
+        def env: Environment
+        def validators: Seq[Validator]
+
+        case NoPayouts(
+            override val majorVersion: Int,
+            override val deposits: Queue[DepositUtxo],
+            override val treasuryUtxo: TreasuryUtxo,
+            override val headNativeScript: HeadMultisigScript,
+            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
+            override val env: Environment,
+            override val validators: Seq[Validator]
+        ) extends Builder
+
+        case WithPayouts(
+            override val majorVersion: Int,
+            override val deposits: Queue[DepositUtxo],
+            override val firstRolloutTxPartial: RolloutTx.Builder.State.FirstOrOnly,
+            override val treasuryUtxo: TreasuryUtxo,
+            override val headNativeScript: HeadMultisigScript,
+            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
+            override val env: Environment,
+            override val validators: Seq[Validator]
+        ) extends Builder, Builder.HasFirstRolloutTxPartial
+
         import Builder.*
 
         type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
 
         case object RolloutFeesWithoutRolloutOutputError
 
-        object PartialResult {
-            def needsRolloutFees: Either[Error, PartialResult.NeedsRolloutFees] = {
-                for {
-                    pessimistic <- basePessimistic
-                    addedDeposits <- addDeposits(pessimistic)
-                    addedPayouts <- addPayouts(addedDeposits)
-                    partialResult = NeedsRolloutFees(addedDeposits, addedPayouts)
-                } yield partialResult
-            }
-
-            final case class NeedsRolloutFees(
-                override val txBuilderContext: TransactionBuilder.Context,
-                override val mbRolloutOutput: Option[Babbage],
-                override val absorbedDeposits: List[DepositUtxo],
-                override val remainingDeposits: List[DepositUtxo]
-            ) extends HasTxBuilderContext,
-                  HasMbRolloutOutput,
-                  HasDepositsPartition {
-                def complete(rolloutFees: Coin): Either[Error, Result] =
-                    addRolloutFees(this, rolloutFees)
-            }
-
-            object NeedsRolloutFees {
-
-                /** Combine the [[AddedDeposits]] and [[AddedPayouts]] into a [[PartialResult]] that
-                  * only needs the rollout transactions' cumulative fees to be turned into a
-                  * [[Result]].
-                  * @param addedDeposits
-                  *   The [[AddedDeposits]] state after adding all deposit inputs that fit into the
-                  *   settlement tx.
-                  * @param addedPayouts
-                  *   The [[AddedPayouts]] state after adding all payout outputs that fit into the
-                  *   settlement tx.
-                  * @return
-                  */
-                def apply(
-                    addedDeposits: AddedDeposits,
-                    addedPayouts: AddedPayouts
-                ): PartialResult.NeedsRolloutFees =
-                    PartialResult.NeedsRolloutFees(
-                      txBuilderContext = addedPayouts.txBuilderContext,
-                      mbRolloutOutput = addedPayouts.mbRolloutOutput,
-                      absorbedDeposits = addedDeposits.absorbedDeposits,
-                      remainingDeposits = addedDeposits.remainingDeposits
+        def build(): Either[Error, Result] = for {
+            pessimistic <- BasePessimistic.basePessimistic
+            addedDeposits <- AddDeposits.addDeposits(pessimistic)
+            result <- this match {
+                case thisBuilder: Builder.WithPayouts =>
+                    for {
+                        mergeTrial <- Finish.tryMergeFirstRolloutTx(addedDeposits, thisBuilder)
+                        (finished, isFirstRolloutMerged) = mergeTrial
+                        settlementTx = PostProcess.WithPayouts.getSettlementTx(
+                          finished,
+                          thisBuilder
+                        )
+                    } yield Result.WithPayouts(
+                      settlementTx = settlementTx,
+                      absorbedDeposits = finished.absorbedDeposits,
+                      remainingDeposits = finished.remainingDeposits,
+                      isFirstRolloutMerged = isFirstRolloutMerged
                     )
+                case thisBuilder: Builder.NoPayouts =>
+                    for {
+                        finished <- Finish.noPayouts(addedDeposits, thisBuilder)
+                        settlementTx = PostProcess.NoPayouts.getSettlementTx(finished, thisBuilder)
+                    } yield Result.NoPayouts(
+                      settlementTx = settlementTx,
+                      absorbedDeposits = finished.absorbedDeposits,
+                      remainingDeposits = finished.remainingDeposits
+                    )
+            }
+        } yield result
+
+        object BasePessimistic {
+            lazy val basePessimistic: Either[Error, State.InProgress] = for {
+                ctx <- TxBuilder.build(basePessimisticSteps)
+                addedPessimisticRollout <- addPessimisticRollout(ctx)
+                _ <- TxBuilder.finish(addedPessimisticRollout)
+            } yield State.InProgress(
+              txBuilderContext = ctx,
+              absorbedDeposits = Queue.empty,
+              remainingDeposits = deposits
+            )
+
+            lazy val basePessimisticSteps: List[TransactionBuilderStep] =
+                List(setSettlementMetadata, referenceHNS, consumeTreasury, sendTreasury)
+
+            def addPessimisticRollout(
+                ctx: TransactionBuilder.Context
+            ): Either[Error, TransactionBuilder.Context] = {
+                val extraStep = BasePessimistic.mbPessimisticSendRollout.toList
+                for { newCtx <- TxBuilder.modify(ctx, extraStep) } yield newCtx
+            }
+
+            lazy val mbPessimisticSendRollout: Option[Send] = Builder.this match {
+                case thisBuilder: Builder.WithPayouts =>
+                    Some(Send(pessimisticRolloutOutput(thisBuilder)))
+                case _ => None
+            }
+
+            def pessimisticRolloutOutput(thisBuilder: Builder.WithPayouts): TxOutput.Babbage =
+                TxOutput.Babbage(
+                  address = headNativeScript.mkAddress(env.network),
+                  value = thisBuilder.firstRolloutTxPartial.inputValueRequired,
+                  datumOption = None,
+                  scriptRef = None
+                )
+
+            lazy val setSettlementMetadata =
+                ModifyAuxiliaryData(_ => Some(settlementTxMetadata))
+
+            lazy val settlementTxMetadata: AuxiliaryData =
+                MD(
+                  MD.L1TxTypes.Settlement,
+                  headAddress = headNativeScript.mkAddress(env.network)
+                )
+
+            lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
+
+            lazy val consumeTreasury: Spend =
+                Spend(treasuryUtxo.asUtxo, headNativeScript.witness)
+
+            lazy val sendTreasury: Send = Send(treasuryOutput)
+
+            lazy val treasuryOutput: TxOutput.Babbage =
+                TxOutput.Babbage(
+                  address = headNativeScript.mkAddress(env.network),
+                  value = treasuryUtxo.value,
+                  datumOption = Some(Inline(treasuryOutputDatum.toData)),
+                  scriptRef = None
+                )
+
+            lazy val treasuryOutputValue: Value = Builder.this match {
+                case thisBuilder: Builder.WithPayouts =>
+                    treasuryUtxo.value - thisBuilder.firstRolloutTxPartial.inputValueRequired
+                case _ => treasuryUtxo.value
+            }
+
+            lazy val treasuryOutputDatum: TreasuryUtxo.Datum =
+                mkMultisigTreasuryDatum(majorVersion, ByteString.empty)
+        }
+
+        object AddDeposits {
+            @tailrec
+            def addDeposits(state: State.InProgress): Either[Error, State.InProgress] = {
+                import state.*
+                remainingDeposits match {
+                    case deposit +: otherDeposits =>
+                        tryAddDeposit(txBuilderContext, deposit) match {
+                            case Right(x) =>
+                                val newState: State.InProgress = state.copy(
+                                  txBuilderContext = x,
+                                  absorbedDeposits = absorbedDeposits :+ deposit,
+                                  remainingDeposits = otherDeposits
+                                )
+                                addDeposits(newState)
+                            case Left(err) =>
+                                TxBuilder.replaceInvalidSizeException(err, state)
+                        }
+                    case _Empty => Right(state)
+                }
+            }
+
+            def tryAddDeposit(
+                ctx: TransactionBuilder.Context,
+                deposit: DepositUtxo
+            ): Either[Error, TransactionBuilder.Context] =
+                val depositStep = Spend(TransactionUnspentOutput(deposit.toUtxo))
+                for {
+                    newCtx <- TxBuilder.modify(ctx, List(depositStep))
+                    // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits
+                    //
+                    // Ensure that at least the pessimistic rollout output fits into the transaction.
+                    addedPessimisticRollout <- BasePessimistic.addPessimisticRollout(newCtx)
+                    _ <- TxBuilder.finish(addedPessimisticRollout)
+                } yield newCtx
+        }
+
+        object Finish {
+            def noPayouts(
+                state: State.InProgress,
+                _thisBuilder: Builder.NoPayouts
+            ): Either[Error, State.Finished] = {
+                import state.*
+                for {
+                    finished <- TxBuilder.finish(txBuilderContext)
+                } yield State.Finished(
+                  txBuilderContext = finished,
+                  absorbedDeposits = absorbedDeposits,
+                  remainingDeposits = remainingDeposits
+                )
+            }
+
+            def tryMergeFirstRolloutTx(
+                state: State.InProgress,
+                _this: Builder.WithPayouts
+            ): Either[Error, (State.Finished, IsFirstRolloutMerged)] = {
+                import state.*
+                import IsFirstRolloutMerged.*
+                val rolloutTx: Transaction =
+                    _this.firstRolloutTxPartial.txBuilderContext.transaction
+
+                val optimisticSteps: List[Send] = rolloutTx.body.value.outputs
+                    .map((x: Sized[TransactionOutput]) => Send(x.value))
+                    .toList
+
+                val optimisticTrial: Either[Error, TransactionBuilder.Context] = for {
+                    newCtx <- TxBuilder.modify(txBuilderContext, optimisticSteps)
+                    finished <- TxBuilder.finish(newCtx)
+                } yield finished
+
+                lazy val pessimisticBackup: Either[Error, TransactionBuilder.Context] = for {
+                    newCtx <- BasePessimistic.addPessimisticRollout(txBuilderContext)
+                    finished <- TxBuilder.finish(newCtx)
+                } yield finished
+
+                // Keep the optimistic transaction (which merged the settlement tx with the first rollout tx)
+                // if it worked out. Otherwise, use the pessimistic transaction.
+                for {
+                    newCtx <- optimisticTrial.orElse(pessimisticBackup)
+                    isFirstRolloutMerged = if optimisticTrial.isRight then Merged else NotMerged
+                } yield (
+                  State.Finished(
+                    txBuilderContext = newCtx,
+                    absorbedDeposits = absorbedDeposits,
+                    remainingDeposits = remainingDeposits
+                  ),
+                  isFirstRolloutMerged
+                )
             }
         }
 
-        def basePessimistic: Either[Error, BasePessimistic] =
-            import BuilderUtils.BasePessimistic.*
-            import BuilderUtils.TxBuilder.*
+        object PostProcess {
+            object NoPayouts {
 
-            for {
-                txBuilderContext <- build(pessimisticSteps)
-                _ <- finalizeTxBuilderContext(txBuilderContext, mbRolloutOutput)
-            } yield BasePessimistic(
-              txBuilderContext = txBuilderContext,
-              mbRolloutOutput = mbRolloutOutput
-            )
-
-        def addDeposits(state: BasePessimistic): Either[Error, AddedDeposits] =
-            import BuilderUtils.AddDeposits.*
-            val newState = AddedDeposits(state, deposits)
-            loop(newState)
-
-        def addPayouts(state: AddedDeposits): Either[Error, AddedPayouts] =
-            import BuilderUtils.AddPayouts.*
-            val newState = AddedPayouts(state, payouts)
-            loop(newState)
-
-        def addRolloutFees(
-            state: PartialResult.NeedsRolloutFees,
-            rolloutFees: Coin
-        ): Either[Error, Result] =
-            import BuilderUtils.*
-            import state.*
-            for {
-                newMbRolloutOutput <- NeedsRolloutFees.updateMbRolloutOutput(
-                  mbRolloutOutput,
-                  rolloutFees
-                )
-
-                newState = state.copy(mbRolloutOutput = newMbRolloutOutput)
-
-                settlementTx: SettlementTx <- PostProcess.finalizeStateAndGetSettlementTx(newState)
-            } yield Result(
-              settlementTx = settlementTx,
-              absorbedDeposits = absorbedDeposits,
-              remainingDeposits = remainingDeposits
-            )
-
-        object BuilderUtils {
-            object BasePessimistic {
-                lazy val pessimisticSteps =
-                    List(referenceHNS, consumeTreasury, sendTreasury, setSettlementMetadata)
-
-                lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
-
-                lazy val consumeTreasury: Spend =
-                    Spend(treasuryUtxo.asUtxo, headNativeScript.witness)
-
-                lazy val sendTreasury: Send = Send(treasuryOutput)
-
-                lazy val setSettlementMetadata =
-                    ModifyAuxiliaryData(_ => Some(settlementTxMetadata))
-                
-                lazy val mbRolloutOutput: Option[Babbage] = {
-                    val valueRollout = payouts.map(_.value).foldLeft(Value.zero)(_ + _)
-                    if valueRollout.isZero then None
-                    else
-                        Some(
-                          Babbage(
-                            headNativeScript.mkAddress(env.network),
-                            valueRollout,
-                            None,
-                            None
-                          )
-                        )
-                }
-
-                lazy val newTreasuryDatum: TreasuryUtxo.Datum =
-                    mkMultisigTreasuryDatum(majorVersion, ByteString.empty)
-
-                lazy val treasuryOutput: Babbage = {
-                    val newTreasuryVal =
-                        mbRolloutOutput.fold(treasuryUtxo.value)(treasuryUtxo.value - _.value)
-
-                    Babbage(
-                      address = headNativeScript.mkAddress(env.network),
-                      value = newTreasuryVal,
-                      datumOption = Some(Inline(newTreasuryDatum.toData)),
-                      scriptRef = None
-                    )
-                }
-
-                lazy val settlementTxMetadata: AuxiliaryData =
-                    MD(
-                      MD.L1TxTypes.Settlement,
-                      headAddress = headNativeScript.mkAddress(env.network)
-                    )
-            }
-
-            object AddDeposits {
-                @tailrec
-                def loop(state: AddedDeposits): Either[Error, AddedDeposits] = {
-                    import state.*
-                    remainingDeposits match {
-                        case deposit :: otherDeposits =>
-                            tryAddDeposit(txBuilderContext, mbRolloutOutput, deposit) match {
-                                case Right(x) =>
-                                    val newState = state.copy(
-                                      txBuilderContext = x,
-                                      absorbedDeposits = absorbedDeposits :+ deposit,
-                                      remainingDeposits = otherDeposits
-                                    )
-                                    loop(newState)
-                                case Left(err) =>
-                                    TxBuilder.replaceInvalidSizeException(err, state)
-                            }
-                        case Nil => Right(state)
-                    }
-                }
-
-                def tryAddDeposit(
-                    ctx: TransactionBuilder.Context,
-                    mbRolloutOutput: Option[Babbage],
-                    deposit: DepositUtxo
-                ): Either[Error, TransactionBuilder.Context] =
-                    val depositStep = Spend(TransactionUnspentOutput(deposit.toUtxo))
-                    for {
-                        newCtx <- TxBuilder.modify(ctx, List(depositStep))
-                        _ <- TxBuilder.finalizeTxBuilderContext(newCtx, mbRolloutOutput)
-                    } yield newCtx
-            }
-
-            object AddPayouts {
-                @tailrec
-                def loop(state: AddedPayouts): Either[Error, AddedPayouts] = {
-                    import state.*
-                    remainingPayouts match {
-                        case payout :: otherPayouts =>
-                            tryAddPayout(txBuilderContext, mbRolloutOutput, payout) match {
-                                case Right(x) =>
-                                    val newState = state.copy(
-                                      txBuilderContext = x,
-                                      remainingPayouts = otherPayouts
-                                    )
-                                    loop(newState)
-                                case Left(err) =>
-                                    TxBuilder.replaceInvalidSizeException(err, state)
-                            }
-                        case Nil => Right(state)
-                    }
-                }
-
-                // TODO: Update mbRolloutOutput (subtracting the payout from it)
-                def tryAddPayout(
-                    ctx: TransactionBuilder.Context,
-                    mbRolloutOutput: Option[Babbage],
-                    payout: Babbage
-                ): Either[Error, TransactionBuilder.Context] =
-                    val payoutStep = Send(payout)
-                    for {
-                        newCtx <- TxBuilder.modify(ctx, List(payoutStep))
-                        _ <- TxBuilder.finalizeTxBuilderContext(newCtx, mbRolloutOutput)
-                    } yield newCtx
-            }
-
-            object NeedsRolloutFees {
-                def updateMbRolloutOutput(
-                    mbRolloutOutput: Option[Babbage],
-                    rolloutFees: Coin
-                ): Either[Error, Option[Babbage]] =
-                    mbRolloutOutput match {
-                        case None =>
-                            if rolloutFees == Coin(0) then Right(None)
-                            else Left(RolloutFeesWithoutRolloutOutputError)
-                        case Some(rolloutOutput) =>
-                            import rolloutOutput.*
-                            Right(Some(rolloutOutput.copy(value = value + Value(rolloutFees))))
-                    }
-            }
-
-            object TxBuilder {
-                def build(
-                    steps: List[TransactionBuilderStep]
-                ): Either[Error, TransactionBuilder.Context] =
-                    TransactionBuilder.build(env.network, steps).left.map(StepError(_))
-
-                def modify(
-                    ctx: TransactionBuilder.Context,
-                    steps: List[TransactionBuilderStep]
-                ): Either[Error, TransactionBuilder.Context] =
-                    TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
-
-                // Avoid naming methods [[finalize]] because it is a built-in Java method of [[Object]].
-                // It's deprecated, but it still exists for now.
-                def finalizeTxBuilderContext(
-                    txBuilderContext: TransactionBuilder.Context,
-                    mbRolloutOutput: Option[Babbage]
-                ): Either[Error, TransactionBuilder.Context] = {
-                    for {
-                        // Add the rollout output step to tx-builder context
-                        addedRolloutOutput <- modify(
-                          txBuilderContext,
-                          mbRolloutOutput.map(Send(_)).toList
-                        )
-
-                        // Try to build, balance, and validate the resulting transaction
-                        finalized <- addedRolloutOutput
-                            .finalizeContext(
-                              protocolParams = env.protocolParams,
-                              diffHandler = ChangeOutputDiffHandler(
-                                protocolParams = env.protocolParams,
-                                changeOutputIdx = 0
-                              ).changeOutputDiffHandler,
-                              evaluator = env.evaluator,
-                              validators = validators
-                            )
-                            .left
-                            .map({
-                                case balanceError: TxBalancingError =>
-                                    BalancingError(balanceError)
-                                case validationError: TransactionException =>
-                                    ValidationError(validationError)
-                            })
-                    } yield finalized
-                }
-
-                def replaceInvalidSizeException[A](err: Error, x: A): Either[Error, A] =
-                    err match
-                        case ValidationError(ve) =>
-                            ve match {
-                                case _: InvalidTransactionSizeException =>
-                                    Right(x)
-                                case _ => Left(err)
-                            }
-                        case _ => Left(err)
-            }
-
-            object PostProcess {
-
-                /** Finalize the [[Builder]] state, and get the finalized transaction parsed as a
-                  * [[SettlementTx]].
+                /** Given a finished [[State]] for a [[Builder.NoPayouts]], apply post-processing to
+                  * get the [[SettlementTx.NoPayouts]].
                   *
                   * @param state
-                  *   A finalized [[Builder]] state that contains a [[TransactionBuilder.Context]].
+                  *   The [[State]] of a [[Builder.NoPayouts]].
+                  * @param thisBuilder
+                  *   Proof that this builder is a [[Builder.NoPayouts]].
                   * @return
-                  *
-                  * IMPORTANT: This function assumes that:
-                  *
-                  *   - The treasury output exists and is the first output of the transaction.
-                  *     [[BasePessimistic.pessimisticSteps]] must satisfy this assumption.
-                  *
-                  *   - The rollout output is the last output of the transaction, if it exists.
-                  *     [[TxBuilder.finalizeTxBuilderContext]] must satisfy this assumption.
                   */
-                def finalizeStateAndGetSettlementTx(
-                    state: HasTxBuilderContext & HasMbRolloutOutput & HasDepositsPartition
-                ): Either[Error, SettlementTx] = {
-                    import state.*
-                    for {
-                        stateFinalized <- TxBuilder.finalizeTxBuilderContext(
-                          txBuilderContext,
-                          mbRolloutOutput
-                        )
-                    } yield SettlementTx(
+                def getSettlementTx(
+                    state: State.Finished,
+                    thisBuilder: Builder.NoPayouts
+                ): SettlementTx.NoPayouts = {
+                    SettlementTx.NoPayouts(
                       treasurySpent = treasuryUtxo,
-                      treasuryProduced = unsafeGetTreasuryProduced(state),
+                      treasuryProduced = getTreasuryProduced(state),
                       depositsSpent = state.absorbedDeposits,
-                      rolloutProduced = unsafeGetRolloutUtxo(state),
+                      tx = state.txBuilderContext.transaction
+                    )
+                }
+            }
+
+            object WithPayouts {
+
+                /** Given a [[State.Finished]] for a [[Builder.WithPayouts]], apply post-processing
+                  * to get the [[SettlementTx.WithPayouts]].
+                  *
+                  * @param state
+                  *   The [[State.Finished]] of this [[Builder.WithPayouts]].
+                  * @param thisBuilder
+                  *   Proof that this builder is a [[Builder.WithPayouts]].
+                  * @return
+                  */
+                def getSettlementTx(
+                    state: State.Finished,
+                    thisBuilder: Builder.WithPayouts
+                ): SettlementTx.WithPayouts = {
+                    SettlementTx.WithPayouts(
+                      treasurySpent = treasuryUtxo,
+                      treasuryProduced = getTreasuryProduced(state),
+                      depositsSpent = state.absorbedDeposits,
+                      rolloutProduced = getRolloutUtxo(state, thisBuilder),
                       tx = state.txBuilderContext.transaction
                     )
                 }
 
-                /** Get the treasury output of the finalized transaction in the [[Builder]] state,
-                  * parsed as a [[TreasuryUtxo]].
+                /** Given a [[State.Finished]] of a [[Builder.WithPayouts]], apply post-processing
+                  * to get the [[RolloutUtxo]] produced by the [[SettlementTx.WithPayouts]].
                   *
                   * @param state
-                  *   A finalized [[Builder]] state that contains a [[TransactionBuilder.Context]].
+                  *   The [[State.Finished]] of this [[Builder.WithPayouts]].
+                  * @param thisBuilder
+                  *   Proof that this builder is a [[Builder.WithPayouts]].
                   * @return
-                  *
-                  * IMPORTANT: This function assumes that:
-                  *   - The treasury output exists and is the first output of the transaction.
-                  *     [[BasePessimistic.pessimisticSteps]] must satisfy this assumption.
                   */
-                def unsafeGetTreasuryProduced(state: HasTxBuilderContext): TreasuryUtxo = {
+                def getRolloutUtxo(
+                    state: State.Finished,
+                    thisBuilder: Builder.WithPayouts
+                ): RolloutUtxo = {
                     val tx = state.txBuilderContext.transaction
-                    val treasuryOutput = tx.body.value.outputs.head.value
+                    assert(tx.body.value.outputs.length >= 2)
 
-                    treasuryUtxo.copy(
-                      txId = TransactionInput(transactionId = tx.id, index = 0),
-                      datum = BasePessimistic.newTreasuryDatum,
-                      value = treasuryOutput.value
-                    )
-                }
+                    val rolloutOutput = tx.body.value.outputs.tail.head.value
 
-                /** Get the rollout output of the finalized transaction in the [[Builder]] state,
-                  * parsed as a [[RolloutUtxo]].
-                  *
-                  * @param state
-                  *   A finalized [[Builder]] state that contains a [[TransactionBuilder.Context]]
-                  *   and optionally a rollout output.
-                  * @return
-                  *
-                  * WARNING: This function assumes that:
-                  *
-                  *   - The rollout output is the last output of the transaction, if it exists.
-                  *     [[TxBuilder.finalizeTxBuilderContext]] must satisfy this assumption.
-                  */
-                def unsafeGetRolloutUtxo(
-                    state: HasTxBuilderContext & HasMbRolloutOutput
-                ): Option[RolloutUtxo] = {
-                    val tx = state.txBuilderContext.transaction
-                    val lastOutputIdx = tx.body.value.outputs.length - 1
-                    assert(lastOutputIdx >= 1)
-
-                    state.mbRolloutOutput.map(rolloutOutput =>
-                        RolloutUtxo((TransactionInput(tx.id, lastOutputIdx), rolloutOutput))
-                    )
+                    RolloutUtxo((TransactionInput(transactionId = tx.id, index = 1), rolloutOutput))
                 }
             }
+
+            /** Given a [[State.Finished]] of a [[Builder]], apply post-processing to get the
+              * [[TreasuryUtxo]] produced by the [[SettlementTx]].
+              *
+              * @param state
+              *   The [[State.Finished]] of this [[Builder]].
+              * @return
+              */
+            def getTreasuryProduced(state: State.Finished): TreasuryUtxo = {
+                val tx = state.txBuilderContext.transaction
+                val treasuryOutput = tx.body.value.outputs.head.value
+
+                treasuryUtxo.copy(
+                  txId = TransactionInput(transactionId = tx.id, index = 0),
+                  datum = BasePessimistic.treasuryOutputDatum,
+                  value = treasuryOutput.value
+                )
+            }
         }
-    }
+
+        object TxBuilder {
+            def build(
+                steps: List[TransactionBuilderStep]
+            ): Either[Error, TransactionBuilder.Context] =
+                TransactionBuilder.build(env.network, steps).left.map(StepError(_))
+
+            def modify(
+                ctx: TransactionBuilder.Context,
+                steps: List[TransactionBuilderStep]
+            ): Either[Error, TransactionBuilder.Context] =
+                TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
+
+            def finish(
+                txBuilderContext: TransactionBuilder.Context
+            ): Either[Error, TransactionBuilder.Context] =
+                for {
+                    // Try to build, balance, and validate the resulting transaction
+                    finished <- txBuilderContext
+                        .finalizeContext(
+                          protocolParams = env.protocolParams,
+                          diffHandler = ChangeOutputDiffHandler(
+                            protocolParams = env.protocolParams,
+                            changeOutputIdx = 0
+                          ).changeOutputDiffHandler,
+                          evaluator = env.evaluator,
+                          validators = validators
+                        )
+                        .left
+                        .map({
+                            case balanceError: TxBalancingError =>
+                                BalancingError(balanceError)
+                            case validationError: TransactionException =>
+                                ValidationError(validationError)
+                        })
+                } yield finished
+
+            /** Replace a [[InvalidTransactionSizeException]] with some other value.
+              *
+              * @param err
+              *   The error to replace.
+              * @param replacement
+              *   The replacement value, provided as a lazy argument.
+              * @tparam A
+              *   The type of the replacement value, usually inferred by Scala.
+              * @return
+              */
+            def replaceInvalidSizeException[A](err: Error, replacement: => A): Either[Error, A] =
+                err match
+                    case ValidationError(ve) =>
+                        ve match {
+                            case _: InvalidTransactionSizeException =>
+                                Right(replacement)
+                            case _ => Left(err)
+                        }
+                    case _ => Left(err)
+        }
 }
