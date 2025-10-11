@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -19,7 +18,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.TxBalancingError
 import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.List as SList
 
@@ -152,12 +150,6 @@ object FallbackTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
         } yield FallbackTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
 
     }

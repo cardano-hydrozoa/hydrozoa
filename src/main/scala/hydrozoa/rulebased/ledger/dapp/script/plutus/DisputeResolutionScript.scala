@@ -155,7 +155,7 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should match vote datum on (headMp, disputeId)"
 
     // Utility to decide which vote is higher
-    private def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
+    def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
         import VoteStatus.NoVote
         import VoteStatus.Vote
         a match {
