@@ -58,6 +58,10 @@ object SettlementTx {
     object Builder {
         import State.Fields.*
 
+        type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
+
+        case object RolloutFeesWithoutRolloutOutputError
+
         sealed trait HasFirstRolloutTxPartial {
             def firstRolloutTxPartial: RolloutTx.Builder.PartialResult.NeedsInput.FirstOrOnly
         }
@@ -142,9 +146,7 @@ object SettlementTx {
         import Builder.*
         import Builder.State.Status.*
 
-        type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
 
-        case object RolloutFeesWithoutRolloutOutputError
 
         def build(): Either[Error, Result] = for {
             pessimistic <- BasePessimistic.basePessimistic
