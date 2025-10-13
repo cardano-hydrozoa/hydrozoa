@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger
 import cats.effect.{IO, Ref}
 import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
-import hydrozoa.multisig.ledger.dapp.token.Token.CIP67Tags
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
@@ -135,7 +135,7 @@ object DappLedger {
         def txBelongsToLedger(ledger: DappLedger): Boolean =
             this.tx.auxiliaryData.getOrElse(false) match {
                 case Metadata(m) =>
-                    m.get(TransactionMetadatumLabel(CIP67Tags.head))
+                    m.get(TransactionMetadatumLabel(CIP67.Tags.head))
                         .fold(false)(_ == ledger.headAddress)
                 case _ => false
             }

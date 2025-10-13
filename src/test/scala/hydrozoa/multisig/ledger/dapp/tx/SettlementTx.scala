@@ -1,12 +1,17 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import cats.data.*
+import hydrozoa.*
 import cats.*
 import cats.data.*
 import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
+import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import io.bullet.borer.Cbor
+import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import io.bullet.borer.Cbor
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
@@ -73,9 +78,8 @@ def genDepositUtxo(
 
 val genHeadTokenName: Gen[AssetName] =
     for {
-        txIds <- Gen.nonEmptyListOf(arbitrary[TransactionInput])
-        ne = NonEmptyList.fromListUnsafe(txIds)
-    } yield Token.mkHeadTokenName(ne)
+        ti <- arbitrary[TransactionInput]
+    } yield CIP67.TokenNames(ti).headTokenName
 
 val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
     for {
@@ -114,7 +118,7 @@ def genTreasuryUtxo(
             addr = scriptAddr,
             datum = datum,
             value = Value(Coin(0L)) + treasuryToken
-          ).toUtxo._2,
+          ).asUtxo._2,
           params
         ).value.coin
 
@@ -138,33 +142,56 @@ def genSettlementRecipe(
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
         deposits <- Gen.listOf(
-          genDepositUtxo(network = network, params = params, headAddr = Some(hns.address(network)))
+          genDepositUtxo(
+            network = network,
+            params = params,
+            headAddr = Some(hns.mkAddress(network))
+          )
         )
 
-        utxo <- genTreasuryUtxo(headAddr = Some(hns.address(network)), network = network)
+        utxo <- genTreasuryUtxo(headAddr = Some(hns.mkAddress(network)), network = network)
         treasuryInputAda = utxo.value.coin
 
         withdrawals <- Gen
             .listOf(genTestPeer)
             .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
 
+        env = testTxBuilderEnvironment
+
+        multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
+
     } yield SettlementTx.Recipe(
       majorVersion = majorVersion,
       deposits = deposits,
-      utxosWithdrawn = Map.from(withdrawals),
+      utxosWithdrawn = withdrawals.map(_._2),
       treasuryUtxo = utxo,
       headNativeScript = hns,
+      rolloutTokenName = AssetName.fromHex("deadbeef"), // FIXME:
+      headNativeScriptReferenceInput = multisigWitnessUtxo,
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
       validators = testValidators
     )).suchThat(r => {
-        val withdrawnCoin = sumUtxoValues(r.utxosWithdrawn.toList).coin
+        val withdrawnCoin = Coin(r.utxosWithdrawn.map(_.value.coin.value).sum)
         val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
         val treasuryInputAda = r.treasuryUtxo.value.coin
         withdrawnCoin + estimatedFee < treasuryInputAda + depositedCoin
     })
 }
+
+def genFakeMultisigWitnessUtxo(
+    script: HeadMultisigScript,
+    network: Network
+): Gen[TransactionUnspentOutput] = for {
+    utxoId <- Arbitrary.arbitrary[TransactionInput]
+    output = Babbage(
+      script.mkAddress(network),
+      Value.ada(2),
+      None,
+      Some(ScriptRef.apply(script.script))
+    )
+} yield TransactionUnspentOutput((utxoId, output))
 
 class SettlementTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
@@ -177,7 +204,9 @@ class SettlementTxTest extends munit.ScalaCheckSuite {
               case Left(e) => throw RuntimeException(s"Build failed $e")
               case Right(tx) => {
                   val cbor = tx.tx.toCbor
+
                   given OriginalCborByteArray = OriginalCborByteArray(cbor)
+
                   val roundTripped = Cbor.decode(cbor).to[Transaction].value
                   assertEquals(obtained = roundTripped, expected = tx.tx)
               }

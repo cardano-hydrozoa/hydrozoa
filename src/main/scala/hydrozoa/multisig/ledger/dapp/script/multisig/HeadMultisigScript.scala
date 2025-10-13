@@ -3,29 +3,39 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 import cats.*
 import cats.data.*
 import hydrozoa.VerificationKeyBytes
+import hydrozoa.lib.tx.ExpectedSigner
+import hydrozoa.lib.tx.NativeScriptWitness
+import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
+import hydrozoa.lib.tx.Witness
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyPaymentPart, ShelleyAddress}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.Timelock.{AllOf, Signature}
+import scalus.cardano.ledger.Timelock.{Signature, AllOf}
 
 case class HeadMultisigScript(private val script0: Script.Native) {
     val script: Script.Native = script0
-    def address(network: Network = Mainnet): ShelleyAddress =
+    def mkAddress(network: Network = Mainnet): ShelleyAddress =
         ShelleyAddress(
           network = network,
           payment = ShelleyPaymentPart.Script(script.scriptHash),
           delegation = Null
         )
     val policyId: PolicyId = script.scriptHash
-    val requiredSigners: TaggedOrderedSet[AddrKeyHash] =
-        TaggedOrderedSet.from(
+    val requiredSigners: Set[ExpectedSigner] =
+        Set.from(
           script.script
               .asInstanceOf[Timelock.AllOf]
               .scripts
-              .map(_.asInstanceOf[Signature].keyHash)
+              .map(keyHash => ExpectedSigner(keyHash.asInstanceOf[Signature].keyHash))
         )
     val numSigners: Int = requiredSigners.toSeq.size
+
+    val witness: NativeScriptWitness = NativeScriptWitness(
+      scriptSource = NativeScriptAttached,
+      additionalSigners = requiredSigners
+    )
+
 }
 
 object HeadMultisigScript:

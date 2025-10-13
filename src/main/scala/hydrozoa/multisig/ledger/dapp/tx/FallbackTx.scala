@@ -5,10 +5,12 @@ import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.token.Token.mkVoteTokenName
+import hydrozoa.multisig.ledger.dapp.token
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
@@ -47,12 +49,12 @@ object FallbackTx {
         val multisigDatum: TreasuryUtxo.Datum = recipe.treasuryUtxo.datum
 
         // FIXME: This isn't correct, I'm not totally sure what it should be
-        val voteTokenName = mkVoteTokenName(recipe.treasuryUtxo.toUtxo._1)
+        val voteTokenName = CIP67.TokenNames(recipe.treasuryUtxo.asUtxo._1).voteTokenName
 
         val newTreasuryDatum = UnresolvedDatum(
           headMp = recipe.headScript.policyId,
           disputeId = voteTokenName.bytes,
-          peers = SList.from(recipe.headScript.requiredSigners.toSortedSet.toList),
+          peers = SList.from(recipe.headScript.requiredSigners.map(_.hash)),
           peersN = recipe.headScript.numSigners,
           deadlineVoting = recipe.votingDuration,
           versionMajor = multisigDatum.versionMajor,
@@ -89,8 +91,8 @@ object FallbackTx {
         mkVoteOutput(mkDefVoteDatum(recipe.headScript.numSigners, ()))
 
         val voteUtxos: List[TransactionOutput] =
-            recipe.headScript.requiredSigners.toSortedSet.toList.zipWithIndex.map((peer, key) =>
-                val datum = mkVoteDatum(key + 1, recipe.headScript.numSigners, peer)
+            recipe.headScript.requiredSigners.toList.zipWithIndex.map((peer, key) =>
+                val datum = mkVoteDatum(key + 1, recipe.headScript.numSigners, peer.hash)
                 mkVoteOutput(datum)
             )
 
@@ -100,11 +102,10 @@ object FallbackTx {
 
         val spendMultisigTreasury: Spend =
             Spend(
-              TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo),
+              recipe.treasuryUtxo.asUtxo,
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners =
-                    recipe.headScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+                additionalSigners = recipe.headScript.requiredSigners
               )
             )
 

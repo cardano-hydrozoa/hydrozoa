@@ -9,8 +9,6 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-import scala.collection
-import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
@@ -20,6 +18,9 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+
+import scala.collection
+import scala.language.{implicitConversions, reflectiveCalls}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -33,9 +34,12 @@ object SettlementTx {
     case class Recipe(
         majorVersion: Int,
         deposits: List[DepositUtxo],
-        utxosWithdrawn: Map[TransactionInput, TransactionOutput],
+        utxosWithdrawn: List[Babbage],
         treasuryUtxo: TreasuryUtxo,
+        rolloutTokenName: AssetName,
         headNativeScript: HeadMultisigScript,
+        // The reference script for the HNS should live inside the multisig regime witness UTxO
+        headNativeScriptReferenceInput: TransactionUnspentOutput,
         network: Network,
         protocolParams: ProtocolParams,
         evaluator: PlutusScriptEvaluator,
@@ -46,7 +50,7 @@ object SettlementTx {
         //////////////////////////////////////////////////////
         // Data extraction
 
-        val headAddress = recipe.headNativeScript.address(recipe.network)
+        val headAddress = recipe.headNativeScript.mkAddress(recipe.network)
 
         val utxos =
             recipe.deposits
@@ -54,7 +58,7 @@ object SettlementTx {
                 .toBuffer
 
         val withdrawnValue: Value =
-            recipe.utxosWithdrawn.values.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
+            recipe.utxosWithdrawn.map(_.value).foldLeft(Value.zero)((acc, v) => acc + v)
 
         //////////////
         // Datum
@@ -76,7 +80,7 @@ object SettlementTx {
         /////////////////////////////////////////////////////////////
         // Step definition
 
-        val spendRecipeAndDeposits: Seq[Spend] = utxos.toSeq.map(utxo =>
+        val spendTreasuryAndDeposits: Seq[Spend] = utxos.toSeq.map(utxo =>
             Spend(
               TransactionUnspentOutput(
                 utxo._1,
@@ -84,8 +88,7 @@ object SettlementTx {
               ),
               witness = NativeScriptWitness(
                 NativeScriptValue(recipe.headNativeScript.script),
-                recipe.headNativeScript.requiredSigners.toSortedSet.unsorted
-                    .map(ExpectedSigner(_))
+                recipe.headNativeScript.requiredSigners
               )
             )
         )
@@ -104,9 +107,9 @@ object SettlementTx {
             ModifyAuxiliaryData(_ => Some(MD(MD.L1TxTypes.Settlement, headAddress)))
 
         // N.B.: Withdrawals may be empty
-        val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
+        val createWithdrawals: Seq[Send] = recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo))
 
-        val steps = spendRecipeAndDeposits
+        val steps = spendTreasuryAndDeposits
             .appended(createTreasuryOutput)
             .appended(modifyAuxiliaryData)
             .appendedAll(createWithdrawals)

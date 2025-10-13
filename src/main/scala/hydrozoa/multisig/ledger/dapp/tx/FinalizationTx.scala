@@ -44,7 +44,7 @@ object FinalizationTx {
               -1L,
               NativeScriptWitness(
                 NativeScriptValue(recipe.headNativeScript.script),
-                recipe.headNativeScript.requiredSigners.toSortedSet.toSet.map(ExpectedSigner(_))
+                recipe.headNativeScript.requiredSigners
               )
             )
 
@@ -52,13 +52,13 @@ object FinalizationTx {
             recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
 
         val spendTreasury: Spend = Spend(
-          utxo = TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo),
+          utxo = recipe.treasuryUtxo.asUtxo,
           witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
         )
 
         val addChangeOutput: Send = Send(
           Babbage(
-            recipe.headNativeScript.address(recipe.network),
+            recipe.headNativeScript.mkAddress(recipe.network),
             Value.zero,
             None,
             None
@@ -69,7 +69,7 @@ object FinalizationTx {
             Some(
               MD(
                 MD.L1TxTypes.Finalization,
-                recipe.headNativeScript.address(recipe.network)
+                recipe.headNativeScript.mkAddress(recipe.network)
               )
             )
         )

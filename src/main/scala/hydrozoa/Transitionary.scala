@@ -8,13 +8,12 @@ import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
+import hydrozoa.lib.tx.DiffHandler
 import hydrozoa.{Address, *}
 import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
-import scala.collection.immutable.SortedMap
-import scala.language.implicitConversions
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -30,6 +29,9 @@ import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
+
+import scala.collection.immutable.SortedMap
+import scala.language.implicitConversions
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
@@ -519,3 +521,22 @@ def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
     }
 
 }
+
+/** A diff handler for [[LowLevelTxBalancer]] that simply reports the difference as a
+  * Left(CantBalance(diff)). Note that this handler returns left _even if the diff is zero_.
+  *
+  * This is a useful hack for doing two things:
+  *
+  *   - Speculative balancing, where you're trying to determine what the minimum size of an _input_
+  *     would need to be
+  *   - Getting out the balance as seen by the diff handler
+  */
+def reportDiffHandler: DiffHandler = (diff, _) => Left(CantBalance(diff))
+
+/** A diff handler for [[LowLevelTxBalancer]] that only succeeds if the transaction is pre-balanced,
+  * otherwise returning a Left(CantBalance(diff)).
+  *
+  * @return
+  */
+def prebalancedDiffHandler: DiffHandler =
+    (diff, tx) => if diff == 0 then Right(tx) else Left(CantBalance(diff))
