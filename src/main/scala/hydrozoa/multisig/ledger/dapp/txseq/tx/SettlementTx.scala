@@ -59,7 +59,7 @@ object SettlementTx {
         import State.Fields.*
 
         sealed trait HasFirstRolloutTxPartial {
-            def firstRolloutTxPartial: RolloutTx.Builder.State
+            def firstRolloutTxPartial: RolloutTx.Builder.PartialResult.NeedsInput.FirstOrOnly
         }
 
         enum Result extends State.Fields.HasDepositsPartition:
@@ -84,16 +84,17 @@ object SettlementTx {
             override val txBuilderContext: TransactionBuilder.Context,
             override val absorbedDeposits: Queue[DepositUtxo],
             override val remainingDeposits: Queue[DepositUtxo]
-        ) extends HasTxBuilderContext, HasDepositsPartition
+        ) extends HasTxBuilderContext,
+              HasDepositsPartition
 
         object State {
             type Status = Status.InProgress | Status.Finished
-            
+
             object Status {
                 type InProgress
                 type Finished
             }
-            
+
             object Fields {
                 sealed trait HasTxBuilderContext {
                     def txBuilderContext: TransactionBuilder.Context
@@ -130,7 +131,7 @@ object SettlementTx {
         case WithPayouts(
             override val majorVersion: Int,
             override val deposits: Queue[DepositUtxo],
-            override val firstRolloutTxPartial: RolloutTx.Builder.State.FirstOrOnly,
+            override val firstRolloutTxPartial: RolloutTx.Builder.PartialResult.NeedsInput.FirstOrOnly,
             override val treasuryUtxo: TreasuryUtxo,
             override val headNativeScript: HeadMultisigScript,
             override val headNativeScriptReferenceInput: TransactionUnspentOutput,
@@ -205,7 +206,7 @@ object SettlementTx {
             def pessimisticRolloutOutput(thisBuilder: Builder.WithPayouts): TxOutput.Babbage =
                 TxOutput.Babbage(
                   address = headNativeScript.mkAddress(env.network),
-                  value = thisBuilder.firstRolloutTxPartial.inputValueRequired,
+                  value = thisBuilder.firstRolloutTxPartial.inputValueNeeded,
                   datumOption = None,
                   scriptRef = None
                 )
@@ -236,7 +237,7 @@ object SettlementTx {
 
             lazy val treasuryOutputValue: Value = Builder.this match {
                 case thisBuilder: Builder.WithPayouts =>
-                    treasuryUtxo.value - thisBuilder.firstRolloutTxPartial.inputValueRequired
+                    treasuryUtxo.value - thisBuilder.firstRolloutTxPartial.inputValueNeeded
                 case _ => treasuryUtxo.value
             }
 

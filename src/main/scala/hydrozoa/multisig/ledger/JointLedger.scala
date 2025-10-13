@@ -32,8 +32,5 @@ final case class JointLedger()(
   * them to keep them aligned.
   */
 object JointLedger {
-
-    type PayoutObligation
-
     final case class CompleteBlockError() extends Throwable
 }
