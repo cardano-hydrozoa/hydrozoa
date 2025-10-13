@@ -44,6 +44,7 @@ object Metadata {
         case "Settlement"      => Some(Settlement)
         case _                 => None
 
+    // TODO: Also include the head instance ID
     def apply(txType: L1TxTypes, headAddress: ShelleyAddress): AuxiliaryData = {
         MD(
           Map(
