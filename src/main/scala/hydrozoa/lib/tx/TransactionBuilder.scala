@@ -1925,7 +1925,6 @@ enum SomeBuildError:
             s"Insufficient funds: need $required more"
         case ValidationError(e) =>
             s"Transaction validation failed: ${e.getClass.getSimpleName} - ${e.getMessage}"
-
     }
 
 ////////////////////////////////////////////////////////////
