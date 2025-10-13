@@ -6,6 +6,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
@@ -23,18 +24,6 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.TxBalancingError
-import cats.data.NonEmptyList
-import cats.syntax.all.*
-import hydrozoa.lib.tx.BuildError
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-
-import scala.collection.immutable.SortedMap
-import io.bullet.borer.Cbor
-import monocle.syntax.all.*
-import org.scalacheck.Gen.choose
-import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
-import test.TestPeer.*
 import test.*
 import test.TestPeer.*
 

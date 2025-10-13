@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{ExpectedSigner, NativeScriptWitness, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{NativeScriptWitness, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token
@@ -12,7 +12,6 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}

@@ -1,24 +1,23 @@
 package hydrozoa.multisig.ledger.dapp.txseq.tx
 
-import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
+import hydrozoa.lib.tx.SomeBuildError.ValidationError
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{BuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError, BuilderContext as ScalusBuilderContext}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.STS.Validator
-
-import scala.annotation.tailrec
+import scalus.cardano.ledger.txbuilder.Environment
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -125,7 +124,7 @@ object SettlementTx {
     ) {
         import Builder.*
 
-        type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
+        type Error = SomeBuildError | RolloutFeesWithoutRolloutOutputError.type
 
         case object RolloutFeesWithoutRolloutOutputError
 
@@ -356,13 +355,13 @@ object SettlementTx {
                 def build(
                     steps: List[TransactionBuilderStep]
                 ): Either[Error, TransactionBuilder.Context] =
-                    TransactionBuilder.build(env.network, steps).left.map(StepError(_))
+                    TransactionBuilder.build(env.network, steps)
 
                 def modify(
                     ctx: TransactionBuilder.Context,
                     steps: List[TransactionBuilderStep]
                 ): Either[Error, TransactionBuilder.Context] =
-                    TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
+                    TransactionBuilder.modify(ctx, steps)
 
                 // Avoid naming methods [[finalize]] because it is a built-in Java method of [[Object]].
                 // It's deprecated, but it still exists for now.
@@ -388,13 +387,6 @@ object SettlementTx {
                               evaluator = env.evaluator,
                               validators = validators
                             )
-                            .left
-                            .map({
-                                case balanceError: TxBalancingError =>
-                                    BalancingError(balanceError)
-                                case validationError: TransactionException =>
-                                    ValidationError(validationError)
-                            })
                     } yield finalized
                 }
 

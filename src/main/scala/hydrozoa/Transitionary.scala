@@ -14,6 +14,8 @@ import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+import scala.collection.immutable.SortedMap
+import scala.language.implicitConversions
 import scalus.bloxbean.Interop
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -23,15 +25,13 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
-
-import scala.collection.immutable.SortedMap
-import scala.language.implicitConversions
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing
