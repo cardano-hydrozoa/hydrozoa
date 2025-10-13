@@ -1916,7 +1916,7 @@ enum SomeBuildError:
             s"Step processing error: ${e.getClass.getSimpleName} - ${e.explain}"
         case BalancingError(TxBalancingError.Failed(unknown)) => unknown match {
           case psee: PlutusScriptEvaluationException =>
-            s"Script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs.mkString("<CR>")}"
+            s"Plutus script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs.mkString(" <CR> ")}"
           case other => s"Unexpected exception during balancing: ${other.getMessage}"
         }
         case BalancingError(TxBalancingError.CantBalance(lastDiff)) =>
