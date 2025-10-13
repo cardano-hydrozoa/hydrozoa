@@ -208,7 +208,7 @@ object RolloutTx {
 
             lazy val rolloutTxMetadata: AuxiliaryData =
                 MD(
-                  MD.L1TxTypes.Settlement,
+                  MD.L1TxTypes.Rollout,
                   headAddress = headNativeScript.mkAddress(env.network)
                 )
 
