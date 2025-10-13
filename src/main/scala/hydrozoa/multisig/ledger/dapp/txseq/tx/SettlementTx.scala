@@ -43,6 +43,7 @@ enum SettlementTx extends Tx {
         override val treasurySpent: TreasuryUtxo,
         override val treasuryProduced: TreasuryUtxo,
         override val depositsSpent: Queue[DepositUtxo],
+        // TODO: Might be an option
         override val rolloutProduced: RolloutUtxo,
         override val tx: Transaction
     ) extends SettlementTx, RolloutTx.HasRolloutProduced
@@ -60,6 +61,7 @@ object SettlementTx {
 
         type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
 
+        // TODO: Obsolete?
         case object RolloutFeesWithoutRolloutOutputError
 
         sealed trait HasFirstRolloutTxPartial {
