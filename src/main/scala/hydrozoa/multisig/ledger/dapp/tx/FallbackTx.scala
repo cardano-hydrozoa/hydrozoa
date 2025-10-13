@@ -41,7 +41,7 @@ object FallbackTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, FallbackTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, FallbackTx] = {
         //////////////////////////////////////
         // Pre-processing
         val multisigDatum: TreasuryUtxo.Datum = recipe.treasuryUtxo.datum
@@ -137,8 +137,6 @@ object FallbackTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(BuildError.StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   recipe.protocolParams,

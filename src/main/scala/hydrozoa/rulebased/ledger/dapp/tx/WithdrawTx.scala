@@ -2,11 +2,10 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.BuildError.StepError
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{BuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
@@ -49,7 +48,7 @@ object WithdrawTx {
         case InsufficientTreasuryFunds(negativeDiff: Value)
         case NoWithdrawals
 
-    def build(recipe: Recipe): Either[BuildError | WithdrawalTxError, WithdrawTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError | WithdrawalTxError, WithdrawTx] = {
         import WithdrawalTxError.*
 
         for {
@@ -90,7 +89,7 @@ object WithdrawTx {
         recipe: Recipe,
         treasuryDatum: ResolvedDatum,
         residualValue: Value
-    ): Either[BuildError, WithdrawTx] = {
+    ): Either[SomeBuildError, WithdrawTx] = {
         import recipe.*
 
         val proofBS = ByteString.fromArray(IArray.genericWrapArray(recipe.membershipProof).toArray)
@@ -138,8 +137,6 @@ object WithdrawTx {
                           // Outputs for withdrawals
                           withdrawalOutputs.map(Send(_))
                 )
-                .left
-                .map(StepError(_))
 
             finalized <- context
                 .finalizeContext(

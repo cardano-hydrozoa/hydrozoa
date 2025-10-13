@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.lib.tx.BuildError
+import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
@@ -140,7 +140,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
 
         InitializationTx.build(recipeLessThanMinAda) match {
             case Left(
-                  BuildError.ValidationError(
+                  SomeBuildError.ValidationError(
                     e: TransactionException.OutputsHaveNotEnoughCoinsException
                   )
                 ) =>
@@ -176,7 +176,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
 
         InitializationTx.build(recipe) match {
             case Left(
-                  BuildError.BalancingError(
+                  SomeBuildError.BalancingError(
                     e: TxBalancingError.InsufficientFunds
                   )
                 ) =>

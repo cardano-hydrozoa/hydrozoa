@@ -1,17 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
-import hydrozoa.lib.tx.BuildError.StepError
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{
-    BuildError,
-    ExpectedSigner,
-    NativeScriptWitness,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.{ExpectedSigner, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -44,7 +36,7 @@ object FinalizationTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, FinalizationTx] = {
         val beaconTokenBurn: TransactionBuilderStep.Mint =
             TransactionBuilderStep.Mint(
               recipe.headNativeScript.policyId,
@@ -91,8 +83,6 @@ object FinalizationTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   protocolParams = recipe.protocolParams,

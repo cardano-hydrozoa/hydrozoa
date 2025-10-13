@@ -2,11 +2,10 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.BuildError.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{BuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.*
@@ -18,7 +17,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.prelude.Option.None as SNone
 
@@ -48,7 +46,7 @@ object TallyTx {
         case MalformedVoteDatum(utxo: UtxoIdL1, msg: String)
         case IncompatibleVotes(continuing: (Key, Link), removed: (Key, Link))
 
-    def build(recipe: Recipe): Either[BuildError | TallyTxError, TallyTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError | TallyTxError, TallyTx] = {
         for {
             continuingVoteDatum <- extractVoteDatum(recipe.continuingVoteUtxo)
             removedVoteDatum <- extractVoteDatum(recipe.removedVoteUtxo)
@@ -99,7 +97,7 @@ object TallyTx {
     private def buildTallyTx(
         recipe: Recipe,
         outputDatum: VoteDatum
-    ): Either[BuildError, TallyTx] = {
+    ): Either[SomeBuildError, TallyTx] = {
         import recipe.* 
         
         val outputValue = continuingVoteUtxo.utxo.output.value +
@@ -147,8 +145,6 @@ object TallyTx {
                     ValidityEndSlot(validityEndSlot)
                   )
                 )
-                .left
-                .map(StepError(_))
 
             finalized <- context
                 .finalizeContext(

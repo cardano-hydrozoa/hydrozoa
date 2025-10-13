@@ -1,9 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.tx.BuildError.StepError
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.{BuildError, PubKeyWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -86,7 +85,7 @@ object DepositTx {
 
     }
 
-    def build(recipe: Recipe): Either[BuildError, DepositTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, DepositTx] = {
         val depositValue: Value =
             Value(coin = recipe.depositAmount)
 
@@ -121,8 +120,6 @@ object DepositTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   recipe.protocolParams,

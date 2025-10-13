@@ -2,8 +2,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.SomeBuildError.*
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -50,7 +50,7 @@ object RefundTx {
             validityStartSlot: Slot
         )
 
-        def build(recipe: Recipe): Either[BuildError, PostDated] = {
+        def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
             /////////////////////////////////////////////////////////////////////
             // Data extraction
 
@@ -97,8 +97,6 @@ object RefundTx {
             for {
                 unbalanced <- TransactionBuilder
                     .build(recipe.network, steps)
-                    .left
-                    .map(StepError(_))
                 finalized <- unbalanced
                     .finalizeContext(
                       recipe.protocolParams,

@@ -4,14 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{
-    BuildError,
-    ExpectedSigner,
-    NativeScriptWitness,
-    PubKeyWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.{ExpectedSigner, NativeScriptWitness, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.Token.mkHeadTokenName
@@ -25,7 +18,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
 final case class InitializationTx(
@@ -77,7 +69,7 @@ object InitializationTx {
         txSerialized: Array[Byte]
     ): Either[ParseError, InitializationTx] = ???
 
-    def build(recipe: Recipe): Either[BuildError, InitializationTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, InitializationTx] = {
         ////////////////////////////////////////////////////////////
         // Data extraction
 
@@ -145,8 +137,6 @@ object InitializationTx {
                   recipe.network,
                   steps
                 )
-                .left
-                .map(BuildError.StepError(_))
 
             finalized <- unbalanced
                 .finalizeContext(

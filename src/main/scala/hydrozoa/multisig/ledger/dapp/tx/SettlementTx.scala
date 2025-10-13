@@ -42,7 +42,7 @@ object SettlementTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, SettlementTx] = {
         //////////////////////////////////////////////////////
         // Data extraction
 
@@ -116,8 +116,6 @@ object SettlementTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(BuildError.StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   recipe.protocolParams,

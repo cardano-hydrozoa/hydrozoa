@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{BuildError, ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{ExpectedSigner, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
@@ -19,7 +19,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.prelude.List as SList
 // import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
@@ -50,7 +49,7 @@ object VoteTx {
         case InvalidVoteDatum(msg: String)
         case VoteAlreadyCast
 
-    def build(recipe: Recipe): Either[BuildError | VoteTxError, VoteTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError | VoteTxError, VoteTx] = {
         import VoteTxError.*
 
         // Extract current vote datum from the UTXO
@@ -87,8 +86,7 @@ object VoteTx {
     private def buildVoteTx(
         recipe: Recipe,
         datumWithVote: VoteDatum
-    ): Either[BuildError, VoteTx] = {
-        import BuildError.*
+    ): Either[SomeBuildError, VoteTx] = {
 
         // Get the TransactionInput and TransactionOutput from VoteUtxo
         val (voteInput, voteOutput) =
@@ -146,8 +144,6 @@ object VoteTx {
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
-                .left
-                .map(StepError(_))
 
             // _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 

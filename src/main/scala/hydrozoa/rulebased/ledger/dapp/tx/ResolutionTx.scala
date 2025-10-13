@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{BuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
@@ -19,7 +19,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 
 final case class ResolutionTx(
@@ -49,7 +48,7 @@ object ResolutionTx {
         case TalliedNoVote
         case TreasuryAlreadyResolved
 
-    def build(recipe: Recipe): Either[BuildError | ResolutionTxError, ResolutionTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError | ResolutionTxError, ResolutionTx] = {
 
         for {
             voteDetails <- extractVoteDetails(recipe.talliedVoteUtxo)
@@ -116,8 +115,7 @@ object ResolutionTx {
     private def buildResolutionTx(
         recipe: Recipe,
         resolvedTreasuryDatum: RuleBasedTreasuryDatum
-    ): Either[BuildError, ResolutionTx] = {
-        import BuildError.*
+    ): Either[SomeBuildError, ResolutionTx] = {
         import recipe.*
         
         val voteRedeemer = DisputeRedeemer.Resolve
@@ -163,8 +161,6 @@ object ResolutionTx {
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
-                .left
-                .map(StepError(_))
 
             finalized <- context
                 .finalizeContext(
