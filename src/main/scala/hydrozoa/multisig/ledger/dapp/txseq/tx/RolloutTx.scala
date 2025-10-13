@@ -17,7 +17,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.ledger.txbuilder.{BuilderContext, Environment, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError}
 
 final case class ROTx(
     rolloutSpent: RolloutUtxo,
@@ -34,7 +34,7 @@ object RolloutTx {
     ) {
 
         import hydrozoa.lib.tx.*
-        import hydrozoa.lib.tx.BuildError.*
+        import hydrozoa.lib.tx.SomeBuildError.*
         import hydrozoa.lib.tx.TransactionBuilderStep.*
 
         enum IncoherenceError:
@@ -61,14 +61,14 @@ object RolloutTx {
             toWithdrawReversed: NonEmptyList[Babbage],
             // A way to make a settlement transaction once it is given the value for the rollout utxo.
             // The Right return value contains the settlementTx and the transaction input of the first rollout utxo
-            mkSettlement: Coin => Either[BuildError, (SettlementTx, TransactionInput)]
+            mkSettlement: Coin => Either[SomeBuildError, (SettlementTx, TransactionInput)]
         ): Either[
-          BuildError | IncoherenceError,
+          SomeBuildError | IncoherenceError,
           (SettlementTx, NonEmptyList[ROTx])
         ] = {
 
             type RolloutM[A] =
-                StateT[[X] =>> Either[BuildError | IncoherenceError, X], NonEmptyList[
+                StateT[[X] =>> Either[SomeBuildError | IncoherenceError, X], NonEmptyList[
                   PartialRolloutInfo
                 ], A]
 
@@ -80,23 +80,14 @@ object RolloutTx {
                 // The state is a sequence that we _prepend_ partial res's to. The final sequence reflects the
                 // correct ordering for the rollouts
 
-                def pure0[A] =
-                    StateT.pure[[X] =>> Either[BuildError | IncoherenceError, X], NonEmptyList[
-                      PartialRolloutInfo
-                    ], A]
+                
 
-                def liftF0[A] =
-                    StateT.liftF[[X] =>> Either[BuildError | IncoherenceError, X], NonEmptyList[
-                      PartialRolloutInfo
-                    ], A]
+                
 
-                def modify0 =
-                    StateT.modify[[X] =>> Either[BuildError | IncoherenceError, X], NonEmptyList[
-                      PartialRolloutInfo
-                    ]]
+                
 
                 def get0 =
-                    StateT.get[[X] =>> Either[BuildError | IncoherenceError, X], NonEmptyList[
+                    StateT.get[[X] =>> Either[SomeBuildError | IncoherenceError, X], NonEmptyList[
                       PartialRolloutInfo
                     ]]
 
@@ -128,7 +119,7 @@ object RolloutTx {
             }
 
             type RolloutKleisli =
-                Kleisli[[X] =>> Either[BuildError, X], TransactionInput, ROTx]
+                Kleisli[[X] =>> Either[SomeBuildError, X], TransactionInput, ROTx]
 
             for {
                 finalRollout <- mockRollout(
@@ -170,23 +161,23 @@ object RolloutTx {
                 // The type signature for map accumulate is
                 // def mapAccumulate[S, B](init: S)(f: (S, A) => (S, B)): (S, F[B]) = (...)
                 // where
-                // S = Either[BuildError, RolloutTx]
+                // S = Either[SomeBuildError, RolloutTx]
                 // A = RolloutKleisli
-                // B = Either[BuildError, RolloutTx]
+                // B = Either[SomeBuildError, RolloutTx]
                 // F = NonEmptyList
                 //
                 // So we get out the F[B] (a non-empty list of Eithers), call .sequence, and we're done.
                 //
                 // P.S.: I think this is a kleisli endomorphism scan where, basically:
                 //   type Kendo[F[_], A] = Kleisli[[X] =>> F[X], A ,A]
-                //   type RolloutKendo = Kendo[[X] =>> Either[BuildError, X], RolloutTx]
+                //   type RolloutKendo = Kendo[[X] =>> Either[SomeBuildError, X], RolloutTx]
                 // and the scan function is >=>. Writing it in terms of a kendo would require massaging the types
                 // a bit more.
                 rolloutTxs <- kleislis
                     .mapAccumulate(Right(firstRolloutTx))(
                       (
                           ePreviousRolloutTx: Either[
-                            BuildError | IncoherenceError,
+                            SomeBuildError | IncoherenceError,
                             ROTx
                           ],
                           k: RolloutKleisli
@@ -214,7 +205,7 @@ object RolloutTx {
             toWithdrawReversed: Seq[Babbage],
             // If 0, then this is the terminal rollout.
             nextRolloutCoin: Coin
-        ): Either[BuildError | IncoherenceError, PartialRolloutInfo] = {
+        ): Either[SomeBuildError | IncoherenceError, PartialRolloutInfo] = {
 
             val nativeScriptWitness =
                 NativeScriptWitness(NativeScriptAttached, headNativeScript.requiredSigners)
@@ -273,8 +264,6 @@ object RolloutTx {
                 // These steps never change
                 staticCtx <- TransactionBuilder
                     .build(env.network, List(referenceHNS, setAuxData))
-                    .left
-                    .map(StepError(_))
 
                 // ===================================
                 // Mock Rollout
@@ -284,15 +273,11 @@ object RolloutTx {
                 // and try to fit all withdrawals with this in mind.
                 withRollouts <- TransactionBuilder
                     .modify(staticCtx, sendNextRollout.toList.appended(mockPreviousRollout0Ada))
-                    .left
-                    .map(StepError(_))
 
                 withdrawals: Withdrawals <- Right(???) // addWithdrawals
 
                 withWithdrawals <- TransactionBuilder
                     .modify(withRollouts, withdrawals.withdrawNow.map(Send(_)))
-                    .left
-                    .map(StepError(_))
 
                 requiredAdaForPreviousRollout <- withWithdrawals.finalizeContext(
                   env.protocolParams,
@@ -301,7 +286,7 @@ object RolloutTx {
                   // Validators are empty since we're only looking at balance.
                   validators = List.empty
                 ) match
-                    case Left(CantBalance(diff)) => Right(diff)
+                    case Left(BalancingError(CantBalance(diff))) => Right(diff)
                     // Not possible -- our diff handler only returns CantBalance
                     // and we don't run any validators
                     case _ => Left(IncoherenceError.IncoherentBalancing)
@@ -329,8 +314,6 @@ object RolloutTx {
                                   .appended(spendRealRolloutInput)
                                   ++ sendNextRollout.toList
                             )
-                            .left
-                            .map(StepError(_))
                         finalized <-
                             unbalanced
                                 .finalizeContext(
@@ -339,13 +322,6 @@ object RolloutTx {
                                   evaluator = env.evaluator,
                                   validators = validators
                                 )
-                                .left
-                                .map({
-                                    case balanceError: TxBalancingError =>
-                                        BalancingError(balanceError)
-                                    case validationError: TransactionException =>
-                                        ValidationError(validationError)
-                                })
 
                         rolloutProducedTI = TransactionInput(
                           finalized.transaction.id,
@@ -368,7 +344,7 @@ object RolloutTx {
 
         case class PartialRolloutInfo(
             // NOTE: The context MUST have the rollout utxo as the final output.
-            completeBuild: TransactionInput => Either[BuildError, ROTx],
+            completeBuild: TransactionInput => Either[SomeBuildError, ROTx],
             requiredCoinForPreviousRolloutUtxO: Coin,
             remainingWithdrawalsReversed: Seq[Babbage]
         )

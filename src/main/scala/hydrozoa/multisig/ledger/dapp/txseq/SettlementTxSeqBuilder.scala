@@ -1,7 +1,7 @@
 //package hydrozoa.multisig.ledger.dapp.txseq
 //
 //import cats.implicits.*
-//import hydrozoa.lib.tx.BuildError
+//import hydrozoa.lib.tx.SomeBuildError
 //import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Recipe
 //import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, SettlementTx}
 //import hydrozoa.multisig.ledger.dapp.txseq.tx as newtx
@@ -28,7 +28,7 @@
 //      *   the recipe for building the settlement/rollout tx sequence
 //      * @return
 //      */
-//    def build(args: Recipe): Either[BuildError, Result] = for {
+//    def build(args: Recipe): Either[SomeBuildError, Result] = for {
 //        unfolded <- unfold(args)
 //        (i1, deposits) = unfolded
 //        i2 = traverseFee(i1)
@@ -52,7 +52,7 @@
 //    /** @param args
 //      * @return
 //      */
-//    def unfold(args: Recipe): Either[BuildError, (UnfoldResult, newtx.SettlementTx.Deposits)] =
+//    def unfold(args: Recipe): Either[SomeBuildError, (UnfoldResult, newtx.SettlementTx.Deposits)] =
 //        for {
 //            // Build a settlementPartialResult with the settlement tx (i.e. its building context)
 //            // as big as it can be

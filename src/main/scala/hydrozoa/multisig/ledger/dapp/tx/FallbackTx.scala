@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -11,7 +10,6 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
@@ -21,7 +19,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.TxBalancingError
 import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.List as SList
 
@@ -45,7 +42,7 @@ object FallbackTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, FallbackTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, FallbackTx] = {
         //////////////////////////////////////
         // Pre-processing
         val multisigDatum: TreasuryUtxo.Datum = recipe.treasuryUtxo.datum
@@ -140,8 +137,6 @@ object FallbackTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(BuildError.StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   recipe.protocolParams,
@@ -153,12 +148,6 @@ object FallbackTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
         } yield FallbackTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
 
     }

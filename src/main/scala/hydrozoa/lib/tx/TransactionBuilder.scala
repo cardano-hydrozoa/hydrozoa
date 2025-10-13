@@ -9,12 +9,14 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
 import hydrozoa.lib.tx.Datum.DatumValue
+import hydrozoa.lib.tx.SomeBuildError.{BalancingError, SomeStepError, ValidationError, *}
+import hydrozoa.lib.tx.StepError.*
 import hydrozoa.lib.tx.TransactionBuilder.{Operation, WitnessKind}
-import hydrozoa.lib.tx.TxBuildError.*
 import io.bullet.borer.Cbor
 import monocle.*
 import monocle.syntax.all.*
@@ -35,9 +37,9 @@ type DiffHandler = (Long, Transaction) => Either[TxBalancingError, Transaction]
 import scalus.cardano.ledger.utils.{AllResolvedScripts, MinCoinSizedTransactionOutput}
 import scalus.|>
 
-// -----------------------------------------------------------------------------
+// ===================================
 // Tx Builder steps
-// -----------------------------------------------------------------------------
+// ===================================
 
 sealed trait TransactionBuilderStep
 
@@ -236,13 +238,13 @@ case class ExpectedSigner(hash: AddrKeyHash)
 object TransactionBuilder:
 
     /** Builder is a state monad over Context. */
-    private type BuilderM[A] = StateT[[X] =>> Either[TxBuildError, X], Context, A]
+    private type BuilderM[A] = StateT[[X] =>> Either[StepError, X], Context, A]
 
     // Helpers to cut down on type signature noise
-    private def pure0[A] = StateT.pure[[X] =>> Either[TxBuildError, X], Context, A]
-    private def liftF0[A] = StateT.liftF[[X] =>> Either[TxBuildError, X], Context, A]
-    private def modify0 = StateT.modify[[X] =>> Either[TxBuildError, X], Context]
-    private def get0 = StateT.get[[X] =>> Either[TxBuildError, X], Context]
+    private def pure0[A] = StateT.pure[[X] =>> Either[StepError, X], Context, A]
+    private def liftF0[A] = StateT.liftF[[X] =>> Either[StepError, X], Context, A]
+    private def modify0 = StateT.modify[[X] =>> Either[StepError, X], Context]
+    private def get0 = StateT.get[[X] =>> Either[StepError, X], Context]
 
     /** Represents different types of authorized operations (except the spending, which goes
       * separately).
@@ -446,13 +448,24 @@ object TransactionBuilder:
             diffHandler: DiffHandler,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
-        ): Either[TransactionException | TxBalancingError, Context] =
+        ): Either[SomeBuildError, Context] =
+            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+
             for {
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
-                // _ = println(HexUtil.encodeHexString(balancedCtx.transaction.toCbor))
+                .left
+                  .map(BalancingError(_))
+                    //.map({
+                    //    // TODO: split/update `case Failed(cause: Throwable)`, remove the cast
+                    //    case TxBalancingError.Failed(cause) => EvaluationError(cause.asInstanceOf[PlutusScriptEvaluationException])
+                    //    case e @ _ => BalancingError(e)
+                    //})
+
                 validatedCtx <- balancedCtx.validate(validators, protocolParams)
+                    .left.map(ValidationError(_))
+
             } yield validatedCtx
     }
 
@@ -475,7 +488,7 @@ object TransactionBuilder:
                     case None =>
                         liftF0(
                           Left(
-                            TxBuildError.ResolvedUtxosIncoherence(
+                            ResolvedUtxosIncoherence(
                               input = utxo.input,
                               existingOutput = ctx.resolvedUtxos.utxos(utxo.input),
                               incoherentOutput = utxo.output
@@ -535,14 +548,14 @@ object TransactionBuilder:
     def build(
         network: Network,
         steps: Seq[TransactionBuilderStep]
-    ): Either[TxBuildError, Context] =
+    ): Either[SomeBuildError, Context] =
         modify(Context.empty(network), steps)
 
     /** Modify a transaction within a context. */
     def modify(
         ctx: Context,
         steps: Seq[TransactionBuilderStep]
-    ): Either[TxBuildError, Context] = {
+    ): Either[SomeBuildError, Context] = {
         val modifyBuilderM: BuilderM[Unit] = {
             for {
                 _ <- processSteps(steps)
@@ -562,7 +575,7 @@ object TransactionBuilder:
                 _ <- modify0(Focus[Context](_.transaction).replace(res))
             } yield ()
         }
-        modifyBuilderM.run(ctx).map(_._1)
+        modifyBuilderM.run(ctx).map(_._1).left.map(SomeStepError(_))
     }
 
     trait HasBuilderEffect[A]:
@@ -636,10 +649,10 @@ object TransactionBuilder:
                         case kh: ShelleyPaymentPart.Key => Right(kh.hash)
                         case _: ShelleyPaymentPart.Script =>
                             Left(
-                              TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo)
+                              WrongOutputType(WitnessKind.KeyBased, utxo)
                             )
                     }
-                case _ => Left(TxBuildError.WrongOutputType(WitnessKind.KeyBased, utxo))
+                case _ => Left(WrongOutputType(WitnessKind.KeyBased, utxo))
             })
 
         def getPaymentScriptHash(address: Address): BuilderM[ScriptHash] =
@@ -649,13 +662,12 @@ object TransactionBuilder:
                         case s: ShelleyPaymentPart.Script => Right(s.hash)
                         case _: ShelleyPaymentPart.Key =>
                             Left(
-                              TxBuildError
-                                  .WrongOutputType(WitnessKind.ScriptBased, utxo)
+                              WrongOutputType(WitnessKind.ScriptBased, utxo)
                             )
 
                     }
                 case _ =>
-                    Left(TxBuildError.WrongOutputType(WitnessKind.ScriptBased, utxo))
+                    Left(WrongOutputType(WitnessKind.ScriptBased, utxo))
             })
 
         for {
@@ -721,20 +733,20 @@ object TransactionBuilder:
             _ <- utxo.output.datumOption match {
                 case None =>
                     liftF0(
-                      Left(TxBuildError.DatumIsMissing(utxo))
+                      Left(DatumIsMissing(utxo))
                     )
                 case Some(DatumOption.Inline(_)) =>
                     datum match {
                         case Datum.DatumInlined => pure0(())
                         case Datum.DatumValue(_) =>
                             liftF0(
-                              Left(TxBuildError.DatumValueForUtxoWithInlineDatum(utxo, datum))
+                              Left(DatumValueForUtxoWithInlineDatum(utxo, datum))
                             )
                     }
                 case Some(DatumOption.Hash(datumHash)) =>
                     datum match {
                         case Datum.DatumInlined =>
-                            liftF0(Left(TxBuildError.DatumWitnessNotProvided(utxo)))
+                            liftF0(Left(DatumWitnessNotProvided(utxo)))
                         case Datum.DatumValue(providedDatum) =>
                             // TODO: is that correct? Upstream Data.dataHash extension?
                             val computedHash: DataHash =
@@ -758,7 +770,7 @@ object TransactionBuilder:
                             } else {
                                 liftF0(
                                   Left(
-                                    TxBuildError.IncorrectDatumHash(utxo, providedDatum, datumHash)
+                                    IncorrectDatumHash(utxo, providedDatum, datumHash)
                                   )
                                 )
                             }
@@ -797,7 +809,7 @@ object TransactionBuilder:
             // Not allowed to mint 0
             _ <-
                 if amount == 0
-                then liftF0(Left(TxBuildError.CannotMintZero(scriptHash, assetName)))
+                then liftF0(Left(CannotMintZero(scriptHash, assetName)))
                 else pure0(())
 
             // Since we allow monoidal mints, only the final redeemer is kept. We have to remove the old redeemer
@@ -986,7 +998,7 @@ object TransactionBuilder:
                       .refocus(_.fee)
                       .replace(fee)
                 )
-            case nonZero => liftF0(Left(TxBuildError.FeeAlreadySet(nonZero)))
+            case nonZero => liftF0(Left(FeeAlreadySet(nonZero)))
         }
     } yield ()
 
@@ -999,7 +1011,7 @@ object TransactionBuilder:
         currentValidityStartSlot = ctx.transaction.body.value.validityStartSlot
         _ <- currentValidityStartSlot match {
             case Some(existingSlot) =>
-                liftF0(Left(TxBuildError.ValidityStartSlotAlreadySet(existingSlot)))
+                liftF0(Left(ValidityStartSlotAlreadySet(existingSlot)))
             case None =>
                 modify0(
                   unsafeCtxBodyL
@@ -1018,7 +1030,7 @@ object TransactionBuilder:
         currentValidityEndSlot = ctx.transaction.body.value.ttl
         _ <- currentValidityEndSlot match {
             case Some(existingSlot) =>
-                liftF0(Left(TxBuildError.ValidityEndSlotAlreadySet(existingSlot)))
+                liftF0(Left(ValidityEndSlotAlreadySet(existingSlot)))
             case None =>
                 modify0(
                   unsafeCtxBodyL
@@ -1056,17 +1068,17 @@ object TransactionBuilder:
                 if !utxo.output.value.assets.isEmpty
                 then
                     liftF0(
-                      Left(TxBuildError.CollateralWithTokens(utxo))
+                      Left(CollateralWithTokens(utxo))
                     )
                 else pure0(())
             addr: ShelleyAddress <- utxo.output.address match {
                 case sa: ShelleyAddress  => pure0(sa)
                 case by: ByronAddress    => liftF0(Left(ByronAddressesNotSupported(by)))
-                case stake: StakeAddress => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
+                case stake: StakeAddress => liftF0(Left(CollateralNotPubKey(utxo)))
             }
             _ <- addr.payment match {
                 case ShelleyPaymentPart.Key(_: AddrKeyHash) => pure0(())
-                case _ => liftF0(Left(TxBuildError.CollateralNotPubKey(utxo)))
+                case _ => liftF0(Left(CollateralNotPubKey(utxo)))
             }
         } yield ()
 
@@ -1117,7 +1129,7 @@ object TransactionBuilder:
                     case (Credential.KeyHash(_), witness: TwoArgumentPlutusScriptWitness) =>
                         liftF0(
                           Left(
-                            TxBuildError.UnneededDeregisterWitness(
+                            UnneededDeregisterWitness(
                               StakeCredential(credential),
                               witness
                             )
@@ -1126,7 +1138,7 @@ object TransactionBuilder:
                     case (Credential.KeyHash(_), witness: NativeScriptWitness) =>
                         liftF0(
                           Left(
-                            TxBuildError.UnneededDeregisterWitness(
+                            UnneededDeregisterWitness(
                               StakeCredential(credential),
                               witness
                             )
@@ -1136,7 +1148,7 @@ object TransactionBuilder:
                     case (Credential.ScriptHash(_), PubKeyWitness) =>
                         liftF0(
                           Left(
-                            TxBuildError.WrongCredentialType(
+                            WrongCredentialType(
                               Operation.CertificateOperation(cert),
                               WitnessKind.KeyBased,
                               credential
@@ -1298,11 +1310,11 @@ object TransactionBuilder:
                             case _: PubKeyWitness.type => pure0(credential)
                             case witness: TwoArgumentPlutusScriptWitness =>
                                 liftF0(
-                                  Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
+                                  Left(UnneededSpoVoteWitness(credential, witness))
                                 )
                             case witness: NativeScriptWitness =>
                                 liftF0(
-                                  Left(TxBuildError.UnneededSpoVoteWitness(credential, witness))
+                                  Left(UnneededSpoVoteWitness(credential, witness))
                                 )
                         }
                     case Voter.ConstitutionalCommitteeHotKey(credential) =>
@@ -1356,7 +1368,7 @@ object TransactionBuilder:
                             case _ =>
                                 liftF0(
                                   Left(
-                                    TxBuildError.WrongCredentialType(
+                                    WrongCredentialType(
                                       credAction,
                                       WitnessKind.KeyBased,
                                       cred
@@ -1424,7 +1436,7 @@ object TransactionBuilder:
         cred: Credential
     )(using hwk: HasWitnessKind[A]): BuilderM[Unit] = {
 
-        val wrongCredErr = TxBuildError.WrongCredentialType(action, hwk.witnessKind, cred)
+        val wrongCredErr = WrongCredentialType(action, hwk.witnessKind, cred)
 
         val result: BuilderM[Unit] = witness match {
             case PubKeyWitness =>
@@ -1492,7 +1504,7 @@ object TransactionBuilder:
 
         if (scriptHash != computedHash) {
             liftF0(
-              Left(TxBuildError.IncorrectScriptHash(script, scriptHash))
+              Left(IncorrectScriptHash(script, scriptHash))
             )
         } else {
             pure0(())
@@ -1512,7 +1524,7 @@ object TransactionBuilder:
                     ctx.resolvedUtxos.utxos
                   )
                   .left
-                  .map(_ => TxBuildError.ScriptResolutionError)
+                  .map(_ => ScriptResolutionError)
             )
             _ <-
                 if resolvedScripts.map(_.scriptHash).contains(scriptHash)
@@ -1520,7 +1532,7 @@ object TransactionBuilder:
                 else
                     liftF0(
                       Left(
-                        TxBuildError.AttachedScriptNotFound(scriptHash)
+                        AttachedScriptNotFound(scriptHash)
                       )
                     )
         } yield ()
@@ -1563,7 +1575,7 @@ object TransactionBuilder:
             _ <-
                 if (state.transaction.body.value.inputs.toSortedSet ++ state.transaction.body.value.referenceInputs.toSortedSet)
                         .contains(input)
-                then liftF0(Left(TxBuildError.InputAlreadyExists(input)))
+                then liftF0(Left(InputAlreadyExists(input)))
                 else pure0(())
         } yield ()
 
@@ -1629,31 +1641,32 @@ object TransactionBuilder:
                 case Some(network) => pure0(network)
                 case None =>
                     liftF0(
-                      Left(TxBuildError.ByronAddressesNotSupported(addr))
+                      Left(ByronAddressesNotSupported(addr))
                     )
             _ <-
                 if context.network != addrNetwork
                 then
                     liftF0(
-                      Left(TxBuildError.WrongNetworkId(addr))
+                      Left(WrongNetworkId(addr))
                     )
                 else pure0(())
         } yield ()
 
-// -------------------------------------------------------------------------
-// Errors
-// -------------------------------------------------------------------------
-sealed trait TxBuildError:
+// ===================================
+// Step processing errors
+// ===================================
+
+sealed trait StepError:
     def explain: String
 
-object TxBuildError {
-    case class Unimplemented(description: String) extends TxBuildError {
+object StepError {
+    case class Unimplemented(description: String) extends StepError {
         override def explain: String = s"$description is not yet implemented. If you need it, " +
             s"submit a request at $bugTrackerUrl."
     }
 
     // TODO: Remove this error and just use a nonzero type
-    case class CannotMintZero(scriptHash: ScriptHash, assetName: AssetName) extends TxBuildError {
+    case class CannotMintZero(scriptHash: ScriptHash, assetName: AssetName) extends StepError {
         override def explain: String =
             "You cannot pass a \"amount = zero\" to a mint step, but we recieved it for" +
                 s"(policyId, assetName) == ($scriptHash, $assetName)." +
@@ -1661,7 +1674,7 @@ object TxBuildError {
     }
 
     // TODO: more verbose error -- we'll need to pass more information from the assertion/step.
-    case class InputAlreadyExists(input: TransactionInput) extends TxBuildError {
+    case class InputAlreadyExists(input: TransactionInput) extends StepError {
         override def explain: String =
             s"The transaction input $input already exists in the transaction as " +
                 "either an input or reference input."
@@ -1671,7 +1684,7 @@ object TxBuildError {
         input: TransactionInput,
         existingOutput: TransactionOutput,
         incoherentOutput: TransactionOutput
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "The context's resolvedUtxos already contain an input associated with a different output." +
                 s"\nInput: $input" +
@@ -1679,18 +1692,18 @@ object TxBuildError {
                 s"\nIncoherent Output: $incoherentOutput"
     }
 
-    case class CollateralNotPubKey(utxo: TransactionUnspentOutput) extends TxBuildError {
+    case class CollateralNotPubKey(utxo: TransactionUnspentOutput) extends StepError {
         override def explain: String =
             s"The UTxO passed as a collateral input is not a PubKey UTxO. UTxO: $utxo"
     }
 
     // TODO: This error could probably be improved.
-    case class CannotExtractSignatures(step: TransactionBuilderStep) extends TxBuildError {
+    case class CannotExtractSignatures(step: TransactionBuilderStep) extends StepError {
         override def explain: String =
             s"Could not extract signatures via _.additionalSigners from $step"
     }
 
-    case class DatumIsMissing(utxo: TransactionUnspentOutput) extends TxBuildError {
+    case class DatumIsMissing(utxo: TransactionUnspentOutput) extends StepError {
         override def explain: String =
             "Given witness to spend an output requires a datum that is missing: $utxo"
     }
@@ -1699,7 +1712,7 @@ object TxBuildError {
         utxo: TransactionUnspentOutput,
         datum: Data,
         datumHash: DataHash
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain
             : String = "You provided a `DatumWitness` with a datum that does not match the datum hash present in a transaction output.\n " +
             s" Datum: $datum (CBOR: ${ByteString.fromArray(Cbor.encode(datum).toByteArray).toHex})\n  " +
@@ -1710,7 +1723,7 @@ object TxBuildError {
     case class IncorrectScriptHash(
         script: Script,
         hash: ScriptHash
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String = script match {
             case nativeScript: Script.Native =>
                 s"Provided script hash ($hash) does not match the provided native script ($nativeScript)"
@@ -1722,7 +1735,7 @@ object TxBuildError {
     case class WrongOutputType(
         expectedType: WitnessKind,
         utxo: TransactionUnspentOutput
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "The UTxO you provided requires no witness, because the payment credential of the address is a `PubKeyHash`. " +
                 s"UTxO: $utxo"
@@ -1732,19 +1745,19 @@ object TxBuildError {
         action: Operation,
         expectedType: WitnessKind,
         cred: Credential
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             s"${action.explain} ($action) requires a $expectedType witness: $cred"
     }
 
-    case class DatumWitnessNotProvided(utxo: TransactionUnspentOutput) extends TxBuildError {
+    case class DatumWitnessNotProvided(utxo: TransactionUnspentOutput) extends StepError {
         override def explain: String =
             "The output you are trying to spend contains a datum hash, you need to provide " +
                 s"a `DatumValue`, output: $utxo"
     }
 
     case class DatumValueForUtxoWithInlineDatum(utxo: TransactionUnspentOutput, datum: Datum)
-        extends TxBuildError {
+        extends StepError {
         override def explain: String =
             "You can't provide datum value for a utxo with inlined datum: " +
                 s"You tried to provide: $datum for the UTxO: $utxo"
@@ -1753,7 +1766,7 @@ object TxBuildError {
     case class UnneededDeregisterWitness(
         stakeCredential: StakeCredential,
         witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, " +
                 "but the stake credential you are trying to issue a deregistering certificate for " +
@@ -1764,7 +1777,7 @@ object TxBuildError {
     case class UnneededSpoVoteWitness(
         cred: Credential,
         witness: TwoArgumentPlutusScriptWitness | NativeScriptWitness
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, but the corresponding Voter is " +
                 "SPO (Stake Pool Operator). You should omit the provided credential witness " +
@@ -1774,14 +1787,14 @@ object TxBuildError {
     case class UnneededProposalPolicyWitness(
         proposal: ProposalProcedure,
         witness: PubKeyWitness.type | TwoArgumentPlutusScriptWitness | NativeScriptWitness
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "You've provided an optional `CredentialWitness`, but the corresponding proposal" +
                 " does not need to validate against the proposal policy. You should omit the " +
                 s"provided credential witness for this proposal: $proposal. Provided witness: $witness"
     }
 
-    case class RedeemerIndexingError(redeemer: Redeemer) extends TxBuildError {
+    case class RedeemerIndexingError(redeemer: Redeemer) extends StepError {
         override def explain: String =
             s"Redeemer indexing error. Problematic redeemer that does not have a valid index: $redeemer"
     }
@@ -1789,7 +1802,7 @@ object TxBuildError {
     case class RedeemerIndexingInternalError(
         tx: Transaction,
         steps: Seq[TransactionBuilderStep]
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             s"Internal redeemer indexing error. Please report as bug: $bugTrackerUrl\nDebug info: " +
                 s"Transaction: $tx, steps: ${steps
@@ -1798,7 +1811,7 @@ object TxBuildError {
 
     private val bugTrackerUrl: String = "https://github.com/cardano-hydrozoa/hydrozoa/issues"
 
-    case class WrongNetworkId(address: Address) extends TxBuildError {
+    case class WrongNetworkId(address: Address) extends StepError {
         override def explain: String =
             "The following `Address` that was specified in one of the UTxOs has a `NetworkId`" +
                 s" different from the one `TransactionBody` has: $address"
@@ -1806,50 +1819,50 @@ object TxBuildError {
 
     case class CollateralWithTokens(
         utxo: TransactionUnspentOutput
-    ) extends TxBuildError {
+    ) extends StepError {
         override def explain: String =
             "The UTxO you provided as a collateral must contain only ada. " +
                 s"UTxO: $utxo"
     }
 
-    case class AttachedScriptNotFound(scriptHash: ScriptHash) extends TxBuildError {
+    case class AttachedScriptNotFound(scriptHash: ScriptHash) extends StepError {
         override def explain: String =
             s"No witness or ref/spent output is found for script matching $scriptHash." +
                 "Note that the builder steps are not commutative: you must attach the script " +
                 "before using an AttachedScript ScriptWitness."
     }
 
-    case class ByronAddressesNotSupported(address: Address) extends TxBuildError {
+    case class ByronAddressesNotSupported(address: Address) extends StepError {
         override def explain: String =
             s"Byron addresses are not supported: $address."
     }
 
     // We can't really return meaningful information, because scalus doesn't
     // provide it. See [[assertAttachedScriptExists]]
-    case object ScriptResolutionError extends TxBuildError {
+    case object ScriptResolutionError extends StepError {
         override def explain: String =
             "An error was returned when trying to resolve scripts for the transaction."
     }
 
-    case class FeeAlreadySet(currentFee: Long) extends TxBuildError {
+    case class FeeAlreadySet(currentFee: Long) extends StepError {
         override def explain: String =
             s"The fee ($currentFee) is already set. You cannot set the fee more than once."
     }
 
-    case class ValidityStartSlotAlreadySet(slot: Long) extends TxBuildError {
+    case class ValidityStartSlotAlreadySet(slot: Long) extends StepError {
         override def explain: String =
             s"The validity start slot ($slot) is already set. You cannot set the validity start slot more than once."
     }
 
-    case class ValidityEndSlotAlreadySet(slot: Long) extends TxBuildError {
+    case class ValidityEndSlotAlreadySet(slot: Long) extends StepError {
         override def explain: String =
             s"The validity end slot ($slot) is already set. You cannot set the validity end slot more than once."
     }
 }
 
-// -------------------------------------------------------------------------
+// ===================================
 // auxiliary types, extensions, helpers
-// -------------------------------------------------------------------------
+// ===================================
 
 // TODO: itd be nice to make this opaque and only return from chain queries
 // NOTE (Peter, 2025-09-23): this comes from
@@ -1858,8 +1871,13 @@ case class TransactionUnspentOutput(input: TransactionInput, output: Transaction
     def toTuple: (TransactionInput, TransactionOutput) = (input, output)
 
 object TransactionUnspentOutput:
+    
     def apply(utxo: (TransactionInput, TransactionOutput)): TransactionUnspentOutput =
         TransactionUnspentOutput(utxo._1, utxo._2)
+
+    def fromUtxo[L <: AnyLayer](utxo: Utxo[L]): TransactionUnspentOutput = {
+        apply(utxo.input.untagged, utxo.output.untagged)
+    }
 
 // NOTE (Peter, 2025-09-23): this comes from https://github.com/mlabs-haskell/purescript-cardano-types/blob/master/src/Cardano/Types/StakeCredential.purs
 case class StakeCredential(credential: Credential)
@@ -1884,107 +1902,119 @@ object NetworkExtensions:
 def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct
 
-//////////////////////////////////////////////////////////
-// Interface sketch
-
-// Notes:
-//
-// The reasons I wanted this trait is:
-//  - Uniform interface for building transactions
-//  - Make it clearer what things are common to all transactions, and what aren't.
-//
-//  What I don't like is that we can't _really_ separate into a
-//
-//  recipe
-//  --recipeToSteps--> steps
-//  --balance--> unbalanced tx
-//  --finalize--> finalized tx
-//  --augmentTx--> augmentedTx
-//
-//  pipeline in a particularly smooth way unless we allow each step of the pipeline to emit additional state -- or
-//  perhaps just
-//
-//      `recipeToSteps(recipe : Recipe) : (Seq[Steps], OtherStuff)`
-//  and
-//      `augmentTx(tx : Transaction, otherStuff : OtherStuff)`
-//
-//  would be enough for practical cases (how often do you need specific information from balancing, fees, or
-//  ledger rule validation for augmenting the Tx?). It could be an interesting exercise, but seems like future/intern
-//  work; we don't get much tangible benefit besides better structure and an explicit indication of what information
-//  the build process (implicitly) carries around.
-//
-//  An alternative could be to provide enough information in the metadata of _each_ transaction that
-//  we could always parse a raw `Transaction` into the augmented form. But in this case, we're still throwing
-//  away intermediate info that we could use, and we previously decided that not all "augmented transactions` need to
-//  be parseable.
-//
-//  Thus, I think we could _maybe_ define some utility functions for balancing/finalization using RecipeType,
-//  but that's probably about it.
-trait BuildableTx:
-    // RWST: ReaderT[Recipe, StateT[InternalData, ExceptT[ErrorType, [_]]], []]
-    // Basically, we want:
-    // - a ReaderT with the Recipe
-    // - A StateT with the InternalData and steps
-    // - An ExceptT the can throw BuildErrors
-    // - A WriterT than can log the effects that were run
-    //
-    // The build stages than proceed as follows:
-    //  - 1.) Pre-processing: lift a computation `Recipe -> InternalData` into the monad stack.
-    //        This extracts all data that is necessary for deciding which steps to run and
-    //        to make available for the final post-processing
-    //  - 2.) Step definition: lift a computation `(Recipe, InternalData) -> Seq(Steps)
-    //        into the monad. This actually defines the computation we need to run
-    //  - 3.) Run the computation itself, balancing and finalizing
-    //  - 4.) Post-processing: this is where we combine the results of 1 + 3 to
-    //        return an "augmented transaction"
-
-    type TxType
-    type InternalData
-    type RecipeType <: BuilderRecipe
-    type ErrorType >: BuildError
-    def preprocess(recipe: RecipeType): InternalData
-
-    def augmentTx(tx: Transaction): TxType
-    def recipeToSteps(recipe: RecipeType): Seq[TransactionBuilderStep]
-    final def build(recipe: RecipeType, diffHandler: DiffHandler): Either[ErrorType, TxType] =
-        for {
-            unbalanced <- TransactionBuilder
-                .build(recipe.network, recipeToSteps(recipe))
-                .left
-                .map(BuildError.StepError(_))
-            finalized <- unbalanced
-                .finalizeContext(
-                  protocolParams = recipe.protocolParams,
-                  diffHandler = diffHandler,
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
-                )
-                .left
-                .map({
-                    case balancingError: TxBalancingError =>
-                        BuildError.BalancingError(balancingError)
-                    case validationError: TransactionException =>
-                        BuildError.ValidationError(validationError)
-                })
-        } yield augmentTx(finalized.transaction)
-
-trait BuilderRecipe:
-    val network: Network
-    val protocolParams: ProtocolParams
-    val evaluator: PlutusScriptEvaluator
-    val validators: Seq[Validator]
-
-// These are the errors that can be thrown by a higher-level TxBuilder. It needs a better name
-enum BuildError:
-    case StepError(e: TxBuildError)
+/**
+ * These are the sum type for any errors that may occur during different phases and that can be returned thrown by a higher-level TxBuilder
+ */
+enum SomeBuildError:
+    case SomeStepError(e: StepError)
+    //case EvaluationError(e: PlutusScriptEvaluationException)
     case BalancingError(e: TxBalancingError)
     case ValidationError(e: TransactionException)
 
-trait ParseableTx:
-    type ParseConfig
-    type ParseError
-    type TxType
-    def parse(
-        expectedConfiguration: ParseConfig,
-        txSerialized: Array[Byte]
-    ): Either[ParseError, TxType]
+    override def toString: String = this match {
+        case SomeStepError(e) =>
+            s"Step processing error: ${e.getClass.getSimpleName} - ${e.explain}"
+        case BalancingError(TxBalancingError.Failed(unknown)) => unknown match {
+          case psee: PlutusScriptEvaluationException =>
+            s"Plutus script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs.mkString(" <CR> ")}"
+          case other => s"Unexpected exception during balancing: ${other.getMessage}"
+        }
+        case BalancingError(TxBalancingError.CantBalance(lastDiff)) =>
+            s"Can't balance: last diff $lastDiff"
+        case BalancingError(TxBalancingError.InsufficientFunds(diff, required)) =>
+            s"Insufficient funds: need $required more"
+        case ValidationError(e) =>
+            s"Transaction validation failed: ${e.getClass.getSimpleName} - ${e.getMessage}"
+    }
+
+////////////////////////////////////////////////////////////
+//// Interface sketch
+//
+//// Notes:
+////
+//// The reasons I wanted this trait is:
+////  - Uniform interface for building transactions
+////  - Make it clearer what things are common to all transactions, and what aren't.
+////
+////  What I don't like is that we can't _really_ separate into a
+////
+////  recipe
+////  --recipeToSteps--> steps
+////  --balance--> unbalanced tx
+////  --finalize--> finalized tx
+////  --augmentTx--> augmentedTx
+////
+////  pipeline in a particularly smooth way unless we allow each step of the pipeline to emit additional state -- or
+////  perhaps just
+////
+////      `recipeToSteps(recipe : Recipe) : (Seq[Steps], OtherStuff)`
+////  and
+////      `augmentTx(tx : Transaction, otherStuff : OtherStuff)`
+////
+////  would be enough for practical cases (how often do you need specific information from balancing, fees, or
+////  ledger rule validation for augmenting the Tx?). It could be an interesting exercise, but seems like future/intern
+////  work; we don't get much tangible benefit besides better structure and an explicit indication of what information
+////  the build process (implicitly) carries around.
+////
+////  An alternative could be to provide enough information in the metadata of _each_ transaction that
+////  we could always parse a raw `Transaction` into the augmented form. But in this case, we're still throwing
+////  away intermediate info that we could use, and we previously decided that not all "augmented transactions` need to
+////  be parseable.
+////
+////  Thus, I think we could _maybe_ define some utility functions for balancing/finalization using RecipeType,
+////  but that's probably about it.
+//trait BuildableTx:
+//    // RWST: ReaderT[Recipe, StateT[InternalData, ExceptT[ErrorType, [_]]], []]
+//    // Basically, we want:
+//    // - a ReaderT with the Recipe
+//    // - A StateT with the InternalData and steps
+//    // - An ExceptT the can throw BuildErrors
+//    // - A WriterT than can log the effects that were run
+//    //
+//    // The build stages than proceed as follows:
+//    //  - 1.) Pre-processing: lift a computation `Recipe -> InternalData` into the monad stack.
+//    //        This extracts all data that is necessary for deciding which steps to run and
+//    //        to make available for the final post-processing
+//    //  - 2.) Step definition: lift a computation `(Recipe, InternalData) -> Seq(Steps)
+//    //        into the monad. This actually defines the computation we need to run
+//    //  - 3.) Run the computation itself, balancing and finalizing
+//    //  - 4.) Post-processing: this is where we combine the results of 1 + 3 to
+//    //        return an "augmented transaction"
+//
+//    type TxType
+//    type InternalData
+//    type RecipeType <: BuilderRecipe
+//    type ErrorType >: SomeBuildError
+//    def preprocess(recipe: RecipeType): InternalData
+//
+//    def augmentTx(tx: Transaction): TxType
+//    def recipeToSteps(recipe: RecipeType): Seq[TransactionBuilderStep]
+//    final def build(recipe: RecipeType, diffHandler: DiffHandler): Either[ErrorType, TxType] =
+//        for {
+//            unbalanced <- TransactionBuilder
+//                .build(recipe.network, recipeToSteps(recipe))
+//                .left
+//                .map(SomeBuildError.SomeStepError(_))
+//            finalized <- unbalanced
+//                .finalizeContext(
+//                  protocolParams = recipe.protocolParams,
+//                  diffHandler = diffHandler,
+//                  evaluator = recipe.evaluator,
+//                  validators = recipe.validators
+//                )
+//        } yield augmentTx(finalized.transaction)
+//
+//trait BuilderRecipe:
+//    val network: Network
+//    val protocolParams: ProtocolParams
+//    val evaluator: PlutusScriptEvaluator
+//    val validators: Seq[Validator]
+//
+//trait ParseableTx:
+//    type ParseConfig
+//    type ParseError
+//    type TxType
+//    def parse(
+//        expectedConfiguration: ParseConfig,
+//        txSerialized: Array[Byte]
+//    ): Either[ParseError, TxType]

@@ -49,9 +49,9 @@ object VoteState:
     given Eq[VoteDetails] = (a: VoteDetails, b: VoteDetails) =>
         a.commitment == b.commitment && a.versionMinor == b.versionMinor
 
-    private type Key = BigInt
+    type Key = BigInt
 
-    private type Link = BigInt
+    type Link = BigInt
 
     // G1 compressed point
     type KzgCommitment = ByteString

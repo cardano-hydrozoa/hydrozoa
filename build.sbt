@@ -143,3 +143,9 @@ lazy val benchmark = (project in file("benchmark"))
         "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )
+
+// An attempt in exclude some folder
+excludeFilter in Global := {
+    val default = (excludeFilter in Global).value
+    default || ".direnv" || ".bloop" || ".metals" || ".idea" || ".vscode"
+}

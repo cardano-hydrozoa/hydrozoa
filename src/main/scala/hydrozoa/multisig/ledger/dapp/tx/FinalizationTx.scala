@@ -1,17 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{
-    BuildError,
-    ExpectedSigner,
-    NativeScriptWitness,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.{NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -22,8 +14,8 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,
@@ -44,7 +36,7 @@ object FinalizationTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, FinalizationTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, FinalizationTx] = {
         val beaconTokenBurn: TransactionBuilderStep.Mint =
             TransactionBuilderStep.Mint(
               recipe.headNativeScript.policyId,
@@ -91,8 +83,6 @@ object FinalizationTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   protocolParams = recipe.protocolParams,
@@ -103,12 +93,6 @@ object FinalizationTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
         } yield FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
     }
 
