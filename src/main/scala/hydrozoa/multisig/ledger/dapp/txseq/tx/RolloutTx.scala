@@ -17,7 +17,6 @@ import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-// import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.utils.TxBalance
@@ -54,9 +53,42 @@ object RolloutTx {
     object Builder {
         import State.Fields.*
 
+        type Error = SomeBuildError
+
         type Result = RolloutTx
 
-        type Error = SomeBuildError
+        enum PartialResult:
+            def state: State[State.Status.NeedsInput]
+            def builder: Builder
+
+            case Intermediate(
+                override val state: State[State.Status.NeedsInput],
+                override val builder: Builder.NotLast
+            )
+            case Last(
+                override val state: State[State.Status.NeedsInput],
+                override val builder: Builder.Last
+            )
+            case First(
+                override val state: State[State.Status.NeedsInput],
+                override val builder: Builder.NotLast
+            )
+            case Only(
+                override val state: State[State.Status.NeedsInput],
+                override val builder: Builder.Last
+            )
+
+            def inputValueNeeded: Value = state.inputValueNeeded
+
+            def tx: Transaction = state.ctx.transaction
+
+        object PartialResult {
+            type FirstOrOnly = PartialResult.First | PartialResult.Only
+
+            type NotLast = Intermediate | First
+
+            type LastOrOnly = PartialResult.Last | Only
+        }
 
         final case class State[Status <: State.Status](
             override val ctx: TransactionBuilder.Context,
@@ -119,54 +151,70 @@ object RolloutTx {
             def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
                 TxBalance.produced(ctx.transaction)
         }
+        
+        // TODO: Find a better place for this
+        final case class Config (
+            headNativeScript: HeadMultisigScript,
+            headNativeScriptReferenceInput: TransactionUnspentOutput,
+            env: Environment,
+            validators: Seq[Validator]    
+        )
+
+        final case class Last(
+            override val config: Config,
+            override val payouts: Vector[Payout.Obligation.L1],
+        ) extends Builder {
+            def buildPartial(): Either[Error, PartialResult.LastOrOnly] = {
+                for {
+                    bp <- BasePessimistic.basePessimistic
+                    withPayouts <- AddPayouts.addPayouts(bp)
+                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
+                    partialResult: PartialResult.LastOrOnly =
+                        if needsInput.remainingPayoutObligations.isEmpty then
+                            PartialResult.Only(needsInput, this)
+                        else PartialResult.Last(needsInput, this)
+                } yield partialResult
+            }
+        }
+
+        final case class NotLast(
+            override val config: Config,
+            override val payouts: Vector[Payout.Obligation.L1],
+            rolloutOutputValue: Value
+        ) extends Builder {
+            def buildPartial(): Either[Error, PartialResult.NotLast] = {
+                for {
+                    bp <- BasePessimistic.basePessimistic
+                    withPayouts <- AddPayouts.addPayouts(bp)
+                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
+                    partialResult: PartialResult.NotLast =
+                        if needsInput.remainingPayoutObligations.isEmpty then
+                            PartialResult.First(needsInput, this)
+                        else PartialResult.Intermediate(needsInput, this)
+                } yield partialResult
+            }
+        }
     }
 
-    enum Builder:
+    trait Builder:
         def payouts: Vector[Payout.Obligation.L1]
-        def headNativeScript: HeadMultisigScript
-        def headNativeScriptReferenceInput: TransactionUnspentOutput
-        def env: Environment
-        def validators: Seq[Validator]
-
-        case Last(
-            override val payouts: Vector[Payout.Obligation.L1],
-            override val headNativeScript: HeadMultisigScript,
-            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
-            override val env: Environment,
-            override val validators: Seq[Validator]
-        )
-
-        case NotLast(
-            override val payouts: Vector[Payout.Obligation.L1],
-            override val headNativeScript: HeadMultisigScript,
-            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
-            override val env: Environment,
-            override val validators: Seq[Validator],
-            rolloutOutputValue: Value
-        )
+        def config: Builder.Config
 
         import Builder.*
         import Builder.State.Status.*
-
-        def buildPartial(): Either[Error, State[NeedsInput]] = {
-            for {
-                bp <- BasePessimistic.basePessimistic
-                withPayouts <- AddPayouts.addPayouts(bp)
-            } yield State.NeedsInput.fromInProgress(withPayouts)
-        }
 
         object BasePessimistic {
             lazy val basePessimistic: Either[Error, State[InProgress]] =
                 for {
                     ctx <- TransactionBuilder.build(
-                      env.network,
+                      config.env.network,
                       commonSteps ++ mbSendRollout.toList
                     )
                     valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
                 } yield State[InProgress](
                   ctx = ctx,
                   inputValueNeeded = valueNeededWithFee,
-                  remainingPayoutObligations = payouts
+                  remainingPayoutObligations = payouts.toVector
                 )
 
             lazy val commonSteps: List[TransactionBuilderStep] =
@@ -178,10 +226,10 @@ object RolloutTx {
             lazy val rolloutTxMetadata: AuxiliaryData =
                 MD(
                   MD.L1TxTypes.Rollout,
-                  headAddress = headNativeScript.mkAddress(env.network)
+                  headAddress = config.headNativeScript.mkAddress(config.env.network)
                 )
 
-            lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
+            lazy val referenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)
 
             lazy val mbSendRollout: Option[Send] =
                 Builder.this match {
@@ -192,7 +240,7 @@ object RolloutTx {
 
             def mkRolloutOutput(thisBuilder: Builder.NotLast): TxOutput.Babbage =
                 TxOutput.Babbage(
-                  address = headNativeScript.mkAddress(env.network),
+                  address = config.headNativeScript.mkAddress(config.env.network),
                   value = thisBuilder.rolloutOutputValue,
                   datumOption = None,
                   scriptRef = None
@@ -249,7 +297,7 @@ object RolloutTx {
 
         object TxBuilder {
             def spendRollout(resolvedUtxo: TransactionUnspentOutput): Spend =
-                Spend(resolvedUtxo, headNativeScript.witness)
+                Spend(resolvedUtxo, config.headNativeScript.witness)
 
             def spendMockRollout(value: Value): Spend =
                 spendRollout(mockRolloutResolvedUtxo(value))
@@ -258,7 +306,7 @@ object RolloutTx {
                 TransactionUnspentOutput(
                   Mock.utxoId,
                   TxOutput.Babbage(
-                    address = headNativeScript.mkAddress(env.network),
+                    address = config.headNativeScript.mkAddress(config.env.network),
                     value = value
                   )
                 )
@@ -287,13 +335,13 @@ object RolloutTx {
                 // Try to build, balance, and validate the resulting transaction
                 txBuilderContext
                     .finalizeContext(
-                      protocolParams = env.protocolParams,
+                      protocolParams = config.env.protocolParams,
                       diffHandler = ChangeOutputDiffHandler(
-                        protocolParams = env.protocolParams,
+                        protocolParams = config.env.protocolParams,
                         changeOutputIdx = 0
                       ).changeOutputDiffHandler,
-                      evaluator = env.evaluator,
-                      validators = validators
+                      evaluator = config.env.evaluator,
+                      validators = config.validators
                     )
 
             /** Replace a [[InvalidTransactionSizeException]] with some other value.
@@ -320,8 +368,7 @@ object RolloutTx {
         object PostProcess {
             @throws[AssertionError]
             def getRolloutTx(
-                state: State[Finished],
-                rolloutSpent: TransactionUnspentOutput
+                state: State[Finished]
             ): RolloutTx =
                 Builder.this match {
                     case thisBuilder: Builder.NotLast =>
@@ -337,8 +384,8 @@ object RolloutTx {
                     thisBuilder: Builder.Last
                 ): RolloutTx.Last = {
                     RolloutTx.Last(
-                        rolloutSpent = unsafeGetRolloutSpent(state),
-                        tx = state.ctx.transaction
+                      rolloutSpent = unsafeGetRolloutSpent(state),
+                      tx = state.ctx.transaction
                     )
                 }
             }
@@ -351,26 +398,26 @@ object RolloutTx {
                 ): RolloutTx.NotLast = {
                     val tx = state.ctx.transaction
                     val rolloutProduced = TransactionUnspentOutput(
-                        TransactionInput(transactionId = tx.id, index = 0),
-                        BasePessimistic.mkRolloutOutput(thisBuilder)
+                      TransactionInput(transactionId = tx.id, index = 0),
+                      BasePessimistic.mkRolloutOutput(thisBuilder)
                     )
                     RolloutTx.NotLast(
-                        rolloutSpent = unsafeGetRolloutSpent(state),
-                        rolloutProduced = RolloutUtxo(rolloutProduced),
-                        tx = tx
+                      rolloutSpent = unsafeGetRolloutSpent(state),
+                      rolloutProduced = RolloutUtxo(rolloutProduced),
+                      tx = tx
                     )
                 }
             }
 
-            /** Given a finished [[State]], get the spent rollout utxo from its transaction.
-              * Assumes that the spent rollout exists as the only input in the transaction.
+            /** Given a finished [[State]], get the spent rollout utxo from its transaction. Assumes
+              * that the spent rollout exists as the only input in the transaction.
               *
               * @param state
-              * the finalized state
+              *   the finalized state
               * @throws AssertionError
-              * when the assumption is broken
+              *   when the assumption is broken
               * @return
-              * the resolved spend rollout utxo
+              *   the resolved spend rollout utxo
               */
             @throws[AssertionError]
             def unsafeGetRolloutSpent(state: State[Finished]): RolloutUtxo = {

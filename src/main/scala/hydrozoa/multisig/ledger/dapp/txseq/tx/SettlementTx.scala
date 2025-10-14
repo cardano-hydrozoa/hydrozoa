@@ -57,7 +57,7 @@ enum SettlementTx extends Tx {
 
 object SettlementTx {
     // TODO: Make this actually guaranteed to be the first tx (no remaining payout obligations)
-    type FirstRolloutTxPartial = RolloutTx.Builder.State[RolloutTx.Builder.State.Status.NeedsInput]
+    type FirstRolloutTxPartial = RolloutTx.Builder.PartialResult.FirstOrOnly
 
     object Builder {
         import State.Fields.*
@@ -304,12 +304,11 @@ object SettlementTx {
 
             def tryMergeFirstRolloutTx(
                 state: State[InProgress],
-                _this: Builder.WithPayouts
+                thisBuilder: Builder.WithPayouts
             ): Either[Error, (State[Finished], IsFirstRolloutMerged)] = {
                 import state.*
                 import IsFirstRolloutMerged.*
-                val rolloutTx: Transaction =
-                    _this.firstRolloutTxPartial.ctx.transaction
+                val rolloutTx: Transaction = thisBuilder.firstRolloutTxPartial.tx
 
                 val optimisticSteps: List[Send] = rolloutTx.body.value.outputs
                     .map((x: Sized[TransactionOutput]) => Send(x.value))
@@ -388,11 +387,11 @@ object SettlementTx {
                   *   - The produced treasury utxo is the first output (asserted).
                   *
                   * @param state
-                  * The [[State]] of a [[Builder.NoPayouts]].
+                  *   The [[State]] of a [[Builder.NoPayouts]].
                   * @param thisBuilder
-                  * Proof that this builder is a [[Builder.NoPayouts]].
+                  *   Proof that this builder is a [[Builder.NoPayouts]].
                   * @throws AssertionError
-                  * when the asserted assumption is broken.
+                  *   when the asserted assumption is broken.
                   * @return
                   */
                 @throws[AssertionError]
@@ -401,10 +400,10 @@ object SettlementTx {
                     thisBuilder: Builder.NoPayouts
                 ): SettlementTx.NoPayouts = {
                     SettlementTx.NoPayouts(
-                        treasurySpent = treasuryUtxo,
-                        treasuryProduced = getTreasuryProduced(state),
-                        depositsSpent = state.absorbedDeposits,
-                        tx = state.ctx.transaction
+                      treasurySpent = treasuryUtxo,
+                      treasuryProduced = getTreasuryProduced(state),
+                      depositsSpent = state.absorbedDeposits,
+                      tx = state.ctx.transaction
                     )
                 }
             }
@@ -419,11 +418,11 @@ object SettlementTx {
                   *   - The produced rollout utxo is the second output (asserted).
                   *
                   * @param state
-                  * The [[State[Finished]]] of this [[Builder.WithPayouts]].
+                  *   The [[State[Finished]]] of this [[Builder.WithPayouts]].
                   * @param thisBuilder
-                  * Proof that this builder is a [[Builder.WithPayouts]].
+                  *   Proof that this builder is a [[Builder.WithPayouts]].
                   * @throws AssertionError
-                  * when the asserted assumptions are broken.
+                  *   when the asserted assumptions are broken.
                   * @return
                   */
                 @throws[AssertionError]
@@ -432,11 +431,11 @@ object SettlementTx {
                     thisBuilder: Builder.WithPayouts
                 ): SettlementTx.WithPayouts = {
                     SettlementTx.WithPayouts(
-                        treasurySpent = treasuryUtxo,
-                        treasuryProduced = getTreasuryProduced(state),
-                        depositsSpent = state.absorbedDeposits,
-                        rolloutProduced = getRolloutUtxo(state, thisBuilder),
-                        tx = state.ctx.transaction
+                      treasurySpent = treasuryUtxo,
+                      treasuryProduced = getTreasuryProduced(state),
+                      depositsSpent = state.absorbedDeposits,
+                      rolloutProduced = getRolloutUtxo(state, thisBuilder),
+                      tx = state.ctx.transaction
                     )
                 }
 
@@ -445,11 +444,11 @@ object SettlementTx {
                   * that the rollout output is present in the transaction and is the second output.
                   *
                   * @param state
-                  * The finished [[State]] of this [[Builder.WithPayouts]].
+                  *   The finished [[State]] of this [[Builder.WithPayouts]].
                   * @param thisBuilder
-                  * Proof that this builder is a [[Builder.WithPayouts]].
+                  *   Proof that this builder is a [[Builder.WithPayouts]].
                   * @throws AssertionError
-                  * when the assumption is broken.
+                  *   when the assumption is broken.
                   * @return
                   */
                 @throws[AssertionError]
@@ -467,10 +466,10 @@ object SettlementTx {
                     val rolloutOutput = outputsTail.head.value
 
                     RolloutUtxo(
-                        TransactionUnspentOutput(
-                            TransactionInput(transactionId = tx.id, index = 1),
-                            rolloutOutput
-                        )
+                      TransactionUnspentOutput(
+                        TransactionInput(transactionId = tx.id, index = 1),
+                        rolloutOutput
+                      )
                     )
                 }
             }
@@ -480,9 +479,9 @@ object SettlementTx {
               * is present in the transaction and is the first output.
               *
               * @param state
-              * The finished [[State]] of this [[Builder]].
+              *   The finished [[State]] of this [[Builder]].
               * @throws AssertionError
-              * when the assumption is broken.
+              *   when the assumption is broken.
               * @return
               */
             @throws[AssertionError]
@@ -494,9 +493,9 @@ object SettlementTx {
                 val treasuryOutput = outputs.head.value
 
                 treasuryUtxo.copy(
-                    txId = TransactionInput(transactionId = tx.id, index = 0),
-                    datum = BasePessimistic.treasuryOutputDatum,
-                    value = treasuryOutput.value
+                  txId = TransactionInput(transactionId = tx.id, index = 0),
+                  datum = BasePessimistic.treasuryOutputDatum,
+                  value = treasuryOutput.value
                 )
             }
         }
