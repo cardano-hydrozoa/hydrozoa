@@ -11,7 +11,6 @@ import hydrozoa.lib.tx.{
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.State.First
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scalus.builtin.ByteString
@@ -33,7 +32,7 @@ enum RolloutTx extends Tx {
         override val tx: Transaction
     ) extends RolloutTx
 
-    case Intermediate(
+    case NotLast(
         override val rolloutSpent: RolloutUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val tx: Transaction
@@ -54,51 +53,22 @@ object RolloutTx {
     object Builder {
         import State.Fields.*
 
-        /** An error that is thrown when we fail a pattern match on the result of
-          * [[reportDiffHandler]], which should _always_ return a Left(CantBalance(...)). Thus, this
-          * should never be seen.
-          */
-        object IncoherentBalancingError
-
         type Result = RolloutTx
 
-        type Error = SomeBuildError | IncoherentBalancingError.type
+        type Error = SomeBuildError
 
-        enum State extends HasTxBuilderContext, HasInputRequired:
-            case Intermediate[Status <: State.Status](
-                override val txBuilderContext: TransactionBuilder.Context,
-                override val inputValueNeeded: Value,
-                override val remainingPayoutObligations: Vector[Payout.Obligation.L1],
-                override val rolloutOutput: TxOutput.Babbage
-            ) extends State, HasRemainingPayoutObligations, HasRolloutOutput
-
-            case Last[Status <: State.Status](
-                override val txBuilderContext: TransactionBuilder.Context,
-                override val inputValueNeeded: Value,
-                override val remainingPayoutObligations: Vector[Payout.Obligation.L1]
-            ) extends State, HasRemainingPayoutObligations
-
-            case First[Status <: State.Status.NotInProgress](
-                override val txBuilderContext: TransactionBuilder.Context,
-                override val inputValueNeeded: Value,
-                override val rolloutOutput: TxOutput.Babbage
-            ) extends State, HasRolloutOutput
-
-            case Only[Status <: State.Status.NotInProgress](
-                override val txBuilderContext: TransactionBuilder.Context,
-                override val inputValueNeeded: Value
-            ) extends State
-
-            def mbRolloutOutput: Option[TxOutput.Babbage] = this match {
-                case x: HasRolloutOutput =>
-                    Some(x.rolloutOutput)
-                case _ => None
-            }
+        final case class State[Status <: State.Status](
+            override val ctx: TransactionBuilder.Context,
+            override val inputValueNeeded: Value,
+            override val remainingPayoutObligations: Vector[Payout.Obligation.L1]
+        ) extends HasTxBuilderContext,
+              HasInputRequired,
+              HasRemainingPayoutObligations
 
         object State {
             object Fields {
                 sealed trait HasTxBuilderContext {
-                    def txBuilderContext: TransactionBuilder.Context
+                    def ctx: TransactionBuilder.Context
                 }
 
                 sealed trait HasInputRequired {
@@ -117,84 +87,19 @@ object RolloutTx {
             type Status = Status.InProgress | Status.NeedsInput | Status.Finished
 
             object Status {
-                type NotInProgress = Status.NeedsInput | Status.Finished
-
                 type InProgress
                 type NeedsInput
                 type Finished
             }
 
-            type InProgress = State.Intermediate[Status.InProgress] | State.Last[Status.InProgress]
-
-            type NeedsInput = State.Intermediate[Status.NeedsInput] |
-                State.Last[Status.NeedsInput] | State.First[Status.NeedsInput] |
-                State.Only[Status.NeedsInput]
-
             object NeedsInput {
-
-                /** Convert a state from [[Status.InProgress]] to [[Status.NeedsInput]]. If its
-                  * [[remainingPayoutObligations]] is empty, then:
-                  *
-                  *   - A [[State.Intermediate]] becomes a [[State.First]]
-                  *   - A [[State.Last]] becomes a [[State.Only]].
-                  */
-                given fromInProgress: Conversion[State.InProgress, State.NeedsInput] = {
-                    case s: State.Intermediate[Status.InProgress] =>
-                        if s.remainingPayoutObligations.isEmpty then {
-                            State.First[Status.NeedsInput](
-                              txBuilderContext = s.txBuilderContext,
-                              inputValueNeeded = s.inputValueNeeded,
-                              rolloutOutput = s.rolloutOutput
-                            )
-                        } else s.convert
-                    case s: State.Last[Status.InProgress] =>
-                        if s.remainingPayoutObligations.isEmpty then {
-                            State.Only[Status.NeedsInput](
-                              txBuilderContext = s.txBuilderContext,
-                              inputValueNeeded = s.inputValueNeeded
-                            )
-                        } else s.convert
-                }
-
-                private given Conversion[Intermediate[Status.InProgress], Intermediate[
-                  Status.NeedsInput
-                ]] = identity
-
-                private given Conversion[Last[Status.InProgress], Last[Status.NeedsInput]] =
-                    identity
-
-                type FirstOrOnly = State.First[Status.NeedsInput] | State.Only[Status.NeedsInput]
-                type LastOrOnly = State.Last[Status.NeedsInput] | State.Only[Status.NeedsInput]
-
-                type NotFirst = State.Intermediate[Status.NeedsInput] |
-                    State.Last[Status.NeedsInput]
-                type NotLast = State.Intermediate[Status.NeedsInput] |
-                    State.First[Status.NeedsInput]
+                given fromInProgress
+                    : Conversion[State[Status.InProgress], State[Status.NeedsInput]] = identity
             }
 
-            type Finished = State.Intermediate[Status.Finished] | State.Last[Status.Finished] |
-                State.First[Status.Finished] | State.Only[Status.Finished]
-
             object Finished {
-
-                /** This conversion is trivial. */
-                given fromNeedsInput: Conversion[State.NeedsInput, State.Finished] = {
-                    case x: Intermediate[Status.NeedsInput] => x.convert
-                    case x: Last[Status.NeedsInput]         => x.convert
-                    case x: First[Status.NeedsInput]        => x.convert
-                    case x: Only[Status.NeedsInput]         => x.convert
-                }
-
-                private given Conversion[Intermediate[Status.NeedsInput], Intermediate[
-                  Status.Finished
-                ]] = identity
-
-                private given Conversion[Last[Status.NeedsInput], Last[Status.Finished]] = identity
-
-                private given Conversion[First[Status.NeedsInput], First[Status.Finished]] =
+                given fromNeedsInput: Conversion[State[Status.NeedsInput], State[Status.Finished]] =
                     identity
-
-                private given Conversion[Only[Status.NeedsInput], Only[Status.Finished]] = identity
             }
         }
 
@@ -215,19 +120,34 @@ object RolloutTx {
         }
     }
 
-    final case class Builder(
-        payouts: Vector[Payout.Obligation.L1],
-        headNativeScript: HeadMultisigScript,
-        headNativeScriptReferenceInput: TransactionUnspentOutput,
-        env: Environment,
-        validators: Seq[Validator],
-        mbRolloutOutputValue: Option[Value]
-    ) {
+    enum Builder:
+        def payouts: Vector[Payout.Obligation.L1]
+        def headNativeScript: HeadMultisigScript
+        def headNativeScriptReferenceInput: TransactionUnspentOutput
+        def env: Environment
+        def validators: Seq[Validator]
+
+        case Last(
+            override val payouts: Vector[Payout.Obligation.L1],
+            override val headNativeScript: HeadMultisigScript,
+            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
+            override val env: Environment,
+            override val validators: Seq[Validator]
+        )
+
+        case NotLast(
+            override val payouts: Vector[Payout.Obligation.L1],
+            override val headNativeScript: HeadMultisigScript,
+            override val headNativeScriptReferenceInput: TransactionUnspentOutput,
+            override val env: Environment,
+            override val validators: Seq[Validator],
+            rolloutOutputValue: Value
+        )
 
         import Builder.*
         import Builder.State.Status.*
 
-        def buildPartial(): Either[Error, State.NeedsInput] = {
+        def buildPartial(): Either[Error, State[NeedsInput]] = {
             for {
                 bp <- BasePessimistic.basePessimistic
                 withPayouts <- AddPayouts.addPayouts(bp)
@@ -235,41 +155,21 @@ object RolloutTx {
         }
 
         object BasePessimistic {
-            lazy val basePessimistic: Either[Error, State.InProgress] = {
-                mbRolloutOutputValue match {
-                    case Some(value) =>
-                        val rolloutOutput = mkRolloutOutput(value)
-                        for {
-                            ctx <- TransactionBuilder.build(
-                              env.network,
-                              Send(rolloutOutput) +: commonSteps
-                            )
-                            valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
-                        } yield State.Intermediate[InProgress](
-                          txBuilderContext = ctx,
-                          inputValueNeeded = valueNeededWithFee,
-                          remainingPayoutObligations = payouts,
-                          rolloutOutput = rolloutOutput
-                        )
-                    case None =>
-                        val value = Value(Coin.zero)
-                        for {
-                            ctx <- TransactionBuilder.build(env.network, commonSteps)
-                            // There's no point attempting to finalized because there are no inputs/outputs
-                        } yield State.Last[InProgress](ctx, value, payouts)
-                }
-            }
+            lazy val basePessimistic: Either[Error, State[InProgress]] =
+                for {
+                    ctx <- TransactionBuilder.build(
+                      env.network,
+                      commonSteps ++ mbSendRollout.toList
+                    )
+                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
+                } yield State[InProgress](
+                  ctx = ctx,
+                  inputValueNeeded = valueNeededWithFee,
+                  remainingPayoutObligations = payouts
+                )
 
             lazy val commonSteps: List[TransactionBuilderStep] =
                 List(setRolloutMetadata, referenceHNS)
-
-            def mkRolloutOutput(rolloutOutputValue: Value): TxOutput.Babbage =
-                TxOutput.Babbage(
-                  address = headNativeScript.mkAddress(env.network),
-                  value = rolloutOutputValue,
-                  datumOption = None,
-                  scriptRef = None
-                )
 
             lazy val setRolloutMetadata =
                 ModifyAuxiliaryData(_ => Some(rolloutTxMetadata))
@@ -281,31 +181,39 @@ object RolloutTx {
                 )
 
             lazy val referenceHNS = ReferenceOutput(headNativeScriptReferenceInput)
+
+            lazy val mbSendRollout: Option[Send] =
+                Builder.this match {
+                    case thisBuilder: Builder.NotLast =>
+                        Some(
+                          Send(
+                            TxOutput.Babbage(
+                              address = headNativeScript.mkAddress(env.network),
+                              value = thisBuilder.rolloutOutputValue,
+                              datumOption = None,
+                              scriptRef = None
+                            )
+                          )
+                        )
+                    case thisBuilder: Builder.Last => None
+                }
         }
 
         object AddPayouts {
             @tailrec
-            def addPayouts(state: State.InProgress): Either[Error, State.InProgress] = {
+            def addPayouts(
+                state: State[InProgress]
+            ): Either[Error, State[InProgress]] = {
                 import state.*
                 remainingPayoutObligations match {
                     case obligation +: otherObligations =>
-                        tryAddPayout(txBuilderContext, obligation) match {
+                        tryAddPayout(ctx, obligation) match {
                             case Right((newCtx, value)) =>
-                                val newState: State.InProgress = state match {
-                                    case s: State.Intermediate[InProgress] =>
-                                        s.copy(
-                                          txBuilderContext = newCtx,
-                                          inputValueNeeded = value,
-                                          remainingPayoutObligations = otherObligations,
-                                          rolloutOutput = s.rolloutOutput
-                                        )
-                                    case s: State.Last[InProgress] =>
-                                        s.copy(
-                                          txBuilderContext = newCtx,
-                                          inputValueNeeded = value,
-                                          remainingPayoutObligations = otherObligations
-                                        )
-                                }
+                                val newState: State[InProgress] = state.copy(
+                                  ctx = newCtx,
+                                  inputValueNeeded = value,
+                                  remainingPayoutObligations = otherObligations
+                                )
                                 addPayouts(newState)
                             case Left(err) =>
                                 TxBuilder.replaceInvalidSizeException(err, state)
@@ -391,5 +299,5 @@ object RolloutTx {
                         }
                     case _ => Left(err)
         }
-    }
+
 }

@@ -56,6 +56,9 @@ enum SettlementTx extends Tx {
 }
 
 object SettlementTx {
+    // TODO: Make this actually guaranteed to be the first tx (no remaining payout obligations)
+    type FirstRolloutTxPartial = RolloutTx.Builder.State[RolloutTx.Builder.State.Status.NeedsInput]
+
     object Builder {
         import State.Fields.*
 
@@ -65,7 +68,7 @@ object SettlementTx {
         case object RolloutFeesWithoutRolloutOutputError
 
         sealed trait HasFirstRolloutTxPartial {
-            def firstRolloutTxPartial: RolloutTx.Builder.State.NeedsInput.FirstOrOnly
+            def firstRolloutTxPartial: FirstRolloutTxPartial
         }
 
         enum Result extends State.Fields.HasDepositsPartition:
@@ -138,7 +141,7 @@ object SettlementTx {
         case WithPayouts(
             override val majorVersion: Int,
             override val deposits: Queue[DepositUtxo],
-            override val firstRolloutTxPartial: RolloutTx.Builder.State.NeedsInput.FirstOrOnly,
+            override val firstRolloutTxPartial: FirstRolloutTxPartial,
             override val treasuryUtxo: TreasuryUtxo,
             override val headNativeScript: HeadMultisigScript,
             override val headNativeScriptReferenceInput: TransactionUnspentOutput,
@@ -306,7 +309,7 @@ object SettlementTx {
                 import state.*
                 import IsFirstRolloutMerged.*
                 val rolloutTx: Transaction =
-                    _this.firstRolloutTxPartial.txBuilderContext.transaction
+                    _this.firstRolloutTxPartial.ctx.transaction
 
                 val optimisticSteps: List[Send] = rolloutTx.body.value.outputs
                     .map((x: Sized[TransactionOutput]) => Send(x.value))
