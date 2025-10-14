@@ -5,9 +5,17 @@ import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.{
+    TreasuryRedeemer,
+    WithdrawRedeemer
+}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scalus.builtin.ByteString
@@ -93,13 +101,15 @@ object WithdrawTx {
         import recipe.*
 
         val proofBS = ByteString.fromArray(IArray.genericWrapArray(recipe.membershipProof).toArray)
-        val withdrawRedeemer = WithdrawRedeemer(
-          SList.from(
-            withdrawals.keys
-                .map(_.untagged)
-                .map(utxoId => TxOutRef(TxId(utxoId.transactionId), utxoId.index))
-          ),
-          proofBS
+        val withdrawRedeemer = TreasuryRedeemer.Withdraw(
+          WithdrawRedeemer(
+            SList.from(
+              withdrawals.keys
+                  .map(_.untagged)
+                  .map(utxoId => TxOutRef(TxId(utxoId.transactionId), utxoId.index))
+            ),
+            proofBS
+          )
         )
         val newTreasuryDatum =
             RuleBasedTreasuryDatum.Resolved(treasuryDatum.copy(utxosActive = proofBS))

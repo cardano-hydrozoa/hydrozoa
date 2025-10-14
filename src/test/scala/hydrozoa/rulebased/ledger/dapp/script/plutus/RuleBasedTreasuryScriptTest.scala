@@ -47,6 +47,28 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         )
     }
 
+    test("Commitment calculation: empty subset") {
+
+        // Hashes of utxos
+        val subsetScalus: List[ScalusScalar] = List.empty
+
+        val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+        println(s"blst utxos active hashes: ${subsetBlst.map(e => BigInt.apply(e.to_bendian()))}")
+
+        val commitmentPoint1 = KzgCommitment.calculateCommitment(subsetBlst)
+        val commitmentPoint2 = KzgCommitment.calculateCommitment(subsetBlst)
+
+        assertEquals(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint2).toArray)
+        )
+
+        assertEquals(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
+          "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        )
+    }
+
     test("Commitment calculation smoke-test") {
 
         // Hashes of utxos
@@ -72,6 +94,33 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         val accumulator = BLS12_381_G1_Element(
           ByteString.fromHex(
             "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
+          )
+        )
+
+        // Hashes of utxos
+        val subset = List(
+          ScalusScalar("5088390254917556218676958430080367916099549701669885042964937592926").get,
+          ScalusScalar("10660627058191719947148018507418106787651292500144510379470545154509").get
+        )
+
+        // Proof
+        val proof = G1.generator
+
+        // Pre-calculated powers of tau
+        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
+
+        assertEquals(
+          RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof),
+          true
+        )
+    }
+
+    test("Membership check smoke-test 2") {
+
+        // Accumulator:
+        val accumulator = BLS12_381_G1_Element(
+          ByteString.fromHex(
+            "8beca1b1d0f5294811791f906d11704179230a235a127132d30c9da6da84eacecc71051db1c1e011afbb8332e23f6584"
           )
         )
 

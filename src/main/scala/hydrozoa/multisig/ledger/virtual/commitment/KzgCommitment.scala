@@ -22,7 +22,7 @@ object KzgCommitment {
             LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
 
         // Calculate hashes
-        SList.from(
+        val scalars = SList.from(
           utxo.toList
               .map(e =>
                   toPlutus(e._1, e._2)
@@ -34,7 +34,8 @@ object KzgCommitment {
               )
         )
 
-        // println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+        //println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+        scalars
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
@@ -104,7 +105,7 @@ object KzgCommitment {
         // Multiply
         val subsetPoints: SList[P1] =
             SList.map2(finalPoly, srsG1): (sb, st) =>
-                st.mult(sb)
+                st.dup().mult(sb.dup())
         // Add
         val zero = P1(G1.zero.toCompressedByteString.bytes)
         subsetPoints.foldLeft(zero.dup()): (a, b) =>

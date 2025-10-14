@@ -9,7 +9,6 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
@@ -449,7 +448,7 @@ object TransactionBuilder:
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
         ): Either[SomeBuildError, Context] =
-            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+            //println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
 
             for {
                 balancedCtx <- this
