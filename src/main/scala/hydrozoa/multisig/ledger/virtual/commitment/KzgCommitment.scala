@@ -105,7 +105,8 @@ object KzgCommitment {
         // Multiply
         val subsetPoints: SList[P1] =
             SList.map2(finalPoly, srsG1): (sb, st) =>
-                st.dup().mult(sb.dup())
+                // This dup is needed, since otherwise we modify the loaded SRS itself
+                st.dup().mult(sb)
         // Add
         val zero = P1(G1.zero.toCompressedByteString.bytes)
         subsetPoints.foldLeft(zero.dup()): (a, b) =>
