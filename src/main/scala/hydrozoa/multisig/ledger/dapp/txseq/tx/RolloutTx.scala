@@ -11,6 +11,7 @@ import hydrozoa.lib.tx.{
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.State.Status.NeedsInput
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scalus.builtin.ByteString
@@ -185,18 +186,17 @@ object RolloutTx {
             lazy val mbSendRollout: Option[Send] =
                 Builder.this match {
                     case thisBuilder: Builder.NotLast =>
-                        Some(
-                          Send(
-                            TxOutput.Babbage(
-                              address = headNativeScript.mkAddress(env.network),
-                              value = thisBuilder.rolloutOutputValue,
-                              datumOption = None,
-                              scriptRef = None
-                            )
-                          )
-                        )
+                        Some(Send(mkRolloutOutput(thisBuilder)))
                     case thisBuilder: Builder.Last => None
                 }
+
+            def mkRolloutOutput(thisBuilder: Builder.NotLast): TxOutput.Babbage =
+                TxOutput.Babbage(
+                  address = headNativeScript.mkAddress(env.network),
+                  value = thisBuilder.rolloutOutputValue,
+                  datumOption = None,
+                  scriptRef = None
+                )
         }
 
         object AddPayouts {
@@ -233,17 +233,34 @@ object RolloutTx {
                 } yield (newCtx, valueNeededWithFee)
         }
 
-        object TxBuilder {
-            def spendMockRollout(value: Value): Spend =
-                Spend(
-                  TransactionUnspentOutput(
-                    Mock.utxoId,
-                    TxOutput.Babbage(
-                      address = headNativeScript.mkAddress(env.network),
-                      value = value
+        object Finish {
+            def finish(
+                state: State[NeedsInput],
+                rolloutSpent: TransactionUnspentOutput
+            ): Either[Error, State[Finished]] =
+                for {
+                    addedRolloutInput <- TransactionBuilder.modify(
+                      state.ctx,
+                      List(TxBuilder.spendRollout(rolloutSpent))
                     )
-                  ),
-                  headNativeScript.witness
+                    finished <- TxBuilder.finish(addedRolloutInput)
+                } yield State.Finished.fromNeedsInput(state.copy(ctx = finished))
+        }
+
+        object TxBuilder {
+            def spendRollout(resolvedUtxo: TransactionUnspentOutput): Spend =
+                Spend(resolvedUtxo, headNativeScript.witness)
+
+            def spendMockRollout(value: Value): Spend =
+                spendRollout(mockRolloutResolvedUtxo(value))
+
+            def mockRolloutResolvedUtxo(value: Value): TransactionUnspentOutput =
+                TransactionUnspentOutput(
+                  Mock.utxoId,
+                  TxOutput.Babbage(
+                    address = headNativeScript.mkAddress(env.network),
+                    value = value
+                  )
                 )
 
             /** Add the mock rollout input to ensure that the RolloutTx will fit within size
@@ -298,6 +315,79 @@ object RolloutTx {
                             case _ => Left(err)
                         }
                     case _ => Left(err)
+        }
+
+        object PostProcess {
+            @throws[AssertionError]
+            def getRolloutTx(
+                state: State[Finished],
+                rolloutSpent: TransactionUnspentOutput
+            ): RolloutTx =
+                Builder.this match {
+                    case thisBuilder: Builder.NotLast =>
+                        NotLast.getRolloutTx(state, thisBuilder)
+                    case thisBuilder: Builder.Last =>
+                        Last.getRolloutTx(state, thisBuilder)
+                }
+
+            object Last {
+                @throws[AssertionError]
+                def getRolloutTx(
+                    state: State[Finished],
+                    thisBuilder: Builder.Last
+                ): RolloutTx.Last = {
+                    RolloutTx.Last(
+                        rolloutSpent = unsafeGetRolloutSpent(state),
+                        tx = state.ctx.transaction
+                    )
+                }
+            }
+
+            object NotLast {
+                @throws[AssertionError]
+                def getRolloutTx(
+                    state: State[Finished],
+                    thisBuilder: Builder.NotLast
+                ): RolloutTx.NotLast = {
+                    val tx = state.ctx.transaction
+                    val rolloutProduced = TransactionUnspentOutput(
+                        TransactionInput(transactionId = tx.id, index = 0),
+                        BasePessimistic.mkRolloutOutput(thisBuilder)
+                    )
+                    RolloutTx.NotLast(
+                        rolloutSpent = unsafeGetRolloutSpent(state),
+                        rolloutProduced = RolloutUtxo(rolloutProduced),
+                        tx = tx
+                    )
+                }
+            }
+
+            /** Given a finished [[State]], get the spent rollout utxo from its transaction.
+              * Assumes that the spent rollout exists as the only input in the transaction.
+              *
+              * @param state
+              * the finalized state
+              * @throws AssertionError
+              * when the assumption is broken
+              * @return
+              * the resolved spend rollout utxo
+              */
+            @throws[AssertionError]
+            def unsafeGetRolloutSpent(state: State[Finished]): RolloutUtxo = {
+                import state.*
+                val tx = ctx.transaction
+                val inputs = tx.body.value.inputs.toSeq
+
+                assert(inputs.nonEmpty)
+                assert(inputs.tail.isEmpty)
+                val firstInput = inputs.head
+
+                assert(inputs.contains(firstInput))
+                val firstInputResolved =
+                    TransactionUnspentOutput(firstInput, ctx.resolvedUtxos.utxos(firstInput))
+
+                RolloutUtxo(firstInputResolved)
+            }
         }
 
 }

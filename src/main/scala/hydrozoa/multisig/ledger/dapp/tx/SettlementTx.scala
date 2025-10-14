@@ -145,7 +145,7 @@ object SettlementTx {
                 else
                     Some(
                       RolloutUtxo(
-                        (
+                        TransactionUnspentOutput(
                           TransactionInput(finalized.transaction.id, 1),
                           finalized.transaction.body.value.outputs(1).value
                         )
