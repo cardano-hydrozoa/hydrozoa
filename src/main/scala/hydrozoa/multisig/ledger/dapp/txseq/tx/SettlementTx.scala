@@ -65,7 +65,7 @@ object SettlementTx {
         case object RolloutFeesWithoutRolloutOutputError
 
         sealed trait HasFirstRolloutTxPartial {
-            def firstRolloutTxPartial: RolloutTx.Builder.PartialResult.NeedsInput.FirstOrOnly
+            def firstRolloutTxPartial: RolloutTx.Builder.State.NeedsInput.FirstOrOnly
         }
 
         enum Result extends State.Fields.HasDepositsPartition:
@@ -94,13 +94,6 @@ object SettlementTx {
               HasDepositsPartition
 
         object State {
-            type Status = Status.InProgress | Status.Finished
-
-            object Status {
-                type InProgress
-                type Finished
-            }
-
             object Fields {
                 sealed trait HasTxBuilderContext {
                     def txBuilderContext: TransactionBuilder.Context
@@ -111,6 +104,15 @@ object SettlementTx {
                     def remainingDeposits: Queue[DepositUtxo]
                 }
             }
+
+            type Status = Status.InProgress | Status.Finished
+
+            object Status {
+                type InProgress
+                type Finished
+            }
+
+
         }
     }
 
@@ -137,7 +139,7 @@ object SettlementTx {
         case WithPayouts(
             override val majorVersion: Int,
             override val deposits: Queue[DepositUtxo],
-            override val firstRolloutTxPartial: RolloutTx.Builder.PartialResult.NeedsInput.FirstOrOnly,
+            override val firstRolloutTxPartial: RolloutTx.Builder.State.NeedsInput.FirstOrOnly,
             override val treasuryUtxo: TreasuryUtxo,
             override val headNativeScript: HeadMultisigScript,
             override val headNativeScriptReferenceInput: TransactionUnspentOutput,

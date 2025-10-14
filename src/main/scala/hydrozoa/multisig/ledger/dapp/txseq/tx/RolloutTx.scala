@@ -14,13 +14,11 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.State.First
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
-import hydrozoa.reportDiffHandler
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.TransactionSizeValidator
+// import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError}
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{TransactionOutput as TxOutput, *}
@@ -56,32 +54,15 @@ object RolloutTx {
     object Builder {
         import State.Fields.*
 
-        /**
-         * An error that is thrown when we fail a pattern match on the result of [[reportDiffHandler]], which
-         * should _always_ return a Left(CantBalance(...)). Thus, this should never be seen.
-         */
+        /** An error that is thrown when we fail a pattern match on the result of
+          * [[reportDiffHandler]], which should _always_ return a Left(CantBalance(...)). Thus, this
+          * should never be seen.
+          */
         object IncoherentBalancingError
 
         type Result = RolloutTx
 
-
         type Error = BuildError | IncoherentBalancingError.type
-
-
-        object PartialResult {
-            type NeedsInput = NeedsInput.FirstOrOnly | NeedsInput.NotFirst
-
-            object NeedsInput {
-                import State.Status
-                type FirstOrOnly = State.First[Status.NeedsInput] | State.Only[Status.NeedsInput]
-                type LastOrOnly = State.Last[Status.NeedsInput] | State.Only[Status.NeedsInput]
-
-                type NotFirst = State.Intermediate[Status.NeedsInput] |
-                    State.Last[Status.NeedsInput]
-                type NotLast = State.Intermediate[Status.NeedsInput] |
-                    State.First[Status.NeedsInput]
-            }
-        }
 
         enum State extends HasTxBuilderContext, HasInputRequired:
             case Intermediate[Status <: State.Status](
@@ -115,18 +96,6 @@ object RolloutTx {
             }
 
         object State {
-            type InProgress = State.Intermediate[Status.InProgress] | State.Last[Status.InProgress]
-
-            type Status = Status.InProgress | Status.NeedsInput | Status.Finished
-
-            object Status {
-                type NotInProgress = Status.NeedsInput | Status.Finished
-
-                type InProgress
-                type NeedsInput
-                type Finished
-            }
-
             object Fields {
                 sealed trait HasTxBuilderContext {
                     def txBuilderContext: TransactionBuilder.Context
@@ -143,6 +112,89 @@ object RolloutTx {
                 sealed trait HasRolloutOutput {
                     def rolloutOutput: TxOutput.Babbage
                 }
+            }
+            
+            type Status = Status.InProgress | Status.NeedsInput | Status.Finished
+
+            object Status {
+                type NotInProgress = Status.NeedsInput | Status.Finished
+
+                type InProgress
+                type NeedsInput
+                type Finished
+            }
+
+            type InProgress = State.Intermediate[Status.InProgress] | State.Last[Status.InProgress]
+
+            type NeedsInput = State.Intermediate[Status.NeedsInput] |
+                State.Last[Status.NeedsInput] | State.First[Status.NeedsInput] |
+                State.Only[Status.NeedsInput]
+
+            object NeedsInput {
+
+                /** Convert a state from [[Status.InProgress]] to [[Status.NeedsInput]]. If its
+                  * [[remainingPayoutObligations]] is empty, then:
+                  *
+                  *   - A [[State.Intermediate]] becomes a [[State.First]]
+                  *   - A [[State.Last]] becomes a [[State.Only]].
+                  */
+                given fromInProgress: Conversion[State.InProgress, State.NeedsInput] = {
+                    case s: State.Intermediate[Status.InProgress] =>
+                        if s.remainingPayoutObligations.isEmpty then {
+                            State.First[Status.NeedsInput](
+                              txBuilderContext = s.txBuilderContext,
+                              inputValueNeeded = s.inputValueNeeded,
+                              rolloutOutput = s.rolloutOutput
+                            )
+                        } else s.convert
+                    case s: State.Last[Status.InProgress] =>
+                        if s.remainingPayoutObligations.isEmpty then {
+                            State.Only[Status.NeedsInput](
+                              txBuilderContext = s.txBuilderContext,
+                              inputValueNeeded = s.inputValueNeeded
+                            )
+                        } else s.convert
+                }
+
+                private given Conversion[Intermediate[Status.InProgress], Intermediate[
+                  Status.NeedsInput
+                ]] = identity
+
+                private given Conversion[Last[Status.InProgress], Last[Status.NeedsInput]] =
+                    identity
+
+                type FirstOrOnly = State.First[Status.NeedsInput] | State.Only[Status.NeedsInput]
+                type LastOrOnly = State.Last[Status.NeedsInput] | State.Only[Status.NeedsInput]
+
+                type NotFirst = State.Intermediate[Status.NeedsInput] |
+                    State.Last[Status.NeedsInput]
+                type NotLast = State.Intermediate[Status.NeedsInput] |
+                    State.First[Status.NeedsInput]
+            }
+
+            type Finished = State.Intermediate[Status.Finished] | State.Last[Status.Finished] |
+                State.First[Status.Finished] | State.Only[Status.Finished]
+
+            object Finished {
+
+                /** This conversion is trivial. */
+                given fromNeedsInput: Conversion[State.NeedsInput, State.Finished] = {
+                    case x: Intermediate[Status.NeedsInput] => x.convert
+                    case x: Last[Status.NeedsInput]         => x.convert
+                    case x: First[Status.NeedsInput]        => x.convert
+                    case x: Only[Status.NeedsInput]         => x.convert
+                }
+
+                private given Conversion[Intermediate[Status.NeedsInput], Intermediate[
+                  Status.Finished
+                ]] = identity
+
+                private given Conversion[Last[Status.NeedsInput], Last[Status.Finished]] = identity
+
+                private given Conversion[First[Status.NeedsInput], First[Status.Finished]] =
+                    identity
+
+                private given Conversion[Only[Status.NeedsInput], Only[Status.Finished]] = identity
             }
         }
 
@@ -175,52 +227,11 @@ object RolloutTx {
         import Builder.*
         import Builder.State.Status.*
 
-
-
-        // Given:
-        //    PartialResult.NeedsInput
-        // Substitute type synonym:
-        //    NeedsInput.FirstOrOnly | NeedsInput.NotFirst
-        // Substitute type synonym on left + associativity of |:
-        //    State.First[Status.NeedsInput] | State.Only[State.NeedsInput] | NeedsInput.NotFirst
-        // Substitute type synoynm and associativity of |:
-        //    State.First[Status.NeedsInput]
-        //    | State.Only[State.NeedsInput]
-        //    | State.Intermediate[Status.NeedsInput]
-        //    | State.Last[Status.NeedsInput]
-        def buildPartial(): Either[Error, PartialResult.NeedsInput] = {
-
-            // Just a small helper to make the branching more readable.
-            // I think there might be a way to do this is _.type? But I'm not certain
-            enum Branch:
-                case Only
-                case First
-                case Last
-                case Intermediate
-
+        def buildPartial(): Either[Error, State.NeedsInput] = {
             for {
                 bp <- BasePessimistic.basePessimistic
                 withPayouts <- AddPayouts.addPayouts(bp)
-
-                branch = if withPayouts.remainingPayoutObligations.isEmpty && mbRolloutOutputValue.isEmpty then Branch.Only
-                else if withPayouts.remainingPayoutObligations.isEmpty then Branch.First
-                else if mbRolloutOutputValue.isEmpty then Branch.Last
-                else Branch.Intermediate
-
-                res: PartialResult.NeedsInput = withPayouts match
-                    case _ : State.Last[NeedsInput] => State.Last[State.Status.NeedsInput](
-                        txBuilderContext = withPayouts.txBuilderContext,
-                        inputValueNeeded = withPayouts.inputValueNeeded,
-                        remainingPayoutObligations = withPayouts.remainingPayoutObligations
-                    )
-                    case _ : State.Intermediate[NeedsInput] => State.Intermediate[State.Status.NeedsInput](
-                        txBuilderContext = withPayouts.txBuilderContext,
-                        inputValueNeeded = withPayouts.inputValueNeeded,
-                        remainingPayoutObligations = withPayouts.remainingPayoutObligations,
-                        rolloutOutput = BasePessimistic.mkRolloutOutput(mbRolloutOutputValue.get)
-                    )
-            }
-            yield res
+            } yield State.NeedsInput.fromInProgress(withPayouts)
         }
 
         object BasePessimistic {
@@ -230,32 +241,24 @@ object RolloutTx {
                         val rolloutOutput = mkRolloutOutput(value)
                         for {
                             ctx <- TxBuilder.build(Send(rolloutOutput) +: commonSteps)
-                            _ <- TxBuilder.finish(ctx)
-                        } yield State.Intermediate[InProgress](ctx, value, payouts, rolloutOutput)
+                            valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
+                        } yield State.Intermediate[InProgress](
+                          txBuilderContext = ctx,
+                          inputValueNeeded = valueNeededWithFee,
+                          remainingPayoutObligations = payouts,
+                          rolloutOutput = rolloutOutput
+                        )
                     case None =>
                         val value = Value(Coin.zero)
                         for {
                             ctx <- TxBuilder.build(commonSteps)
-                            // There's no point trying to finalize because there are no inputs/outputs
-                            // _ <- TxBuilder.finish(ctx)
+                            // There's no point attempting to finalized because there are no inputs/outputs
                         } yield State.Last[InProgress](ctx, value, payouts)
                 }
             }
 
             lazy val commonSteps: List[TransactionBuilderStep] =
                 List(setRolloutMetadata, referenceHNS)
-
-            def spendMockRollout(value: Value): Spend =
-                Spend(
-                  TransactionUnspentOutput(
-                    Mock.utxoId,
-                    TxOutput.Babbage(
-                      address = headNativeScript.mkAddress(env.network),
-                        value = value
-                    )
-                  ),
-                  headNativeScript.witness
-                )
 
             def mkRolloutOutput(rolloutOutputValue: Value): TxOutput.Babbage =
                 TxOutput.Babbage(
@@ -286,17 +289,19 @@ object RolloutTx {
                         tryAddPayout(txBuilderContext, obligation) match {
                             case Right((newCtx, value)) =>
                                 val newState: State.InProgress = state match {
-                                    case s: State.Intermediate[InProgress] => s.copy(
-                                        txBuilderContext = newCtx,
-                                        inputValueNeeded = value,
-                                        remainingPayoutObligations = otherObligations,
-                                        rolloutOutput = s.rolloutOutput
-                                    )
-                                    case s: State.Last[InProgress] => s.copy(
-                                        txBuilderContext = newCtx,
-                                        inputValueNeeded = value,
-                                        remainingPayoutObligations = otherObligations
-                                    )
+                                    case s: State.Intermediate[InProgress] =>
+                                        s.copy(
+                                          txBuilderContext = newCtx,
+                                          inputValueNeeded = value,
+                                          remainingPayoutObligations = otherObligations,
+                                          rolloutOutput = s.rolloutOutput
+                                        )
+                                    case s: State.Last[InProgress] =>
+                                        s.copy(
+                                          txBuilderContext = newCtx,
+                                          inputValueNeeded = value,
+                                          remainingPayoutObligations = otherObligations
+                                        )
                                 }
                                 addPayouts(newState)
                             case Left(e) => Right(state)
@@ -312,8 +317,8 @@ object RolloutTx {
                 val payoutStep = Send(payoutObligation.output)
                 for {
                     newCtx <- TxBuilder.modify(ctx, List(payoutStep))
-                    value <- TxBuilder.trialFinishWithMock(ctx)
-                } yield (newCtx, Value(Coin(value)))
+                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
+                } yield (newCtx, valueNeededWithFee)
         }
 
         object TxBuilder {
@@ -328,50 +333,32 @@ object RolloutTx {
             ): Either[Error, TransactionBuilder.Context] =
                 TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
 
-            /**
-             * Add the mock rollout input to ensure that the RolloutTx will fit within size constraints
-             * after fee calculation + balancing.
-             *
-             * @param ctx
-             * @return Right(requiredAdaForPreviousRolloutUtxo) on success
-             */
-            def trialFinishWithMock(ctx: TransactionBuilder.Context): Either[Error, Long] =
-                for {
-                    // Check with 0 ada mock to get the diff
-                    with0AdaMock <- modify(ctx, List(BasePessimistic.spendMockRollout(Value.zero)))
-                    requiredAda <- with0AdaMock.finalizeContext(
-                        protocolParams = env.protocolParams,
-                        diffHandler = reportDiffHandler,
-                        evaluator = env.evaluator,
-                        validators = List.empty) match
-                        case Left(CantBalance(diff)) => Right(diff)
-                        // Not possible -- our diff handler only returns CantBalance
-                        // and we don't run any validators
-                        case Left(e) => Left(e).left
-                            .map({
-                                case balanceError: TxBalancingError =>
-                                    BalancingError(balanceError)
-                                case validationError: TransactionException =>
-                                    ValidationError(validationError)
-                            })
-                        case Right(_) => Left(IncoherentBalancingError)
+            def spendMockRollout(value: Value): Spend =
+                Spend(
+                  TransactionUnspentOutput(
+                    Mock.utxoId,
+                    TxOutput.Babbage(
+                      address = headNativeScript.mkAddress(env.network),
+                      value = value
+                    )
+                  ),
+                  headNativeScript.witness
+                )
 
-                    // Check with full Ada mock to get a _successful_ balance, which includes calculating the
-                    // correct fee (which can increase the size of the transaction)
-                    withFullAdaMock <- modify(ctx, List(BasePessimistic.spendMockRollout(Value(Coin(requiredAda)))))
-                    _ <- withFullAdaMock.finalizeContext(
-                            protocolParams = env.protocolParams,
-                            diffHandler = new ChangeOutputDiffHandler(env.protocolParams, 0).changeOutputDiffHandler,
-                            evaluator = env.evaluator,
-                            validators = List(TransactionSizeValidator))
-                        .left
-                        .map({
-                            case balanceError: TxBalancingError =>
-                                BalancingError(balanceError)
-                            case validationError: TransactionException =>
-                                ValidationError(validationError)
-                        })
-                } yield (requiredAda)
+            /** Add the mock rollout input to ensure that the RolloutTx will fit within size
+              * constraints after fee calculation + balancing.
+              */
+            def trialFinishWithMock(ctx: TransactionBuilder.Context): Either[Error, Value] = {
+                val valueNeeded = Mock.inputValueNeeded(ctx)
+                val valueNeededPlus = valueNeeded + Value(Coin.ada(1000))
+                for {
+                    addedMockRolloutInput <- modify(ctx, List(spendMockRollout(valueNeededPlus)))
+                    finished <- finish(addedMockRolloutInput)
+                    valueNeededWithFee = valueNeeded + Value(
+                      finished.transaction.body.value.fee - ctx.transaction.body.value.fee
+                    )
+                } yield valueNeededWithFee
+            }
 
             def finish(
                 txBuilderContext: TransactionBuilder.Context

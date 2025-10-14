@@ -29,7 +29,8 @@ final case class RolloutTxSeq(
 object RolloutTxSeq {
 
     import RolloutTx.Builder.*
-    import RolloutTx.Builder.State.*
+    import RolloutTx.Builder.State as SingleState
+    import RolloutTx.Builder.State.Status as SingleStatus
     import hydrozoa.lib.tx.*
     import hydrozoa.lib.tx.BuildError.*
     import hydrozoa.lib.tx.TransactionBuilderStep.*
@@ -46,7 +47,7 @@ object RolloutTxSeq {
 
         // A NonEmptyList where the first element has a distinguished type
         type RolloutPartialResultChain =
-            (PartialResult.NeedsInput.FirstOrOnly, List[PartialResult.NeedsInput.NotFirst])
+            (SingleState.NeedsInput.FirstOrOnly, List[SingleState.NeedsInput.NotFirst])
 
         /** @return
           *   The settlement tx accompanied by a _chain_ of rollout transactions. TODO: make a
@@ -56,7 +57,7 @@ object RolloutTxSeq {
             // TODO: make NonEmptyVector
             payouts: Vector[Payout.Obligation.L1]
         ): RolloutErrorOr[RolloutPartialResultChain] = {
-            type RolloutMState = NonEmptyList[PartialResult.NeedsInput]
+            type RolloutMState = NonEmptyList[SingleState.NeedsInput]
             type RolloutM[A] = StateT[RolloutErrorOr, RolloutMState, A]
 
             // This accumulates a chain of partial results (f1, f2, ..., fn) in the state.
@@ -85,8 +86,8 @@ object RolloutTxSeq {
                     nextPartialRes = state._2.head
 
                     _ <- nextPartialRes match {
-                        case x: PartialResult.NeedsInput.FirstOrOnly => pure0(())
-                        case x: State.Intermediate[Status.NeedsInput] =>
+                        case x: SingleState.NeedsInput.FirstOrOnly => pure0(())
+                        case x: State.Intermediate[SingleStatus.NeedsInput] =>
                             for {
                                 thisPartialRes <- liftF0(
                                   RolloutTx
@@ -104,7 +105,7 @@ object RolloutTxSeq {
 
                             } yield (())
 
-                        case x: State.Last[Status.NeedsInput] =>
+                        case x: State.Last[SingleStatus.NeedsInput] =>
                             for {
                                 thisPartialRes <- liftF0(
                                   RolloutTx
@@ -148,7 +149,7 @@ object RolloutTxSeq {
                                     case _                          => Left(IncoherentChainingError)
                                 }
                                 castedTail <- Try(
-                                  prs.asInstanceOf[List[PartialResult.NeedsInput.NotFirst]]
+                                  prs.asInstanceOf[List[SingleState.NeedsInput.NotFirst]]
                                 ) match
                                     case Success(s) => Right(s)
                                     case Failure(_) => Left(IncoherentChainingError)
@@ -165,7 +166,7 @@ object RolloutTxSeq {
           * @return
           */
         def finishPartialChain(
-            partialResults: NonEmptyList[PartialResult.NeedsInput],
+            partialResults: NonEmptyList[SingleState.NeedsInput],
             firstRolloutInput: TransactionInput
         ): RolloutErrorOr[NonEmptyList[RolloutTx]] = {
             type RolloutKleisli =
@@ -242,7 +243,7 @@ object RolloutTxSeq {
           * @return
           */
         private def completeBuild(
-            partialRes: PartialResult.NeedsInput,
+            partialRes: SingleState.NeedsInput,
             spentRolloutTxIn: TransactionInput
         ): Either[BuildError, RolloutTx] = {
             val spentRolloutUtxo = TransactionUnspentOutput(
@@ -285,9 +286,9 @@ object RolloutTxSeq {
                     })
 
                 res = partialRes match {
-                    case last: PartialResult.NeedsInput.LastOrOnly =>
+                    case last: SingleState.NeedsInput.LastOrOnly =>
                         RolloutTx.Last(RolloutUtxo(spentRolloutUtxo.toTuple), finalized.transaction)
-                    case first: PartialResult.NeedsInput.NotLast =>
+                    case first: SingleState.NeedsInput.NotLast =>
                         RolloutTx.Intermediate(
                           rolloutSpent = RolloutUtxo(spentRolloutUtxo.toTuple),
                           rolloutProduced = RolloutUtxo(
@@ -307,7 +308,7 @@ object RolloutTxSeq {
 
         /** Returned when the first partial result in the chain isn't of type
           * State.First[NeedsInput], or when an element of the tail isn't of type
-          * PartialResult.NeedsInputNotFirst
+          * SingleState.NeedsInputNotFirst
           */
         object IncoherentChainingError
 }
