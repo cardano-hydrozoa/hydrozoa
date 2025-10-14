@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.txseq.tx
 
-import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
+import hydrozoa.lib.tx.SomeBuildError.ValidationError
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import hydrozoa.lib.tx.{
-    BuildError,
+    SomeBuildError,
     TransactionBuilder,
     TransactionBuilderStep,
     TransactionUnspentOutput
@@ -19,7 +19,7 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.STS.Validator
 // import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{TransactionOutput as TxOutput, *}
 
@@ -62,7 +62,7 @@ object RolloutTx {
 
         type Result = RolloutTx
 
-        type Error = BuildError | IncoherentBalancingError.type
+        type Error = SomeBuildError | IncoherentBalancingError.type
 
         enum State extends HasTxBuilderContext, HasInputRequired:
             case Intermediate[Status <: State.Status](
@@ -113,7 +113,7 @@ object RolloutTx {
                     def rolloutOutput: TxOutput.Babbage
                 }
             }
-            
+
             type Status = Status.InProgress | Status.NeedsInput | Status.Finished
 
             object Status {
@@ -240,7 +240,10 @@ object RolloutTx {
                     case Some(value) =>
                         val rolloutOutput = mkRolloutOutput(value)
                         for {
-                            ctx <- TxBuilder.build(Send(rolloutOutput) +: commonSteps)
+                            ctx <- TransactionBuilder.build(
+                              env.network,
+                              Send(rolloutOutput) +: commonSteps
+                            )
                             valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
                         } yield State.Intermediate[InProgress](
                           txBuilderContext = ctx,
@@ -251,7 +254,7 @@ object RolloutTx {
                     case None =>
                         val value = Value(Coin.zero)
                         for {
-                            ctx <- TxBuilder.build(commonSteps)
+                            ctx <- TransactionBuilder.build(env.network, commonSteps)
                             // There's no point attempting to finalized because there are no inputs/outputs
                         } yield State.Last[InProgress](ctx, value, payouts)
                 }
@@ -304,7 +307,8 @@ object RolloutTx {
                                         )
                                 }
                                 addPayouts(newState)
-                            case Left(e) => Right(state)
+                            case Left(err) =>
+                                TxBuilder.replaceInvalidSizeException(err, state)
                         }
                     case _Empty => Right(state)
                 }
@@ -316,23 +320,12 @@ object RolloutTx {
             ): Either[Error, (TransactionBuilder.Context, Value)] =
                 val payoutStep = Send(payoutObligation.output)
                 for {
-                    newCtx <- TxBuilder.modify(ctx, List(payoutStep))
+                    newCtx <- TransactionBuilder.modify(ctx, List(payoutStep))
                     valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
                 } yield (newCtx, valueNeededWithFee)
         }
 
         object TxBuilder {
-            def build(
-                steps: List[TransactionBuilderStep]
-            ): Either[Error, TransactionBuilder.Context] =
-                TransactionBuilder.build(env.network, steps).left.map(StepError(_))
-
-            def modify(
-                ctx: TransactionBuilder.Context,
-                steps: List[TransactionBuilderStep]
-            ): Either[Error, TransactionBuilder.Context] =
-                TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
-
             def spendMockRollout(value: Value): Spend =
                 Spend(
                   TransactionUnspentOutput(
@@ -352,7 +345,10 @@ object RolloutTx {
                 val valueNeeded = Mock.inputValueNeeded(ctx)
                 val valueNeededPlus = valueNeeded + Value(Coin.ada(1000))
                 for {
-                    addedMockRolloutInput <- modify(ctx, List(spendMockRollout(valueNeededPlus)))
+                    addedMockRolloutInput <- TransactionBuilder.modify(
+                      ctx,
+                      List(spendMockRollout(valueNeededPlus))
+                    )
                     finished <- finish(addedMockRolloutInput)
                     valueNeededWithFee = valueNeeded + Value(
                       finished.transaction.body.value.fee - ctx.transaction.body.value.fee
@@ -363,26 +359,17 @@ object RolloutTx {
             def finish(
                 txBuilderContext: TransactionBuilder.Context
             ): Either[Error, TransactionBuilder.Context] =
-                for {
-                    // Try to build, balance, and validate the resulting transaction
-                    finished <- txBuilderContext
-                        .finalizeContext(
-                          protocolParams = env.protocolParams,
-                          diffHandler = ChangeOutputDiffHandler(
-                            protocolParams = env.protocolParams,
-                            changeOutputIdx = 0
-                          ).changeOutputDiffHandler,
-                          evaluator = env.evaluator,
-                          validators = validators
-                        )
-                        .left
-                        .map({
-                            case balanceError: TxBalancingError =>
-                                BalancingError(balanceError)
-                            case validationError: TransactionException =>
-                                ValidationError(validationError)
-                        })
-                } yield finished
+                // Try to build, balance, and validate the resulting transaction
+                txBuilderContext
+                    .finalizeContext(
+                      protocolParams = env.protocolParams,
+                      diffHandler = ChangeOutputDiffHandler(
+                        protocolParams = env.protocolParams,
+                        changeOutputIdx = 0
+                      ).changeOutputDiffHandler,
+                      evaluator = env.evaluator,
+                      validators = validators
+                    )
 
             /** Replace a [[InvalidTransactionSizeException]] with some other value.
               *

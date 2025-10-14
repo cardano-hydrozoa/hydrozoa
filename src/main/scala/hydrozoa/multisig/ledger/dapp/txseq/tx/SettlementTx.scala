@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.txseq.tx
 
-import hydrozoa.lib.tx.BuildError.{BalancingError, StepError, ValidationError}
+import hydrozoa.lib.tx.SomeBuildError.ValidationError
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.lib.tx.{
-    BuildError,
+    SomeBuildError,
     TransactionBuilder,
     TransactionBuilderStep,
     TransactionUnspentOutput
@@ -19,7 +19,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionOutput as TxOutput
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{Environment, TxBalancingError}
+import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.STS.Validator
 
@@ -59,7 +59,7 @@ object SettlementTx {
     object Builder {
         import State.Fields.*
 
-        type Error = BuildError | RolloutFeesWithoutRolloutOutputError.type
+        type Error = SomeBuildError | RolloutFeesWithoutRolloutOutputError.type
 
         // TODO: Obsolete?
         case object RolloutFeesWithoutRolloutOutputError
@@ -112,7 +112,6 @@ object SettlementTx {
                 type Finished
             }
 
-
         }
     }
 
@@ -150,8 +149,6 @@ object SettlementTx {
         import Builder.*
         import Builder.State.Status.*
 
-
-
         def build(): Either[Error, Result] = for {
             pessimistic <- BasePessimistic.basePessimistic
             addedDeposits <- AddDeposits.addDeposits(pessimistic)
@@ -184,7 +181,7 @@ object SettlementTx {
 
         object BasePessimistic {
             lazy val basePessimistic: Either[Error, State[InProgress]] = for {
-                ctx <- TxBuilder.build(basePessimisticSteps)
+                ctx <- TransactionBuilder.build(env.network, basePessimisticSteps)
                 addedPessimisticRollout <- addPessimisticRollout(ctx)
                 _ <- TxBuilder.finish(addedPessimisticRollout)
             } yield State[InProgress](
@@ -200,7 +197,7 @@ object SettlementTx {
                 ctx: TransactionBuilder.Context
             ): Either[Error, TransactionBuilder.Context] = {
                 val extraStep = BasePessimistic.mbPessimisticSendRollout.toList
-                for { newCtx <- TxBuilder.modify(ctx, extraStep) } yield newCtx
+                for { newCtx <- TransactionBuilder.modify(ctx, extraStep) } yield newCtx
             }
 
             lazy val mbPessimisticSendRollout: Option[Send] = Builder.this match {
@@ -278,7 +275,7 @@ object SettlementTx {
             ): Either[Error, TransactionBuilder.Context] =
                 val depositStep = Spend(TransactionUnspentOutput(deposit.toUtxo))
                 for {
-                    newCtx <- TxBuilder.modify(ctx, List(depositStep))
+                    newCtx <- TransactionBuilder.modify(ctx, List(depositStep))
                     // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits
                     //
                     // Ensure that at least the pessimistic rollout output fits into the transaction.
@@ -316,7 +313,7 @@ object SettlementTx {
                     .toList
 
                 val optimisticTrial: Either[Error, TransactionBuilder.Context] = for {
-                    newCtx <- TxBuilder.modify(txBuilderContext, optimisticSteps)
+                    newCtx <- TransactionBuilder.modify(txBuilderContext, optimisticSteps)
                     finished <- TxBuilder.finish(newCtx)
                 } yield finished
 
@@ -432,40 +429,20 @@ object SettlementTx {
         }
 
         object TxBuilder {
-            def build(
-                steps: List[TransactionBuilderStep]
-            ): Either[Error, TransactionBuilder.Context] =
-                TransactionBuilder.build(env.network, steps).left.map(StepError(_))
-
-            def modify(
-                ctx: TransactionBuilder.Context,
-                steps: List[TransactionBuilderStep]
-            ): Either[Error, TransactionBuilder.Context] =
-                TransactionBuilder.modify(ctx, steps).left.map(StepError(_))
-
             def finish(
                 txBuilderContext: TransactionBuilder.Context
             ): Either[Error, TransactionBuilder.Context] =
-                for {
-                    // Try to build, balance, and validate the resulting transaction
-                    finished <- txBuilderContext
-                        .finalizeContext(
-                          protocolParams = env.protocolParams,
-                          diffHandler = ChangeOutputDiffHandler(
-                            protocolParams = env.protocolParams,
-                            changeOutputIdx = 0
-                          ).changeOutputDiffHandler,
-                          evaluator = env.evaluator,
-                          validators = validators
-                        )
-                        .left
-                        .map({
-                            case balanceError: TxBalancingError =>
-                                BalancingError(balanceError)
-                            case validationError: TransactionException =>
-                                ValidationError(validationError)
-                        })
-                } yield finished
+                // Try to build, balance, and validate the resulting transaction
+                txBuilderContext
+                    .finalizeContext(
+                      protocolParams = env.protocolParams,
+                      diffHandler = ChangeOutputDiffHandler(
+                        protocolParams = env.protocolParams,
+                        changeOutputIdx = 0
+                      ).changeOutputDiffHandler,
+                      evaluator = env.evaluator,
+                      validators = validators
+                    )
 
             /** Replace a [[InvalidTransactionSizeException]] with some other value.
               *
