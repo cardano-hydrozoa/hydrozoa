@@ -12,6 +12,23 @@ import scalus.cardano.ledger.txbuilder.Environment
 
 import scala.collection.immutable.Queue
 
+enum SettlementTxSeq:
+    def settlementTx: SettlementTx
+    
+    case NoPayouts(
+        override val settlementTx: SettlementTx
+    )
+    
+    case WithPayouts(
+        override val settlementTx: SettlementTx,
+        rolloutTxSeq: Option[RolloutTxSeq]
+    )
+
+object SettlementTxSeq {
+    
+    
+    
+}
 
 //case class SettlementTxSeqBuilder(
 //                                     majorVersion: Int,
