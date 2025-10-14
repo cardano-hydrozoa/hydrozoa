@@ -2,20 +2,23 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
-import scalus.builtin.{BLS12_381_G2_Element, ByteString}
+import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
+import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.FeesOkValidator
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
+import scalus.prelude as scalus
+import supranational.blst.Scalar
 import test.*
 
 /** Generator for resolved treasury UTXO with resolved datum */
@@ -131,7 +134,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
 class WithdrawTxTest extends munit.ScalaCheckSuite {
 
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters =
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(50)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1000)
 
     property("Withdraw tx builds successfully with valid recipe")(
       Prop.forAll(genWithdrawTxRecipe) { recipe =>
@@ -167,4 +170,55 @@ class WithdrawTxTest extends munit.ScalaCheckSuite {
           }
       }
     )
+
+    property("Partial membership proofs check") {
+        Prop.forAll(genMembershipCheck) { (subset, commitmentG1, proof) =>
+
+            // Pre-calculated powers of tau
+            val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
+
+            assertEquals(
+                RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof),
+                true
+            )
+        }
+    }
+
+    def genMembershipCheck: Gen[(scalus.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)] =
+        for {
+            // Acc elements
+            length <- Gen.choose(1, 64)
+            identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
+            identityBlst = scalus.List.from(identity.map(ss => Scalar().from_bendian(ss._1.toByteArray)))
+
+            // Accumulator
+            commitmentPoint = KzgCommitment.calculateCommitment(identityBlst)
+            commitmentBS = ByteString.fromArray(IArray.genericWrapArray(commitmentPoint).toArray)
+            commitmentG1 = BLS12_381_G1_Element(commitmentBS)
+
+            // Subset
+            subset <- Gen.pick(Integer.min(1, length), identity)
+
+            // Proof
+            theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
+            theRestBlst = scalus.List.from(theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray)))
+
+            proofPoint = KzgCommitment.calculateCommitment(theRestBlst)
+            proofBS = ByteString.fromArray(IArray.genericWrapArray(proofPoint).toArray)
+            proofG1 = BLS12_381_G1_Element(proofBS)
+
+        } yield (scalus.List.from(subset), commitmentG1, proofG1)
+
+    // Arbitrary instance for ScalusScalar that generates big enough (> 2^230) values
+    given Arbitrary[ScalusScalar] = Arbitrary {
+        for {
+            // Generate a large BigInt within the scalar field range
+            // Use a range that's big enough but still within the field prime
+            bigInt <- Gen.choose(
+                BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
+                ScalusScalar.fieldPrime - 1
+            )
+        } yield ScalusScalar.applyUnsafe(bigInt)
+    }
+
 }

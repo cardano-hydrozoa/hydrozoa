@@ -46,9 +46,12 @@ object KzgCommitment {
       */
     def calculateCommitment(scalars: SList[Scalar]): KzgCommitment = {
 
+        println(s"elems: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+
         // Get as much from the setup as we need: n + 1 elements
         val size = scalars.length.toInt + 1
         val srs = TrustedSetup.takeSrsG1(size)
+        
         // Check the size of the setup is big enough
         assert(
           size == srs.length,
