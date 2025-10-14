@@ -1,15 +1,16 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
+import cats.data.{Kleisli, NonEmptyVector}
+import cats.syntax.all.*
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
 import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
 import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder as SingleBuilder
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
+import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.PartialResult.FirstOrOnly
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.joint.utxo.Payout
 
 import scala.annotation.tailrec
-import cats.syntax.all.*
-import cats.data.{Kleisli, NonEmptyVector}
 
 /**
  * A non-empty chain of rollout transactions in order of chaining.
@@ -30,7 +31,10 @@ object RolloutTxSeq {
 
         type Result = RolloutTxSeq
 
-        sealed trait PartialResult
+        sealed trait PartialResult:
+            def firstOrOnly: RolloutTx.Builder.PartialResult.FirstOrOnly
+
+            def finishPostProcess(rolloutSpent: RolloutUtxo): ErrorOr[RolloutTxSeq]
 
         object PartialResult {
             /**
@@ -50,6 +54,8 @@ object RolloutTxSeq {
                         onlyPostProcessed = only.builder.PostProcess.Last
                             .getRolloutTx(onlyFinished, only.builder)
                     } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
+
+                val firstOrOnly: FirstOrOnly = only
             }
 
             /** I.E.: RolloutUtxo => Either[Error, RolloutTx.NotLast] */
@@ -65,6 +71,7 @@ object RolloutTxSeq {
                 intermediates: Vector[SinglePartialResult.Intermediate],
                 last: SinglePartialResult.Last
             ) extends PartialResult {
+                val firstOrOnly: FirstOrOnly = first
                 
                 /** Finalize the partial result chain into a sequence of rollout transactions by providing
                  * the first rollout utxo to the first partial result, finishing it, and then threading the subsequent
