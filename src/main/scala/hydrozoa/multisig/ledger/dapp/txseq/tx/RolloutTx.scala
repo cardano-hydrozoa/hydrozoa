@@ -151,13 +151,13 @@ object RolloutTx {
             def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
                 TxBalance.produced(ctx.transaction)
         }
-        
+
         // TODO: Find a better place for this
         final case class Config (
             headNativeScript: HeadMultisigScript,
             headNativeScriptReferenceInput: TransactionUnspentOutput,
             env: Environment,
-            validators: Seq[Validator]    
+            validators: Seq[Validator]
         )
 
         final case class Last(
