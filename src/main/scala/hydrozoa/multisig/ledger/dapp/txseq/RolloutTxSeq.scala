@@ -11,6 +11,13 @@ import scala.annotation.tailrec
 import cats.syntax.all.*
 import cats.data.{Kleisli, NonEmptyVector}
 
+/**
+ * A non-empty chain of rollout transactions in order of chaining.
+ * The first Tx [[notLast]] vector consumes a rollout utxo produced by a settling or finalizing transaction;
+ * the second consumes the rollout utxo produced by the first, and so on.
+ * @param notLast
+ * @param last
+ */
 final case class RolloutTxSeq(
     notLast: Vector[RolloutTx.NotLast],
     last: RolloutTx.Last
@@ -26,7 +33,15 @@ object RolloutTxSeq {
         sealed trait PartialResult
 
         object PartialResult {
+            /**
+             * A case class indicating when only single rollout transaction is required to 
+             * fulfill all payout obligations. The transaction consumes the first rollout utxo
+             * (produced by the settlement or finalization transaction) and directly pays out
+             * all remaining payouts.
+             * @param only
+             */
             final case class Singleton(only: SinglePartialResult.Only) extends PartialResult {
+                /** Finish the singleton rollout transaction by providing the first rollout utxo. */
                 def finishPostProcess(
                     rolloutSpent: RolloutUtxo
                 ): ErrorOr[RolloutTxSeq] =
@@ -37,14 +52,24 @@ object RolloutTxSeq {
                     } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
             }
 
+            /** I.E.: RolloutUtxo => Either[Error, RolloutTx.NotLast] */
             type RolloutKleisli =
                 Kleisli[ErrorOr, RolloutUtxo, RolloutTx.NotLast]
 
+            /** A partial result for a rollout transaction _chain_, where the [[first]] transaction consumes a rollout
+             * utxo from a settlement or finalization tx and produces the next rollout utxo, the [[intermediates]] 
+             * consume the previous and produce another, and the [[last]] consumes a final rollout utxo and fulfills
+             * all payout obligations (therefore not needing to produce another rollout utxo). */
             final case class Many(
                 first: SinglePartialResult.First,
                 intermediates: Vector[SinglePartialResult.Intermediate],
                 last: SinglePartialResult.Last
             ) extends PartialResult {
+                
+                /** Finalize the partial result chain into a sequence of rollout transactions by providing
+                 * the first rollout utxo to the first partial result, finishing it, and then threading the subsequent
+                 * rollout utxos through the remainder of the sequence. 
+                 * */
                 def finishPostProcess(
                     rolloutSpent: RolloutUtxo
                 ): ErrorOr[RolloutTxSeq] =
@@ -114,6 +139,12 @@ object RolloutTxSeq {
 
         import Builder.*
 
+        /**
+         * Builds a "partial result chain" pertaining to rollout transactions. This can either be a [[Singleton]] chain
+         * or a [[Many]] chain. In the case of the latter, it tries to pack as many payout obligations into 
+         * each rollout transaction, proceeding from the last and working towards the first.
+         * @return
+         */
         def buildPartial(): ErrorOr[PartialResult] =
             for {
                 lastRolloutTx <- SingleBuilder.Last(config, payouts.toVector).buildPartial()

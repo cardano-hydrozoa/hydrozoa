@@ -17,8 +17,8 @@ import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.txbuilder.Environment
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{TransactionOutput as TxOutput, *}
 
@@ -31,9 +31,10 @@ enum RolloutTx extends Tx {
         override val rolloutSpent: RolloutUtxo,
         override val tx: Transaction
     ) extends RolloutTx
-
+    
     case NotLast(
         override val rolloutSpent: RolloutUtxo,
+        /** Invariant: this rollout utxo MUST have the txId of the [[tx]] field and index 0. */
         override val rolloutProduced: RolloutUtxo,
         override val tx: Transaction
     ) extends RolloutTx, RolloutTx.HasRolloutProduced
@@ -57,6 +58,11 @@ object RolloutTx {
 
         type Result = RolloutTx
 
+      /**
+       * Partial results are enumerated based on their position within the rollout chain.
+       * The builders for [[Intermediate]] and [[First]] produce transactions that
+       * produce rollout utxos, while the builders for [[Last]] and [[Only]] do not.
+       * */
         enum PartialResult:
             def state: State[State.Status.NeedsInput]
             def builder: Builder
@@ -90,6 +96,24 @@ object RolloutTx {
             type LastOrOnly = PartialResult.Last | Only
         }
 
+      /**
+       * The state associated with a single rollout tx. It is passed between
+       * functions that modify it in different stages, and carries a [[Status]]
+       * phantom type to indicate which operations have already been applied.
+       *
+       * @param ctx
+       * The [[Context]] "so far" on the state, including a partially-built transaction, s
+       * resolved utxos, etc.
+       * @param inputValueNeeded
+       * The input value needed to process this rollout tx.
+       * If this is not the Only or Last rollout transaction,
+       * this includes the value necessary to establish the next
+       * rollout utxo and pay for its fees.
+       * @param remainingPayoutObligations
+       * The payout obligations that were not processes by
+       * this rollout transaction.
+       * @tparam Status
+       */
         final case class State[Status <: State.Status](
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
@@ -160,6 +184,13 @@ object RolloutTx {
             validators: Seq[Validator]
         )
 
+      /**
+       * A builder for the last (or only) rollout transaction in a chain. It doesn't produce a subsequent rollout
+       * utxo. In practice, this rollout transaction is built _first_ and we work backwards to construct the
+       * rest of the chain.
+       * @param config
+       * @param payouts
+       */
         final case class Last(
             override val config: Config,
             override val payouts: Vector[Payout.Obligation.L1],
@@ -177,6 +208,16 @@ object RolloutTx {
             }
         }
 
+      /**
+       * A builder for non-terminal rollout transaction in a chain. It produces a subsequent rollout
+       * utxo with the correct amount value required for the _next_ rollout transaction in the chain, which is
+       * _built_ prior to this transaction.   
+       * @param config
+       * @param payouts 
+       * @param rolloutOutputValue
+       * The rollout output this transaction produces, which must be consumed as an input in the next rollout 
+       * transaction.
+       */
         final case class NotLast(
             override val config: Config,
             override val payouts: Vector[Payout.Obligation.L1],
@@ -197,12 +238,32 @@ object RolloutTx {
     }
 
     trait Builder:
+      /**
+       * The current payout obligations when this rollout tx is built. The builder packs as many as possible into this
+       * transaction (while preserving the order of the input seqeuence) and returns the _remaining payouts_ (the 
+       * ones that didn't fit) in its result.
+       *
+       * @return
+       */
         def payouts: Vector[Payout.Obligation.L1]
         def config: Builder.Config
 
         import Builder.*
+
         import Builder.State.Status.*
 
+        /** 
+         * This object serves to organize the construction of a "pessimistic" [[State]] that assumes worst-case
+         * packing of payout obligations into the transaction by taking the absolute minimum requirements of a 
+         * rollout tx. These include:
+         * - Setting the metadata for the transaction
+         * - Adding the utxo with the head native script to the reference inputs of the tx body
+         * - If this rollout transaction is not the last one in the chain, creating the next rollout utxo.
+         * 
+         * Then, it calculates the value that would satisfy the requirements of the transaction (including balancing 
+         * and fee).
+         * 
+         * */
         object BasePessimistic {
             lazy val basePessimistic: Either[Error, State[InProgress]] =
                 for {
@@ -247,7 +308,9 @@ object RolloutTx {
                 )
         }
 
+        
         object AddPayouts {
+            /** Try to add payouts one-by-one until adding another payout would exceed transaction size limits. */
             @tailrec
             def addPayouts(
                 state: State[InProgress]
@@ -269,7 +332,10 @@ object RolloutTx {
                     case _Empty => Right(state)
                 }
             }
-
+      
+            /** Try to add a single payout to the rollout transaction, and then trial a finalization with a mock
+             * rollout utxo as an input. If successful, returns the new [[Context]] and the actual value needed 
+             * for the prior rollout utxo.*/
             def tryAddPayout(
                 ctx: TransactionBuilder.Context,
                 payoutObligation: Payout.Obligation.L1
@@ -315,6 +381,7 @@ object RolloutTx {
               * constraints after fee calculation + balancing.
               */
             def trialFinishWithMock(ctx: TransactionBuilder.Context): Either[Error, Value] = {
+                // The deficit in the inputs to the transaction prior to adding the mock
                 val valueNeeded = Mock.inputValueNeeded(ctx)
                 val valueNeededPlus = valueNeeded + Value(Coin.ada(1000))
                 for {
