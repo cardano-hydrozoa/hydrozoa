@@ -10,7 +10,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.*
+import scalus.{Compile, Compiler, plutusV3, toUplcOptimized, writePlutusFile, |>}
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
@@ -234,6 +234,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // The beacon token should be preserved
                 // By contract, we require the treasure utxo is always be the head, and the tail be withdrawals
                 val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
+
                 require(
                   treasuryOutput.value.toSortedMap
                       .get(headMp)
@@ -274,6 +275,11 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Extract setup of needed length
                 val setup = resolvedDatum.setup.take(withdrawnUtxos.length + 1).map(G2.uncompress)
+
+                //// trace hashes
+                //withdrawnUtxos.foreach( s =>
+                //    trace(s.toInt.show)(())
+                //)
 
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),

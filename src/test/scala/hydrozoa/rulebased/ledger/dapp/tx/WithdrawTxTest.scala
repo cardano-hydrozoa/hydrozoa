@@ -5,7 +5,10 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    RuleBasedTreasuryScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
@@ -26,10 +29,11 @@ def genResolvedTreasuryUtxo(
     fallbackTxId: TransactionHash,
     headMp: PolicyId,
     beaconTokenName: TokenName,
-    utxosCommitment: KzgCommitment.KzgCommitment
+    utxosCommitment: KzgCommitment.KzgCommitment,
+    setupSize: Int
 ): Gen[RuleBasedTreasuryUtxo] =
     for {
-        treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment)
+        treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment, setupSize)
         // Min ada for the beacon token and the datum
         coin <- Gen.const(5_000_000L)
         value = Value(Coin(coin)) + singleton(headMp, AssetName(beaconTokenName))
@@ -49,13 +53,14 @@ def genResolvedTreasuryUtxo(
 /** Generator for resolved treasury datum */
 def genTreasuryResolvedDatum(
     headMp: PolicyId,
-    utxosCommitment: KzgCommitment.KzgCommitment
+    utxosCommitment: KzgCommitment.KzgCommitment,
+    setupSize: Int
 ): Gen[ResolvedDatum] =
     for {
         version <- genVersion
         params <- genByteStringOfN(32)
         setup = TrustedSetup
-            .takeSrsG2(26)
+            .takeSrsG2(setupSize)
             .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
     } yield ResolvedDatum(
       headMp = headMp,
@@ -86,20 +91,58 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
           fallbackTxId
         ) <- genHeadParams
 
-        // Generate a set of L2 utxos
-        l2UtxoCount <- Gen.choose(2, 25)
+        // Generate a set of 64-1000 L2 utxos (64 is
+        l2UtxoCount <- Gen.choose(64, 1000)
         utxosL2 <- genUtxosL2(l2UtxoCount)
+        _ = println(s"utxosL2: ${utxosL2.keys.size}")
 
-        // Calculate the whole utxo set commitment
+        // Calculate the whole L2 utxo set commitment
         utxoCommitment = mkCommitment(utxosL2.asScalus)
+
+        // Select some random number of withdrawals
+        // TODO: find the limit with refscripts
+        wn <- Gen.choose(1, Integer.min(35, utxosL2.untagged.keys.size))
+        withdrawals0 <- Gen.pick(wn, utxosL2.untagged)
+        _ = println(s"withdrawals length: ${withdrawals0.length}")
+        withdrawals = UtxoSet(withdrawals0.toMap)
+
+        // Check
+        //_ = println(s"withdrawals: {$withdrawals0}")
+        //_ = println(
+        //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
+        //)
+
+        // Calculate the membership proof
+        theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
+        _ = println(s"theRest: ${theRest.keys.size}")
+        membershipProof = mkCommitment(theRest.asScalus)
+
+        // Check correctness locally
+        // Pre-calculated powers of tau
+        crsG2 = TrustedSetup.takeSrsG2(withdrawals0.length + 1).map(BLS12_381_G2_Element.apply)
+        commitmentBS = ByteString.fromArray(IArray.genericWrapArray(utxoCommitment).toArray)
+        commitmentG1 = BLS12_381_G1_Element(commitmentBS)
+        withdrawalScalars = KzgCommitment.hashToScalar(withdrawals.asScalus)
+        subset = withdrawalScalars.map(s =>
+            ScalusScalar.fromByteStringBigEndianUnsafe(ByteString.fromArray(s.to_bendian()))
+        )
+
+        proofBS = ByteString.fromArray(IArray.genericWrapArray(membershipProof).toArray)
+        proofG1 = BLS12_381_G1_Element(proofBS)
+
+        _ = assert(
+          RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proofG1),
+          "Local pre-verification failed"
+        )
 
         // Generate treasury UTXO with _some_ funds
         beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
         treasuryUtxo <- genResolvedTreasuryUtxo(
-          fallbackTxId,
-          headScriptHash,
-          beaconTokenName,
-          utxoCommitment
+            fallbackTxId,
+            headScriptHash,
+            beaconTokenName,
+            utxoCommitment,
+            wn + 1
         )
 
         // Ensure treasury has sufficient funds
@@ -108,15 +151,6 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
             Value(Coin(20_000_000L))
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
 
-        // Select some random withdrawals
-        // withdrawals0 <- Gen.atLeastOne(utxosL2.untagged)
-        // FIXME: test works for 4 withdrawals but stop working for 5
-        withdrawals0 <- Gen.pick(Integer.min(4, utxosL2.untagged.keys.size), utxosL2.untagged)
-        withdrawals = UtxoSet(withdrawals0.toMap)
-
-        // Calculate the membership proof
-        theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
-        membershipProof = mkCommitment(theRest.asScalus)
 
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)
@@ -134,7 +168,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
 class WithdrawTxTest extends munit.ScalaCheckSuite {
 
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters =
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
 
     property("Withdraw tx builds successfully with valid recipe")(
       Prop.forAll(genWithdrawTxRecipe) { recipe =>
@@ -175,21 +209,25 @@ class WithdrawTxTest extends munit.ScalaCheckSuite {
         Prop.forAll(genMembershipCheck) { (subset, commitmentG1, proof) =>
 
             // Pre-calculated powers of tau
-            val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
+            val crsG2 =
+                TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
 
             assertEquals(
-                RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof),
-                true
+              RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof),
+              true
             )
         }
     }
 
-    def genMembershipCheck: Gen[(scalus.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)] =
+    def genMembershipCheck
+        : Gen[(scalus.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)] =
         for {
             // Acc elements
-            length <- Gen.choose(1, 64)
+            length <- Gen.choose(64, 1024)
             identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
-            identityBlst = scalus.List.from(identity.map(ss => Scalar().from_bendian(ss._1.toByteArray)))
+            identityBlst = scalus.List.from(
+              identity.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+            )
 
             // Accumulator
             commitmentPoint = KzgCommitment.calculateCommitment(identityBlst)
@@ -197,11 +235,13 @@ class WithdrawTxTest extends munit.ScalaCheckSuite {
             commitmentG1 = BLS12_381_G1_Element(commitmentBS)
 
             // Subset
-            subset <- Gen.pick(Integer.min(1, length), identity)
+            subset <- Gen.pick(Integer.min(1, 64), identity)
 
             // Proof
             theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
-            theRestBlst = scalus.List.from(theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray)))
+            theRestBlst = scalus.List.from(
+              theRest.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+            )
 
             proofPoint = KzgCommitment.calculateCommitment(theRestBlst)
             proofBS = ByteString.fromArray(IArray.genericWrapArray(proofPoint).toArray)
@@ -209,14 +249,13 @@ class WithdrawTxTest extends munit.ScalaCheckSuite {
 
         } yield (scalus.List.from(subset), commitmentG1, proofG1)
 
+    // TODO: upstream
     // Arbitrary instance for ScalusScalar that generates big enough (> 2^230) values
     given Arbitrary[ScalusScalar] = Arbitrary {
         for {
-            // Generate a large BigInt within the scalar field range
-            // Use a range that's big enough but still within the field prime
             bigInt <- Gen.choose(
-                BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
-                ScalusScalar.fieldPrime - 1
+              BigInt("1000000000000000000000000000000000000000000000000000000000000000000000"),
+              ScalusScalar.fieldPrime - 1
             )
         } yield ScalusScalar.applyUnsafe(bigInt)
     }

@@ -41,6 +41,7 @@ object WithdrawTx {
 
     case class Recipe(
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        // NB: The order doesn't matter in the recipe, since either all withdrawals should make it to the tx.
         withdrawals: UtxoSetL2,
         membershipProof: IArray[Byte],
         validityEndSlot: Long,
@@ -100,13 +101,18 @@ object WithdrawTx {
     ): Either[SomeBuildError, WithdrawTx] = {
         import recipe.*
 
-        val proofBS = ByteString.fromArray(IArray.genericWrapArray(recipe.membershipProof).toArray)
+        val proofBS = ByteString.fromArray(IArray.genericWrapArray(membershipProof).toArray)
+
+        // From this point we should choose and stick to a particular order of withdrawals, so
+        // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
+        // the redeemer should be the same.
+        val withdrawalsList = withdrawals.untagged.toList
+
         val withdrawRedeemer = TreasuryRedeemer.Withdraw(
           WithdrawRedeemer(
             SList.from(
-              withdrawals.keys
-                  .map(_.untagged)
-                  .map(utxoId => TxOutRef(TxId(utxoId.transactionId), utxoId.index))
+              withdrawalsList
+                  .map((utxoId, _) => TxOutRef(TxId(utxoId.transactionId), utxoId.index))
             ),
             proofBS
           )
@@ -115,12 +121,12 @@ object WithdrawTx {
             RuleBasedTreasuryDatum.Resolved(treasuryDatum.copy(utxosActive = proofBS))
 
         // withdrawal outputs
-        val withdrawalOutputs = recipe.withdrawals.values
+        val withdrawalOutputs = withdrawalsList.map(_._2)
 
         for {
             context <- TransactionBuilder
                 .build(
-                  recipe.network,
+                  network,
                   List(
                     // Spend the treasury utxo with withdrawal proof
                     Spend(
@@ -141,7 +147,7 @@ object WithdrawTx {
                         scriptRef = None
                       )
                     ),
-                    ValidityEndSlot(recipe.validityEndSlot)
+                    ValidityEndSlot(validityEndSlot)
                   )
                       ++
                           // Outputs for withdrawals
@@ -150,28 +156,28 @@ object WithdrawTx {
 
             finalized <- context
                 .finalizeContext(
-                  protocolParams = recipe.protocolParams,
+                  protocolParams = protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
+                    protocolParams,
                     0
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                  evaluator = evaluator,
+                  validators = validators
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              beaconTokenName = recipe.treasuryUtxo.beaconTokenName,
+              beaconTokenName = treasuryUtxo.beaconTokenName,
               txId = TransactionInput(
                 finalized.transaction.id,
                 0
               ), // Treasury output index
-              addr = recipe.treasuryUtxo.addr,
-              datum = recipe.treasuryUtxo.datum,
+              addr = treasuryUtxo.addr,
+              datum = treasuryUtxo.datum,
               value = residualValue
             )
 
         } yield WithdrawTx(
-          treasuryUtxoSpent = recipe.treasuryUtxo,
+          treasuryUtxoSpent = treasuryUtxo,
           treasuryUtxoProduced = newTreasuryUtxo,
           withdrawalOutputs = withdrawalOutputs.toList,
           tx = finalized.transaction

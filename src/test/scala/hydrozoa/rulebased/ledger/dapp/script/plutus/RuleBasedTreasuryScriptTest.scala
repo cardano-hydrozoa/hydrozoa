@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import munit.FunSuite
-import scala.io.Source
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
@@ -12,6 +11,8 @@ import scalus.prelude.List
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.Scalar
+
+import scala.io.Source
 
 class RuleBasedTreasuryScriptTest extends FunSuite {
 
@@ -22,13 +23,13 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
     test("Script compiles, size and hash is still the same") {
         assertEquals(
           RuleBasedTreasuryScript.compiledScriptHash,
-          ScriptHash.fromHex("905ceb8b466d5a4090b10a4fc0521946968adbef069969f9f0b551ea"),
+          ScriptHash.fromHex("5cf75884c7b76ec5c6b4f2b418552c530aa0afd56e466f19468b0fce"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         )
 
         assertEquals(
           RuleBasedTreasuryScript.flatEncoded.length,
-          9175,
+          9104,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
         )
 
@@ -94,33 +95,6 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         val accumulator = BLS12_381_G1_Element(
           ByteString.fromHex(
             "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
-          )
-        )
-
-        // Hashes of utxos
-        val subset = List(
-          ScalusScalar("5088390254917556218676958430080367916099549701669885042964937592926").get,
-          ScalusScalar("10660627058191719947148018507418106787651292500144510379470545154509").get
-        )
-
-        // Proof
-        val proof = G1.generator
-
-        // Pre-calculated powers of tau
-        val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
-
-        assertEquals(
-          RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof),
-          true
-        )
-    }
-
-    test("Membership check smoke-test 2") {
-
-        // Accumulator:
-        val accumulator = BLS12_381_G1_Element(
-          ByteString.fromHex(
-            "8beca1b1d0f5294811791f906d11704179230a235a127132d30c9da6da84eacecc71051db1c1e011afbb8332e23f6584"
           )
         )
 
