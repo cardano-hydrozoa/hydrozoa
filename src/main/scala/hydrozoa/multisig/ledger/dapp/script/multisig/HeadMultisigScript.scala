@@ -3,15 +3,13 @@ package hydrozoa.multisig.ledger.dapp.script.multisig
 import cats.*
 import cats.data.*
 import hydrozoa.VerificationKeyBytes
-import hydrozoa.lib.tx.ExpectedSigner
-import hydrozoa.lib.tx.NativeScriptWitness
 import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
-import hydrozoa.lib.tx.Witness
+import hydrozoa.lib.tx.{ExpectedSigner, NativeScriptWitness}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{Network, ShelleyPaymentPart, ShelleyAddress}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.Timelock.{Signature, AllOf}
+import scalus.cardano.ledger.Timelock.{AllOf, Signature}
 
 case class HeadMultisigScript(private val script0: Script.Native) {
     val script: Script.Native = script0

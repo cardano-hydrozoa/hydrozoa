@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{
@@ -8,8 +9,8 @@ import scalus.cardano.ledger.{
     TransactionMetadatum,
     TransactionMetadatumLabel
 }
+
 import Metadata.L1TxTypes.*
-import hydrozoa.multisig.ledger.dapp.token.CIP67
 
 object Metadata {
     // NOTE (from Peter to George): I assume we have these types somewhere else? They used to be in DappLedger.

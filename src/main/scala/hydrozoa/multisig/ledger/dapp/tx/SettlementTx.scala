@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.{BalancingError, ValidationError}
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -10,6 +9,8 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import scala.collection
+import scala.language.{implicitConversions, reflectiveCalls}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network
@@ -17,11 +18,8 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
-
-import scala.collection
-import scala.language.{implicitConversions, reflectiveCalls}
 
 final case class SettlementTx(
     treasurySpent: TreasuryUtxo,
@@ -47,7 +45,7 @@ object SettlementTx {
         validators: Seq[Validator]
     )
 
-    def build(recipe: Recipe): Either[BuildError, SettlementTx] = {
+    def build(recipe: Recipe): Either[SomeBuildError, SettlementTx] = {
         //////////////////////////////////////////////////////
         // Data extraction
 
@@ -120,8 +118,6 @@ object SettlementTx {
         for {
             unbalanced <- TransactionBuilder
                 .build(recipe.network, steps)
-                .left
-                .map(BuildError.StepError(_))
             finalized <- unbalanced
                 .finalizeContext(
                   recipe.protocolParams,
@@ -132,12 +128,6 @@ object SettlementTx {
                   evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
-                .left
-                .map({
-                    case balanceError: TxBalancingError => BalancingError(balanceError)
-                    case validationError: TransactionException =>
-                        ValidationError(validationError)
-                })
 
             /////////////////////////////////////////////////////////////////////////
             // Post-process result

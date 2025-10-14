@@ -2,8 +2,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
 import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.BuildError.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
+import hydrozoa.lib.tx.SomeBuildError.*
 import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -14,8 +14,8 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
@@ -50,7 +50,7 @@ object RefundTx {
             validityStartSlot: Slot
         )
 
-        def build(recipe: Recipe): Either[BuildError, PostDated] = {
+        def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
             /////////////////////////////////////////////////////////////////////
             // Data extraction
 
@@ -96,8 +96,6 @@ object RefundTx {
             for {
                 unbalanced <- TransactionBuilder
                     .build(recipe.network, steps)
-                    .left
-                    .map(StepError(_))
                 finalized <- unbalanced
                     .finalizeContext(
                       recipe.protocolParams,
@@ -108,12 +106,6 @@ object RefundTx {
                       evaluator = recipe.evaluator,
                       validators = recipe.validators
                     )
-                    .left
-                    .map({
-                        case balanceError: TxBalancingError => BalancingError(balanceError)
-                        case validationError: TransactionException =>
-                            ValidationError(validationError)
-                    })
             } yield PostDated(
               depositSpent = recipe.depositTx.depositProduced,
               tx = finalized.transaction

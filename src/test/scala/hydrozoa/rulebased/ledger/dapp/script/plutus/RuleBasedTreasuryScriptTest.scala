@@ -22,7 +22,7 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
     test("Script compiles, size and hash is still the same") {
         assertEquals(
           RuleBasedTreasuryScript.compiledScriptHash,
-          ScriptHash.fromHex("26202127157a1791dc9c2c5f50a8961f242db793e37c328e13d2de52"),
+          ScriptHash.fromHex("905ceb8b466d5a4090b10a4fc0521946968adbef069969f9f0b551ea"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         )
 

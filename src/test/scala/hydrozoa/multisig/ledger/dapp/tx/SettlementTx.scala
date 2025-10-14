@@ -2,19 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
-import cats.*
-import cats.data.*
-import hydrozoa.*
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import io.bullet.borer.Cbor
-import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
-import io.bullet.borer.Cbor
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null

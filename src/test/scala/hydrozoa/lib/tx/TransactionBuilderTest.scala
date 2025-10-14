@@ -5,9 +5,10 @@ import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.RedeemerPurpose.{ForCert, ForMint}
 import hydrozoa.lib.tx.ScriptSource.*
+import hydrozoa.lib.tx.SomeBuildError.SomeStepError
+import hydrozoa.lib.tx.StepError.*
 import hydrozoa.lib.tx.TransactionBuilder.{Context, ResolvedUtxos, WitnessKind, build}
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.lib.tx.TxBuildError.*
 import hydrozoa.{txBodyL, txInputsL, txRedeemersL, txReferenceInputsL, txRequiredSignersL}
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -43,11 +44,11 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     def testBuilderStepsFail(
         label: String,
         steps: Seq[TransactionBuilderStep],
-        error: TxBuildError
+        error: StepError
     ): Unit =
         test(label) {
             val res = TransactionBuilder.build(Mainnet, steps)
-            assert(res == Left(error))
+            assert(res == Left(SomeStepError(error)))
         }
 
     def testBuilderSteps(
@@ -185,7 +186,7 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     testBuilderStepsFail(
       label = "PKH output x2",
       steps = List(Spend(pkhUtxo, PubKeyWitness), Spend(pkhUtxo, PubKeyWitness)),
-      error = TxBuildError.InputAlreadyExists(pkhUtxo.input)
+      error = InputAlreadyExists(pkhUtxo.input)
     )
 
     testBuilderStepsFail(
@@ -510,7 +511,7 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     testBuilderStepsFail(
       label = "Mint 0 directly",
       steps = List(mintScript1(0)),
-      error = TxBuildError.CannotMintZero(scriptHash1, AssetName.empty)
+      error = CannotMintZero(scriptHash1, AssetName.empty)
     )
 
     testBuilderSteps(
@@ -654,11 +655,11 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
         )
     }
 
-    test("A script based utxo can't be used as a collateral") {
-        val step = AddCollateral(utxo = script1Utxo)
-        val res = TransactionBuilder.build(Mainnet, List(step))
-        assert(res == Left(TxBuildError.CollateralNotPubKey(script1Utxo)))
-    }
+    testBuilderStepsFail(
+        label = "A script based utxo can't be used as a collateral",
+        steps = List(AddCollateral(utxo = script1Utxo)),
+        error = CollateralNotPubKey(script1Utxo)
+    )
 
     // =======================================================================
     // Group: "Deregister"
