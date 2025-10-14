@@ -457,11 +457,6 @@ object TransactionBuilder:
                     .balance(diffHandler, protocolParams, evaluator)
                 .left
                   .map(BalancingError(_))
-                    //.map({
-                    //    // TODO: split/update `case Failed(cause: Throwable)`, remove the cast
-                    //    case TxBalancingError.Failed(cause) => EvaluationError(cause.asInstanceOf[PlutusScriptEvaluationException])
-                    //    case e @ _ => BalancingError(e)
-                    //})
 
                 validatedCtx <- balancedCtx.validate(validators, protocolParams)
                     .left.map(ValidationError(_))
@@ -1914,6 +1909,7 @@ enum SomeBuildError:
     override def toString: String = this match {
         case SomeStepError(e) =>
             s"Step processing error: ${e.getClass.getSimpleName} - ${e.explain}"
+        // TODO: port back changes from Scalus WRT the new constructor in TxBalancingError
         case BalancingError(TxBalancingError.Failed(unknown)) => unknown match {
           case psee: PlutusScriptEvaluationException =>
             s"Plutus script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs.mkString(" <CR> ")}"
