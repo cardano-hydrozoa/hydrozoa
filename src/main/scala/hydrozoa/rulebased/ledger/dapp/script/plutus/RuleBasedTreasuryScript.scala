@@ -10,7 +10,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.*
+import scalus.{Compile, Compiler, plutusV3, toUplcOptimized, writePlutusFile, |>}
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
@@ -233,9 +233,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // The beacon token should be preserved
                 // By contract, we require the treasure utxo is always be the head, and the tail be withdrawals
-                // FIXME: in reality the change outputs gets in
-                //   Ideally we need to use treasury for fees.
                 val List.Cons(treasuryOutput, withdrawalOutputs) = tx.outputs: @unchecked
+
                 require(
                   treasuryOutput.value.toSortedMap
                       .get(headMp)
@@ -247,23 +246,16 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Withdrawals
                 // The number of withdrawals should match the number of utxos ids in the redeemer
-                // FIXME: in reality the change outputs gets in - hence +1 for now
                 require(
-                  withdrawalOutputs.size == utxoIds.size + 1,
+                  withdrawalOutputs.size == utxoIds.size,
                   WithdrawWrongNumberOfWithdrawals
                 )
-                // Calculate the final poly for withdrawn subset
-                // FIXME: this fails due to the same error:
-                // Caused by: java.lang.IllegalArgumentException: Expected case class type, got TypeVar(T,Some(218919)) in expression: match d with
-                // I blame this lines in Scalus, though it's not clear how to fix that since it uses
 
-                // TODO:
-                val withdrawalOutputsNoChange = withdrawalOutputs.reverse.tail.reverse
+                // Calculate the final poly for withdrawn subset
 
                 // Zip utxo ids and outputs
                 val withdrawnUtxos: List[ScalusScalar] = utxoIds
-                    // .zip(withdrawalOutputs)
-                    .zip(withdrawalOutputsNoChange)
+                    .zip(withdrawalOutputs)
                     // Convert to data, serialize, calculate a hash, convert to scalars
                     .map(e =>
                         e.toData
@@ -284,6 +276,11 @@ object RuleBasedTreasuryValidator extends Validator {
                 // Extract setup of needed length
                 val setup = resolvedDatum.setup.take(withdrawnUtxos.length + 1).map(G2.uncompress)
 
+                //// trace hashes
+                //withdrawnUtxos.foreach( s =>
+                //    trace(s.toInt.show)(())
+                //)
+
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
                   WithdrawMembershipValidationFailed
@@ -302,7 +299,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // withdrawals.
                 // TODO: combine with iterating for poly calculation up above?
                 val withdrawnValue =
-                    withdrawalOutputsNoChange.foldLeft(Value.zero)((acc, o) => acc + o.value)
+                    withdrawalOutputs.foldLeft(Value.zero)((acc, o) => acc + o.value)
 
                 val valueIsPreserved =
                     treasuryInput.value === (treasuryOutput.value + withdrawnValue)
