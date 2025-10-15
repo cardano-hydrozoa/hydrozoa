@@ -16,11 +16,11 @@ enum SettlementTxSeq:
     def settlementTx: SettlementTx
 
     case NoRollouts(
-        override val settlementTx: SettlementTx
+        override val settlementTx: SettlementTx.NoRollouts
     )
 
     case WithRollouts(
-        override val settlementTx: SettlementTx,
+        override val settlementTx: SettlementTx.WithRollouts,
         rolloutTxSeq: RolloutTxSeq
     )
 
@@ -74,7 +74,7 @@ object SettlementTxSeq {
                             .WithPayouts(
                               majorVersion = majorVersion,
                               deposits = deposits,
-                              firstRolloutTxPartial = rolloutTxSeqPartial.firstOrOnly,
+                              rolloutTxSeqPartial = rolloutTxSeqPartial,
                               treasuryUtxo = treasuryUtxo,
                               headNativeScript = headNativeScript,
                               headNativeScriptReferenceInput = headNativeScriptReferenceInput,
@@ -86,29 +86,17 @@ object SettlementTxSeq {
                             .map(Error.SettlementError(_))
 
                         settlementTxSeq <-
-                            import SettlementTx.Builder.IsFirstRolloutMerged.*
-                            val mbNewRolloutTxSeqPartial =
-                                settlementTxRes.isFirstRolloutMerged match {
-                                    case NotMerged => Some(rolloutTxSeqPartial)
-                                    case Merged =>
-                                        rolloutTxSeqPartial.skipFirst.map(_.partialResult)
-                                }
-
-                            mbNewRolloutTxSeqPartial match {
-                                case None =>
-                                    Right(SettlementTxSeq.NoRollouts(settlementTxRes.settlementTx))
-                                case Some(newRolloutTxSeqPartial) =>
-                                    // TODO: The spent rollout must exist in this case, but let's make it type safe.
-                                    val firstSpentRollout =
-                                        settlementTxRes.settlementTx.mbRolloutProduced.get
-                                    newRolloutTxSeqPartial
-                                        .finishPostProcess(firstSpentRollout)
+                            import SettlementTx.Builder.Result
+                            settlementTxRes match {
+                                case res: Result.WithOnlyDirectPayouts =>
+                                    Right(SettlementTxSeq.NoRollouts(res.settlementTx))
+                                case res: Result.WithRollouts =>
+                                    val tx: SettlementTx.WithRollouts = res.settlementTx
+                                    res.rolloutTxSeqPartial
+                                        .finishPostProcess(tx.rolloutProduced)
                                         .left
                                         .map(Error.RolloutSeqError(_))
-                                        .map(
-                                          SettlementTxSeq
-                                              .WithRollouts(settlementTxRes.settlementTx, _)
-                                        )
+                                        .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
                     } yield Result(
                       settlementTxSeq = settlementTxSeq,
