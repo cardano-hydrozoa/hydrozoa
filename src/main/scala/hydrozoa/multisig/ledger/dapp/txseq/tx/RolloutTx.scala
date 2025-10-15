@@ -67,10 +67,12 @@ object RolloutTx {
             def state: State[State.Status.NeedsInput]
             def builder: Builder
 
+            // FIXME: state should have a NonEmptyVector of remaining payouts
             case Intermediate(
                 override val state: State[State.Status.NeedsInput],
                 override val builder: Builder.NotLast
             )
+            // FIXME: State should have a NonEmptyVector of remaining payouts
             case Last(
                 override val state: State[State.Status.NeedsInput],
                 override val builder: Builder.Last
@@ -339,6 +341,7 @@ object RolloutTx {
           * (including balancing and fee).
           */
         object BasePessimistic {
+            // TODO: Add a single withdrawal
             lazy val basePessimistic: Either[Error, State[Status.InProgress]] =
                 for {
                     ctx <- TransactionBuilder.build(

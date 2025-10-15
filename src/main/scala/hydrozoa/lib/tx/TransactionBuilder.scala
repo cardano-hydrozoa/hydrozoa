@@ -55,8 +55,7 @@ object TransactionBuilderStep {
       */
     case class Spend(
         utxo: TransactionUnspentOutput,
-        witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness =
-            PubKeyWitness
+        witness: PubKeyWitness.type | NativeScriptWitness | ThreeArgumentPlutusScriptWitness
     ) extends TransactionBuilderStep
 
     /** Send some funds/data to an address. Multiple identical steps are acceptable. */
@@ -449,7 +448,7 @@ object TransactionBuilder:
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
         ): Either[SomeBuildError, Context] =
-            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+//            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
 
             for {
                 balancedCtx <- this
@@ -1732,7 +1731,7 @@ object StepError {
         utxo: TransactionUnspentOutput
     ) extends StepError {
         override def explain: String =
-            "The UTxO you provided requires no witness, because the payment credential of the address is a `PubKeyHash`. " +
+            s"The UTxO you provided has the wrong type. We require a `$expectedType`. " +
                 s"UTxO: $utxo"
     }
 

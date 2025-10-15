@@ -277,7 +277,7 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     testBuilderSteps(
       label = "Spending with ref script from consumed utxo",
       steps = List(
-        Spend(utxo = utxoWithScript1ReferenceScript),
+        Spend(utxo = utxoWithScript1ReferenceScript, witness = PubKeyWitness),
         Spend(utxo = script1Utxo, witness = plutusScript1RefSpentWitness)
       ),
       expected = {

@@ -6,10 +6,13 @@ import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.joint.utxo.Payout
 import io.bullet.borer.Cbor
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
+import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -21,6 +24,33 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
+import hydrozoa.multisig.ledger.dapp.tx.ArbitraryInstances.{*, given}
+
+import scala.collection.immutable.Queue
+
+
+// Import as (...).ArbitraryInstances.{*, given}
+object ArbitraryInstances {
+    given Arbitrary[Payout.Obligation.L2] = Arbitrary {
+        for {
+            l2Input <- arbitrary[TransactionInput]
+
+            addr <- arbitrary[ShelleyAddress]
+            coin <- arbitrary[Coin]
+            datum <- arbitrary[ByteString]
+            output = Babbage(address = addr,
+                value = Value(coin),
+                datumOption = Some(Inline(datum.toData)),
+                scriptRef = None)
+        } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
+    }
+
+    given Arbitrary[Payout.Obligation.L1] = Arbitrary {
+        for {
+            l2 <- arbitrary[Payout.Obligation.L2]
+        } yield (Payout.Obligation.L1(l2))
+    }
+}
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
@@ -127,11 +157,11 @@ def genTreasuryUtxo(
       value = Value(treasuryAda) + treasuryToken
     )
 
-def genSettlementRecipe(
+def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = Mainnet
-): Gen[SettlementTx.Recipe] = {
+                                 ): Gen[SettlementTxSeq.Builder] = {
     (for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -147,32 +177,25 @@ def genSettlementRecipe(
         utxo <- genTreasuryUtxo(headAddr = Some(hns.mkAddress(network)), network = network)
         treasuryInputAda = utxo.value.coin
 
-        withdrawals <- Gen
-            .listOf(genTestPeer)
-            .map(_.map(genAdaOnlyPubKeyUtxo(_, params).sample.get))
+        payouts <- Gen
+            .listOf(arbitrary[Payout.Obligation.L1])
 
         env = testTxBuilderEnvironment
 
         multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
 
-    } yield SettlementTx.Recipe(
-      majorVersion = majorVersion,
-      deposits = deposits,
-      utxosWithdrawn = withdrawals.map(_._2),
-      treasuryUtxo = utxo,
-      headNativeScript = hns,
-      rolloutTokenName = AssetName.fromHex("deadbeef"), // FIXME:
-      headNativeScriptReferenceInput = multisigWitnessUtxo,
-      network = testNetwork,
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      validators = testValidators
-    )).suchThat(r => {
-        val withdrawnCoin = Coin(r.utxosWithdrawn.map(_.value.coin.value).sum)
-        val depositedCoin = sumUtxoValues(r.deposits.map(_.toUtxo)).coin
-        val treasuryInputAda = r.treasuryUtxo.value.coin
-        withdrawnCoin + estimatedFee < treasuryInputAda + depositedCoin
-    })
+    } yield SettlementTxSeq.Builder(
+        majorVersion = majorVersion,
+        // TODO: generating a list and turning it into a queue is suboptimal
+        deposits = Queue.from(deposits),
+        payouts = Vector.from(payouts),
+        treasuryUtxo = utxo,
+        headNativeScript = hns,
+        headNativeScriptReferenceInput = multisigWitnessUtxo,
+        env = testTxBuilderEnvironment,
+        validators = testValidators
+    ))
+        
 }
 
 def genFakeMultisigWitnessUtxo(
@@ -188,25 +211,3 @@ def genFakeMultisigWitnessUtxo(
     )
 } yield TransactionUnspentOutput((utxoId, output))
 
-class SettlementTxTest extends munit.ScalaCheckSuite {
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
-    }
-
-    property("Build settlement tx")(
-      Prop.forAll(genSettlementRecipe()) { recipe =>
-          SettlementTx.build(recipe) match {
-              case Left(e) => throw RuntimeException(s"Build failed $e")
-              case Right(tx) => {
-                  val cbor = tx.tx.toCbor
-
-                  given OriginalCborByteArray = OriginalCborByteArray(cbor)
-
-                  val roundTripped = Cbor.decode(cbor).to[Transaction].value
-                  assertEquals(obtained = roundTripped, expected = tx.tx)
-              }
-          }
-
-      }
-    )
-}
