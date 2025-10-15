@@ -120,7 +120,7 @@ object SettlementTx {
             override val pessimisticTreasuryOutputValue: Value = treasuryUtxo.value
 
             override type BuildResult = Result.NoPayouts
-            
+
             override def build(): Either[Error, BuildResult] = for {
                 progressed <- progress()
                 completed <- complete(progressed)
@@ -134,7 +134,7 @@ object SettlementTx {
                 } yield getResult(finished)
 
             override type FinishResult = State[Status.Finished]
-            
+
             override def finish(state: State[Status.InProgress]): Either[Error, FinishResult] = {
                 import state.*
                 for {
@@ -205,7 +205,7 @@ object SettlementTx {
                 treasuryUtxo.value - firstRolloutTxPartial.inputValueNeeded
 
             override type BuildResult = Result.WithPayouts
-            
+
             override def build(): Either[Error, BuildResult] = for {
                 progressed <- progress()
                 completed <- complete(progressed)
@@ -226,7 +226,7 @@ object SettlementTx {
 
             override type FinishResult =
                 (State[Status.Finished], IsFirstRolloutMerged, Option[RolloutUtxo])
-            
+
             override def finish(state: State[Status.InProgress]): Either[Error, FinishResult] = {
                 import state.*
                 import IsFirstRolloutMerged.*
@@ -395,7 +395,7 @@ object SettlementTx {
                 addedDeposits <- AddDeposits.addDeposits(pessimistic)
 
             } yield addedDeposits
-        
+
         def complete(progressed: State[Status.InProgress]): Either[Error, BuildResult]
 
         def mbPessimisticSendRollout: Option[Send]

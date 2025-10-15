@@ -47,7 +47,6 @@ object RolloutTxSeq {
               * all payout obligations. The transaction consumes the first rollout utxo (produced by
               * the settlement or finalization transaction) and directly pays out all remaining
               * payouts.
-              * @param only
               */
             final case class Singleton(only: SinglePartialResult.Only) extends PartialResult {
 
@@ -115,8 +114,7 @@ object RolloutTxSeq {
 
                 private given Conversion[SkipFirst, PartialResult] = identity
 
-                extension (self: SkipFirst)
-                    def partialResult: PartialResult = self.convert
+                extension (self: SkipFirst) def partialResult: PartialResult = self.convert
             }
         }
 
@@ -134,17 +132,15 @@ object RolloutTxSeq {
                 case singleton: PartialResult.Singleton =>
                     import singleton.*
                     for {
-                        onlyFinished <- only.builder.Finish.finish(only.state, rolloutSpent.utxo)
-                        onlyPostProcessed = only.builder.PostProcess.Last
-                            .getRolloutTx(onlyFinished, only.builder)
+                        onlyFinished <- only.builder.finish(only.state, rolloutSpent.utxo)
+                        onlyPostProcessed = only.builder.getRolloutTx(onlyFinished)
                     } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
 
-                case many: PartialResult.Many => {
+                case many: PartialResult.Many =>
                     import many.*
                     for {
-                        firstFinished <- first.builder.Finish.finish(first.state, rolloutSpent.utxo)
-                        firstPostProcessed = first.builder.PostProcess.NotLast
-                            .getRolloutTx(firstFinished, first.builder)
+                        firstFinished <- first.builder.finish(first.state, rolloutSpent.utxo)
+                        firstPostProcessed = first.builder.getRolloutTx(firstFinished)
 
                         vectorKleisli: Vector[IntermediateRolloutKleisli] = intermediates
                             .map(finishPostProcessIntermediate)
@@ -159,16 +155,13 @@ object RolloutTxSeq {
                             .getOrElse(firstPostProcessed)
                             .rolloutProduced
 
-                        lastFinished <- last.builder.Finish
-                            .finish(last.state, lastRolloutSpent.utxo)
-                        lastPostProcessed = last.builder.PostProcess.Last
-                            .getRolloutTx(lastFinished, last.builder)
+                        lastFinished <- last.builder.finish(last.state, lastRolloutSpent.utxo)
+                        lastPostProcessed = last.builder.getRolloutTx(lastFinished)
 
                     } yield RolloutTxSeq(
                       notLast = firstPostProcessed +: intermediatesPostProcessed,
                       last = lastPostProcessed
                     )
-                }
 
             }
 
@@ -182,10 +175,8 @@ object RolloutTxSeq {
                 rolloutSpent: RolloutUtxo
             ): ErrorOr[RolloutTx.NotLast] =
                 for {
-                    currentFinished <- current.builder.Finish
-                        .finish(current.state, rolloutSpent.utxo)
-                    currentPostProcessed = current.builder.PostProcess.NotLast
-                        .getRolloutTx(currentFinished, current.builder)
+                    currentFinished <- current.builder.finish(current.state, rolloutSpent.utxo)
+                    currentPostProcessed = current.builder.getRolloutTx(currentFinished)
                 } yield currentPostProcessed
 
             private def kleisliRunner(
@@ -208,7 +199,7 @@ object RolloutTxSeq {
 
         import Builder.*
 
-        /** Builds a "partial result chain" pertaining to rollout transactions. This can either be a
+        /** Builds a "partial result chain" of rollout transactions. This can either be a
           * [[Singleton]] chain or a [[Many]] chain. In the case of the latter, it tries to pack as
           * many payout obligations into each rollout transaction, proceeding from the last and
           * working towards the first.
