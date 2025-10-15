@@ -31,7 +31,7 @@ enum RolloutTx extends Tx {
         override val rolloutSpent: RolloutUtxo,
         override val tx: Transaction
     ) extends RolloutTx
-    
+
     case NotLast(
         override val rolloutSpent: RolloutUtxo,
         /** Invariant: this rollout utxo MUST have the txId of the [[tx]] field and index 0. */
@@ -53,16 +53,16 @@ object RolloutTx {
 
     object Builder {
         import State.Fields.*
+        import State.Status
 
         type Error = SomeBuildError
 
         type Result = RolloutTx
 
-      /**
-       * Partial results are enumerated based on their position within the rollout chain.
-       * The builders for [[Intermediate]] and [[First]] produce transactions that
-       * produce rollout utxos, while the builders for [[Last]] and [[Only]] do not.
-       * */
+        /** Partial results are enumerated based on their position within the rollout chain. The
+          * builders for [[Intermediate]] and [[First]] produce transactions that produce rollout
+          * utxos, while the builders for [[Last]] and [[Only]] do not.
+          */
         enum PartialResult:
             def state: State[State.Status.NeedsInput]
             def builder: Builder
@@ -94,26 +94,35 @@ object RolloutTx {
             type NotLast = Intermediate | First
 
             type LastOrOnly = PartialResult.Last | Only
+
+            extension (pr: PartialResult.Intermediate)
+                def asFirst: PartialResult.First =
+                    import pr.*
+                    PartialResult.First(state, builder)
+
+            extension (pr: PartialResult.Last)
+                def asOnly: PartialResult.Only =
+                    import pr.*
+                    PartialResult.Only(state, builder)
         }
 
-      /**
-       * The state associated with a single rollout tx. It is passed between
-       * functions that modify it in different stages, and carries a [[Status]]
-       * phantom type to indicate which operations have already been applied.
-       *
-       * @param ctx
-       * The [[Context]] "so far" on the state, including a partially-built transaction, s
-       * resolved utxos, etc.
-       * @param inputValueNeeded
-       * The input value needed to process this rollout tx.
-       * If this is not the Only or Last rollout transaction,
-       * this includes the value necessary to establish the next
-       * rollout utxo and pay for its fees.
-       * @param remainingPayoutObligations
-       * The payout obligations that were not processes by
-       * this rollout transaction.
-       * @tparam Status
-       */
+        /** The state associated with a single rollout tx. It is passed between functions that
+          * modify it in different stages, and carries a [[Status]] phantom type to indicate which
+          * operations have already been applied.
+          *
+          * @param ctx
+          *   The [[Context]] "so far" on the state, including a partially-built transaction, s
+          *   resolved utxos, etc.
+          * @param inputValueNeeded
+          *   The input value needed to process this rollout tx. If this is not the Only or Last
+          *   rollout transaction, this includes the value necessary to establish the next rollout
+          *   utxo and pay for its fees.
+          * @param remainingPayoutObligations
+          *   The payout obligations that were not processes by this rollout transaction.
+          * @tparam Status
+          *   The phantom type indicating which operations the builder has already applied to the
+          *   state.
+          */
         final case class State[Status <: State.Status](
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
@@ -177,105 +186,170 @@ object RolloutTx {
         }
 
         // TODO: Find a better place for this
-        final case class Config (
+        final case class Config(
             headNativeScript: HeadMultisigScript,
             headNativeScriptReferenceInput: TransactionUnspentOutput,
             env: Environment,
             validators: Seq[Validator]
         )
 
-      /**
-       * A builder for the last (or only) rollout transaction in a chain. It doesn't produce a subsequent rollout
-       * utxo. In practice, this rollout transaction is built _first_ and we work backwards to construct the
-       * rest of the chain.
-       * @param config
-       * @param payouts
-       */
+        /** A builder for the last (or only) rollout transaction in a chain. It doesn't produce a
+          * subsequent rollout utxo. In practice, this rollout transaction is built _first_ and we
+          * work backwards to construct the rest of the chain.
+          */
         final case class Last(
             override val config: Config,
-            override val payouts: Vector[Payout.Obligation.L1],
+            override val payouts: Vector[Payout.Obligation.L1]
         ) extends Builder {
-            def buildPartial(): Either[Error, PartialResult.LastOrOnly] = {
-                for {
-                    bp <- BasePessimistic.basePessimistic
-                    withPayouts <- AddPayouts.addPayouts(bp)
-                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
-                    partialResult: PartialResult.LastOrOnly =
-                        if needsInput.remainingPayoutObligations.isEmpty then
-                            PartialResult.Only(needsInput, this)
-                        else PartialResult.Last(needsInput, this)
-                } yield partialResult
+            override lazy val mbSendRollout: None.type = None
+
+            override type BuildPartialType = PartialResult.LastOrOnly
+
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
+                if needsInput.remainingPayoutObligations.isEmpty then
+                    PartialResult.Only(needsInput, this)
+                else PartialResult.Last(needsInput, this)
+
+            override type RolloutTxType = RolloutTx.Last
+
+            @throws[AssertionError]
+            override def getRolloutTx(state: State[Status.Finished]): RolloutTxType = {
+                RolloutTx.Last(
+                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(state),
+                  tx = state.ctx.transaction
+                )
             }
         }
 
-      /**
-       * A builder for non-terminal rollout transaction in a chain. It produces a subsequent rollout
-       * utxo with the correct amount value required for the _next_ rollout transaction in the chain, which is
-       * _built_ prior to this transaction.   
-       * @param config
-       * @param payouts 
-       * @param rolloutOutputValue
-       * The rollout output this transaction produces, which must be consumed as an input in the next rollout 
-       * transaction.
-       */
+        /** A builder for non-terminal rollout transaction in a chain. It produces a subsequent
+          * rollout utxo with the correct amount value required for the _next_ rollout transaction
+          * in the chain, which is _built_ prior to this transaction.
+          * @param payouts
+          *   the payout obligations that need to be discharged
+          * @param rolloutOutputValue
+          *   The rollout output this transaction produces, which must be consumed as an input in
+          *   the next rollout transaction.
+          */
         final case class NotLast(
             override val config: Config,
             override val payouts: Vector[Payout.Obligation.L1],
             rolloutOutputValue: Value
         ) extends Builder {
-            def buildPartial(): Either[Error, PartialResult.NotLast] = {
-                for {
-                    bp <- BasePessimistic.basePessimistic
-                    withPayouts <- AddPayouts.addPayouts(bp)
-                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
-                    partialResult: PartialResult.NotLast =
-                        if needsInput.remainingPayoutObligations.isEmpty then
-                            PartialResult.First(needsInput, this)
-                        else PartialResult.Intermediate(needsInput, this)
-                } yield partialResult
+            override lazy val mbSendRollout: Option[Send] = Some(sendRollout)
+
+            lazy val sendRollout = Send(rolloutOutput)
+
+            lazy val rolloutOutput: TxOutput.Babbage =
+                TxOutput.Babbage(
+                    address = config.headNativeScript.mkAddress(config.env.network),
+                    value = rolloutOutputValue,
+                    datumOption = None,
+                    scriptRef = None
+                )
+            
+            override type BuildPartialType = PartialResult.NotLast
+
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
+                if needsInput.remainingPayoutObligations.isEmpty then
+                    PartialResult.First(needsInput, this)
+                else PartialResult.Intermediate(needsInput, this)
+
+            override type RolloutTxType = RolloutTx.NotLast
+
+            @throws[AssertionError]
+            override def getRolloutTx(
+                state: State[Status.Finished]
+            ): RolloutTxType = {
+                val tx = state.ctx.transaction
+                val rolloutProduced = TransactionUnspentOutput(
+                  TransactionInput(transactionId = tx.id, index = 0),
+                  rolloutOutput
+                )
+                RolloutTx.NotLast(
+                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(state),
+                  rolloutProduced = RolloutUtxo(rolloutProduced),
+                  tx = tx
+                )
             }
         }
     }
 
     trait Builder:
-      /**
-       * The current payout obligations when this rollout tx is built. The builder packs as many as possible into this
-       * transaction (while preserving the order of the input seqeuence) and returns the _remaining payouts_ (the 
-       * ones that didn't fit) in its result.
-       *
-       * @return
-       */
+        /** The current payout obligations when this rollout tx is built. The builder packs as many
+          * as possible into this transaction (while preserving the order of the input sequence) and
+          * returns the _remaining payouts_ (the ones that didn't fit) in its result.
+          *
+          * @return
+          */
         def payouts: Vector[Payout.Obligation.L1]
         def config: Builder.Config
 
         import Builder.*
 
-        import Builder.State.Status.*
+        import Builder.State.Status
 
-        /** 
-         * This object serves to organize the construction of a "pessimistic" [[State]] that assumes worst-case
-         * packing of payout obligations into the transaction by taking the absolute minimum requirements of a 
-         * rollout tx. These include:
-         * - Setting the metadata for the transaction
-         * - Adding the utxo with the head native script to the reference inputs of the tx body
-         * - If this rollout transaction is not the last one in the chain, creating the next rollout utxo.
-         * 
-         * Then, it calculates the value that would satisfy the requirements of the transaction (including balancing 
-         * and fee).
-         * 
-         * */
+        type BuildPartialType
+        def buildPartial(): Either[Error, BuildPartialType] =
+            for {
+                needsInput <- progress()
+                partialResult = classifyPartialResult(needsInput)
+            } yield partialResult
+
+        def progress(): Either[Error, State[Status.NeedsInput]] = for {
+            bp <- BasePessimistic.basePessimistic
+            withPayouts <- AddPayouts.addPayouts(bp)
+        } yield State.NeedsInput.fromInProgress(withPayouts)
+
+        def classifyPartialResult(state: State[Status.NeedsInput]): BuildPartialType
+
+        type RolloutTxType
+        def complete(
+            state: State[Status.NeedsInput],
+            rolloutSpent: TransactionUnspentOutput
+        ): Either[Error, RolloutTxType] =
+            for {
+                finished <- finish(state, rolloutSpent)
+            } yield getRolloutTx(finished)
+
+        def getRolloutTx(state: State[Status.Finished]): RolloutTxType
+
+        def finish(
+            state: State[Status.NeedsInput],
+            rolloutSpent: TransactionUnspentOutput
+        ): Either[Error, State[Status.Finished]] =
+            for {
+                addedRolloutInput <- TransactionBuilder.modify(
+                  state.ctx,
+                  List(TxBuilder.spendRollout(rolloutSpent))
+                )
+                finished <- TxBuilder.finish(addedRolloutInput)
+            } yield State.Finished.fromNeedsInput(state.copy(ctx = finished))
+
+        def mbSendRollout: Option[Send]
+
+        /** This object serves to organize the construction of a "pessimistic" [[State]] that
+          * assumes worst-case packing of payout obligations into the transaction by taking the
+          * absolute minimum requirements of a rollout tx. These include:
+          *   - Setting the metadata for the transaction
+          *   - Adding the utxo with the head native script to the reference inputs of the tx body
+          *   - If this rollout transaction is not the last one in the chain, creating the next
+          *     rollout utxo.
+          *
+          * Then, it calculates the value that would satisfy the requirements of the transaction
+          * (including balancing and fee).
+          */
         object BasePessimistic {
-            lazy val basePessimistic: Either[Error, State[InProgress]] =
+            lazy val basePessimistic: Either[Error, State[Status.InProgress]] =
                 for {
                     ctx <- TransactionBuilder.build(
                       config.env.network,
                       commonSteps ++ mbSendRollout.toList
                     )
                     valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
-                } yield State[InProgress](
+                } yield State[Status.InProgress](
                   ctx = ctx,
                   inputValueNeeded = valueNeededWithFee,
-                  remainingPayoutObligations = payouts.toVector
+                  remainingPayoutObligations = payouts
                 )
 
             lazy val commonSteps: List[TransactionBuilderStep] =
@@ -291,36 +365,23 @@ object RolloutTx {
                 )
 
             lazy val referenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)
-
-            lazy val mbSendRollout: Option[Send] =
-                Builder.this match {
-                    case thisBuilder: Builder.NotLast =>
-                        Some(Send(mkRolloutOutput(thisBuilder)))
-                    case thisBuilder: Builder.Last => None
-                }
-
-            def mkRolloutOutput(thisBuilder: Builder.NotLast): TxOutput.Babbage =
-                TxOutput.Babbage(
-                  address = config.headNativeScript.mkAddress(config.env.network),
-                  value = thisBuilder.rolloutOutputValue,
-                  datumOption = None,
-                  scriptRef = None
-                )
         }
 
-        
         object AddPayouts {
-            /** Try to add payouts one-by-one until adding another payout would exceed transaction size limits. */
+
+            /** Try to add payouts one-by-one until adding another payout would exceed transaction
+              * size limits.
+              */
             @tailrec
             def addPayouts(
-                state: State[InProgress]
-            ): Either[Error, State[InProgress]] = {
+                state: State[Status.InProgress]
+            ): Either[Error, State[Status.InProgress]] = {
                 import state.*
                 remainingPayoutObligations match {
                     case obligation +: otherObligations =>
                         tryAddPayout(ctx, obligation) match {
                             case Right((newCtx, value)) =>
-                                val newState: State[InProgress] = state.copy(
+                                val newState: State[Status.InProgress] = state.copy(
                                   ctx = newCtx,
                                   inputValueNeeded = value,
                                   remainingPayoutObligations = otherObligations
@@ -332,10 +393,11 @@ object RolloutTx {
                     case _Empty => Right(state)
                 }
             }
-      
-            /** Try to add a single payout to the rollout transaction, and then trial a finalization with a mock
-             * rollout utxo as an input. If successful, returns the new [[Context]] and the actual value needed 
-             * for the prior rollout utxo.*/
+
+            /** Try to add a single payout to the rollout transaction, and then trial a finalization
+              * with a mock rollout utxo as an input. If successful, returns the new [[Context]] and
+              * the actual value needed for the prior rollout utxo.
+              */
             def tryAddPayout(
                 ctx: TransactionBuilder.Context,
                 payoutObligation: Payout.Obligation.L1
@@ -345,20 +407,6 @@ object RolloutTx {
                     newCtx <- TransactionBuilder.modify(ctx, List(payoutStep))
                     valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
                 } yield (newCtx, valueNeededWithFee)
-        }
-
-        object Finish {
-            def finish(
-                state: State[NeedsInput],
-                rolloutSpent: TransactionUnspentOutput
-            ): Either[Error, State[Finished]] =
-                for {
-                    addedRolloutInput <- TransactionBuilder.modify(
-                      state.ctx,
-                      List(TxBuilder.spendRollout(rolloutSpent))
-                    )
-                    finished <- TxBuilder.finish(addedRolloutInput)
-                } yield State.Finished.fromNeedsInput(state.copy(ctx = finished))
         }
 
         object TxBuilder {
@@ -433,48 +481,6 @@ object RolloutTx {
         }
 
         object PostProcess {
-            @throws[AssertionError]
-            def getRolloutTx(
-                state: State[Finished]
-            ): RolloutTx =
-                Builder.this match {
-                    case thisBuilder: Builder.NotLast =>
-                        NotLast.getRolloutTx(state, thisBuilder)
-                    case thisBuilder: Builder.Last =>
-                        Last.getRolloutTx(state, thisBuilder)
-                }
-
-            object Last {
-                @throws[AssertionError]
-                def getRolloutTx(
-                    state: State[Finished],
-                    thisBuilder: Builder.Last
-                ): RolloutTx.Last = {
-                    RolloutTx.Last(
-                      rolloutSpent = unsafeGetRolloutSpent(state),
-                      tx = state.ctx.transaction
-                    )
-                }
-            }
-
-            object NotLast {
-                @throws[AssertionError]
-                def getRolloutTx(
-                    state: State[Finished],
-                    thisBuilder: Builder.NotLast
-                ): RolloutTx.NotLast = {
-                    val tx = state.ctx.transaction
-                    val rolloutProduced = TransactionUnspentOutput(
-                      TransactionInput(transactionId = tx.id, index = 0),
-                      BasePessimistic.mkRolloutOutput(thisBuilder)
-                    )
-                    RolloutTx.NotLast(
-                      rolloutSpent = unsafeGetRolloutSpent(state),
-                      rolloutProduced = RolloutUtxo(rolloutProduced),
-                      tx = tx
-                    )
-                }
-            }
 
             /** Given a finished [[State]], get the spent rollout utxo from its transaction. Assumes
               * that the spent rollout exists as the only input in the transaction.
@@ -487,7 +493,7 @@ object RolloutTx {
               *   the resolved spend rollout utxo
               */
             @throws[AssertionError]
-            def unsafeGetRolloutSpent(state: State[Finished]): RolloutUtxo = {
+            def unsafeGetRolloutSpent(state: State[Status.Finished]): RolloutUtxo = {
                 import state.*
                 val tx = ctx.transaction
                 val inputs = tx.body.value.inputs.toSeq

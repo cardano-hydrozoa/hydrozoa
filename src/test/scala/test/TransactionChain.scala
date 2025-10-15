@@ -3,7 +3,6 @@ package test
 import cats.*
 import cats.data.*
 import cats.syntax.all.*
-import scalus.cardano.ledger.TransactionException
 import scalus.cardano.ledger.rules.{CardanoMutator, STS}
 
 import scala.annotation.tailrec

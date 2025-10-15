@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
-import cats.data.NonEmptyList
+import cats.data.NonEmptyVector
 import cats.implicits.*
 import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -14,84 +14,130 @@ import scala.collection.immutable.Queue
 
 enum SettlementTxSeq:
     def settlementTx: SettlementTx
-    
-    case NoPayouts(
+
+    case NoRollouts(
         override val settlementTx: SettlementTx
     )
-    
-    case WithPayouts(
+
+    case WithRollouts(
         override val settlementTx: SettlementTx,
-        rolloutTxSeq: Option[RolloutTxSeq]
+        rolloutTxSeq: RolloutTxSeq
     )
 
 object SettlementTxSeq {
-    
-    
-    
+    case class Builder(
+        majorVersion: Int,
+        deposits: Queue[DepositUtxo],
+        payouts: Vector[Payout.Obligation.L1],
+        treasuryUtxo: TreasuryUtxo,
+        headNativeScript: HeadMultisigScript,
+        // The reference script for the HNS should live inside the multisig regime witness UTxO
+        headNativeScriptReferenceInput: TransactionUnspentOutput,
+        env: Environment,
+        validators: Seq[Validator]
+    ) {
+        import Builder.*
+        def build(): Either[Error, Result] = {
+            NonEmptyVector.fromVector(payouts) match {
+                case None =>
+                    SettlementTx.Builder
+                        .NoPayouts(
+                          majorVersion,
+                          deposits,
+                          treasuryUtxo,
+                          headNativeScript,
+                          headNativeScriptReferenceInput,
+                          env,
+                          validators
+                        )
+                        .build()
+                        .left
+                        .map(Error.SettlementError(_))
+                        .map(_.asSettlementTxSeqResult)
+                case Some(nePayouts) =>
+                    for {
+                        rolloutTxSeqPartial <- RolloutTxSeq
+                            .Builder(
+                              config = RolloutTx.Builder.Config(
+                                headNativeScript,
+                                headNativeScriptReferenceInput,
+                                env,
+                                validators
+                              ),
+                              payouts = nePayouts
+                            )
+                            .buildPartial()
+                            .left
+                            .map(Error.RolloutSeqError(_))
+
+                        settlementTxRes <- SettlementTx.Builder
+                            .WithPayouts(
+                              majorVersion = majorVersion,
+                              deposits = deposits,
+                              firstRolloutTxPartial = rolloutTxSeqPartial.firstOrOnly,
+                              treasuryUtxo = treasuryUtxo,
+                              headNativeScript = headNativeScript,
+                              headNativeScriptReferenceInput = headNativeScriptReferenceInput,
+                              env = env,
+                              validators = validators
+                            )
+                            .build()
+                            .left
+                            .map(Error.SettlementError(_))
+
+                        settlementTxSeq <-
+                            import SettlementTx.Builder.IsFirstRolloutMerged.*
+                            val mbNewRolloutTxSeqPartial =
+                                settlementTxRes.isFirstRolloutMerged match {
+                                    case NotMerged => Some(rolloutTxSeqPartial)
+                                    case Merged =>
+                                        rolloutTxSeqPartial.skipFirst.map(_.partialResult)
+                                }
+
+                            mbNewRolloutTxSeqPartial match {
+                                case None =>
+                                    Right(SettlementTxSeq.NoRollouts(settlementTxRes.settlementTx))
+                                case Some(newRolloutTxSeqPartial) =>
+                                    // TODO: The spent rollout must exist in this case, but let's make it type safe.
+                                    val firstSpentRollout =
+                                        settlementTxRes.settlementTx.mbRolloutProduced.get
+                                    newRolloutTxSeqPartial
+                                        .finishPostProcess(firstSpentRollout)
+                                        .left
+                                        .map(Error.RolloutSeqError(_))
+                                        .map(
+                                          SettlementTxSeq
+                                              .WithRollouts(settlementTxRes.settlementTx, _)
+                                        )
+                            }
+                    } yield Result(
+                      settlementTxSeq = settlementTxSeq,
+                      absorbedDeposits = settlementTxRes.absorbedDeposits,
+                      remainingDeposits = settlementTxRes.remainingDeposits
+                    )
+            }
+        }
+
+        object Builder {
+            enum Error:
+                case SettlementError(e: SettlementTx.Builder.Error)
+                case RolloutSeqError(e: RolloutTxSeq.Builder.Error)
+
+            final case class Result(
+                settlementTxSeq: SettlementTxSeq,
+                override val absorbedDeposits: Queue[DepositUtxo],
+                override val remainingDeposits: Queue[DepositUtxo]
+            ) extends SettlementTx.Builder.State.Fields.HasDepositsPartition
+
+            extension (res: SettlementTx.Builder.Result.NoPayouts)
+                def asSettlementTxSeqResult: Result = {
+                    import res.*
+                    Result(
+                      SettlementTxSeq.NoRollouts(settlementTx),
+                      absorbedDeposits = absorbedDeposits,
+                      remainingDeposits = remainingDeposits
+                    )
+                }
+        }
+    }
 }
-
-//case class SettlementTxSeqBuilder(
-//                                     majorVersion: Int,
-//                                     deposits: Queue[DepositUtxo],
-//                                     payouts: Vector[Payout.Obligation.L1],
-//                                     treasuryUtxo: TreasuryUtxo,
-//                                     headNativeScript: HeadMultisigScript,
-//                                     // The reference script for the HNS should live inside the multisig regime witness UTxO
-//                                     headNativeScriptReferenceInput: TransactionUnspentOutput,
-//                                     env: Environment,
-//                                     validators: Seq[Validator]
-//                                 ) {
-//
-//    private val rolloutSeqBuilder = RolloutTxSeq.Builder(
-//        hnsReferenceOutput = headNativeScriptReferenceInput,
-//        headNativeScript = headNativeScript,
-//        env = env, validators = validators)
-//
-//    def build(): Either[Error,
-//        (SettlementTx.Builder.Result, List[RolloutTx])] =
-//        for {
-//            rolloutPartialResults <- rolloutSeqBuilder.mkPartialChain(payouts).left.map(Error.RolloutSeqError(_))
-//
-//            firstRolloutPR = rolloutPartialResults._1
-//
-//            settlementTx <- SettlementTx.Builder.WithPayouts(
-//                majorVersion = majorVersion,
-//                deposits = deposits,
-//                firstRolloutTxPartial = firstRolloutPR,
-//                treasuryUtxo = treasuryUtxo,
-//                headNativeScript = headNativeScript,
-//                headNativeScriptReferenceInput = headNativeScriptReferenceInput,
-//                env = env,
-//                validators = validators
-//            ).build().left.map(Error.SettlementError(_))
-//
-//            finishedRolloutChain <- settlementTx match {
-//                case tx: SettlementTx.Builder.Result.NoPayouts => Right(List.empty)
-//                case tx: SettlementTx.Builder.Result.WithPayouts => tx.isFirstRolloutMerged match {
-//                    case SettlementTx.Builder.IsFirstRolloutMerged.Merged => {
-//                        val rolloutTail = rolloutPartialResults._2
-//                        for {
-//                            rollouts <-
-//                                if rolloutTail.isEmpty
-//                                then Right(List.empty)
-//                                else rolloutSeqBuilder.finishPartialChain(NonEmptyList.fromListUnsafe(rolloutTail),
-//                                    tx.settlementTx.rolloutProduced.utxo._1).map(_.toList).left.map(Error.RolloutSeqError(_))
-//                        } yield rollouts
-//                    }
-//                    case SettlementTx.Builder.IsFirstRolloutMerged.NotMerged =>
-//                        for {
-//                            rollouts <- rolloutSeqBuilder.finishPartialChain(
-//                                NonEmptyList(rolloutPartialResults._1, rolloutPartialResults._2),
-//                                tx.settlementTx.rolloutProduced.utxo._1
-//                            ).map(_.toList).left.map(Error.RolloutSeqError(_))
-//                        } yield rollouts
-//                }
-//            }
-//        } yield (settlementTx, finishedRolloutChain)
-//
-//    enum Error:
-//        case SettlementError(e: SettlementTx.Builder.Error)
-//        case RolloutSeqError(e: RolloutTxSeq.Builder.Error)
-//
-//}
-
