@@ -91,7 +91,7 @@ object SettlementTx {
                     def ctx: TransactionBuilder.Context
                 }
 
-                sealed trait HasDepositsPartition {
+                trait HasDepositsPartition {
                     def absorbedDeposits: Queue[DepositUtxo]
                     def remainingDeposits: Queue[DepositUtxo]
                 }
@@ -149,26 +149,16 @@ object SettlementTx {
                     for {
                         mergeTrial <- Finish.tryMergeFirstRolloutTx(addedDeposits, thisBuilder)
                         (finished, isFirstRolloutMerged, mbRolloutUtxo) = mergeTrial
-                        settlementTx = PostProcess.WithPayouts.getSettlementTx(
-                          finished,
-                          mbRolloutUtxo,
-                          thisBuilder
-                        )
-                    } yield Result.WithPayouts(
-                      settlementTx = settlementTx,
-                      absorbedDeposits = finished.absorbedDeposits,
-                      remainingDeposits = finished.remainingDeposits,
-                      isFirstRolloutMerged = isFirstRolloutMerged
+                    } yield PostProcess.WithPayouts.getResult(
+                      finished,
+                      isFirstRolloutMerged,
+                      mbRolloutUtxo,
+                      thisBuilder
                     )
                 case thisBuilder: Builder.NoPayouts =>
                     for {
                         finished <- Finish.noPayouts(addedDeposits, thisBuilder)
-                        settlementTx = PostProcess.NoPayouts.getSettlementTx(finished, thisBuilder)
-                    } yield Result.NoPayouts(
-                      settlementTx = settlementTx,
-                      absorbedDeposits = finished.absorbedDeposits,
-                      remainingDeposits = finished.remainingDeposits
-                    )
+                    } yield PostProcess.NoPayouts.getResult(finished, thisBuilder)
             }
         } yield result
 
@@ -342,7 +332,7 @@ object SettlementTx {
                 } yield (
                   finishedState,
                   isFirstRolloutMerged,
-                    mbRolloutOutput
+                  mbRolloutOutput
                 )
             }
 
@@ -351,7 +341,7 @@ object SettlementTx {
               * produced. Assumes that it the rollout produced is the second output of the
               * transaction.
               *
-              * @param state
+              * @param finished
               *   The finished [[State]] of this [[Builder.WithPayouts]].
               * @param thisBuilder
               *   Proof that this builder is a [[Builder.WithPayouts]].
@@ -360,10 +350,10 @@ object SettlementTx {
               * @return
               */
             def getPessimisticRolloutUtxo(
-                state: State[Finished],
+                finished: State[Finished],
                 thisBuilder: Builder.WithPayouts
             ): RolloutUtxo = {
-                val tx = state.ctx.transaction
+                val tx = finished.ctx.transaction
                 val outputs = tx.body.value.outputs
 
                 assert(outputs.nonEmpty)
@@ -420,6 +410,17 @@ object SettlementTx {
 
         object PostProcess {
             object NoPayouts {
+                def getResult(
+                    finished: State[Finished],
+                    thisBuilder: Builder.NoPayouts
+                ): Result.NoPayouts = {
+                    val settlementTx = PostProcess.NoPayouts.getSettlementTx(finished, thisBuilder)
+                    Result.NoPayouts(
+                      settlementTx = settlementTx,
+                      absorbedDeposits = finished.absorbedDeposits,
+                      remainingDeposits = finished.remainingDeposits
+                    )
+                }
 
                 /** Given a finished [[State]] for a [[Builder.NoPayouts]], apply post-processing to
                   * get the [[SettlementTx.NoPayouts]]. Assumes that:
@@ -427,7 +428,7 @@ object SettlementTx {
                   *   - The spent treasury utxo is the first input (unchecked).
                   *   - The produced treasury utxo is the first output (asserted).
                   *
-                  * @param state
+                  * @param finished
                   *   The [[State]] of a [[Builder.NoPayouts]].
                   * @param thisBuilder
                   *   Proof that this builder is a [[Builder.NoPayouts]].
@@ -437,19 +438,55 @@ object SettlementTx {
                   */
                 @throws[AssertionError]
                 def getSettlementTx(
-                    state: State[Finished],
+                    finished: State[Finished],
                     thisBuilder: Builder.NoPayouts
                 ): SettlementTx.NoPayouts = {
                     SettlementTx.NoPayouts(
                       treasurySpent = treasuryUtxo,
-                      treasuryProduced = getTreasuryProduced(state),
-                      depositsSpent = state.absorbedDeposits,
-                      tx = state.ctx.transaction
+                      treasuryProduced = getTreasuryProduced(finished),
+                      depositsSpent = finished.absorbedDeposits,
+                      tx = finished.ctx.transaction
                     )
                 }
             }
 
             object WithPayouts {
+
+                /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing
+                  * to assemble the [[Result.WithPayouts]]. Assumes that:
+                  *
+                  *   - The spent treasury utxo is the first input (unchecked).
+                  *   - The produced treasury utxo is the first output (asserted).
+                  *   - The produced rollout utxo is the second output (asserted).
+                  *
+                  * @param finished
+                  *   The [[State[Finished]]] of this [[Builder.WithPayouts]].
+                  * @param thisBuilder
+                  *   Proof that this builder is a [[Builder.WithPayouts]].
+                  * @throws AssertionError
+                  *   when the asserted assumptions are broken.
+                  * @return
+                  */
+                @throws[AssertionError]
+                def getResult(
+                    finished: State[Finished],
+                    isFirstRolloutMerged: IsFirstRolloutMerged,
+                    mbRolloutUtxo: Option[RolloutUtxo],
+                    thisBuilder: Builder.WithPayouts
+                ): Result.WithPayouts = {
+                    val settlementTx = PostProcess.WithPayouts.getSettlementTx(
+                      finished,
+                      mbRolloutUtxo,
+                      thisBuilder
+                    )
+
+                    Result.WithPayouts(
+                      settlementTx = settlementTx,
+                      absorbedDeposits = finished.absorbedDeposits,
+                      remainingDeposits = finished.remainingDeposits,
+                      isFirstRolloutMerged = isFirstRolloutMerged
+                    )
+                }
 
                 /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing
                   * to get the [[SettlementTx.WithPayouts]]. Assumes that:
@@ -458,7 +495,7 @@ object SettlementTx {
                   *   - The produced treasury utxo is the first output (asserted).
                   *   - The produced rollout utxo is the second output (asserted).
                   *
-                  * @param state
+                  * @param finished
                   *   The [[State[Finished]]] of this [[Builder.WithPayouts]].
                   * @param thisBuilder
                   *   Proof that this builder is a [[Builder.WithPayouts]].
@@ -468,16 +505,16 @@ object SettlementTx {
                   */
                 @throws[AssertionError]
                 def getSettlementTx(
-                    state: State[Finished],
+                    finished: State[Finished],
                     mbRolloutOutput: Option[RolloutUtxo],
                     thisBuilder: Builder.WithPayouts
                 ): SettlementTx.WithPayouts = {
                     SettlementTx.WithPayouts(
                       treasurySpent = treasuryUtxo,
-                      treasuryProduced = getTreasuryProduced(state),
-                      depositsSpent = state.absorbedDeposits,
+                      treasuryProduced = getTreasuryProduced(finished),
+                      depositsSpent = finished.absorbedDeposits,
                       mbRolloutProduced = mbRolloutOutput,
-                      tx = state.ctx.transaction
+                      tx = finished.ctx.transaction
                     )
                 }
             }
@@ -486,15 +523,15 @@ object SettlementTx {
               * [[TreasuryUtxo]] produced by the [[SettlementTx]]. Assumes that the treasury output
               * is present in the transaction and is the first output.
               *
-              * @param state
+              * @param finished
               *   The finished [[State]] of this [[Builder]].
               * @throws AssertionError
               *   when the assumption is broken.
               * @return
               */
             @throws[AssertionError]
-            def getTreasuryProduced(state: State[Finished]): TreasuryUtxo = {
-                val tx = state.ctx.transaction
+            def getTreasuryProduced(finished: State[Finished]): TreasuryUtxo = {
+                val tx = finished.ctx.transaction
                 val outputs = tx.body.value.outputs
 
                 assert(outputs.nonEmpty)

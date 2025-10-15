@@ -94,6 +94,16 @@ object RolloutTx {
             type NotLast = Intermediate | First
 
             type LastOrOnly = PartialResult.Last | Only
+            
+            extension (pr: PartialResult.Intermediate)
+                def asFirst: PartialResult.First =
+                    import pr.*
+                    PartialResult.First(state, builder)
+
+            extension (pr: PartialResult.Last)
+                def asOnly: PartialResult.Only =
+                    import pr.*
+                    PartialResult.Only(state, builder)
         }
 
       /**
