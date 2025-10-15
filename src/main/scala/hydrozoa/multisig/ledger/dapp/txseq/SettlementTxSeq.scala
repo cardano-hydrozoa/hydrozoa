@@ -40,27 +40,20 @@ object SettlementTxSeq {
         def build(): Either[Error, Result] = {
             NonEmptyVector.fromVector(payouts) match {
                 case None =>
-                    for {
-                        settlementTxRes <- SettlementTx.Builder
-                            .NoPayouts(
-                              majorVersion,
-                              deposits,
-                              treasuryUtxo,
-                              headNativeScript,
-                              headNativeScriptReferenceInput,
-                              env,
-                              validators
-                            )
-                            .build()
-                            .left
-                            .map(Error.SettlementError(_))
-                    } yield {
-                        Result(
-                          SettlementTxSeq.NoRollouts(settlementTxRes.settlementTx),
-                          settlementTxRes.absorbedDeposits,
-                          settlementTxRes.remainingDeposits
+                    SettlementTx.Builder
+                        .NoPayouts(
+                          majorVersion,
+                          deposits,
+                          treasuryUtxo,
+                          headNativeScript,
+                          headNativeScriptReferenceInput,
+                          env,
+                          validators
                         )
-                    }
+                        .build()
+                        .left
+                        .map(Error.SettlementError(_))
+                        .map(_.asSettlementTxSeqResult)
                 case Some(nePayouts) =>
                     for {
                         rolloutTxSeqPartial <- RolloutTxSeq
@@ -92,30 +85,31 @@ object SettlementTxSeq {
                             .left
                             .map(Error.SettlementError(_))
 
-                        settlementTxSeq <- settlementTxRes match {
-                            case res: SettlementTx.Builder.Result.NoPayouts =>
-                                Right(SettlementTxSeq.NoRollouts(res.settlementTx))
-                            case res: SettlementTx.Builder.Result.WithPayouts =>
-                                import SettlementTx.Builder.IsFirstRolloutMerged.*
-                                val mbNewRolloutTxSeqPartial = res.isFirstRolloutMerged match {
+                        settlementTxSeq <-
+                            import SettlementTx.Builder.IsFirstRolloutMerged.*
+                            val mbNewRolloutTxSeqPartial =
+                                settlementTxRes.isFirstRolloutMerged match {
                                     case NotMerged => Some(rolloutTxSeqPartial)
                                     case Merged =>
                                         rolloutTxSeqPartial.skipFirst.map(_.partialResult)
                                 }
 
-                                mbNewRolloutTxSeqPartial match {
-                                    case None => Right(SettlementTxSeq.NoRollouts(res.settlementTx))
-                                    case Some(newRolloutTxSeqPartial) =>
-                                        // TODO: The spent rollout must exist in this case, but let's make it type safe.
-                                        val firstSpentRollout =
-                                            res.settlementTx.mbRolloutProduced.get
-                                        newRolloutTxSeqPartial
-                                            .finishPostProcess(firstSpentRollout)
-                                            .left
-                                            .map(Error.RolloutSeqError(_))
-                                            .map(SettlementTxSeq.WithRollouts(res.settlementTx, _))
-                                }
-                        }
+                            mbNewRolloutTxSeqPartial match {
+                                case None =>
+                                    Right(SettlementTxSeq.NoRollouts(settlementTxRes.settlementTx))
+                                case Some(newRolloutTxSeqPartial) =>
+                                    // TODO: The spent rollout must exist in this case, but let's make it type safe.
+                                    val firstSpentRollout =
+                                        settlementTxRes.settlementTx.mbRolloutProduced.get
+                                    newRolloutTxSeqPartial
+                                        .finishPostProcess(firstSpentRollout)
+                                        .left
+                                        .map(Error.RolloutSeqError(_))
+                                        .map(
+                                          SettlementTxSeq
+                                              .WithRollouts(settlementTxRes.settlementTx, _)
+                                        )
+                            }
                     } yield Result(
                       settlementTxSeq = settlementTxSeq,
                       absorbedDeposits = settlementTxRes.absorbedDeposits,
@@ -136,7 +130,7 @@ object SettlementTxSeq {
             ) extends SettlementTx.Builder.State.Fields.HasDepositsPartition
 
             extension (res: SettlementTx.Builder.Result.NoPayouts)
-                def asSettlementTxSeq: Result = {
+                def asSettlementTxSeqResult: Result = {
                     import res.*
                     Result(
                       SettlementTxSeq.NoRollouts(settlementTx),
