@@ -119,23 +119,18 @@ object SettlementTx {
 
             override val pessimisticTreasuryOutputValue: Value = treasuryUtxo.value
 
-            override type BuildResult = Result.NoPayouts
-
-            override def build(): Either[Error, BuildResult] = for {
-                progressed <- progress()
-                completed <- complete(progressed)
-            } yield completed
+            override type BuildType = Result.NoPayouts
 
             override def complete(
                 progressed: State[Status.InProgress]
-            ): Either[Error, BuildResult] =
+            ): Either[Error, BuildType] =
                 for {
                     finished <- finish(progressed)
                 } yield getResult(finished)
 
-            override type FinishResult = State[Status.Finished]
+            override type FinishType = State[Status.Finished]
 
-            override def finish(state: State[Status.InProgress]): Either[Error, FinishResult] = {
+            override def finish(state: State[Status.InProgress]): Either[Error, FinishType] = {
                 import state.*
                 for {
                     finished <- TxBuilder.finish(ctx)
@@ -146,7 +141,9 @@ object SettlementTx {
                 )
             }
 
-            def getResult(finished: State[Status.Finished]): BuildResult = {
+            override type GetResultType = (finished: State[Status.Finished]) => BuildType
+
+            override def getResult: GetResultType = (finished: State[Status.Finished]) => {
                 val settlementTx = getSettlementTx(finished)
                 Result.NoPayouts(
                   settlementTx = settlementTx,
@@ -155,29 +152,29 @@ object SettlementTx {
                 )
             }
 
+            override type GetSettlementTxType =
+                (finished: State[Status.Finished]) => SettlementTx.NoPayouts
+
             /** Given a finished [[State]] for a [[Builder.NoPayouts]], apply post-processing to get
               * the [[SettlementTx.NoPayouts]]. Assumes that:
               *
               *   - The spent treasury utxo is the first input (unchecked).
               *   - The produced treasury utxo is the first output (asserted).
               *
-              * @param finished
-              *   The [[State]] of a [[Builder.NoPayouts]].
               * @throws AssertionError
               *   when the asserted assumption is broken.
               * @return
               */
             @throws[AssertionError]
-            def getSettlementTx(
-                finished: State[Status.Finished]
-            ): SettlementTx.NoPayouts = {
-                SettlementTx.NoPayouts(
-                  treasurySpent = treasuryUtxo,
-                  treasuryProduced = PostProcess.getTreasuryProduced(finished),
-                  depositsSpent = finished.absorbedDeposits,
-                  tx = finished.ctx.transaction
-                )
-            }
+            override def getSettlementTx: GetSettlementTxType =
+                (finished: State[Status.Finished]) => {
+                    SettlementTx.NoPayouts(
+                      treasurySpent = treasuryUtxo,
+                      treasuryProduced = PostProcess.getTreasuryProduced(finished),
+                      depositsSpent = finished.absorbedDeposits,
+                      tx = finished.ctx.transaction
+                    )
+                }
         }
 
         final case class WithPayouts(
@@ -204,16 +201,11 @@ object SettlementTx {
             override val pessimisticTreasuryOutputValue: Value =
                 treasuryUtxo.value - firstRolloutTxPartial.inputValueNeeded
 
-            override type BuildResult = Result.WithPayouts
-
-            override def build(): Either[Error, BuildResult] = for {
-                progressed <- progress()
-                completed <- complete(progressed)
-            } yield completed
+            override type BuildType = Result.WithPayouts
 
             override def complete(
                 progressed: State[Status.InProgress]
-            ): Either[Error, BuildResult] = {
+            ): Either[Error, BuildType] = {
                 for {
                     mergeTrial <- finish(progressed)
                     (finished, isFirstRolloutMerged, mbRolloutUtxo) = mergeTrial
@@ -224,10 +216,10 @@ object SettlementTx {
                 )
             }
 
-            override type FinishResult =
+            override type FinishType =
                 (State[Status.Finished], IsFirstRolloutMerged, Option[RolloutUtxo])
 
-            override def finish(state: State[Status.InProgress]): Either[Error, FinishResult] = {
+            override def finish(state: State[Status.InProgress]): Either[Error, FinishType] = {
                 import state.*
                 import IsFirstRolloutMerged.*
                 val rolloutTx: Transaction = firstRolloutTxPartial.tx
@@ -278,6 +270,72 @@ object SettlementTx {
                 )
             }
 
+            override type GetResultType = (
+                finished: State[Status.Finished],
+                isFirstRolloutMerged: IsFirstRolloutMerged,
+                mbRolloutUtxo: Option[RolloutUtxo]
+            ) => BuildType
+
+            /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing to
+              * assemble the [[Result.WithPayouts]]. Assumes that:
+              *
+              *   - The spent treasury utxo is the first input (unchecked).
+              *   - The produced treasury utxo is the first output (asserted).
+              *   - The produced rollout utxo is the second output (asserted).
+              *
+              * @throws AssertionError
+              *   when the asserted assumptions are broken.
+              * @return
+              */
+            @throws[AssertionError]
+            override def getResult: GetResultType = (
+                finished: State[Status.Finished],
+                isFirstRolloutMerged: IsFirstRolloutMerged,
+                mbRolloutUtxo: Option[RolloutUtxo]
+            ) => {
+                val settlementTx = getSettlementTx(
+                  finished,
+                  mbRolloutUtxo
+                )
+
+                Result.WithPayouts(
+                  settlementTx = settlementTx,
+                  absorbedDeposits = finished.absorbedDeposits,
+                  remainingDeposits = finished.remainingDeposits,
+                  isFirstRolloutMerged = isFirstRolloutMerged
+                )
+            }
+
+            override type GetSettlementTxType = (
+                finished: State[Status.Finished],
+                mbRolloutOutput: Option[RolloutUtxo]
+            ) => SettlementTx.WithPayouts
+
+            /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing to
+              * get the [[SettlementTx.WithPayouts]]. Assumes that:
+              *
+              *   - The spent treasury utxo is the first input (unchecked).
+              *   - The produced treasury utxo is the first output (asserted).
+              *   - The produced rollout utxo is the second output (asserted).
+              *
+              * @throws AssertionError
+              *   when the asserted assumptions are broken.
+              * @return
+              */
+            @throws[AssertionError]
+            override def getSettlementTx: GetSettlementTxType = (
+                finished: State[Status.Finished],
+                mbRolloutOutput: Option[RolloutUtxo]
+            ) => {
+                SettlementTx.WithPayouts(
+                  treasurySpent = treasuryUtxo,
+                  treasuryProduced = PostProcess.getTreasuryProduced(finished),
+                  depositsSpent = finished.absorbedDeposits,
+                  mbRolloutProduced = mbRolloutOutput,
+                  tx = finished.ctx.transaction
+                )
+            }
+
             /** Given a finished [[State]] of a [[Builder.WithPayouts]], apply post-processing to
               * get the [[RolloutUtxo]] produced by the [[SettlementTx.WithPayouts]], if it was
               * produced. Assumes that it the rollout produced is the second output of the
@@ -289,7 +347,7 @@ object SettlementTx {
               *   when the assumption is broken.
               * @return
               */
-            def getPessimisticRolloutUtxo(finished: State[Status.Finished]): RolloutUtxo = {
+            private def getPessimisticRolloutUtxo(finished: State[Status.Finished]): RolloutUtxo = {
                 val tx = finished.ctx.transaction
                 val outputs = tx.body.value.outputs
 
@@ -304,65 +362,6 @@ object SettlementTx {
                     TransactionInput(transactionId = tx.id, index = 1),
                     rolloutOutput
                   )
-                )
-            }
-
-            /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing to
-              * assemble the [[Result.WithPayouts]]. Assumes that:
-              *
-              *   - The spent treasury utxo is the first input (unchecked).
-              *   - The produced treasury utxo is the first output (asserted).
-              *   - The produced rollout utxo is the second output (asserted).
-              *
-              * @param finished
-              *   The finished builder state.
-              * @throws AssertionError
-              *   when the asserted assumptions are broken.
-              * @return
-              */
-            @throws[AssertionError]
-            def getResult(
-                finished: State[Status.Finished],
-                isFirstRolloutMerged: IsFirstRolloutMerged,
-                mbRolloutUtxo: Option[RolloutUtxo]
-            ): BuildResult = {
-                val settlementTx = getSettlementTx(
-                  finished,
-                  mbRolloutUtxo
-                )
-
-                Result.WithPayouts(
-                  settlementTx = settlementTx,
-                  absorbedDeposits = finished.absorbedDeposits,
-                  remainingDeposits = finished.remainingDeposits,
-                  isFirstRolloutMerged = isFirstRolloutMerged
-                )
-            }
-
-            /** Given a finished [[State]] for a [[Builder.WithPayouts]], apply post-processing to
-              * get the [[SettlementTx.WithPayouts]]. Assumes that:
-              *
-              *   - The spent treasury utxo is the first input (unchecked).
-              *   - The produced treasury utxo is the first output (asserted).
-              *   - The produced rollout utxo is the second output (asserted).
-              *
-              * @param finished
-              *   The finished builder state.
-              * @throws AssertionError
-              *   when the asserted assumptions are broken.
-              * @return
-              */
-            @throws[AssertionError]
-            def getSettlementTx(
-                finished: State[Status.Finished],
-                mbRolloutOutput: Option[RolloutUtxo]
-            ): SettlementTx.WithPayouts = {
-                SettlementTx.WithPayouts(
-                  treasurySpent = treasuryUtxo,
-                  treasuryProduced = PostProcess.getTreasuryProduced(finished),
-                  depositsSpent = finished.absorbedDeposits,
-                  mbRolloutProduced = mbRolloutOutput,
-                  tx = finished.ctx.transaction
                 )
             }
         }
@@ -381,13 +380,22 @@ object SettlementTx {
         import Builder.*
         import Builder.State.Status
 
-        type BuildResult
-        def build(): Either[Error, BuildResult]
+        type BuildType
+        def build(): Either[Error, BuildType] = for {
+            progressed <- progress()
+            completed <- complete(progressed)
+        } yield completed
 
-        type FinishResult
-        def finish(state: State[Status.InProgress]): Either[Error, FinishResult]
+        def complete(progressed: State[Status.InProgress]): Either[Error, BuildType]
 
-        type SettlementTxResult
+        type FinishType
+        def finish(state: State[Status.InProgress]): Either[Error, FinishType]
+
+        type GetResultType
+        def getResult: GetResultType
+
+        type GetSettlementTxType
+        def getSettlementTx: GetSettlementTxType
 
         def progress(): Either[Error, State[Status.InProgress]] =
             for {
@@ -395,8 +403,6 @@ object SettlementTx {
                 addedDeposits <- AddDeposits.addDeposits(pessimistic)
 
             } yield addedDeposits
-
-        def complete(progressed: State[Status.InProgress]): Either[Error, BuildResult]
 
         def mbPessimisticSendRollout: Option[Send]
 

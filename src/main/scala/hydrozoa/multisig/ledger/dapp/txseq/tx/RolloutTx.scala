@@ -203,23 +203,17 @@ object RolloutTx {
         ) extends Builder {
             override lazy val mbSendRollout: None.type = None
 
-            override type BuildPartialResult = PartialResult.LastOrOnly
-            override def buildPartial(): Either[Error, BuildPartialResult] = {
-                for {
-                    bp <- BasePessimistic.basePessimistic
-                    withPayouts <- AddPayouts.addPayouts(bp)
-                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
-                    partialResult: PartialResult.LastOrOnly =
-                        if needsInput.remainingPayoutObligations.isEmpty then
-                            PartialResult.Only(needsInput, this)
-                        else PartialResult.Last(needsInput, this)
-                } yield partialResult
-            }
+            override type BuildPartialType = PartialResult.LastOrOnly
 
-            override type RolloutTxResult = RolloutTx.Last
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
+                if needsInput.remainingPayoutObligations.isEmpty then
+                    PartialResult.Only(needsInput, this)
+                else PartialResult.Last(needsInput, this)
+
+            override type RolloutTxType = RolloutTx.Last
 
             @throws[AssertionError]
-            override def getRolloutTx(state: State[Status.Finished]): RolloutTxResult = {
+            override def getRolloutTx(state: State[Status.Finished]): RolloutTxType = {
                 RolloutTx.Last(
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(state),
                   tx = state.ctx.transaction
@@ -230,7 +224,8 @@ object RolloutTx {
         /** A builder for non-terminal rollout transaction in a chain. It produces a subsequent
           * rollout utxo with the correct amount value required for the _next_ rollout transaction
           * in the chain, which is _built_ prior to this transaction.
-          * @param payouts the payout obligations that need to be discharged
+          * @param payouts
+          *   the payout obligations that need to be discharged
           * @param rolloutOutputValue
           *   The rollout output this transaction produces, which must be consumed as an input in
           *   the next rollout transaction.
@@ -240,37 +235,31 @@ object RolloutTx {
             override val payouts: Vector[Payout.Obligation.L1],
             rolloutOutputValue: Value
         ) extends Builder {
-            override type BuildPartialResult = PartialResult.NotLast
-            override def buildPartial(): Either[Error, BuildPartialResult] = {
-                for {
-                    bp <- BasePessimistic.basePessimistic
-                    withPayouts <- AddPayouts.addPayouts(bp)
-                    needsInput = State.NeedsInput.fromInProgress(withPayouts)
-                    partialResult: PartialResult.NotLast =
-                        if needsInput.remainingPayoutObligations.isEmpty then
-                            PartialResult.First(needsInput, this)
-                        else PartialResult.Intermediate(needsInput, this)
-                } yield partialResult
-            }
-
             override lazy val mbSendRollout: Option[Send] = Some(sendRollout)
 
             lazy val sendRollout = Send(rolloutOutput)
 
             lazy val rolloutOutput: TxOutput.Babbage =
                 TxOutput.Babbage(
-                  address = config.headNativeScript.mkAddress(config.env.network),
-                  value = rolloutOutputValue,
-                  datumOption = None,
-                  scriptRef = None
+                    address = config.headNativeScript.mkAddress(config.env.network),
+                    value = rolloutOutputValue,
+                    datumOption = None,
+                    scriptRef = None
                 )
+            
+            override type BuildPartialType = PartialResult.NotLast
 
-            override type RolloutTxResult = RolloutTx.NotLast
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
+                if needsInput.remainingPayoutObligations.isEmpty then
+                    PartialResult.First(needsInput, this)
+                else PartialResult.Intermediate(needsInput, this)
+
+            override type RolloutTxType = RolloutTx.NotLast
 
             @throws[AssertionError]
             override def getRolloutTx(
                 state: State[Status.Finished]
-            ): RolloutTxResult = {
+            ): RolloutTxType = {
                 val tx = state.ctx.transaction
                 val rolloutProduced = TransactionUnspentOutput(
                   TransactionInput(transactionId = tx.id, index = 0),
@@ -287,8 +276,8 @@ object RolloutTx {
 
     trait Builder:
         /** The current payout obligations when this rollout tx is built. The builder packs as many
-          * as possible into this transaction (while preserving the order of the input sequence)
-          * and returns the _remaining payouts_ (the ones that didn't fit) in its result.
+          * as possible into this transaction (while preserving the order of the input sequence) and
+          * returns the _remaining payouts_ (the ones that didn't fit) in its result.
           *
           * @return
           */
@@ -299,13 +288,30 @@ object RolloutTx {
 
         import Builder.State.Status
 
-        type BuildPartialResult
-        def buildPartial(): Either[Error, BuildPartialResult]
+        type BuildPartialType
+        def buildPartial(): Either[Error, BuildPartialType] =
+            for {
+                needsInput <- progress()
+                partialResult = classifyPartialResult(needsInput)
+            } yield partialResult
 
-        type RolloutTxResult
-        def getRolloutTx(state: State[Status.Finished]): RolloutTxResult
+        def progress(): Either[Error, State[Status.NeedsInput]] = for {
+            bp <- BasePessimistic.basePessimistic
+            withPayouts <- AddPayouts.addPayouts(bp)
+        } yield State.NeedsInput.fromInProgress(withPayouts)
 
-        def mbSendRollout: Option[Send]
+        def classifyPartialResult(state: State[Status.NeedsInput]): BuildPartialType
+
+        type RolloutTxType
+        def complete(
+            state: State[Status.NeedsInput],
+            rolloutSpent: TransactionUnspentOutput
+        ): Either[Error, RolloutTxType] =
+            for {
+                finished <- finish(state, rolloutSpent)
+            } yield getRolloutTx(finished)
+
+        def getRolloutTx(state: State[Status.Finished]): RolloutTxType
 
         def finish(
             state: State[Status.NeedsInput],
@@ -318,6 +324,8 @@ object RolloutTx {
                 )
                 finished <- TxBuilder.finish(addedRolloutInput)
             } yield State.Finished.fromNeedsInput(state.copy(ctx = finished))
+
+        def mbSendRollout: Option[Send]
 
         /** This object serves to organize the construction of a "pessimistic" [[State]] that
           * assumes worst-case packing of payout obligations into the transaction by taking the

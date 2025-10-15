@@ -56,7 +56,10 @@ object RolloutTxSeq {
 
                 /** Finish the singleton rollout transaction by providing the first rollout utxo. */
                 override def finishPostProcess(rolloutSpent: RolloutUtxo): ErrorOr[Result] =
-                    Finish.finishPostProcess(this, rolloutSpent)
+                    for {
+                        onlyFinished <- only.builder.finish(only.state, rolloutSpent.utxo)
+                        onlyPostProcessed = only.builder.getRolloutTx(onlyFinished)
+                    } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
             }
 
             /** A partial result for a rollout transaction _chain_, where the [[first]] transaction
@@ -80,7 +83,58 @@ object RolloutTxSeq {
                   * sequence.
                   */
                 override def finishPostProcess(rolloutSpent: RolloutUtxo): ErrorOr[Result] =
-                    Finish.finishPostProcess(this, rolloutSpent)
+                    import Many.*
+                    for {
+                        firstFinished <- first.builder.finish(first.state, rolloutSpent.utxo)
+                        firstPostProcessed = first.builder.getRolloutTx(firstFinished)
+
+                        vectorKleisli: Vector[IntermediateRolloutKleisli] = intermediates
+                            .map(finishPostProcessIntermediate)
+                            .map(Kleisli(_))
+
+                        intermediatesPostProcessed <- vectorKleisli
+                            .mapAccumulate(Right(firstPostProcessed))(kleisliRunner)
+                            ._2
+                            .sequence
+
+                        lastRolloutSpent = intermediatesPostProcessed.lastOption
+                            .getOrElse(firstPostProcessed)
+                            .rolloutProduced
+
+                        lastFinished <- last.builder.finish(last.state, lastRolloutSpent.utxo)
+                        lastPostProcessed = last.builder.getRolloutTx(lastFinished)
+
+                    } yield RolloutTxSeq(
+                        notLast = firstPostProcessed +: intermediatesPostProcessed,
+                        last = lastPostProcessed
+                    )
+            }
+
+            object Many {
+                /** I.E.: RolloutUtxo => Either[Error, RolloutTx.NotLast] */
+                type IntermediateRolloutKleisli =
+                    Kleisli[ErrorOr, RolloutUtxo, RolloutTx.NotLast]
+
+                def finishPostProcessIntermediate(
+                    current: SinglePartialResult.Intermediate
+                )(
+                    rolloutSpent: RolloutUtxo
+                ): ErrorOr[RolloutTx.NotLast] =
+                    for {
+                        currentFinished <- current.builder.finish(current.state, rolloutSpent.utxo)
+                        currentPostProcessed = current.builder.getRolloutTx(currentFinished)
+                    } yield currentPostProcessed
+
+                def kleisliRunner(
+                    eCurrent: ErrorOr[RolloutTx.NotLast],
+                    k: IntermediateRolloutKleisli
+                ): (ErrorOr[RolloutTx.NotLast], ErrorOr[RolloutTx.NotLast]) = {
+                    val res = for {
+                        current <- eCurrent
+                        next <- k.run(current.rolloutProduced)
+                    } yield next
+                    (res, res)
+                }
             }
 
             /** A newtype wrapper around a [[PartialResult]] that has had its first
@@ -122,74 +176,6 @@ object RolloutTxSeq {
             notLast: Vector[SinglePartialResult.Intermediate],
             last: SinglePartialResult.Last
         )
-
-        private object Finish {
-            def finishPostProcess(
-                partialResult: PartialResult,
-                rolloutSpent: RolloutUtxo
-            ): ErrorOr[RolloutTxSeq] = partialResult match {
-
-                case singleton: PartialResult.Singleton =>
-                    import singleton.*
-                    for {
-                        onlyFinished <- only.builder.finish(only.state, rolloutSpent.utxo)
-                        onlyPostProcessed = only.builder.getRolloutTx(onlyFinished)
-                    } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
-
-                case many: PartialResult.Many =>
-                    import many.*
-                    for {
-                        firstFinished <- first.builder.finish(first.state, rolloutSpent.utxo)
-                        firstPostProcessed = first.builder.getRolloutTx(firstFinished)
-
-                        vectorKleisli: Vector[IntermediateRolloutKleisli] = intermediates
-                            .map(finishPostProcessIntermediate)
-                            .map(Kleisli(_))
-
-                        intermediatesPostProcessed <- vectorKleisli
-                            .mapAccumulate(Right(firstPostProcessed))(kleisliRunner)
-                            ._2
-                            .sequence
-
-                        lastRolloutSpent = intermediatesPostProcessed.lastOption
-                            .getOrElse(firstPostProcessed)
-                            .rolloutProduced
-
-                        lastFinished <- last.builder.finish(last.state, lastRolloutSpent.utxo)
-                        lastPostProcessed = last.builder.getRolloutTx(lastFinished)
-
-                    } yield RolloutTxSeq(
-                      notLast = firstPostProcessed +: intermediatesPostProcessed,
-                      last = lastPostProcessed
-                    )
-
-            }
-
-            /** I.E.: RolloutUtxo => Either[Error, RolloutTx.NotLast] */
-            type IntermediateRolloutKleisli =
-                Kleisli[ErrorOr, RolloutUtxo, RolloutTx.NotLast]
-
-            private def finishPostProcessIntermediate(
-                current: SinglePartialResult.Intermediate
-            )(
-                rolloutSpent: RolloutUtxo
-            ): ErrorOr[RolloutTx.NotLast] =
-                for {
-                    currentFinished <- current.builder.finish(current.state, rolloutSpent.utxo)
-                    currentPostProcessed = current.builder.getRolloutTx(currentFinished)
-                } yield currentPostProcessed
-
-            private def kleisliRunner(
-                eCurrent: ErrorOr[RolloutTx.NotLast],
-                k: IntermediateRolloutKleisli
-            ): (ErrorOr[RolloutTx.NotLast], ErrorOr[RolloutTx.NotLast]) = {
-                val res = for {
-                    current <- eCurrent
-                    next <- k.run(current.rolloutProduced)
-                } yield next
-                (res, res)
-            }
-        }
     }
 
     final case class Builder(
