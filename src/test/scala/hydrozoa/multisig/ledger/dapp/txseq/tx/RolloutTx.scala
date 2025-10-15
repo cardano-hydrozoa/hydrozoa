@@ -23,6 +23,15 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
           validators = testValidators),
           payouts = Vector.from(payouts))
 
+    property("Build Last Rollout Tx Base Pessimistic")(
+      Prop.forAll(genLastBuilder){
+          builder => builder.BasePessimistic.basePessimistic match
+            case Left(e) => throw new RuntimeException(e.toString)
+            case Right(_) => ()
+      }
+
+    )
+
     property("Build Last Rollout Tx")(
       Prop.forAll(genLastBuilder){
          builder => builder.buildPartial() match
