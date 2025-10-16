@@ -3,7 +3,11 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
+    BlockTypeL2,
+    OnchainBlockHeader,
+    given
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum

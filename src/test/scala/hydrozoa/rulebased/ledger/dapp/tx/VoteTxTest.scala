@@ -4,7 +4,10 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
@@ -157,10 +160,13 @@ class VoteTxTest extends munit.ScalaCheckSuite {
               case Left(e) =>
                   throw RuntimeException(s"Build failed $e")
               case Right(tx) =>
-                  //println(HexUtil.encodeHexString(tx.tx.toCbor))
+                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
                   // Verify VoteTx structure
-                  assert(tx.voteUtxoSpent == recipe.voteUtxo, "Spent vote UTXO should match recipe input")
+                  assert(
+                    tx.voteUtxoSpent == recipe.voteUtxo,
+                    "Spent vote UTXO should match recipe input"
+                  )
                   assert(tx.voteUtxoProduced != null, "Vote UTXO produced should not be null")
                   assert(tx.tx != null, "Transaction should not be null")
                   ()

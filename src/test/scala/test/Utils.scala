@@ -1,5 +1,4 @@
 package test
-
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import monocle.syntax.all.*
 import org.scalacheck.*
@@ -35,6 +34,13 @@ val evaluator = PlutusScriptEvaluator(
   protocolMajorVersion = MajorProtocolVersion.plominPV,
   costModels = costModels
 )
+
+val testEnv: Environment =
+    Environment(
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      network = testNetwork
+    )
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Mainnet

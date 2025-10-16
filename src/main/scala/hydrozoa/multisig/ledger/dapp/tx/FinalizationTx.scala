@@ -3,7 +3,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
+import hydrozoa.lib.tx.{
+    NativeScriptWitness,
+    SomeBuildError,
+    TransactionBuilder,
+    TransactionBuilderStep
+}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript

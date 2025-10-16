@@ -5,11 +5,23 @@ import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryScript
+}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{
+    ResolvedDatum,
+    RuleBasedTreasuryDatum,
+    UnresolvedDatum
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
 import scala.util.{Failure, Success, Try}
@@ -117,7 +129,7 @@ object ResolutionTx {
         resolvedTreasuryDatum: RuleBasedTreasuryDatum
     ): Either[SomeBuildError, ResolutionTx] = {
         import recipe.*
-        
+
         val voteRedeemer = DisputeRedeemer.Resolve
         val treasuryRedeemer = TreasuryRedeemer.Resolve
 

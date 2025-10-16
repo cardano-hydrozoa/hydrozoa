@@ -277,7 +277,7 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     testBuilderSteps(
       label = "Spending with ref script from consumed utxo",
       steps = List(
-        Spend(utxo = utxoWithScript1ReferenceScript),
+        Spend(utxo = utxoWithScript1ReferenceScript, witness = PubKeyWitness),
         Spend(utxo = script1Utxo, witness = plutusScript1RefSpentWitness)
       ),
       expected = {
@@ -656,9 +656,9 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     }
 
     testBuilderStepsFail(
-        label = "A script based utxo can't be used as a collateral",
-        steps = List(AddCollateral(utxo = script1Utxo)),
-        error = CollateralNotPubKey(script1Utxo)
+      label = "A script based utxo can't be used as a collateral",
+      steps = List(AddCollateral(utxo = script1Utxo)),
+      error = CollateralNotPubKey(script1Utxo)
     )
 
     // =======================================================================
