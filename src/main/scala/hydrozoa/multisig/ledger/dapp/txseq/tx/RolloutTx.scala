@@ -1,15 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.txseq.tx
 
+import cats.data.NonEmptyVector
 import hydrozoa.lib.tx.SomeBuildError.ValidationError
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import hydrozoa.lib.tx.{
-    SomeBuildError,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.State.Status.NeedsInput
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
@@ -51,231 +48,6 @@ object RolloutTx {
         def rolloutProduced: RolloutUtxo
     }
 
-    object Builder {
-        import State.Fields.*
-        import State.Status
-
-        type Error = SomeBuildError
-
-        type Result = RolloutTx
-
-        /** Partial results are enumerated based on their position within the rollout chain. The
-          * builders for [[Intermediate]] and [[First]] produce transactions that produce rollout
-          * utxos, while the builders for [[Last]] and [[Only]] do not.
-          */
-        enum PartialResult:
-            def state: State[State.Status.NeedsInput]
-            def builder: Builder
-
-            // FIXME: state should have a NonEmptyVector of remaining payouts
-            case Intermediate(
-                override val state: State[State.Status.NeedsInput],
-                override val builder: Builder.NotLast
-            )
-            // FIXME: State should have a NonEmptyVector of remaining payouts
-            case Last(
-                override val state: State[State.Status.NeedsInput],
-                override val builder: Builder.Last
-            )
-            case First(
-                override val state: State[State.Status.NeedsInput],
-                override val builder: Builder.NotLast
-            )
-            case Only(
-                override val state: State[State.Status.NeedsInput],
-                override val builder: Builder.Last
-            )
-
-            def inputValueNeeded: Value = state.inputValueNeeded
-
-            def tx: Transaction = state.ctx.transaction
-
-        object PartialResult {
-            type FirstOrOnly = PartialResult.First | PartialResult.Only
-
-            type NotLast = Intermediate | First
-
-            type LastOrOnly = PartialResult.Last | Only
-
-            extension (pr: PartialResult.Intermediate)
-                def asFirst: PartialResult.First =
-                    import pr.*
-                    PartialResult.First(state, builder)
-
-            extension (pr: PartialResult.Last)
-                def asOnly: PartialResult.Only =
-                    import pr.*
-                    PartialResult.Only(state, builder)
-        }
-
-        /** The state associated with a single rollout tx. It is passed between functions that
-          * modify it in different stages, and carries a [[Status]] phantom type to indicate which
-          * operations have already been applied.
-          *
-          * @param ctx
-          *   The [[Context]] "so far" on the state, including a partially-built transaction, s
-          *   resolved utxos, etc.
-          * @param inputValueNeeded
-          *   The input value needed to process this rollout tx. If this is not the Only or Last
-          *   rollout transaction, this includes the value necessary to establish the next rollout
-          *   utxo and pay for its fees.
-          * @param remainingPayoutObligations
-          *   The payout obligations that were not processes by this rollout transaction.
-          * @tparam Status
-          *   The phantom type indicating which operations the builder has already applied to the
-          *   state.
-          */
-        final case class State[Status <: State.Status](
-            override val ctx: TransactionBuilder.Context,
-            override val inputValueNeeded: Value,
-            override val remainingPayoutObligations: Vector[Payout.Obligation.L1]
-        ) extends HasTxBuilderContext,
-              HasInputRequired,
-              HasRemainingPayoutObligations
-
-        object State {
-            object Fields {
-                sealed trait HasTxBuilderContext {
-                    def ctx: TransactionBuilder.Context
-                }
-
-                sealed trait HasInputRequired {
-                    def inputValueNeeded: Value
-                }
-
-                sealed trait HasRemainingPayoutObligations {
-                    def remainingPayoutObligations: Vector[Payout.Obligation.L1]
-                }
-
-                sealed trait HasRolloutOutput {
-                    def rolloutOutput: TxOutput.Babbage
-                }
-            }
-
-            type Status = Status.InProgress | Status.NeedsInput | Status.Finished
-
-            object Status {
-                type InProgress
-                type NeedsInput
-                type Finished
-            }
-
-            object NeedsInput {
-                given fromInProgress
-                    : Conversion[State[Status.InProgress], State[Status.NeedsInput]] = identity
-            }
-
-            object Finished {
-                given fromNeedsInput: Conversion[State[Status.NeedsInput], State[Status.Finished]] =
-                    identity
-            }
-        }
-
-        object Mock {
-            // A UtxoID with the largest possible size in Flat encoding
-            // - Transaction ID should be 32 bytes of 1111 1111 because Flat uses the least number of bytes.
-            // - The index can be zero because Flat will still use a full byte
-            // https://hackage.haskell.org/package/flat-0.6/docs/Flat-Class.html
-            val utxoId = TransactionInput(
-              transactionId = TransactionHash.fromByteString(
-                ByteString.fromArray(Array.fill(32)(Byte.MinValue))
-              ),
-              index = 0
-            )
-
-            def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
-                TxBalance.produced(ctx.transaction)
-        }
-
-        // TODO: Find a better place for this
-        final case class Config(
-            headNativeScript: HeadMultisigScript,
-            headNativeScriptReferenceInput: TransactionUnspentOutput,
-            env: Environment,
-            validators: Seq[Validator]
-        )
-
-        /** A builder for the last (or only) rollout transaction in a chain. It doesn't produce a
-          * subsequent rollout utxo. In practice, this rollout transaction is built _first_ and we
-          * work backwards to construct the rest of the chain.
-          */
-        final case class Last(
-            override val config: Config,
-            override val payouts: Vector[Payout.Obligation.L1]
-        ) extends Builder {
-            override lazy val mbSendRollout: None.type = None
-
-            override type BuildPartialType = PartialResult.LastOrOnly
-
-            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
-                if needsInput.remainingPayoutObligations.isEmpty then
-                    PartialResult.Only(needsInput, this)
-                else PartialResult.Last(needsInput, this)
-
-            override type RolloutTxType = RolloutTx.Last
-
-            @throws[AssertionError]
-            override def getRolloutTx(state: State[Status.Finished]): RolloutTxType = {
-                RolloutTx.Last(
-                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(state),
-                  tx = state.ctx.transaction
-                )
-            }
-        }
-
-        /** A builder for non-terminal rollout transaction in a chain. It produces a subsequent
-          * rollout utxo with the correct amount value required for the _next_ rollout transaction
-          * in the chain, which is _built_ prior to this transaction.
-          * @param payouts
-          *   the payout obligations that need to be discharged
-          * @param rolloutOutputValue
-          *   The rollout output this transaction produces, which must be consumed as an input in
-          *   the next rollout transaction.
-          */
-        final case class NotLast(
-            override val config: Config,
-            override val payouts: Vector[Payout.Obligation.L1],
-            rolloutOutputValue: Value
-        ) extends Builder {
-            override lazy val mbSendRollout: Option[Send] = Some(sendRollout)
-
-            lazy val sendRollout = Send(rolloutOutput)
-
-            lazy val rolloutOutput: TxOutput.Babbage =
-                TxOutput.Babbage(
-                    address = config.headNativeScript.mkAddress(config.env.network),
-                    value = rolloutOutputValue,
-                    datumOption = None,
-                    scriptRef = None
-                )
-            
-            override type BuildPartialType = PartialResult.NotLast
-
-            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType =
-                if needsInput.remainingPayoutObligations.isEmpty then
-                    PartialResult.First(needsInput, this)
-                else PartialResult.Intermediate(needsInput, this)
-
-            override type RolloutTxType = RolloutTx.NotLast
-
-            @throws[AssertionError]
-            override def getRolloutTx(
-                state: State[Status.Finished]
-            ): RolloutTxType = {
-                val tx = state.ctx.transaction
-                val rolloutProduced = TransactionUnspentOutput(
-                  TransactionInput(transactionId = tx.id, index = 0),
-                  rolloutOutput
-                )
-                RolloutTx.NotLast(
-                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(state),
-                  rolloutProduced = RolloutUtxo(rolloutProduced),
-                  tx = tx
-                )
-            }
-        }
-    }
-
     trait Builder:
         /** The current payout obligations when this rollout tx is built. The builder packs as many
           * as possible into this transaction (while preserving the order of the input sequence) and
@@ -283,49 +55,47 @@ object RolloutTx {
           *
           * @return
           */
-        def payouts: Vector[Payout.Obligation.L1]
+        def payouts: NonEmptyVector[Payout.Obligation.L1]
         def config: Builder.Config
 
         import Builder.*
-
         import Builder.State.Status
 
         type BuildPartialType
-        def buildPartial(): Either[Error, BuildPartialType] =
+        final def buildPartial(): Either[Error, BuildPartialType] =
             for {
                 needsInput <- progress()
                 partialResult = classifyPartialResult(needsInput)
             } yield partialResult
 
-        def progress(): Either[Error, State[Status.NeedsInput]] = for {
-            bp <- BasePessimistic.basePessimistic
-            withPayouts <- AddPayouts.addPayouts(bp)
+        final def progress(): Either[Error, State[Status.NeedsInput]] = for {
+            withPayouts <- AddPayouts.addPayouts()
         } yield State.NeedsInput.fromInProgress(withPayouts)
 
         def classifyPartialResult(state: State[Status.NeedsInput]): BuildPartialType
 
         type RolloutTxType
-        def complete(
-            state: State[Status.NeedsInput],
-            rolloutSpent: TransactionUnspentOutput
+        final def complete(
+            pr: PartialResult,
+            rolloutSpent: RolloutUtxo
         ): Either[Error, RolloutTxType] =
             for {
-                finished <- finish(state, rolloutSpent)
+                finished <- finish(pr, rolloutSpent)
             } yield getRolloutTx(finished)
 
-        def getRolloutTx(state: State[Status.Finished]): RolloutTxType
+        def getRolloutTx(ctx : TransactionBuilder.Context): RolloutTxType
 
-        def finish(
-            state: State[Status.NeedsInput],
-            rolloutSpent: TransactionUnspentOutput
-        ): Either[Error, State[Status.Finished]] =
+        final def finish(
+            pr : PartialResult,
+            rolloutSpent: RolloutUtxo
+        ): Either[Error, TransactionBuilder.Context] =
             for {
                 addedRolloutInput <- TransactionBuilder.modify(
-                  state.ctx,
-                  List(TxBuilder.spendRollout(rolloutSpent))
+                  pr.ctx,
+                  List(TxBuilder.spendRollout(rolloutSpent.utxo))
                 )
                 finished <- TxBuilder.finish(addedRolloutInput)
-            } yield State.Finished.fromNeedsInput(state.copy(ctx = finished))
+            } yield finished
 
         def mbSendRollout: Option[Send]
 
@@ -341,19 +111,19 @@ object RolloutTx {
           * (including balancing and fee).
           */
         object BasePessimistic {
-            // TODO: Add a single withdrawal
-            lazy val basePessimistic: Either[Error, State[Status.InProgress]] =
-                for {
-                    ctx <- TransactionBuilder.build(
-                      config.env.network,
-                      commonSteps ++ mbSendRollout.toList
-                    )
-                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
-                } yield State[Status.InProgress](
-                  ctx = ctx,
-                  inputValueNeeded = valueNeededWithFee,
-                  remainingPayoutObligations = payouts
-                )
+//            // TODO: Add a single withdrawal
+//            lazy val basePessimistic: Either[Error, State[Status.InProgress]] =
+//                for {
+//                    ctx <- TransactionBuilder.build(
+//                      config.env.network,
+//                      commonSteps ++ mbSendRollout.toList
+//                    )
+//                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
+//                } yield State[Status.InProgress](
+//                  ctx = ctx,
+//                  inputValueNeeded = valueNeededWithFee,
+//                    remainingPayoutObligations = payouts.toVector
+//                )
 
             lazy val commonSteps: List[TransactionBuilderStep] =
                 List(setRolloutMetadata, referenceHNS)
@@ -371,12 +141,28 @@ object RolloutTx {
         }
 
         object AddPayouts {
+            def addPayouts(): Either[Error, State[Status.InProgress]] = {
+                for {
+                    ctx <- TransactionBuilder.build(
+                      config.env.network,
+                      BasePessimistic.commonSteps ++ mbSendRollout.toList
+                    )
+                    withPayout <- tryAddPayout(ctx, payoutObligation = payouts.head)
+                    basePessimistic = State[Status.InProgress](
+                        ctx = withPayout._1,
+                        inputValueNeeded = withPayout._2,
+                        remainingPayoutObligations = payouts.tail
+                    )
+                    res <- loop(basePessimistic)
+                } yield res
+
+            }
 
             /** Try to add payouts one-by-one until adding another payout would exceed transaction
               * size limits.
               */
             @tailrec
-            def addPayouts(
+            def loop(
                 state: State[Status.InProgress]
             ): Either[Error, State[Status.InProgress]] = {
                 import state.*
@@ -389,7 +175,7 @@ object RolloutTx {
                                   inputValueNeeded = value,
                                   remainingPayoutObligations = otherObligations
                                 )
-                                addPayouts(newState)
+                                loop(newState)
                             case Left(err) =>
                                 TxBuilder.replaceInvalidSizeException(err, state)
                         }
@@ -408,7 +194,7 @@ object RolloutTx {
                 val payoutStep = Send(payoutObligation.output)
                 for {
                     newCtx <- TransactionBuilder.modify(ctx, List(payoutStep))
-                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(ctx)
+                    valueNeededWithFee <- TxBuilder.trialFinishWithMock(newCtx)
                 } yield (newCtx, valueNeededWithFee)
         }
 
@@ -496,8 +282,7 @@ object RolloutTx {
               *   the resolved spend rollout utxo
               */
             @throws[AssertionError]
-            def unsafeGetRolloutSpent(state: State[Status.Finished]): RolloutUtxo = {
-                import state.*
+            def unsafeGetRolloutSpent(ctx : TransactionBuilder.Context): RolloutUtxo = {
                 val tx = ctx.transaction
                 val inputs = tx.body.value.inputs.toSeq
 
@@ -512,5 +297,274 @@ object RolloutTx {
                 RolloutUtxo(firstInputResolved)
             }
         }
+
+    object Builder {
+
+        import Fields.*
+        import State.Status
+
+        /** Partial results are enumerated based on their position within the rollout chain. The
+          * builders for [[Intermediate]] and [[First]] produce transactions that produce rollout
+          * utxos, while the builders for [[Last]] and [[Only]] do not.
+          */
+        enum PartialResult extends HasTxBuilderContext, HasInputRequired:
+            def builder: Builder
+
+            case Intermediate(
+                                 override val builder: Builder.NotLast,
+                                 override val ctx: TransactionBuilder.Context,
+                                 override val inputValueNeeded: Value,
+                                 val remainingPayoutObligations: NonEmptyVector[Payout.Obligation.L1],
+                             ) extends PartialResult, HasRemainingPayoutObligations
+
+            case Last(
+                         override val builder: Builder.Last,
+                         override val ctx: TransactionBuilder.Context,
+                         override val inputValueNeeded: Value,
+                         val remainingPayoutObligations: NonEmptyVector[Payout.Obligation.L1],
+                     ) extends PartialResult, HasRemainingPayoutObligations
+
+            case First(
+                          override val builder: Builder.NotLast,
+                          override val ctx: TransactionBuilder.Context,
+                          override val inputValueNeeded: Value,
+            )
+            case Only(
+                         override val builder: Builder.Last,
+                         override val ctx: TransactionBuilder.Context,
+                         override val inputValueNeeded: Value,
+            )
+
+            final def tx: Transaction = ctx.transaction
+            final def finish(rolloutSpent: RolloutUtxo): Either[Error, TransactionBuilder.Context] = {
+                builder.finish(this, rolloutSpent = rolloutSpent)
+            }
+
+        type Error = SomeBuildError
+
+        type Result = RolloutTx
+
+        /** The state associated with a single rollout tx. It is passed between functions that
+          * modify it in different stages, and carries a [[Status]] phantom type to indicate which
+          * operations have already been applied.
+          *
+          * @param ctx
+          *   The [[Context]] "so far" on the state, including a partially-built transaction, s
+          *   resolved utxos, etc.
+          * @param inputValueNeeded
+          *   The input value needed to process this rollout tx. If this is not the Only or Last
+          *   rollout transaction, this includes the value necessary to establish the next rollout
+          *   utxo and pay for its fees.
+          * @param remainingPayoutObligations
+          *   The payout obligations that were not processes by this rollout transaction. May be empty.
+          * @tparam Status
+          *   The phantom type indicating which operations the builder has already applied to the
+          *   state.
+          */
+        final case class State[Status <: State.Status](
+            override val ctx: TransactionBuilder.Context,
+            override val inputValueNeeded: Value,
+            remainingPayoutObligations: Vector[Payout.Obligation.L1]
+                                                      ) extends HasTxBuilderContext, HasInputRequired
+
+        /** A builder for the last (or only) rollout transaction in a chain. It doesn't produce a
+          * subsequent rollout utxo. In practice, this rollout transaction is built _first_ and we
+          * work backwards to construct the rest of the chain.
+          */
+        final case class Last(
+            override val config: Config,
+            override val payouts: NonEmptyVector[Payout.Obligation.L1]
+        ) extends Builder {
+            override lazy val mbSendRollout: None.type = None
+
+            override type BuildPartialType = PartialResult.LastOrOnly
+
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType = {
+                import needsInput.*
+                NonEmptyVector.fromVector(needsInput.remainingPayoutObligations) match
+                    case None => PartialResult.Only(
+                        builder = this,
+                        ctx = ctx,
+                        inputValueNeeded = inputValueNeeded
+                    )
+                    case Some(nev) => PartialResult.Last(
+                        builder = this,
+                        ctx = ctx,
+                        inputValueNeeded = inputValueNeeded,
+                        remainingPayoutObligations = nev
+                    )
+            }
+
+            override type RolloutTxType = RolloutTx.Last
+
+            @throws[AssertionError]
+            override def getRolloutTx(ctx : TransactionBuilder.Context): RolloutTxType = {
+                RolloutTx.Last(
+                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
+                  tx = ctx.transaction
+                )
+            }
+        }
+
+        /** A builder for non-terminal rollout transaction in a chain. It produces a subsequent
+          * rollout utxo with the correct amount value required for the _next_ rollout transaction
+          * in the chain, which is _built_ prior to this transaction.
+          * @param payouts
+          *   the payout obligations that need to be discharged
+          * @param rolloutOutputValue
+          *   The rollout output this transaction produces, which must be consumed as an input in
+          *   the next rollout transaction.
+          */
+        final case class NotLast(
+            override val config: Config,
+            override val payouts: NonEmptyVector[Payout.Obligation.L1],
+            rolloutOutputValue: Value
+        ) extends Builder {
+            override lazy val mbSendRollout: Option[Send] = Some(sendRollout)
+
+            lazy val sendRollout = Send(rolloutOutput)
+
+            lazy val rolloutOutput: TxOutput.Babbage =
+                TxOutput.Babbage(
+                    address = config.headNativeScript.mkAddress(config.env.network),
+                    value = rolloutOutputValue,
+                    datumOption = None,
+                    scriptRef = None
+                )
+
+            override type BuildPartialType = PartialResult.NotLast
+
+            override def classifyPartialResult(needsInput: State[Status.NeedsInput]): BuildPartialType = {
+                import needsInput.*
+                NonEmptyVector.fromVector(needsInput.remainingPayoutObligations) match
+                    case None => PartialResult.First(
+                        builder = this,
+                        ctx = ctx,
+                        inputValueNeeded = inputValueNeeded
+                    )
+                    case Some(nev) => PartialResult.Intermediate(
+                        builder = this,
+                        ctx = ctx,
+                        inputValueNeeded = inputValueNeeded,
+                        remainingPayoutObligations = nev
+                    )
+            }
+
+            override type RolloutTxType = RolloutTx.NotLast
+
+            @throws[AssertionError]
+            override def getRolloutTx(
+                ctx : TransactionBuilder.Context
+            ): RolloutTxType = {
+                val tx = ctx.transaction
+                val rolloutProduced = TransactionUnspentOutput(
+                  TransactionInput(transactionId = tx.id, index = 0),
+                  rolloutOutput
+                )
+                RolloutTx.NotLast(
+                  rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
+                  rolloutProduced = RolloutUtxo(rolloutProduced),
+                  tx = tx
+                )
+            }
+        }
+
+        object State {
+
+
+            type Status = Status.InProgress | Status.NeedsInput | Status.Finished
+
+            object Status {
+                type InProgress
+                type NeedsInput
+                type Finished
+            }
+
+            object NeedsInput {
+                def fromInProgress(ip : State[Status.InProgress]): State[Status.NeedsInput] = {
+                    import ip.*
+                    State(ctx, inputValueNeeded, remainingPayoutObligations)
+                }
+            }
+
+            object Finished {
+                def fromNeedsInput(ni : State[Status.NeedsInput]): State[Status.Finished] = {
+                    import ni.*
+                    State(ctx, inputValueNeeded, remainingPayoutObligations)
+                }
+            }
+        }
+
+        object Mock {
+            // A UtxoID with the largest possible size in Flat encoding
+            // - Transaction ID should be 32 bytes of 1111 1111 because Flat uses the least number of bytes.
+            // - The index can be zero because Flat will still use a full byte
+            // https://hackage.haskell.org/package/flat-0.6/docs/Flat-Class.html
+            val utxoId = TransactionInput(
+              transactionId = TransactionHash.fromByteString(
+                ByteString.fromArray(Array.fill(32)(Byte.MinValue))
+              ),
+              index = 0
+            )
+
+            def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
+                TxBalance.produced(ctx.transaction)
+        }
+
+        // TODO: Find a better place for this
+        final case class Config(
+            headNativeScript: HeadMultisigScript,
+            headNativeScriptReferenceInput: TransactionUnspentOutput,
+            env: Environment,
+            validators: Seq[Validator]
+        )
+
+        /** Common fields shared between different parts of the builder
+         *
+         */
+        object Fields {
+            sealed trait HasTxBuilderContext {
+                def ctx: TransactionBuilder.Context
+            }
+
+            sealed trait HasInputRequired {
+                def inputValueNeeded: Value
+            }
+
+            sealed trait HasRemainingPayoutObligations {
+                def remainingPayoutObligations: NonEmptyVector[Payout.Obligation.L1]
+            }
+
+            sealed trait HasRolloutOutput {
+                def rolloutOutput: TxOutput.Babbage
+            }
+        }
+
+        object PartialResult {
+            type FirstOrOnly = PartialResult.First | PartialResult.Only
+
+            type NotLast = Intermediate | First
+
+            type LastOrOnly = PartialResult.Last | Only
+
+
+            extension (pr: PartialResult.Intermediate)
+                /** Used to "promote" an intermediate transaction to a "first" if the settlement tx merged in the
+                 * first-of-many rollouts
+                 */
+
+                def asFirst: PartialResult.First =
+                    import pr.*
+                    PartialResult.First(builder, ctx ,inputValueNeeded)
+
+            extension (pr: PartialResult.Last)
+                /**
+                 * Used to "promote" a  transaction to a "first" if the settlement tx merged in the
+                 */
+                def asOnly: PartialResult.Only =
+                    import pr.*
+                    PartialResult.Only(builder, ctx, inputValueNeeded)
+        }
+    }
 
 }
