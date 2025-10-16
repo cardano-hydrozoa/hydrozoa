@@ -154,4 +154,51 @@ object CommonGenerators {
         peers.toList.map(peer => peer.wallet.createEd25519Signature(bs))
     }
 
+    /** Generator for Shelley address */
+    def genShelleyAddress: Gen[ShelleyAddress] =
+        for {
+            keyHash <- arbitrary[AddrKeyHash]
+            network = Mainnet
+        } yield ShelleyAddress(
+          network = network,
+          payment = ShelleyPaymentPart.Key(keyHash),
+          delegation = ShelleyDelegationPart.Null
+        )
+
+    /** Generator for L2 UTXO sets */
+    def genUtxosL2(count: Int = 2): Gen[UtxoSetL2] =
+        for {
+            outputs <- Gen.listOfN(count, genOutputL2)
+            utxoIds <- Gen.listOfN(count, genUtxoIdL2)
+        } yield UtxoSet[L2](utxoIds.zip(outputs).toMap)
+
+    /** Generator for a single L2 output */
+    def genOutputL2: Gen[OutputL2] =
+        for {
+            address <- genShelleyAddress
+            coin <- Gen.choose(1_000_000L, 10_000_000L)
+            value = Value(Coin(coin))
+        } yield Output[L2](
+          Babbage(
+            address = address,
+            value = value,
+            datumOption = None,
+            scriptRef = None
+          )
+        )
+
+    /** Generator for L2 UTXO ID */
+    def genUtxoIdL2: Gen[UtxoId[L2]] =
+        for {
+            txHash <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+            index <- Gen.choose(0, 10)
+        } yield UtxoId[L2](TransactionInput(txHash, index))
+
+    /** Generator for version tuple */
+    def genVersion: Gen[(BigInt, BigInt)] =
+        for {
+            major <- Gen.choose(1, 10)
+            minor <- Gen.choose(0, 99)
+        } yield (BigInt(major), BigInt(minor))
+
 }

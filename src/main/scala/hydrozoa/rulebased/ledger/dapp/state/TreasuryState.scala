@@ -50,7 +50,7 @@ object TreasuryState:
     // EdDSA / ed25519 Cardano verification key
     type VerificationKey = ByteString
 
-    // The result of `bls12_381_G2_compress` function
+    // The result of `bls12_381_G1_compress` function
     type MembershipProof = ByteString
 
     // Hash of consensus parameters

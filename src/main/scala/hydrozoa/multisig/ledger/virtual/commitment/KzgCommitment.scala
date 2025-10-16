@@ -22,7 +22,7 @@ object KzgCommitment {
             LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))
 
         // Calculate hashes
-        SList.from(
+        val scalars = SList.from(
           utxo.toList
               .map(e =>
                   toPlutus(e._1, e._2)
@@ -34,7 +34,8 @@ object KzgCommitment {
               )
         )
 
-        // println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+        //println(s"utxos hashes: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+        scalars
 
     /** Calculates the commitment for the pairing-based accumulator.
       *
@@ -45,9 +46,13 @@ object KzgCommitment {
       */
     def calculateCommitment(scalars: SList[Scalar]): KzgCommitment = {
 
+        //println(s"elems: ${scalars.length}")
+        //println(s"elems: ${scalars.map(e => BigInt.apply(e.to_bendian()))}")
+
         // Get as much from the setup as we need: n + 1 elements
         val size = scalars.length.toInt + 1
         val srs = TrustedSetup.takeSrsG1(size)
+
         // Check the size of the setup is big enough
         assert(
           size == srs.length,
@@ -55,7 +60,8 @@ object KzgCommitment {
         )
 
         val finalPoly = mkFinalPoly(scalars)
-        println(s"finalPoly: ${finalPoly.map(e => BigInt.apply(e.to_bendian()))}")
+
+        //println(s"finalPoly: ${finalPoly.map(e => BigInt.apply(e.to_bendian()))}")
 
         val commitment = evalFinalPoly(srs, finalPoly).compress()
         println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
@@ -104,7 +110,8 @@ object KzgCommitment {
         // Multiply
         val subsetPoints: SList[P1] =
             SList.map2(finalPoly, srsG1): (sb, st) =>
-                st.mult(sb)
+                // This dup is needed, since otherwise we modify the loaded SRS itself
+                st.dup().mult(sb)
         // Add
         val zero = P1(G1.zero.toCompressedByteString.bytes)
         subsetPoints.foldLeft(zero.dup()): (a, b) =>

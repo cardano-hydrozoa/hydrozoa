@@ -4,7 +4,6 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import munit.FunSuite
-import scala.io.Source
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
@@ -12,6 +11,8 @@ import scalus.prelude.List
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.Scalar
+
+import scala.io.Source
 
 class RuleBasedTreasuryScriptTest extends FunSuite {
 
@@ -22,13 +23,13 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
     test("Script compiles, size and hash is still the same") {
         assertEquals(
           RuleBasedTreasuryScript.compiledScriptHash,
-          ScriptHash.fromHex("905ceb8b466d5a4090b10a4fc0521946968adbef069969f9f0b551ea"),
+          ScriptHash.fromHex("5cf75884c7b76ec5c6b4f2b418552c530aa0afd56e466f19468b0fce"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         )
 
         assertEquals(
           RuleBasedTreasuryScript.flatEncoded.length,
-          9175,
+          9104,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
         )
 
@@ -44,6 +45,28 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         assertEquals(
           RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof),
           true
+        )
+    }
+
+    test("Commitment calculation: empty subset") {
+
+        // Hashes of utxos
+        val subsetScalus: List[ScalusScalar] = List.empty
+
+        val subsetBlst = subsetScalus.map(ss => Scalar().from_bendian(ss._1.toByteArray))
+        println(s"blst utxos active hashes: ${subsetBlst.map(e => BigInt.apply(e.to_bendian()))}")
+
+        val commitmentPoint1 = KzgCommitment.calculateCommitment(subsetBlst)
+        val commitmentPoint2 = KzgCommitment.calculateCommitment(subsetBlst)
+
+        assertEquals(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint2).toArray)
+        )
+
+        assertEquals(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
+          "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
         )
     }
 

@@ -447,7 +447,8 @@ object TransactionBuilder:
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
         ): Either[SomeBuildError, Context] =
-//            println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+            //println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
+
 
             for {
                 balancedCtx <- this
