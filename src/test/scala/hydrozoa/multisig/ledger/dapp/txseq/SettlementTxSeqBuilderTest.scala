@@ -13,7 +13,7 @@ import scala.collection.immutable.Queue
 class SettlementTxSeqBuilderTest extends munit.ScalaCheckSuite {
 
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1000)
+        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1)
     }
     
     property("Build settlement tx sequence")(

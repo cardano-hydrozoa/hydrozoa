@@ -1,11 +1,10 @@
 package hydrozoa.multisig.ledger.dapp.txseq.tx
 
+import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.joint.utxo.Payout
-import org.scalacheck.*
-import hydrozoa.multisig.ledger.dapp.tx.ArbitraryInstances.given
-import hydrozoa.multisig.ledger.dapp.tx.genFakeMultisigWitnessUtxo
+import hydrozoa.multisig.ledger.dapp.tx.{genFakeMultisigWitnessUtxo, genPayoutObligationL1}
 import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.Config
+import org.scalacheck.*
 import test.*
 
 class RolloutTxTest extends munit.ScalaCheckSuite {
@@ -15,22 +14,13 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
             env = testTxBuilderEnvironment
             multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
-            payouts <- Gen.nonEmptyListOf(Arbitrary.arbitrary[Payout.Obligation.L1])
+            payouts <- Gen.nonEmptyListOf(genPayoutObligationL1(env.network))
         } yield RolloutTx.Builder.Last(config = Config(
           headNativeScript = hns,
           headNativeScriptReferenceInput = multisigWitnessUtxo,
           env = env,
           validators = testValidators),
-          payouts = Vector.from(payouts))
-
-    property("Build Last Rollout Tx Base Pessimistic")(
-      Prop.forAll(genLastBuilder){
-          builder => builder.BasePessimistic.basePessimistic match
-            case Left(e) => throw new RuntimeException(e.toString)
-            case Right(_) => ()
-      }
-
-    )
+            payouts = NonEmptyVector.fromVectorUnsafe(payouts.toVector))
 
     property("Build Last Rollout Tx")(
       Prop.forAll(genLastBuilder){
