@@ -3,7 +3,8 @@ package hydrozoa.multisig.ledger.dapp.txseq.tx
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.{genFakeMultisigWitnessUtxo, genPayoutObligationL1}
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.Config
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.Config
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import org.scalacheck.*
 import test.*
 

@@ -3,10 +3,10 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.{Kleisli, NonEmptyVector}
 import cats.syntax.all.*
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder as SingleBuilder
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
-import hydrozoa.multisig.ledger.dapp.txseq.tx.RolloutTx.Builder.PartialResult.FirstOrOnly
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder as SingleBuilder
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.PartialResult.FirstOrOnly
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 
