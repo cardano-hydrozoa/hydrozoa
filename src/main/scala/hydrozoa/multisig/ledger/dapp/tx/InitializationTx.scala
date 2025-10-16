@@ -4,7 +4,13 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{NativeScriptWitness, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    NativeScriptWitness,
+    PubKeyWitness,
+    SomeBuildError,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token

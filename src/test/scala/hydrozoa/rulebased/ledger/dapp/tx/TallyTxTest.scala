@@ -4,7 +4,10 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
@@ -20,9 +23,6 @@ import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude.Option as SOption
 import test.*
-
-
-
 
 /** Generate a vote datum with a cast vote for tally testing
   */
@@ -48,21 +48,21 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
         continuingKey <- Gen.choose(0, peersN - 1)
         removedKey = continuingKey + 1
         nextLink = (removedKey + 1) % (peersN + 1)
-        
+
         // Generate independent commitments and versions for each vote
         continuingVersionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
         continuingCommitment <- genByteStringOfN(48)
-        
+
         removedVersionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
         removedCommitment <- genByteStringOfN(48)
-        
+
         continuingDatum = VoteDatum(
           key = continuingKey,
-          link = removedKey,  // Key constraint: continuing vote links to removed vote
+          link = removedKey, // Key constraint: continuing vote links to removed vote
           peer = SOption.None,
           voteStatus = VoteStatus.Vote(VoteDetails(continuingCommitment, continuingVersionMinor))
         )
-        
+
         removedDatum = VoteDatum(
           key = removedKey,
           link = nextLink,
@@ -93,13 +93,14 @@ def genTallyVoteUtxo(
       datumOption = Some(Inline(voteDatum.toData)),
       scriptRef = None
     )
-    
-    Gen.const(TallyVoteUtxo(
-      voter = voter,
-      Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
-    ))
-}
 
+    Gen.const(
+      TallyVoteUtxo(
+        voter = voter,
+        Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
+      )
+    )
+}
 
 def genTallyTxRecipe(
     estimatedFee: Coin = Coin(5_000_000L)
@@ -137,7 +138,7 @@ def genTallyTxRecipe(
 
         // Generate compatible vote datums for tallying
         (continuingVoteDatum, removedVoteDatum) <- genCompatibleVoteDatums(peers.length)
-        
+
         // Generate vote UTxOs with cast votes
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
@@ -147,10 +148,10 @@ def genTallyTxRecipe(
           continuingVoteDatum,
           AddrKeyHash(peers.head.wallet.exportVerificationKeyBytes.pubKeyHash.hash)
         )
-        
+
         removedVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
-          2, // Output index 2  
+          2, // Output index 2
           headScriptHash,
           voteTokenName,
           removedVoteDatum,
@@ -188,7 +189,7 @@ class TallyTxTest extends munit.ScalaCheckSuite {
               case Left(e) =>
                   throw RuntimeException(s"TallyTx build failed: $e")
               case Right(tx) =>
-                  //println(HexUtil.encodeHexString(tx.tx.toCbor))
+                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
                   // Basic smoke test assertions
                   assert(tx.continuingVoteUtxo != null)

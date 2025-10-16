@@ -5,7 +5,12 @@ import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
 import hydrozoa.lib.tx.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.WithdrawRedeemer
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}

@@ -9,7 +9,6 @@ package hydrozoa.lib.tx
 import cats.*
 import cats.data.*
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.lib.optics.>>>
 import hydrozoa.lib.tx
@@ -454,11 +453,13 @@ object TransactionBuilder:
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
-                .left
-                  .map(BalancingError(_))
+                    .left
+                    .map(BalancingError(_))
 
-                validatedCtx <- balancedCtx.validate(validators, protocolParams)
-                    .left.map(ValidationError(_))
+                validatedCtx <- balancedCtx
+                    .validate(validators, protocolParams)
+                    .left
+                    .map(ValidationError(_))
 
             } yield validatedCtx
     }
@@ -1865,7 +1866,7 @@ case class TransactionUnspentOutput(input: TransactionInput, output: Transaction
     def toTuple: (TransactionInput, TransactionOutput) = (input, output)
 
 object TransactionUnspentOutput:
-    
+
     def apply(utxo: (TransactionInput, TransactionOutput)): TransactionUnspentOutput =
         TransactionUnspentOutput(utxo._1, utxo._2)
 
@@ -1896,12 +1897,12 @@ object NetworkExtensions:
 def appendDistinct[A](elem: A, seq: Seq[A]): Seq[A] =
     seq.appended(elem).distinct
 
-/**
- * These are the sum type for any errors that may occur during different phases and that can be returned thrown by a higher-level TxBuilder
- */
+/** These are the sum type for any errors that may occur during different phases and that can be
+  * returned thrown by a higher-level TxBuilder
+  */
 enum SomeBuildError:
     case SomeStepError(e: StepError)
-    //case EvaluationError(e: PlutusScriptEvaluationException)
+    // case EvaluationError(e: PlutusScriptEvaluationException)
     case BalancingError(e: TxBalancingError)
     case ValidationError(e: TransactionException)
 
@@ -1909,11 +1910,13 @@ enum SomeBuildError:
         case SomeStepError(e) =>
             s"Step processing error: ${e.getClass.getSimpleName} - ${e.explain}"
         // TODO: port back changes from Scalus WRT the new constructor in TxBalancingError
-        case BalancingError(TxBalancingError.Failed(unknown)) => unknown match {
-          case psee: PlutusScriptEvaluationException =>
-            s"Plutus script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs.mkString(" <CR> ")}"
-          case other => s"Unexpected exception during balancing: ${other.getMessage}"
-        }
+        case BalancingError(TxBalancingError.Failed(unknown)) =>
+            unknown match {
+                case psee: PlutusScriptEvaluationException =>
+                    s"Plutus script evaluation failed: ${psee.getMessage}, execution trace: ${psee.logs
+                            .mkString(" <CR> ")}"
+                case other => s"Unexpected exception during balancing: ${other.getMessage}"
+            }
         case BalancingError(TxBalancingError.CantBalance(lastDiff)) =>
             s"Can't balance: last diff $lastDiff"
         case BalancingError(TxBalancingError.InsufficientFunds(diff, required)) =>

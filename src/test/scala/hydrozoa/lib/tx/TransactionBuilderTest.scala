@@ -656,9 +656,9 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     }
 
     testBuilderStepsFail(
-        label = "A script based utxo can't be used as a collateral",
-        steps = List(AddCollateral(utxo = script1Utxo)),
-        error = CollateralNotPubKey(script1Utxo)
+      label = "A script based utxo can't be used as a collateral",
+      steps = List(AddCollateral(utxo = script1Utxo)),
+      error = CollateralNotPubKey(script1Utxo)
     )
 
     // =======================================================================

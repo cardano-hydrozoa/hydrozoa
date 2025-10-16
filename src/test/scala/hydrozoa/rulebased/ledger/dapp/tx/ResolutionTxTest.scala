@@ -5,7 +5,10 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*

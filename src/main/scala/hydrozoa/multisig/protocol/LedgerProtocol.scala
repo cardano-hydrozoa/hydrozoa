@@ -64,7 +64,7 @@ object LedgerProtocol {
         } yield VirtualTransaction(txSerialized, deferredResponse)
 
         final case class Success(
-            payoutObligations: List[Unit] //ledger.JointLedger.PayoutObligation]
+            payoutObligations: List[Unit] // ledger.JointLedger.PayoutObligation]
         )
 
         type Error = ledger.VirtualLedger.CborParseError |

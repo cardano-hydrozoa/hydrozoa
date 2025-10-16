@@ -10,6 +10,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult as RolloutTxSeqPartial
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import scala.annotation.tailrec
+import scala.collection.immutable.Queue
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
@@ -18,9 +20,6 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.{TransactionOutput as TxOutput, *}
-
-import scala.annotation.tailrec
-import scala.collection.immutable.Queue
 
 enum SettlementTx extends Tx {
     def treasurySpent: TreasuryUtxo
@@ -174,8 +173,10 @@ object SettlementTx {
                 ctx: TransactionBuilder.Context,
                 deposit: DepositUtxo
             ): Either[Error, TransactionBuilder.Context] =
-                val depositStep = Spend(TransactionUnspentOutput(deposit.toUtxo), 
-                    NativeScriptWitness(NativeScriptAttached, headNativeScript.requiredSigners))
+                val depositStep = Spend(
+                  TransactionUnspentOutput(deposit.toUtxo),
+                  NativeScriptWitness(NativeScriptAttached, headNativeScript.requiredSigners)
+                )
                 for {
                     newCtx <- TransactionBuilder.modify(ctx, List(depositStep))
                     // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits

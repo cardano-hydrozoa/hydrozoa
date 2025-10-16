@@ -7,10 +7,9 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, SettlementTx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import scala.collection.immutable.Queue
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.Environment
-
-import scala.collection.immutable.Queue
 
 enum SettlementTxSeq:
     def settlementTx: SettlementTx

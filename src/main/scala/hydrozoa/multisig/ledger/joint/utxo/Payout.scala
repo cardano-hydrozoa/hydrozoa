@@ -18,7 +18,7 @@ object Payout {
             opaque type L1 = L2
 
             def apply(x: L2): L1 = x
-            
+
             extension (self: L1) def output: TransactionOutput.Babbage = self.output
         }
     }

@@ -4,10 +4,25 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{
+    AddCollateral,
+    ReferenceOutput,
+    Send,
+    Spend,
+    ValidityEndSlot
+}
+import hydrozoa.lib.tx.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
+    DisputeRedeemer,
+    TallyRedeemer,
+    maxVote
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.*
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
 import scala.util.{Failure, Success, Try}
@@ -98,8 +113,8 @@ object TallyTx {
         recipe: Recipe,
         outputDatum: VoteDatum
     ): Either[SomeBuildError, TallyTx] = {
-        import recipe.* 
-        
+        import recipe.*
+
         val outputValue = continuingVoteUtxo.utxo.output.value +
             removedVoteUtxo.utxo.output.value
 

@@ -6,12 +6,12 @@ import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.tx.ArbitraryInstances.{*, given}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.collection.immutable.Queue
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
@@ -25,19 +25,17 @@ import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
 
-import scala.collection.immutable.Queue
-
-
-/**
- * NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but may be a
- * good starting point. For example, an arbitrary payout obligation may be for a different network than
- * the one you intend.
- *
- * Import as (...).ArbitraryInstances.{*, given}
- */
+/** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but may be a
+  * good starting point. For example, an arbitrary payout obligation may be for a different network
+  * than the one you intend.
+  *
+  * Import as (...).ArbitraryInstances.{*, given}
+  */
 object ArbitraryInstances {
-    /** NOTE: You can't change the network very easily because this is an opaque type. You should only use
-     * this for fuzz testing. */
+
+    /** NOTE: You can't change the network very easily because this is an opaque type. You should
+      * only use this for fuzz testing.
+      */
     given Arbitrary[Payout.Obligation.L2] = Arbitrary {
         for {
             l2Input <- arbitrary[TransactionInput]
@@ -45,10 +43,12 @@ object ArbitraryInstances {
             addr <- arbitrary[ShelleyAddress]
             coin <- arbitrary[Coin]
             datum <- arbitrary[ByteString]
-            output = Babbage(address = addr,
-                value = Value(coin),
-                datumOption = Some(Inline(datum.toData)),
-                scriptRef = None)
+            output = Babbage(
+              address = addr,
+              value = Value(coin),
+              datumOption = Some(Inline(datum.toData)),
+              scriptRef = None
+            )
         } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
     }
 
@@ -67,15 +67,16 @@ def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
         addr = addr0.copy(network = network)
         coin <- arbitrary[Coin]
         datum <- arbitrary[ByteString]
-        output = Babbage(address = addr,
-            value = Value(coin),
-            datumOption = Some(Inline(datum.toData)),
-            scriptRef = None)
+        output = Babbage(
+          address = addr,
+          value = Value(coin),
+          datumOption = Some(Inline(datum.toData)),
+          scriptRef = None
+        )
     } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
 
-def genPayoutObligationL1(network: Network) : Gen[Payout.Obligation.L1] = genPayoutObligationL2(network).map(
-    Payout.Obligation.L1(_))
-
+def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
+    genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
@@ -146,7 +147,7 @@ def genTreasuryUtxo(
     network: Network = Mainnet,
     params: ProtocolParams = blockfrost544Params,
     headAddr: Option[ShelleyAddress],
-    coin : Option[Coin]
+    coin: Option[Coin]
 ): Gen[TreasuryUtxo] =
     for {
         txId <- arbitrary[TransactionInput]
@@ -187,12 +188,13 @@ def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = Mainnet
-                                 ): Gen[SettlementTxSeq.Builder] = {
+): Gen[SettlementTxSeq.Builder] = {
     (for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
-        deposits <- Gen.listOfN(10,
+        deposits <- Gen.listOfN(
+          10,
           genDepositUtxo(
             network = network,
             params = params,
@@ -204,24 +206,26 @@ def genSettlementTxSeqBuilder(
         payouts <- Gen.listOfN(1000, genPayoutObligationL1(network))
         payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
-
-        utxo <- genTreasuryUtxo(headAddr = Some(hns.mkAddress(network)), network = network, coin =
-            Some(payoutAda + Coin(1_000_000_000L)))
+        utxo <- genTreasuryUtxo(
+          headAddr = Some(hns.mkAddress(network)),
+          network = network,
+          coin = Some(payoutAda + Coin(1_000_000_000L))
+        )
 
         multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
 
     } yield SettlementTxSeq.Builder(
-        majorVersion = majorVersion,
-        // TODO: generating a list and turning it into a queue is suboptimal
-        deposits = Queue.from(deposits),
-        payouts = Vector.from(payouts),
-        treasuryUtxo = utxo,
-        headNativeScript = hns,
-        headNativeScriptReferenceInput = multisigWitnessUtxo,
-        env = testTxBuilderEnvironment,
-        validators = testValidators
+      majorVersion = majorVersion,
+      // TODO: generating a list and turning it into a queue is suboptimal
+      deposits = Queue.from(deposits),
+      payouts = Vector.from(payouts),
+      treasuryUtxo = utxo,
+      headNativeScript = hns,
+      headNativeScriptReferenceInput = multisigWitnessUtxo,
+      env = testTxBuilderEnvironment,
+      validators = testValidators
     ))
-        
+
 }
 
 def genFakeMultisigWitnessUtxo(
@@ -236,4 +240,3 @@ def genFakeMultisigWitnessUtxo(
       Some(ScriptRef.apply(script.script))
     )
 } yield TransactionUnspentOutput((utxoId, output))
-

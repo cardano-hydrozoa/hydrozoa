@@ -4,10 +4,26 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, ReferenceOutput, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{ExpectedSigner, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import hydrozoa.lib.tx.TransactionBuilderStep.{
+    AddCollateral,
+    ReferenceOutput,
+    Send,
+    Spend,
+    ValidityEndSlot
+}
+import hydrozoa.lib.tx.{
+    ExpectedSigner,
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
+    DisputeRedeemer,
+    OnchainBlockHeader,
+    VoteRedeemer
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
@@ -121,7 +137,7 @@ object VoteTx {
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         redeemer.toData,
                         DatumInlined,
-                        //Set.empty
+                        // Set.empty
                         Set(ExpectedSigner(recipe.voteUtxo.voter))
                       )
                     ),
