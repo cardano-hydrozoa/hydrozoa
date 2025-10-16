@@ -57,7 +57,7 @@ object RolloutTxSeq {
                 /** Finish the singleton rollout transaction by providing the first rollout utxo. */
                 override def finishPostProcess(rolloutSpent: RolloutUtxo): ErrorOr[Result] =
                     for {
-                        onlyFinished <- only.builder.finish(only.state, rolloutSpent.utxo)
+                        onlyFinished <- only.finish(rolloutSpent)
                         onlyPostProcessed = only.builder.getRolloutTx(onlyFinished)
                     } yield RolloutTxSeq(notLast = Vector.empty, last = onlyPostProcessed)
             }
@@ -85,7 +85,7 @@ object RolloutTxSeq {
                 override def finishPostProcess(rolloutSpent: RolloutUtxo): ErrorOr[Result] =
                     import Many.*
                     for {
-                        firstFinished <- first.builder.finish(first.state, rolloutSpent.utxo)
+                        firstFinished <- first.finish(rolloutSpent)
                         firstPostProcessed = first.builder.getRolloutTx(firstFinished)
 
                         vectorKleisli: Vector[IntermediateRolloutKleisli] = intermediates
@@ -101,7 +101,7 @@ object RolloutTxSeq {
                             .getOrElse(firstPostProcessed)
                             .rolloutProduced
 
-                        lastFinished <- last.builder.finish(last.state, lastRolloutSpent.utxo)
+                        lastFinished <- last.finish(lastRolloutSpent)
                         lastPostProcessed = last.builder.getRolloutTx(lastFinished)
 
                     } yield RolloutTxSeq(
@@ -121,7 +121,7 @@ object RolloutTxSeq {
                     rolloutSpent: RolloutUtxo
                 ): ErrorOr[RolloutTx.NotLast] =
                     for {
-                        currentFinished <- current.builder.finish(current.state, rolloutSpent.utxo)
+                        currentFinished <- current.finish(rolloutSpent)
                         currentPostProcessed = current.builder.getRolloutTx(currentFinished)
                     } yield currentPostProcessed
 
@@ -193,7 +193,7 @@ object RolloutTxSeq {
           */
         def buildPartial(): ErrorOr[PartialResult] =
             for {
-                lastRolloutTx <- SingleBuilder.Last(config, payouts.toVector).buildPartial()
+                lastRolloutTx <- SingleBuilder.Last(config, payouts).buildPartial()
                 partialResult <- lastRolloutTx match {
                     case only: SinglePartialResult.Only =>
                         Right(PartialResult.Singleton(only))
@@ -203,8 +203,8 @@ object RolloutTxSeq {
                             current <- SingleBuilder
                                 .NotLast(
                                   config,
-                                  lastRolloutTx.state.remainingPayoutObligations,
-                                  lastRolloutTx.state.inputValueNeeded
+                                  last.remainingPayoutObligations,
+                                  last.inputValueNeeded
                                 )
                                 .buildPartial()
                             loopResult <- loop(current, initialState)
@@ -220,8 +220,8 @@ object RolloutTxSeq {
                     val eNewCurrent = SingleBuilder
                         .NotLast(
                           config,
-                          intermediate.state.remainingPayoutObligations,
-                          intermediate.state.inputValueNeeded
+                          intermediate.remainingPayoutObligations,
+                          intermediate.inputValueNeeded
                         )
                         .buildPartial()
                     eNewCurrent match {

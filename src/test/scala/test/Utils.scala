@@ -1,11 +1,12 @@
 package test
 
+import cats.data.NonEmptyList
 import hydrozoa.lib.tx.TransactionBuilder.setMinAda
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
-import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Mainnet
@@ -23,6 +24,8 @@ import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
 
+import scala.language.postfixOps
+
 val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
 )
@@ -35,6 +38,13 @@ val evaluator = PlutusScriptEvaluator(
   protocolMajorVersion = MajorProtocolVersion.plominPV,
   costModels = costModels
 )
+
+val testEnv: Environment =
+    Environment(
+        protocolParams = testProtocolParams, 
+        evaluator = testEvaluator, 
+        network = testNetwork
+    )
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Mainnet
