@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import munit.FunSuite
+import scala.io.Source
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
 import scalus.ledger.api.v3.ScriptContext
@@ -11,8 +12,6 @@ import scalus.prelude.List
 import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.Scalar
-
-import scala.io.Source
 
 class RuleBasedTreasuryScriptTest extends FunSuite {
 
@@ -23,13 +22,13 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
     test("Script compiles, size and hash is still the same") {
         assertEquals(
           RuleBasedTreasuryScript.compiledScriptHash,
-          ScriptHash.fromHex("5cf75884c7b76ec5c6b4f2b418552c530aa0afd56e466f19468b0fce"),
+          ScriptHash.fromHex("8f0f586ab63709aadaa7e7e4add9ab0d0df686c6067acca335eb3ca9"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         )
 
         assertEquals(
           RuleBasedTreasuryScript.flatEncoded.length,
-          9104,
+          9326,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
         )
 
