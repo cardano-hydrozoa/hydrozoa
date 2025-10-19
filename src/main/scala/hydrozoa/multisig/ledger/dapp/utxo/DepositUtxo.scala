@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
+
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -12,6 +13,8 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.PosixTime
 import scalus.ledger.api.v3.{Address, Credential}
 import scalus.prelude.Option as ScalusOption
+
+import scala.collection.immutable.Queue
 
 final case class DepositUtxo(
     private val l1Input: TransactionInput,
@@ -34,6 +37,40 @@ final case class DepositUtxo(
 }
 
 object DepositUtxo {
+    trait Spent {
+        def depositSpent: DepositUtxo
+    }
+
+    trait Produced {
+        def depositProduced: DepositUtxo
+    }
+
+    object Many {
+        trait Spent {
+            def depositsSpent: Vector[DepositUtxo]
+        }
+
+        trait ToSpend {
+            def depositsToSpend: Vector[DepositUtxo]
+        }
+
+        object Spent {
+            trait Partition extends Spent, ToSpend
+        }
+        
+        trait Produced {
+            def depositsProduced: Vector[DepositUtxo]
+        }
+
+        trait ToProduce {
+            def depositsToProduce: Vector[DepositUtxo]
+        }
+        
+        object Produced {
+            trait Partition extends Produced, ToProduce
+        }
+    }
+
     enum DepositUtxoConversionError:
         case DepositUtxoNotBabbage
         case AddressNotShelley
