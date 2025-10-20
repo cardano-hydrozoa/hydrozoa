@@ -25,6 +25,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
+import test.Generators.Hydrozoa.*
 
 /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but may be a
   * good starting point. For example, an arbitrary payout obligation may be for a different network
@@ -237,15 +238,4 @@ def genSettlementTxSeqBuilder(
     )
 }
 
-def genFakeMultisigWitnessUtxo(
-    script: HeadMultisigScript,
-    network: Network
-): Gen[TransactionUnspentOutput] = for {
-    utxoId <- Arbitrary.arbitrary[TransactionInput]
-    output = Babbage(
-      script.mkAddress(network),
-      Value.ada(2),
-      None,
-      Some(ScriptRef.apply(script.script))
-    )
-} yield TransactionUnspentOutput((utxoId, output))
+

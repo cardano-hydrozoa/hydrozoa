@@ -5,38 +5,30 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.tx.{
     RolloutTx,
-    genFakeMultisigWitnessUtxo,
     genPayoutObligationL1
 }
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import org.scalacheck.*
 import test.*
+import test.Generators.Hydrozoa.*
 
 class RolloutTxTest extends munit.ScalaCheckSuite {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
-            peers <- genTestPeers
-            hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-            env = testTxBuilderEnvironment
-            multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
-            payouts <- Gen.nonEmptyListOf(genPayoutObligationL1(env.network))
+            config <- genTxConfig()
+            payouts <- Gen.nonEmptyListOf(genPayoutObligationL1(config.env.network))
         } yield (
-          RolloutTx.Builder.Last(
-            Config(
-              headNativeScript = hns,
-              headNativeScriptReferenceInput = multisigWitnessUtxo,
-              env = env,
-              validators = testValidators
-            )
-          ),
+          RolloutTx.Builder.Last(config),
           RolloutTx.Builder.Args.Last(NonEmptyVector.fromVectorUnsafe(payouts.toVector))
         )
-
-    property("Build Last Rollout Tx")(
+    
+    property("Build Last Rollout Tx Partial Result")(
       Prop.forAll(genLastBuilder) { (builder, args) =>
           builder.partialResult(args) match
               case Left(e)  => throw new RuntimeException(e.toString)
               case Right(_) => ()
       }
     )
+
+    property("Post-process last rollout tx partial result")(???)
 }
