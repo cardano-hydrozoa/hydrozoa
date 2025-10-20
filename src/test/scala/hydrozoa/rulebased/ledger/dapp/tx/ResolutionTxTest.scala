@@ -80,7 +80,7 @@ def genResolutionTxRecipe(
     for {
         // Common head parameters
         (
-          headScriptHash,
+          hns,
           headTokensSuffix,
           peers,
           peersVKs,
@@ -95,7 +95,7 @@ def genResolutionTxRecipe(
         voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          headScriptHash,
+          hns.policyId,
           voteTokenName,
           peersVKs,
           paramsHash,
@@ -103,7 +103,7 @@ def genResolutionTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-          headScriptHash,
+            hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -118,7 +118,7 @@ def genResolutionTxRecipe(
         talliedVoteUtxo <- genResolutionTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           peersVKs.size + 1, // number of vote tokens in the tallied utxo
           talliedVoteDatum,

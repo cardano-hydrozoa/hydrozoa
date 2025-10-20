@@ -2,6 +2,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.config.EquityShares
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.{NativeScriptValue, PlutusScriptValue}
@@ -70,13 +71,13 @@ object DeinitTx {
 
             headTokens <- extractHeadTokens(policyId, treasuryUtxo)
 
-            (equityOutputs, mbEquityFees) = mkEquityOutputs(
+            equityOutputs = mkEquityProduced(
               treasuryUtxo.value.coin,
               recipe.shares,
               recipe.env.protocolParams
             )
 
-            result <- buildDeinitTx(recipe, equityOutputs, mbEquityFees, headTokens)
+            result <- buildDeinitTx(recipe, equityOutputs.outputs, equityOutputs.dust, headTokens)
         } yield result
     }
 
@@ -97,16 +98,27 @@ object DeinitTx {
 
         } yield ()
 
-    private def mkEquityOutputs(
+    case class EquityProduced(
+        outputs: List[Babbage],
+        dust: Option[Coin]
+    )
+
+    object EquityProduced:
+        def apply(dust: Coin): EquityProduced =
+            EquityProduced(List.empty, Option.when(dust < Coin.zero)(dust))
+
+    private def mkEquityProduced(
         treasuryEquity: Coin,
         shares: EquityShares,
         params: ProtocolParams
-    ): (List[Babbage], Option[Coin]) =
-        val distribution = shares.distribute(treasuryEquity)
-        val empty: (List[Babbage], Coin) = (List.empty, distribution.dust)
+    ): EquityProduced =
+
         val minAda0 = minAda(params)
 
-        val ret = distribution.shares.foldLeft(empty)((ret, share) => {
+        val distribution = shares.distribute(treasuryEquity)
+        val initial = EquityProduced(distribution.dust)
+
+        distribution.shares.foldLeft(initial)((acc, share) => {
             val output =
                 Babbage(
                   address = share._1,
@@ -114,11 +126,10 @@ object DeinitTx {
                   datumOption = None,
                   scriptRef = None
                 )
-            if share._2 >= minAda0(output) then (ret._1 :+ output, ret._2)
-            else (ret._1, ret._2 + share._2)
+            if share._2 >= minAda0(output)
+            then EquityProduced(acc.outputs :+ output, acc.dust)
+            else EquityProduced(acc.outputs, Some(share._2 + acc.dust.getOrElse(Coin.zero)))
         })
-
-        (ret._1, Option.when(ret._2 > Coin.zero)(ret._2))
 
     private def minAda(params: ProtocolParams)(output: TransactionOutput) =
         MinCoinSizedTransactionOutput(Sized(output), params)

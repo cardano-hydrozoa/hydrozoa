@@ -1,5 +1,6 @@
 package hydrozoa
 
+import hydrozoa.config.{EquityShares, HeadConfig, HeadConfigError, PeerSection, RawConfig}
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite

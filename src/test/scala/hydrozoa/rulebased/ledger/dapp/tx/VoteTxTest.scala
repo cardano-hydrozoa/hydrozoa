@@ -76,7 +76,7 @@ def genVoteTxRecipe(
 
         // Common head parameters
         (
-          headScriptHash,
+          hns,
           headTokensSuffix,
           peers,
           peersVKs,
@@ -91,7 +91,7 @@ def genVoteTxRecipe(
         voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           peersVKs,
           paramsHash,
@@ -99,7 +99,7 @@ def genVoteTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-          headScriptHash,
+            hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -109,7 +109,7 @@ def genVoteTxRecipe(
         voteUtxo <- genVoteUtxo(
           fallbackTxId,
           peers.length,
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           voteDatum
         )

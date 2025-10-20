@@ -1,15 +1,9 @@
-package hydrozoa
+package hydrozoa.config
 
-/** The head config is used in both multisig and rule-based regimes, so it's hard to decide where we
-  * should put it.
-  */
-
-import hydrozoa.HeadConfigError.{NonConsistentShares, NonUniqueVerificationKey}
-import scalus.cardano.ledger.Coin
-import spire.compat.integral
-import spire.implicits.eqOps
+import hydrozoa.*
 import spire.math.{Rational, UByte}
-import spire.syntax.literals.r
+
+import HeadConfigError.{NonConsistentShares, NonUniqueVerificationKey}
 
 // ===================================
 // Raw config
@@ -73,39 +67,3 @@ enum HeadConfigError:
             s"A duplicate verification key(s): ${duplicates.map(_.bytes.toHex)}"
         case NonConsistentShares(total) => s"Shares do not sum to 1, got total: $total"
         case TooManyPeers(count)        => s"Too many peers: $count, maximum allowed is 255"
-
-case class EquityShares private (private val shares: List[(AddressL1, Rational)]):
-    def distribute(equity: Coin): EquityShares.Distribution = {
-        val totalAmount = equity.value
-        val distributedShares = shares.map { (address, share) =>
-            val amount = (totalAmount * share).floor.toLong
-            address -> Coin(amount)
-        }.toMap
-
-        val totalDistributed = distributedShares.values.map(_.value).sum
-        val dust = Coin(totalAmount - totalDistributed)
-
-        EquityShares.Distribution(distributedShares, dust)
-    }
-
-object EquityShares:
-    def apply(
-        shares: List[(AddressL1, Rational)]
-    ): Either[HeadConfigError.NonConsistentShares, EquityShares] = {
-        val total = shares.map(_._2).sum
-        Either.cond(
-          total === r"1",
-          new EquityShares(shares),
-          HeadConfigError.NonConsistentShares(total)
-        )
-    }
-
-    case class Distribution(
-        shares: Map[AddressL1, Coin],
-        dust: Dust // Leftover after the distribution
-    )
-
-    type Dust = Coin
-
-//val foo: UByte = ub"42"
-//val shares = EquityShares
