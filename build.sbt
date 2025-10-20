@@ -55,7 +55,9 @@ lazy val core = (project in file("."))
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
-        "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1"
+        "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
+        "org.typelevel" %% "spire" % "0.18.0",
+
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
