@@ -9,95 +9,142 @@ import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
+    Resolved,
+    Unresolved
+}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
+import scala.collection.immutable.SortedMap
+import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
-    initializerOutput: TransactionOutput,
+    equityOutputs: List[TransactionOutput],
     tx: Transaction
 )
 
-/** TODO: should also spend the equity from dispute utxos as long as they exist. It's an interesting
-  * hybrid:
-  *   - we need collateral since it's a plutus tx
-  *   - treasury can't be a collateral since it's not pkh-owned
-  *   - we do need to sign this, but then all should use the same collateral
-  *   - it's asymmetric in this sense
+/** The deinit tx spends an empty (i.e. not containing any l2 utxos) treasury utxo, distributing the
+  * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,
+  * it goes for the fees.
+  *
+  * Since the treasury is locked at the Plutus script it requires the collateral. It's used for fees
+  * as well, which simplifies the building - we don't need to subtract fees from the treasury.
+  *
+  * When it comes to multi-signing, all nodes cannot be built _exactly_ the same transaction since
+  * every will use their own collateral. This should be addressed when implementing automatic
+  * signing if we decide to have it.
+  *
+  * All head tokens under the head's policy id (and only those) should be burnt.
   */
 object DeinitTx {
 
     case class Recipe(
         headNativeScript: HeadMultisigScript,
-        // Might be _unresolved_ or _resolved_
         treasuryUtxo: RuleBasedTreasuryUtxo,
-        // TODO: consume dispute utxos? is it mandatory?
-        // TODO: consume multisig regime utxo?
-        // TODO: outputs?
-
+        shares: EquityShares,
         collateralUtxo: Utxo[L1],
-        // The reference script for the HNS should live inside the multisig regime UTxO
-        headNativeScriptReferenceInput: TransactionUnspentOutput,
         env: Environment,
         validators: Seq[Validator]
     )
 
     enum DeinitTxError:
-        case InvalidTreasuryDatum(msg: String)
-        case NoBeaconTokensFound
+        case TreasuryShouldBeResolved
+        case TreasuryShouldBeEmpty
+        case NoHeadTokensFound
+
+    import DeinitTxError.*
 
     def build(recipe: Recipe): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
-
+        val treasuryUtxo = recipe.treasuryUtxo
         val policyId = recipe.headNativeScript.policyId
 
         for {
-            headTokens <- extractHeadTokens(policyId, recipe.treasuryUtxo)
-            result <- buildDeinitTx(recipe, headTokens)
+            _ <- checkTreasury(treasuryUtxo)
+
+            headTokens <- extractHeadTokens(policyId, treasuryUtxo)
+
+            (equityOutputs, mbEquityFees) = mkEquityOutputs(
+              treasuryUtxo.value.coin,
+              recipe.shares,
+              recipe.env.protocolParams
+            )
+
+            result <- buildDeinitTx(recipe, equityOutputs, mbEquityFees, headTokens)
         } yield result
     }
+
+    private def checkTreasury(
+        treasury: RuleBasedTreasuryUtxo
+    ): Either[DeinitTxError, Unit] =
+
+        // TODO use G1.generatorCompressed once it's here
+        val g1bs =
+            hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+
+        for {
+            resolved <- treasury.datum match {
+                case Unresolved(_) => Left(TreasuryShouldBeResolved)
+                case Resolved(d)   => Right(d)
+            }
+            _ <- Either.cond(resolved.utxosActive == g1bs, (), TreasuryShouldBeEmpty)
+
+        } yield ()
+
+    private def mkEquityOutputs(
+        treasuryEquity: Coin,
+        shares: EquityShares,
+        params: ProtocolParams
+    ): (List[Babbage], Option[Coin]) =
+        val distribution = shares.distribute(treasuryEquity)
+        val empty: (List[Babbage], Coin) = (List.empty, distribution.dust)
+        val minAda0 = minAda(params)
+
+        val ret = distribution.shares.foldLeft(empty)((ret, share) => {
+            val output =
+                Babbage(
+                  address = share._1,
+                  value = Value.apply(share._2),
+                  datumOption = None,
+                  scriptRef = None
+                )
+            if share._2 >= minAda0(output) then (ret._1 :+ output, ret._2)
+            else (ret._1, ret._2 + share._2)
+        })
+
+        (ret._1, Option.when(ret._2 > Coin.zero)(ret._2))
+
+    private def minAda(params: ProtocolParams)(output: TransactionOutput) =
+        MinCoinSizedTransactionOutput(Sized(output), params)
 
     private def extractHeadTokens(
         policyId: PolicyId,
         treasuryUtxo: RuleBasedTreasuryUtxo
-    ): Either[DeinitTxError, MultiAsset] = {
-        import DeinitTxError.*
-
+    ): Either[DeinitTxError, SortedMap[AssetName, Long]] = {
         treasuryUtxo.value.assets.assets.get(policyId) match {
             case Some(headTokens) =>
                 if headTokens.nonEmpty
-                then Right(MultiAsset.fromPolicy(policyId, headTokens))
-                else Left(NoBeaconTokensFound)
-            case None => Left(NoBeaconTokensFound)
+                then Right(headTokens)
+                else Left(NoHeadTokensFound)
+            case None => Left(NoHeadTokensFound)
         }
     }
 
     private def buildDeinitTx(
         recipe: Recipe,
-        headTokens: MultiAsset
+        equityOutputs: List[Babbage],
+        mbEquityFees: Option[Coin],
+        headTokens: SortedMap[AssetName, Long]
     ): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
         import recipe.*
 
-        // Create treasury redeemer for deinitialization
-        val treasuryRedeemer = TreasuryRedeemer.Deinit
-
-        // Calculate the value to send to initializer (treasury minus beacon tokens)
-        val initializerValue = treasuryUtxo.value - Value.apply(Coin.zero, headTokens)
-
-        // Create initializer output
-        val initializerOutput = Babbage(
-          address = ???,
-          value = initializerValue,
-          datumOption = None,
-          scriptRef = None
-        )
-
-        // Get treasury input and output
-        val (treasuryInput, treasuryOutput) = recipe.treasuryUtxo.toUtxo
+        val policyId = recipe.headNativeScript.policyId
 
         for {
             context <- TransactionBuilder
@@ -106,29 +153,36 @@ object DeinitTx {
                   List(
                     // Spend the treasury utxo
                     Spend(
-                      TransactionUnspentOutput(treasuryInput, treasuryOutput),
+                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
-                        treasuryRedeemer.toData,
+                        TreasuryRedeemer.Deinit.toData,
                         DatumInlined,
-                        Set.empty // Treasury script doesn't require specific signers for deinit
+                        Set.empty
                       )
                     ),
-                    // Burn beacon tokens
-                    Mint(
-                      scriptHash = headNativeScript.policyId,
-                      assetName = treasuryUtxo.beaconTokenName,
-                      amount = -1,
-                      witness = NativeScriptWitness(
-                        NativeScriptValue(headNativeScript.script),
-                        headNativeScript.requiredSigners
-                      )
-                    ),
-                    // Send remaining funds to initializer
-                    Send(initializerOutput),
-                    // Add collateral
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(collateralUtxo))
+                    // Fees are covered by the collateral to simplify the balancing
+                    Spend(TransactionUnspentOutput.fromUtxo(collateralUtxo), PubKeyWitness),
+                    AddCollateral(TransactionUnspentOutput.fromUtxo(collateralUtxo)),
+                    // Send collateral back as the first output
+                    Send(collateralUtxo.output)
                   )
+                  // Possible fees from equity sares that are < minAda
+                      ++ mbEquityFees.toList.map(Fee(_))
+                      // Equity shares outputs
+                      ++ equityOutputs.map(o => Send(o))
+                      // Burn head tokens
+                      ++ headTokens.map((assetName, amount) =>
+                          Mint(
+                            scriptHash = policyId,
+                            assetName = assetName,
+                            amount = -amount,
+                            witness = NativeScriptWitness(
+                              NativeScriptValue(headNativeScript.script),
+                              headNativeScript.requiredSigners
+                            )
+                          )
+                      )
                 )
 
             finalized <- context
@@ -136,7 +190,7 @@ object DeinitTx {
                   protocolParams = env.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
                     env.protocolParams,
-                    0
+                    0 // the collateral sent back
                   ).changeOutputDiffHandler,
                   evaluator = env.evaluator,
                   validators = validators
@@ -144,7 +198,7 @@ object DeinitTx {
 
         } yield DeinitTx(
           treasuryUtxoSpent = treasuryUtxo,
-          initializerOutput = initializerOutput,
+          equityOutputs = equityOutputs,
           tx = finalized.transaction
         )
     }

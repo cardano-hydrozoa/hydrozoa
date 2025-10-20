@@ -44,12 +44,12 @@ object HeadConfig:
 
     def parse(rawConfig: RawConfig): Either[HeadConfigError, HeadConfig] = for {
         keys <- {
-            val verificationKeys = rawConfig.peers.map(_.verificationKeyBytes)
+            val sortedVKs = rawConfig.peers.map(_.verificationKeyBytes).sortBy(_.bytes)
             val duplicates =
-                verificationKeys.groupMapReduce(identity)(_ => 1)(_ + _).filter((_, cnt) => cnt > 1)
+                sortedVKs.groupMapReduce(identity)(_ => 1)(_ + _).filter((_, cnt) => cnt > 1)
             Either.cond(
               duplicates.isEmpty,
-              verificationKeys,
+              sortedVKs,
               NonUniqueVerificationKey(duplicates.keys.toSet)
             )
         }
