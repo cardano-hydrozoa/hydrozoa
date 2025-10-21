@@ -132,7 +132,7 @@ object CommonGenerators {
         for {
             txId <- arbitrary[TransactionHash]
             ix <- Gen.choose(0, 10)
-            addr <- genPubkeyAddr(testNetwork)
+            addr <- genPubkeyAddress(testNetwork)
             value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
         } yield Utxo[L1](
             UtxoId[L1](TransactionInput(txId, ix)),
