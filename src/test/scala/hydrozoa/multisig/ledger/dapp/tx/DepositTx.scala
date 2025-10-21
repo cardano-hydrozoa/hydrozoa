@@ -22,7 +22,7 @@ def genDepositRecipe(
 ): Gen[DepositTx.Recipe] =
     for {
         depositor <- genTestPeer
-        headAddress <- genScriptAddr()
+        headAddress <- genScriptAddress()
         genData = Gen.frequency(
           (99, genByteStringData.map(data => SOption.Some((data)))),
           (1, SOption.None)
@@ -31,8 +31,8 @@ def genDepositRecipe(
         refundData <- genData
         deadline: BigInt <- Gen.posNum[BigInt]
 
-        l2Addr <- genPubkeyAddr()
-        refundAddr <- genPubkeyAddr()
+        l2Addr <- genPubkeyAddress()
+        refundAddr <- genPubkeyAddress()
 
         depositDatum = DepositUtxo.Datum(
           address = (LedgerToPlutusTranslation.getAddress(l2Addr).credential),

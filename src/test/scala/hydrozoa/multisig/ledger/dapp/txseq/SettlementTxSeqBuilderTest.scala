@@ -12,8 +12,8 @@ class SettlementTxSeqBuilderTest extends munit.ScalaCheckSuite {
 
     property("Build settlement tx sequence")(
       // TODO: I guess this generator doesn't work well
-      Prop.forAll(genSettlementTxSeqBuilder()) { builder =>
-          builder.build() match {
+      Prop.forAll(genSettlementTxSeqBuilder()) { (builder,args) =>
+          builder.build(args) match {
               case Left(e)  => throw RuntimeException(s"Build failed $e")
               case Right(_) => ()
           }

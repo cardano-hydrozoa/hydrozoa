@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -40,11 +41,11 @@ object ArbitraryInstances {
         for {
             l2Input <- arbitrary[TransactionInput]
 
-            addr <- arbitrary[ShelleyAddress]
+            address <- arbitrary[ShelleyAddress]
             coin <- arbitrary[Coin]
             datum <- arbitrary[ByteString]
             output = Babbage(
-              address = addr,
+              address = address,
               value = Value(coin),
               datumOption = Some(Inline(datum.toData)),
               scriptRef = None
@@ -55,7 +56,7 @@ object ArbitraryInstances {
     given Arbitrary[Payout.Obligation.L1] = Arbitrary {
         for {
             l2 <- arbitrary[Payout.Obligation.L2]
-        } yield (Payout.Obligation.L1(l2))
+        } yield Payout.Obligation.L1(l2)
     }
 }
 
@@ -63,12 +64,12 @@ def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
     for {
         l2Input <- arbitrary[TransactionInput]
 
-        addr0 <- arbitrary[ShelleyAddress]
-        addr = addr0.copy(network = network)
+        address0 <- arbitrary[ShelleyAddress]
+        address = address0.copy(network = network)
         coin <- arbitrary[Coin]
         datum <- arbitrary[ByteString]
         output = Babbage(
-          address = addr,
+          address = address,
           value = Value(coin),
           datumOption = Some(Inline(datum.toData)),
           scriptRef = None
@@ -80,19 +81,21 @@ def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
-        addr <- genPubkeyAddr(network = network).map(
+        address <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
         )
         datum <- genByteStringData
         deadline <- Gen.posNum[BigInt]
-        refundAddr <- genPubkeyAddr(network = network).map(LedgerToPlutusTranslation.getAddress(_))
+        refundAddress <- genPubkeyAddress(network = network).map(
+          LedgerToPlutusTranslation.getAddress(_)
+        )
         refundDatum <- genByteStringData
 
     } yield DepositUtxo.Datum(
-      address = addr,
+      address = address,
       datum = SOption.Some(datum),
       deadline = deadline,
-      refundAddress = refundAddr,
+      refundAddress = refundAddress,
       refundDatum = SOption.Some(refundDatum)
     )
 }
@@ -100,16 +103,16 @@ def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
 def genDepositUtxo(
     network: Network = Mainnet,
     params: ProtocolParams = blockfrost544Params,
-    headAddr: Option[ShelleyAddress] = None
+    headAddress: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for {
         txId <- arbitrary[TransactionInput]
-        headAddr_ = headAddr.getOrElse(genScriptAddr(network).sample.get)
+        headAddress_ = headAddress.getOrElse(genScriptAddress(network).sample.get)
         dd <- genDepositDatum(network)
 
         // Mock utxo to calculate minAda
         mockUtxo = Babbage(
-          address = headAddr_,
+          address = headAddress_,
           value = Value.zero,
           datumOption = Some(Inline(dd.toData)),
           scriptRef = None
@@ -121,7 +124,7 @@ def genDepositUtxo(
 
     } yield DepositUtxo(
       l1Input = txId,
-      l1OutputAddress = headAddr_,
+      l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
       l1RefScript = None
@@ -146,20 +149,20 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 def genTreasuryUtxo(
     network: Network = Mainnet,
     params: ProtocolParams = blockfrost544Params,
-    headAddr: Option[ShelleyAddress],
+    headAddress: Option[ShelleyAddress],
     coin: Option[Coin]
 ): Gen[TreasuryUtxo] =
     for {
         txId <- arbitrary[TransactionInput]
         headTn <- genHeadTokenName
 
-        scriptAddr = headAddr.getOrElse({
+        scriptAddress = headAddress.getOrElse({
             ShelleyAddress(network, ShelleyPaymentPart.Script(genScriptHash.sample.get), Null)
         })
         datum <- genTreasuryDatum
 
         treasuryToken = singleton(
-          scriptAddr.payment.asInstanceOf[ShelleyPaymentPart.Script].hash,
+          scriptAddress.payment.asInstanceOf[ShelleyPaymentPart.Script].hash,
           headTn
         )
 
@@ -167,7 +170,7 @@ def genTreasuryUtxo(
           TreasuryUtxo(
             headTokenName = headTn,
             txId = txId,
-            addr = scriptAddr,
+            address = scriptAddress,
             datum = datum,
             value = Value(Coin(0L)) + treasuryToken
           ).asUtxo._2,
@@ -180,16 +183,16 @@ def genTreasuryUtxo(
       headTokenName = headTn,
       txId = txId,
       datum = datum,
-      addr = scriptAddr,
-      value = (Value(coin.getOrElse(treasuryAda)) + treasuryToken)
+      address = scriptAddress,
+      value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
     )
 
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = Mainnet
-): Gen[SettlementTxSeq.Builder] = {
-    (for {
+): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args)] = {
+    for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
@@ -198,7 +201,7 @@ def genSettlementTxSeqBuilder(
           genDepositUtxo(
             network = network,
             params = params,
-            headAddr = Some(hns.mkAddress(network))
+            headAddress = Some(hns.mkAddress(network))
           )
         )
 
@@ -207,25 +210,31 @@ def genSettlementTxSeqBuilder(
         payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
         utxo <- genTreasuryUtxo(
-          headAddr = Some(hns.mkAddress(network)),
+          headAddress = Some(hns.mkAddress(network)),
           network = network,
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
         multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
 
-    } yield SettlementTxSeq.Builder(
-      majorVersion = majorVersion,
-      // TODO: generating a list and turning it into a queue is suboptimal
-      deposits = Queue.from(deposits),
-      payouts = Vector.from(payouts),
-      treasuryUtxo = utxo,
-      headNativeScript = hns,
-      headNativeScriptReferenceInput = multisigWitnessUtxo,
-      env = testTxBuilderEnvironment,
-      validators = testValidators
-    ))
-
+    } yield (
+      SettlementTxSeq.Builder(config =
+          Tx.Builder.Config(
+            headNativeScript = hns,
+            headNativeScriptReferenceInput = multisigWitnessUtxo,
+            env = testTxBuilderEnvironment,
+            validators = testValidators
+          )
+      ),
+      SettlementTxSeq.Builder.Args(
+        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        // TODO: generating a list and turning it into a queue is suboptimal
+        // @Peter from George: Is the above still relevant?
+        depositsToSpend = Vector.from(deposits),
+        payoutObligationsRemaining = Vector.from(payouts),
+        treasuryToSpend = utxo
+      )
+    )
 }
 
 def genFakeMultisigWitnessUtxo(

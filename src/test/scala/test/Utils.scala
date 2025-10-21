@@ -35,13 +35,6 @@ val evaluator = PlutusScriptEvaluator(
   costModels = costModels
 )
 
-val testEnv: Environment =
-    Environment(
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      network = testNetwork
-    )
-
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
@@ -64,6 +57,13 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
+val testEnv: Environment =
+    Environment(
+        protocolParams = testProtocolParams,
+        evaluator = testEvaluator,
+        network = testNetwork
+    )
+
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
   evaluator = testEvaluator,
@@ -78,7 +78,7 @@ val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByt
 
 val genPolicyId: Gen[PolicyId] = genScriptHash
 
-def genPubkeyAddr(
+def genPubkeyAddress(
     network: Network = Mainnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
@@ -86,7 +86,7 @@ def genPubkeyAddr(
         ShelleyAddress(network = network, payment = Key(akh), delegation = delegation)
     )
 
-def genScriptAddr(
+def genScriptAddress(
     network: Network = Mainnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
