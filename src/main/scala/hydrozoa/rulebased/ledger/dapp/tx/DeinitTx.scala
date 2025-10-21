@@ -18,12 +18,12 @@ import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.Environment
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,

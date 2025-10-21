@@ -59,7 +59,7 @@ def genVoteUtxo(
 
         voteOutput = Babbage(
           address = scriptAddr,
-          // Sufficient ADA for minUTxO + vote/tallying fees
+          // Sufficient ADA for minAda + vote/tallying fees
           value = Value(Coin(10_000_000L)) + voteToken,
           datumOption = Some(Inline(voteDatum.toData)),
           scriptRef = None

@@ -24,12 +24,12 @@ import scala.collection.immutable.SortedMap
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.{Address, *}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.GovAction.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{Context as SContext, STS, State as SState, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, TxBalancingError}
+import scalus.cardano.ledger.{Utxo as _, *}
 
 // Type alias for compatibility - DiffHandler is now a function type in new Scalus API
 type DiffHandler = (Long, Transaction) => Either[TxBalancingError, Transaction]
@@ -419,7 +419,7 @@ object TransactionBuilder:
         }
 
         /** Conversion help to Scalus [[Utxo]] */
-        def getUtxo: UTxO = this.resolvedUtxos.utxos
+        def getUtxo: Utxos = this.resolvedUtxos.utxos
 
         /** Validate a context according so a set of ledger rules */
         def validate(

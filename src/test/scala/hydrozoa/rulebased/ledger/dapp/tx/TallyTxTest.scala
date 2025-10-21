@@ -88,7 +88,7 @@ def genTallyVoteUtxo(
 
     val voteOutput = Babbage(
       address = scriptAddr,
-      // Sufficient ADA for minUTxO + tally fees
+      // Sufficient ADA for minAda + tally fees
       value = Value(Coin(10_000_000L)) + voteToken,
       datumOption = Some(Inline(voteDatum.toData)),
       scriptRef = None
@@ -139,7 +139,7 @@ def genTallyTxRecipe(
         // Generate compatible vote datums for tallying
         (continuingVoteDatum, removedVoteDatum) <- genCompatibleVoteDatums(peers.length)
 
-        // Generate vote UTxOs with cast votes
+        // Generate a vote utxo with cast votes
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1

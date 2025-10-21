@@ -70,7 +70,7 @@ def genTreasuryResolvedDatum(
       setup = setup
     )
 
-def mkCommitment(withdrawals: UTxO): KzgCommitment.KzgCommitment =
+def mkCommitment(withdrawals: Utxos): KzgCommitment.KzgCommitment =
     val utxoHashed = KzgCommitment.hashToScalar(withdrawals)
     // println(s"blst utxos active hashes: ${utxoHashed.map(e => BigInt.apply(e.to_bendian()))}")
     val ret = KzgCommitment.calculateCommitment(utxoHashed)

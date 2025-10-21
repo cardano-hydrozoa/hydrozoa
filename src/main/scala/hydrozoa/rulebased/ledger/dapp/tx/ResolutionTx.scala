@@ -27,11 +27,11 @@ import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,

@@ -60,7 +60,7 @@ def genResolutionTallyVoteUtxo(
 
     val voteOutput = Babbage(
       address = scriptAddr,
-      // Sufficient ADA for minUTxO + resolution fees
+      // Sufficient ADA for minAda + resolution fees
       value = Value(Coin(10_000_000L)) + voteToken,
       datumOption = Some(Inline(voteDatum.toData)),
       scriptRef = None
@@ -114,7 +114,7 @@ def genResolutionTxRecipe(
           link = 2 // Links to next peer
         )
 
-        // Generate tallied vote UTxO
+        // Generate tallied vote utxo
         talliedVoteUtxo <- genResolutionTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1

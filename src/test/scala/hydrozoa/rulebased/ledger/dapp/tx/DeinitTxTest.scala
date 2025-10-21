@@ -22,8 +22,7 @@ import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.ValueNotConservedUTxOValidator
+import scalus.cardano.ledger.{Utxo as _, *}
 import spire.compat.integral
 import spire.math.Rational
 import spire.syntax.literals.r
@@ -130,8 +129,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
       shares = shares,
       collateralUtxo = collateralUtxo,
       env = testTxBuilderEnvironment,
-      // TODO: revert once scalus #144 is merged
-      validators = testValidators.filterNot(_ == ValueNotConservedUTxOValidator)
+      validators = testValidators
     )
 
 class DeinitTxTest extends munit.ScalaCheckSuite {

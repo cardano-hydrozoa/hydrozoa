@@ -19,13 +19,12 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.List as SList
-// import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?

@@ -16,9 +16,9 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList

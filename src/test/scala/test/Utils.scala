@@ -26,7 +26,7 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
 )
 
-val costModels = CostModels.fromProtocolParams(blockfrost544Params)
+val costModels = blockfrost544Params.costModels
 
 val evaluator = PlutusScriptEvaluator(
   SlotConfig.Mainnet,
@@ -35,17 +35,20 @@ val evaluator = PlutusScriptEvaluator(
   costModels = costModels
 )
 
+// Individual parameters for Recipe constructors (replacing BuilderContext)
+val testNetwork: Network = Mainnet
+val testSlotConfig: SlotConfig = SlotConfig.Mainnet
+val testProtocolParams: ProtocolParams = blockfrost544Params
+val testEvaluator: PlutusScriptEvaluator = evaluator
+
 val testEnv: Environment =
     Environment(
       protocolParams = testProtocolParams,
+      slotConfig = testSlotConfig,
       evaluator = testEvaluator,
       network = testNetwork
     )
 
-// Individual parameters for Recipe constructors (replacing BuilderContext)
-val testNetwork: Network = Mainnet
-val testProtocolParams: ProtocolParams = blockfrost544Params
-val testEvaluator: PlutusScriptEvaluator = evaluator
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
     List(
@@ -66,6 +69,7 @@ val testValidators: Seq[Validator] =
 
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
+  slotConfig = testSlotConfig,
   evaluator = testEvaluator,
   network = testNetwork,
   era = Era.Conway

@@ -3,7 +3,7 @@
 //  DockerPlugin
 //)
 
-val scalusVersion = "0.12.1+52-e6811117-SNAPSHOT"
+val scalusVersion = "0.12.1+196-29652ffa-SNAPSHOT"
 val bloxbeanVersion = "0.7.0"
 
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")
@@ -18,12 +18,14 @@ lazy val core = (project in file("."))
     .settings(
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
+      resolvers += Resolver.defaultLocal,
       resolvers += "jitpack" at "https://jitpack.io",
       libraryDependencies ++= Seq(
         // Scalus
-        "org.scalus" %% "scalus" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-bloxbean-cardano-client-lib" % scalusVersion withSources (),
+        // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
+        "org.scalus" % "scalus_3" % scalusVersion withSources (),
+        "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
+        "org.scalus" % "scalus-bloxbean-cardano-client-lib_3" % scalusVersion withSources (),
         // Cardano Client library
         "com.bloxbean.cardano" % "cardano-client-lib" % bloxbeanVersion,
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
@@ -66,7 +68,7 @@ lazy val core = (project in file("."))
         //"org.scalacheck" %% "scalacheck" % "1.19.0" % Test,
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-        "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
+        "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
       )
@@ -101,7 +103,7 @@ ThisBuild / scalacOptions ++= Seq(
 )
 
 // Add the Scalus compiler plugin
-addCompilerPlugin("org.scalus" %% "scalus-plugin" % scalusVersion)
+addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
 // Demo workload
 //lazy val demo = (project in file("demo"))
 //    .dependsOn(core, integration)
@@ -142,7 +144,7 @@ lazy val benchmark = (project in file("benchmark"))
       libraryDependencies ++= Seq(
         //"org.scalacheck" %% "scalacheck" % "1.19.0",
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.scalus" %% "scalus-testkit" % scalusVersion
+        "org.scalus" % "scalus-testkit_3" % scalusVersion
       )
     )
 

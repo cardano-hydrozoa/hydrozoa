@@ -29,8 +29,8 @@ import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
+import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
-import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
@@ -158,10 +158,10 @@ extension (addr: v3.Address) {
 //    def toIArray: IArray[Byte] =
 //        IArray.from(hash.bytes)
 //}
-//
-def csToPolicyId(cs: CurrencySymbol): PolicyId = {
-    Hash(ByteString.fromArray(cs.bytes))
-}
+
+
+// TODO: upstream
+def csToPolicyId(cs: v1.PolicyId): PolicyId = Hash.scriptHash(cs)
 
 ////////////////////////////////////////////////////
 //// Token Name
