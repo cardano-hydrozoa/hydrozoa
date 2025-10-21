@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyVector
 import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import hydrozoa.lib.tx.{
+    SomeBuildError,
     TransactionBuilder,
     TransactionBuilderStep,
     TransactionUnspentOutput
@@ -19,7 +20,11 @@ import scalus.cardano.ledger.{
 }
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
+import hydrozoa.{prebalancedDiffHandler, reportDiffHandler}
 import scalus.builtin.ByteString
+import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
+import scalus.cardano.ledger.rules.TransactionSizeValidator
+import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.utils.TxBalance
 
 import scala.annotation.tailrec
@@ -84,6 +89,7 @@ object RolloutTx {
         trait PartialResult[T <: RolloutTx]
             extends Tx.Builder.HasCtx,
               State.Fields.HasInputRequired {
+
             def builder: Builder[T]
 
             /** Add the missing [[RolloutUtxo]] input to the transaction and post-process it into a
@@ -111,7 +117,12 @@ object RolloutTx {
                 val steps = List(SpendRollout.spendRollout(builder.config, rolloutSpent.utxo))
                 for {
                     addedRolloutInput <- TransactionBuilder.modify(ctx, steps)
-                    finished <- builder.finish(addedRolloutInput)
+                    finished <- addedRolloutInput.finalizeContext(
+                      protocolParams = builder.config.env.protocolParams,
+                      diffHandler = prebalancedDiffHandler,
+                      evaluator = builder.config.env.evaluator,
+                      validators = builder.config.validators
+                    )
                 } yield finished
             }
         }
@@ -307,12 +318,12 @@ object RolloutTx {
             def commonSteps(config: Tx.Builder.Config): List[TransactionBuilderStep] =
                 List(stepRolloutMetadata(config), stepReferenceHNS(config))
 
-            def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
+            private def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
                 ModifyAuxiliaryData(_ =>
                     Some(MD(MD.L1TxTypes.Rollout, headAddress = config.headAddress))
                 )
 
-            def stepReferenceHNS(config: Tx.Builder.Config) =
+            private def stepReferenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
 
         }
@@ -324,7 +335,7 @@ object RolloutTx {
             ): Option[Send] =
                 mbRolloutOutputValue.map(x => Send(rolloutOutput(config, x)))
 
-            def rolloutOutput(
+            private def rolloutOutput(
                 config: Tx.Builder.Config,
                 rolloutOutputValue: Value
             ): TxOutput.Babbage = {
@@ -356,15 +367,39 @@ object RolloutTx {
             ): BuildErrorOr[Value] = {
                 // The deficit in the inputs to the transaction prior to adding the placeholder
                 val valueNeeded = Placeholder.inputValueNeeded(ctx)
-                val valueNeededPlus = valueNeeded + Value(Coin.ada(1000))
-                val placeholder = List(spendPlaceholderRollout(builder.config, valueNeededPlus))
-                for {
+                trialFinishLoop(builder, ctx, valueNeeded)
+            }
+
+            @tailrec
+            private def trialFinishLoop[T <: RolloutTx](
+                builder: Builder[T],
+                ctx: TransactionBuilder.Context,
+                trialValue: Value
+            ): BuildErrorOr[Value] = {
+                val placeholder = List(spendPlaceholderRollout(builder.config, trialValue))
+                val res = for {
+                    // TODO: move out of loop
                     addedPlaceholderRolloutInput <- TransactionBuilder.modify(ctx, placeholder)
-                    finished <- builder.finish(addedPlaceholderRolloutInput)
-                    valueNeededWithFee = valueNeeded + Value(
-                      finished.transaction.body.value.fee - ctx.transaction.body.value.fee
+                    res <- addedPlaceholderRolloutInput.finalizeContext(
+                      builder.config.env.protocolParams,
+                      prebalancedDiffHandler,
+                      builder.config.env.evaluator,
+                      List(TransactionSizeValidator)
                     )
-                } yield valueNeededWithFee
+
+                } yield res
+                res match {
+                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException)) =>
+                        Left(SomeBuildError.ValidationError(e))
+                    case Left(SomeBuildError.BalancingError(CantBalance(diff))) =>
+                        trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
+                    case Right(_) => Right(trialValue)
+                    case _ =>
+                        throw new RuntimeException(
+                          "impossible; " +
+                              "loop only has one possible Lefts"
+                        )
+                }
             }
 
             private def spendPlaceholderRollout(config: Tx.Builder.Config, value: Value): Spend =
@@ -386,14 +421,14 @@ object RolloutTx {
             // - Transaction ID should be 32 bytes of 1111 1111 because Flat uses the least number of bytes.
             // - The index can be zero because Flat will still use a full byte
             // https://hackage.haskell.org/package/flat-0.6/docs/Flat-Class.html
-            val utxoId = TransactionInput(
+            private val utxoId = TransactionInput(
               transactionId = TransactionHash.fromByteString(
                 ByteString.fromArray(Array.fill(32)(Byte.MinValue))
               ),
               index = 0
             )
 
-            def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
+            private def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
                 TxBalance.produced(ctx.transaction)
         }
 

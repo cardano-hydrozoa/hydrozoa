@@ -107,10 +107,10 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         withdrawals = UtxoSet(withdrawals0.toMap)
 
         // Check
-        //_ = println(s"withdrawals: {$withdrawals0}")
-        //_ = println(
+        // _ = println(s"withdrawals: {$withdrawals0}")
+        // _ = println(
         //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
-        //)
+        // )
 
         // Calculate the membership proof
         theRest = UtxoSet(utxosL2.untagged -- withdrawals.untagged.keys)
@@ -138,11 +138,11 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         // Generate treasury UTXO with _some_ funds
         beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
         treasuryUtxo <- genResolvedTreasuryUtxo(
-            fallbackTxId,
-            headScriptHash,
-            beaconTokenName,
-            utxoCommitment,
-            wn + 1
+          fallbackTxId,
+          headScriptHash,
+          beaconTokenName,
+          utxoCommitment,
+          wn + 1
         )
 
         // Ensure treasury has sufficient funds
@@ -150,7 +150,6 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         sufficientTreasuryValue = treasuryUtxo.value + totalL2Value +
             Value(Coin(20_000_000L))
         adjustedTreasuryUtxo = treasuryUtxo.copy(value = sufficientTreasuryValue)
-
 
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)

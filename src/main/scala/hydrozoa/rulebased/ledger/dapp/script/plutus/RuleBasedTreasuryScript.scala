@@ -291,9 +291,9 @@ object RuleBasedTreasuryValidator extends Validator {
                 val setup = resolvedDatum.setup.take(withdrawnUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
-                //withdrawnUtxos.foreach( s =>
+                // withdrawnUtxos.foreach( s =>
                 //    trace(s.toInt.show)(())
-                //)
+                // )
 
                 require(
                   checkMembership(setup, acc, withdrawnUtxos, proof_),
