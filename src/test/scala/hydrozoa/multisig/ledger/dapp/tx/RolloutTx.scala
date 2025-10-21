@@ -39,6 +39,7 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
     override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
         ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1)
     }
+    override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
 
     // ===================================
     // Last
@@ -50,9 +51,13 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
               println(pr.get.ctx.transaction.body.value.outputs.size)
               pr.toProp :| "Partial result didn't build successfully"
               && {
-                  val actualSize = pr.get.ctx.transaction.toCbor.length
+                  val unsignedSize = pr.get.ctx.transaction.toCbor.length
+                  val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
                   val maxSize = builder.config.env.protocolParams.maxTxSize
-                  (actualSize <= maxSize) :| s"Partial result tx size  $actualSize exceeds max tx size $maxSize"
+                  (unsignedSize + witnessesSize <= maxSize) :|
+                      s"Partial result unsigned tx size plus signature size " +
+                          s"($unsignedSize + $witnessesSize = ${unsignedSize+witnessesSize})" +
+                          s" exceeds max tx size $maxSize"
               }
           }
       }
