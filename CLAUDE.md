@@ -13,54 +13,56 @@ Hydrozoa is a lightweight multi-party state channels implementation for Cardano,
 ### Building and Testing
 ```bash
 # Enter sbt shell (use sbtn for faster execution)
-sbtn
+nix develop --command sbtn
 
-# Compile the project
-sbtn compile
+# Compile the project - ALWAYS use this exact command for compilation checks
+nix develop --command sbtn compile
 
 # Run tests
-sbtn test
+nix develop --command sbtn test
 
 # Run specific test suites
-sbtn "testOnly *SpecificTestSuite*"
+nix develop --command sbtn "testOnly *SpecificTestSuite*"
 ```
+
+**Important**: When using Claude Code, always run sbtn commands within the nix shell using `nix develop --command sbtn <command>`. Do not use `sbt` or `sbtn` directly, as they may not work correctly in this environment.
 
 ### Code Quality
 ```bash
 # Format code
-just fmt
+nix develop --command just fmt
 # or
-sbtn scalafmtAll
+nix develop --command sbtn scalafmtAll
 
 # Check formatting
-just fmt-check
+nix develop --command just fmt-check
 # or
-sbtn scalafmtCheck
+nix develop --command sbtn scalafmtCheck
 
 # Apply linting fixes
-just lint
+nix develop --command just lint
 # or
-sbtn scalafixAll
+nix develop --command sbtn scalafixAll
 
 # Check linting
-just lint-check
+nix develop --command just lint-check
 # or
-sbtn scalafixAll --check
+nix develop --command sbtn scalafixAll --check
 ```
 
 ### Benchmarks
 ```bash
 # Run JMH benchmarks
-sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
+nix develop --command sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ```
 
 ### Specification
 ```bash
 # Build PDF specification
-make spec
+nix develop --command make spec
 
 # Clean specification files
-make spec-clean
+nix develop --command make spec-clean
 ```
 
 ## Architecture

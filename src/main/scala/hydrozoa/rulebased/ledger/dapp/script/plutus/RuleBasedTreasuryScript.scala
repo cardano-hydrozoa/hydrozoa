@@ -17,18 +17,11 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-import scalus.{Compile, Compiler, plutusV3, toUplcOptimized, writePlutusFile, |>}
+import scalus.*
+import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
-import scalus.builtin.{
-    BLS12_381_G1_Element,
-    BLS12_381_G2_Element,
-    ByteString,
-    Data,
-    FromData,
-    ToData
-}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.Value.+
@@ -109,10 +102,14 @@ object RuleBasedTreasuryValidator extends Validator {
         "Accumulator in the output should be properly updated"
 
     // Deinit redeemer
+    private inline val DeinitRequiresResolvedTreasury = 
+        "Deinitialization is not possible until the dispute is resolved"
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
     private inline val DeinitTokensNotBurned =
         "All head tokens should be burned"
+    private inline val DeinitTreasuryShouldBeEmpty =
+        "All utxos should be withdrawn before deinitializing"
 
     def cip67BeaconTokenPrefix = hex"01349900"
 
@@ -125,6 +122,10 @@ object RuleBasedTreasuryValidator extends Validator {
         val treasuryDatum: RuleBasedTreasuryDatum = datum match
             case Some(d) => d.to[RuleBasedTreasuryDatum]
             case None    => fail(DatumIsMissing)
+
+        // ===================================
+        // Resolve redeemer
+        // ===================================
 
         redeemer.to[TreasuryRedeemer] match
             case Resolve =>
@@ -212,6 +213,10 @@ object RuleBasedTreasuryValidator extends Validator {
                   unresolvedDatum.setup === treasuryOutputDatum.setup,
                   ResolveTreasuryInputOutputSetup
                 )
+
+            // ===================================
+            // Withdraw redeemer
+            // ===================================
 
             case Withdraw(WithdrawRedeemer(utxoIds, proof)) =>
                 log("Withdraw")
@@ -320,20 +325,17 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 require(valueIsPreserved, WithdrawValueShouldBePreserved)
 
+            // ===================================
+            // Deinit redeemer
+            // ===================================
+
             case Deinit =>
                 log("Deinit")
 
-                // This redeemer does not require the treasury’s active utxo set to be empty,
-                // but it implicitly requires the transaction to be multi-signed by all peers
-                // to burn the headMp tokens.
-
-                // Thus, the peers can use this redeemer to override the treasury’s
-                // spending validator with their multi-signature.
-
-                // Treasury datum might be "resolved" or "unresolved"
-                val headMp = treasuryDatum match
-                    case Resolved(d)   => d.headMp
-                    case Unresolved(d) => d.headMp
+                // Treasury should be resolved
+                val (headMp, utxosActive) = treasuryDatum match
+                    case Resolved(d)   => (d.headMp, d.utxosActive)
+                    case Unresolved(d) => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
                 val treasuryInput = tx.inputs
@@ -351,12 +353,19 @@ object RuleBasedTreasuryValidator extends Validator {
                   DeinitTokensNotFound
                 )
 
-                // All head tokens should be burned
+                // All head tokens should be burned, which means that all peers sign the tx.
                 val headTokensMint = (-tx.mint).toSortedMap
                     .get(headMp)
                     .getOrFail(DeinitTokensNotBurned)
 
                 require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
+
+                // All utxos should be withdrawn
+                // TODO: comparing as bytestrings is more efficient, we want to have this constant in Scalus
+                require(
+                  utxosActive === hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+                  DeinitTreasuryShouldBeEmpty
+                )
 
     // Utility functions
     /*

@@ -2,22 +2,10 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
+import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.Datum.DatumInlined
 import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{
-    AddCollateral,
-    ReferenceOutput,
-    Send,
-    Spend,
-    ValidityEndSlot
-}
-import hydrozoa.lib.tx.{
-    ExpectedSigner,
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     DisputeRedeemer,
@@ -151,12 +139,7 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo)),
-                    AddCollateral(
-                      TransactionUnspentOutput(
-                        recipe.collateralUtxo.input,
-                        recipe.collateralUtxo.output
-                      )
-                    ),
+                    AddCollateral(TransactionUnspentOutput.fromUtxo(recipe.collateralUtxo)),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

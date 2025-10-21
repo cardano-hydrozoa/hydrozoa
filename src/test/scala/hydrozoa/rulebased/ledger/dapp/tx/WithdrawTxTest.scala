@@ -82,7 +82,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
     for {
         // Common head parameters
         (
-          headScriptHash,
+          hns,
           headTokensSuffix,
           peers,
           peersVKs,
@@ -139,7 +139,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
         beaconTokenName = cip67BeaconTokenPrefix.concat(headTokensSuffix)
         treasuryUtxo <- genResolvedTreasuryUtxo(
           fallbackTxId,
-          headScriptHash,
+          hns.policyId,
           beaconTokenName,
           utxoCommitment,
           wn + 1
