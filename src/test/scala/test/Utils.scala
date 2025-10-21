@@ -48,7 +48,6 @@ val testEnv: Environment =
       evaluator = testEvaluator,
       network = testNetwork
     )
-
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
     List(
@@ -67,6 +66,13 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
+val testEnv: Environment =
+    Environment(
+        protocolParams = testProtocolParams,
+        evaluator = testEvaluator,
+        network = testNetwork
+    )
+
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
   slotConfig = testSlotConfig,
@@ -82,7 +88,7 @@ val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByt
 
 val genPolicyId: Gen[PolicyId] = genScriptHash
 
-def genPubkeyAddr(
+def genPubkeyAddress(
     network: Network = Mainnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
@@ -90,7 +96,7 @@ def genPubkeyAddr(
         ShelleyAddress(network = network, payment = Key(akh), delegation = delegation)
     )
 
-def genScriptAddr(
+def genScriptAddress(
     network: Network = Mainnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =

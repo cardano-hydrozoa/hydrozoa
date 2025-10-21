@@ -31,7 +31,7 @@ import test.TestPeer.*
 val minInitTreasuryAda: Coin = {
     val mockTreasury = Babbage(
       // This is a pubkey address, but the script address should be the same size
-      address = genPubkeyAddr().sample.get,
+      address = genPubkeyAddress().sample.get,
       value = Value(
         Coin(0L),
         assets = MultiAsset(

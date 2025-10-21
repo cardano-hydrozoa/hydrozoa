@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.joint.utxo
 
+import cats.data.NonEmptyVector
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 
 object Payout {
@@ -9,6 +10,12 @@ object Payout {
             l2Input: TransactionInput,
             output: TransactionOutput.Babbage
         )
+        
+        object L2 {
+            trait Many {
+                def payoutObligations: Vector[L2]
+            }
+        }
 
         type L1 = L1.L1
 
@@ -20,6 +27,18 @@ object Payout {
             def apply(x: L2): L1 = x
 
             extension (self: L1) def output: TransactionOutput.Babbage = self.output
+
+            object Many {
+                trait Remaining {
+                    def payoutObligationsRemaining: Vector[L1]
+                }
+
+                object Remaining {
+                    trait NonEmpty {
+                        def payoutObligationsRemaining: NonEmptyVector[L1]
+                    }
+                }
+            }
         }
     }
 

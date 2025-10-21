@@ -13,7 +13,7 @@ import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Va
 final case class TreasuryUtxo(
     headTokenName: AssetName,
     txId: TransactionInput,
-    addr: ShelleyAddress,
+    address: ShelleyAddress,
     datum: TreasuryUtxo.Datum,
     value: Value
 ) {
@@ -21,7 +21,7 @@ final case class TreasuryUtxo(
         TransactionUnspentOutput(
           txId,
           Babbage(
-            address = addr,
+            address = address,
             value = value,
             datumOption = Some(Inline(datum.toData)),
             scriptRef = None
@@ -30,6 +30,18 @@ final case class TreasuryUtxo(
 }
 
 object TreasuryUtxo {
+    trait Spent {
+        def treasurySpent: TreasuryUtxo
+    }
+    
+    trait ToSpend {
+        def treasuryToSpend: TreasuryUtxo
+    }
+    
+    trait Produced {
+        def treasuryProduced: TreasuryUtxo
+    }
+    
     final case class Datum(
         commit: KzgCommit,
         versionMajor: VersionMajor,

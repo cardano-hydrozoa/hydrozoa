@@ -112,7 +112,7 @@ object DappLedger {
             case Right(tx) =>
                 for {
                     state <- Ref[IO].of(State(treasury = tx.treasuryProduced))
-                } yield Right((DappLedger(headAddress = tx.treasuryProduced.addr)(state), tx))
+                } yield Right((DappLedger(headAddress = tx.treasuryProduced.address)(state), tx))
         }
     }
 

@@ -164,7 +164,7 @@ object InitializationTx {
               transactionId = finalized.transaction.id,
               index = 0
             ),
-            addr = headAddress,
+            address = headAddress,
             datum = datum,
             value = headValue
           ),
