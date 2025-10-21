@@ -108,7 +108,7 @@ def genTallyTxRecipe(
     for {
         // Common head parameters
         (
-          headScriptHash,
+          hns,
           headTokensSuffix,
           peers,
           peersVKs,
@@ -123,7 +123,7 @@ def genTallyTxRecipe(
         voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           peersVKs,
           paramsHash,
@@ -131,7 +131,7 @@ def genTallyTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-          headScriptHash,
+            hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -143,7 +143,7 @@ def genTallyTxRecipe(
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           continuingVoteDatum,
           AddrKeyHash(peers.head.wallet.exportVerificationKeyBytes.pubKeyHash.hash)
@@ -152,7 +152,7 @@ def genTallyTxRecipe(
         removedVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           2, // Output index 2
-          headScriptHash,
+            hns.policyId,
           voteTokenName,
           removedVoteDatum,
           AddrKeyHash(peers.toList(1).wallet.exportVerificationKeyBytes.pubKeyHash.hash)

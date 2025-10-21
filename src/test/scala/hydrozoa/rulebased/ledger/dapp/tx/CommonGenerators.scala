@@ -2,12 +2,9 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
-    BlockTypeL2,
-    OnchainBlockHeader,
-    given
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
@@ -33,7 +30,7 @@ object CommonGenerators {
 
     def genHeadParams: Gen[
       (
-          ScriptHash,
+          HeadMultisigScript,
           TokenName,
           NonEmptyList[TestPeer],
           NonEmptyList[VerificationKeyBytes],
@@ -43,13 +40,12 @@ object CommonGenerators {
       )
     ] =
         for {
-            // TODO: use native script?
-            nativeScriptHash <- genScriptHash
             // This is 4 bytes shorter to accommodate CIP-67 prefixes
             // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
             headTokenSuffix <- genByteStringOfN(28)
             peers <- genTestPeers
             peersVKs = peers.map(_.wallet.exportVerificationKeyBytes)
+            hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
             // L2 consensus parameters hash
             params <- genByteStringOfN(32)
             // Major version upon switching to the rule-based regime
@@ -57,7 +53,7 @@ object CommonGenerators {
             // Fallback tx id - should be common for the vote utxo and treasury utxo
             fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         } yield (
-          nativeScriptHash,
+          hns,
           headTokenSuffix,
           peers,
           peersVKs,
@@ -129,6 +125,23 @@ object CommonGenerators {
             datumOption = None,
             scriptRef = None
           )
+        )
+
+    /** Generate collateral UTXO with random address */
+    def genCollateralUtxo: Gen[Utxo[L1]] =
+        for {
+            txId <- arbitrary[TransactionHash]
+            ix <- Gen.choose(0, 10)
+            addr <- genPubkeyAddr(testNetwork)
+            value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
+        } yield Utxo[L1](
+            UtxoId[L1](TransactionInput(txId, ix)),
+            Output[L1](Babbage(
+                address = Address[L1](addr),
+                value = value,
+                datumOption = None,
+                scriptRef = None
+            ))
         )
 
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =

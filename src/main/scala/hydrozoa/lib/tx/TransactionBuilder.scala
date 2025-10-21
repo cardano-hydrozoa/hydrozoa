@@ -449,13 +449,14 @@ object TransactionBuilder:
         ): Either[SomeBuildError, Context] =
             //println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
 
-
             for {
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
                     .left
                     .map(BalancingError(_))
+
+                //_ = println(s"before validation: ${HexUtil.encodeHexString(balancedCtx.transaction.toCbor)}")
 
                 validatedCtx <- balancedCtx
                     .validate(validators, protocolParams)
