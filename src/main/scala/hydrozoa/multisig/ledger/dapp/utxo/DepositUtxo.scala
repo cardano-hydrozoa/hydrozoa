@@ -57,7 +57,7 @@ object DepositUtxo {
         object Spent {
             trait Partition extends Spent, ToSpend
         }
-        
+
         trait Produced {
             def depositsProduced: Vector[DepositUtxo]
         }
@@ -65,7 +65,7 @@ object DepositUtxo {
         trait ToProduce {
             def depositsToProduce: Vector[DepositUtxo]
         }
-        
+
         object Produced {
             trait Partition extends Produced, ToProduce
         }

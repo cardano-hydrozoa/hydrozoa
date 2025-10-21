@@ -328,6 +328,10 @@ object TransactionBuilder:
         val empty: ResolvedUtxos = ResolvedUtxos(Map.empty)
         def apply(utxos: UTxO): ResolvedUtxos = new ResolvedUtxos(utxos)
 
+        trait HasResolvedUtxos {
+            def resolvedUtxos: ResolvedUtxos
+        }
+
     /** An opaque context in which the builder operates.
       *
       * TODO: make a class, remove toTuple()?
@@ -446,24 +450,20 @@ object TransactionBuilder:
             diffHandler: DiffHandler,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator]
-        ): Either[SomeBuildError, Context] =
-            //println(s"before balancing: ${HexUtil.encodeHexString(this.transaction.toCbor)}")
-
+        ): Either[SomeBuildError, Context] = {
             for {
                 balancedCtx <- this
                     .setMinAdaAll(protocolParams)
                     .balance(diffHandler, protocolParams, evaluator)
                     .left
                     .map(BalancingError(_))
-
-                //_ = println(s"before validation: ${HexUtil.encodeHexString(balancedCtx.transaction.toCbor)}")
-
                 validatedCtx <- balancedCtx
                     .validate(validators, protocolParams)
                     .left
                     .map(ValidationError(_))
 
             } yield validatedCtx
+        }
     }
 
     object Context:

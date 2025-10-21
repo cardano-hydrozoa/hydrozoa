@@ -8,7 +8,7 @@ object RolloutUtxo {
     trait Spent {
         def rolloutSpent: RolloutUtxo
     }
-    
+
     trait Produced {
         def rolloutProduced: RolloutUtxo
     }
@@ -16,7 +16,7 @@ object RolloutUtxo {
     trait MbProduced {
         final def mbRolloutProduced: Option[RolloutUtxo] = this match {
             case t: (this.type & Produced) => Some(t.rolloutProduced)
-            case _ => None
+            case _                         => None
         }
     }
 }

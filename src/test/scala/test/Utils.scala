@@ -4,10 +4,11 @@ import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
+
 import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -36,7 +37,7 @@ val evaluator = PlutusScriptEvaluator(
 )
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
-val testNetwork: Network = Mainnet
+val testNetwork: Network = Testnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 val testEvaluator: PlutusScriptEvaluator = evaluator
 val testValidators: Seq[Validator] =
@@ -59,9 +60,9 @@ val testValidators: Seq[Validator] =
 
 val testEnv: Environment =
     Environment(
-        protocolParams = testProtocolParams,
-        evaluator = testEvaluator,
-        network = testNetwork
+      protocolParams = testProtocolParams,
+      evaluator = testEvaluator,
+      network = testNetwork
     )
 
 val testTxBuilderEnvironment: Environment = Environment(
@@ -107,6 +108,7 @@ val genAdaOnlyValue: Gen[Value] =
 /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index, no
   * datum, no script ref
   */
+// TODO: make this take all fields as Option and default to generation if None.
 def genAdaOnlyPubKeyUtxo(
     peer: TestPeer,
     params: ProtocolParams = blockfrost544Params
@@ -153,3 +155,13 @@ def genByteStringInlineDatumOption(
       (someFrequency, genByteStringData.map(data => SOption.Some(Inline(data)))),
       (noneFrequency, SOption.None)
     )
+
+extension [E, A](either: Either[E, A])
+    def toProp: Prop = either match {
+        case Left(e)  => throw new RuntimeException(e.toString)
+        case Right(a) => Prop.proved
+    }
+
+    def get: A = either match {
+        case Right(a) => a
+    }
