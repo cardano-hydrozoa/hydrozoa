@@ -127,6 +127,23 @@ object CommonGenerators {
           )
         )
 
+    /** Generate collateral UTXO with random address */
+    def genCollateralUtxo: Gen[Utxo[L1]] =
+        for {
+            txId <- arbitrary[TransactionHash]
+            ix <- Gen.choose(0, 10)
+            addr <- genPubkeyAddr(testNetwork)
+            value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
+        } yield Utxo[L1](
+            UtxoId[L1](TransactionInput(txId, ix)),
+            Output[L1](Babbage(
+                address = Address[L1](addr),
+                value = value,
+                datumOption = None,
+                scriptRef = None
+            ))
+        )
+
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =
         for {
             blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
