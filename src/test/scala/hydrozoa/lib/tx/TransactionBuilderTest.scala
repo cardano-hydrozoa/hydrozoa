@@ -399,7 +399,7 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
         val built = fromRight(build(Mainnet, List(step)))
 
         // Signers are what we expect for a transaction built with this step
-        assert(
+        val _ = assert(
           built.expectedSigners ==
               step.witness.asInstanceOf[ThreeArgumentPlutusScriptWitness].additionalSigners
         )
@@ -628,7 +628,8 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     test("Referencing a utxo adds the utxo to resolvedUtxos and tx body") {
         val steps = List(ReferenceOutput(utxo = script1Utxo))
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
-        assert(
+
+        val _ = assert(
           (built.toTuple |> resolvedUtxosL.get) == ResolvedUtxos(Map(script1Utxo.toTuple))
         )
 
@@ -645,7 +646,8 @@ class TransactionBuilderTest extends AnyFunSuite, ScalaCheckPropertyChecks {
     test("Adding a utxo as collateral adds the utxo to resolvedUtxos and tx body") {
         val steps = List(AddCollateral(utxo = pkhUtxo))
         val built = fromRight(TransactionBuilder.build(Mainnet, steps))
-        assert(
+
+        val _ = assert(
           (built.toTuple |> resolvedUtxosL.get) == ResolvedUtxos(Map(pkhUtxo.toTuple))
         )
 

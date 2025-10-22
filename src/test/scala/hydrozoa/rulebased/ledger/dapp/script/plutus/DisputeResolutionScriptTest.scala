@@ -1,26 +1,30 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
-import munit.FunSuite
+import org.scalatest.funsuite.AnyFunSuite
+import scala.annotation.nowarn
 import scalus.cardano.ledger.ScriptHash
 
-class DisputeResolutionScriptTest extends FunSuite {
+@nowarn("msg=unused value")
+class DisputeResolutionScriptTest extends AnyFunSuite {
 
     test("DisputeResolutionScript object exists and can be referenced") {
-        assertNotEquals(DisputeResolutionScript.toString, null)
+        assert(DisputeResolutionScript.toString != null)
     }
 
     test("Script compiles, size and hash is still the same") {
-        assertEquals(
-          DisputeResolutionScript.compiledScriptHash,
+
+        assertResult(
           ScriptHash.fromHex("7f9ad6889b55ce62629f442aa0589251c0560972d149aa97f8495fe3"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
-        )
+        ) {
+            DisputeResolutionScript.compiledScriptHash
+        }
 
-        assertEquals(
-          DisputeResolutionScript.flatEncoded.length,
+        assertResult(
           10398,
           "Script size should be stable. In case the script is modified please update the test."
-        )
-
+        ) {
+            DisputeResolutionScript.flatEncoded.length
+        }
     }
 }

@@ -5,14 +5,14 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    RuleBasedTreasuryScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.{Arbitrary, Gen}
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
@@ -165,56 +165,54 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
       validators = testValidators.filterNot(_ == FeesOkValidator)
     )
 
-class WithdrawTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class WithdrawTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters =
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 100)
 
-    property("Withdraw tx builds successfully with valid recipe")(
-      Prop.forAll(genWithdrawTxRecipe) { recipe =>
-          WithdrawTx.build(recipe) match {
-              case Left(error) =>
-                  throw RuntimeException(s"Build failed with valid recipe: $error")
-              case Right(withdrawTx) =>
-                  // Verify WithdrawTx structure
-                  assert(
-                    withdrawTx.treasuryUtxoSpent == recipe.treasuryUtxo,
-                    "Spent treasury UTXO should match recipe input"
-                  )
-                  assert(
-                    withdrawTx.treasuryUtxoProduced != null,
-                    "Treasury UTXO produced should not be null"
-                  )
-                  assert(
-                    withdrawTx.withdrawalOutputs.length == recipe.withdrawals.size,
-                    "Withdrawal outputs should match recipe withdrawals"
-                  )
-                  assert(withdrawTx.tx != null, "Transaction should not be null")
+    test("Withdraw tx builds successfully with valid recipe") {
+        forAll(genWithdrawTxRecipe) { recipe =>
+            WithdrawTx.build(recipe) match {
+                case Left(error) =>
+                    fail(s"Build failed with valid recipe: $error")
+                case Right(withdrawTx) =>
+                    // Verify WithdrawTx structure
+                    assert(
+                      withdrawTx.treasuryUtxoSpent == recipe.treasuryUtxo,
+                      "Spent treasury UTXO should match recipe input"
+                    )
+                    assert(
+                      withdrawTx.treasuryUtxoProduced != null,
+                      "Treasury UTXO produced should not be null"
+                    )
+                    assert(
+                      withdrawTx.withdrawalOutputs.length == recipe.withdrawals.size,
+                      "Withdrawal outputs should match recipe withdrawals"
+                    )
+                    assert(withdrawTx.tx != null, "Transaction should not be null")
 
-                  // Verify residual treasury value is correct
-                  val totalWithdrawals =
-                      recipe.withdrawals.values.foldLeft(Value.zero)(_ + _.untagged.value)
-                  val expectedResidual = recipe.treasuryUtxo.value - totalWithdrawals
-                  assert(
-                    withdrawTx.treasuryUtxoProduced.value == expectedResidual,
-                    "Residual treasury value should be correct"
-                  )
+                    // Verify residual treasury value is correct
+                    val totalWithdrawals =
+                        recipe.withdrawals.values.foldLeft(Value.zero)(_ + _.untagged.value)
+                    val expectedResidual = recipe.treasuryUtxo.value - totalWithdrawals
+                    assert(
+                      withdrawTx.treasuryUtxoProduced.value == expectedResidual,
+                      "Residual treasury value should be correct"
+                    )
+            }
+        }
+    }
 
-                  true
-          }
-      }
-    )
-
-    property("Partial membership proofs check") {
-        Prop.forAll(genMembershipCheck) { (subset, commitmentG1, proof) =>
+    test("Partial membership proofs check") {
+        forAll(genMembershipCheck) { (subset, commitmentG1, proof) =>
 
             // Pre-calculated powers of tau
             val crsG2 =
                 TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
 
-            assertEquals(
-              RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof),
-              true
+            assert(
+              RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
             )
         }
     }

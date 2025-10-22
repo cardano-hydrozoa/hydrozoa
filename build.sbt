@@ -40,8 +40,8 @@ lazy val core = (project in file("."))
         // "com.softwaremill.ox" %% "core" % "0.5.11",
         // "com.softwaremill.ox" %% "mdc-logback" % "0.5.13",
         // Logging
-         "ch.qos.logback" % "logback-classic" % "1.5.18",
-         "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
+        "ch.qos.logback" % "logback-classic" % "1.5.18",
+        "com.typesafe.scala-logging" %% "scala-logging" % "3.9.6",
         // Used for input/output
         "org.scala-lang" %% "toolkit" % "0.7.0",
         // jsoniter + tapit-jsoniter
@@ -58,16 +58,13 @@ lazy val core = (project in file("."))
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
-        "org.typelevel" %% "spire" % "0.18.0",
+        "org.typelevel" %% "spire" % "0.18.0"
 
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),
       libraryDependencies ++= Seq(
-        "org.scalameta" %% "munit" % "1.2.0" % Test,
-        "org.scalameta" %% "munit-scalacheck" % "1.2.0" % Test,
-        //"org.scalacheck" %% "scalacheck" % "1.19.0" % Test,
-        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
@@ -116,7 +113,7 @@ addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
 //    )
 
 // Test dependencies
-ThisBuild / testFrameworks += new TestFramework("munit.Framework")
+ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
 
 inThisBuild(
   List(
@@ -142,7 +139,7 @@ lazy val benchmark = (project in file("benchmark"))
         "-XX:+UseG1GC"
       ),
       libraryDependencies ++= Seq(
-        //"org.scalacheck" %% "scalacheck" % "1.19.0",
+        // "org.scalacheck" %% "scalacheck" % "1.19.0",
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion
       )

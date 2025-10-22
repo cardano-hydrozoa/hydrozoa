@@ -8,11 +8,10 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.collection.immutable.Queue
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet

@@ -15,7 +15,7 @@ import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G2_Element, ByteString}
 import scalus.cardano.address.Network.Mainnet
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Utxo as _, *}
@@ -24,6 +24,9 @@ import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
 import scalus.|>
 import test.*
+
+// Alias for compatibility
+def genPubkeyAddr(network: Network = Mainnet): Gen[ShelleyAddress] = genPubkeyAddress(network)
 
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {

@@ -3,16 +3,13 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-import hydrozoa.multisig.ledger.dapp.tx.{
-    RolloutTx,
-    genFakeMultisigWitnessUtxo,
-    genPayoutObligationL1
-}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.dapp.tx.{genFakeMultisigWitnessUtxo, genPayoutObligationL1}
 import org.scalacheck.*
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import test.*
 
-class RolloutTxTest extends munit.ScalaCheckSuite {
+class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
             peers <- genTestPeers
@@ -32,11 +29,11 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
           RolloutTx.Builder.Args.Last(NonEmptyVector.fromVectorUnsafe(payouts.toVector))
         )
 
-    property("Build Last Rollout Tx")(
-      Prop.forAll(genLastBuilder) { (builder, args) =>
-          builder.partialResult(args) match
-              case Left(e)  => throw new RuntimeException(e.toString)
-              case Right(_) => ()
-      }
-    )
+    test("Build Last Rollout Tx") {
+        forAll(genLastBuilder) { (builder, args) =>
+            builder.partialResult(args) match
+                case Left(e)  => fail(e.toString)
+                case Right(_) => ()
+        }
+    }
 }

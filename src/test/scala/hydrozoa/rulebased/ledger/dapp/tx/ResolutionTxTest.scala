@@ -5,15 +5,15 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
@@ -138,11 +138,11 @@ def genResolutionTxRecipe(
       validators = testValidators
     )
 
-class ResolutionTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class ResolutionTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
-    }
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 10)
 
     test("Resolution recipe generator works") {
         val exampleRecipe = genResolutionTxRecipe().sample.get
@@ -150,40 +150,38 @@ class ResolutionTxTest extends munit.ScalaCheckSuite {
     }
 
     // This doesn't fit the size, we needed to use reference script, ignoring for now
-    property("Resolution tx builds successfully".ignore)(
-      Prop.forAll(genResolutionTxRecipe()) { recipe =>
-          ResolutionTx.build(recipe) match {
-              case Left(e) =>
-                  throw RuntimeException(s"ResolutionTx build failed: $e")
-              case Right(tx) =>
-                  println(HexUtil.encodeHexString(tx.tx.toCbor))
+    ignore("Resolution tx builds successfully") {
+        forAll(genResolutionTxRecipe()) { recipe =>
+            ResolutionTx.build(recipe) match {
+                case Left(e) =>
+                    fail(s"ResolutionTx build failed: $e")
+                case Right(tx) =>
+                    println(HexUtil.encodeHexString(tx.tx.toCbor))
 
-                  // Basic smoke test assertions
-                  assert(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
-                  assert(
-                    tx.treasuryUnresolvedUtxoSpent != null,
-                    "Treasury unresolved UTXO spent should not be null"
-                  )
-                  assert(
-                    tx.treasuryResolvedUtxoProduced != null,
-                    "Treasury resolved UTXO produced should not be null"
-                  )
-                  assert(tx.tx != null, "Transaction should not be null")
+                    // Basic smoke test assertions
+                    assert(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
+                    assert(
+                      tx.treasuryUnresolvedUtxoSpent != null,
+                      "Treasury unresolved UTXO spent should not be null"
+                    )
+                    assert(
+                      tx.treasuryResolvedUtxoProduced != null,
+                      "Treasury resolved UTXO produced should not be null"
+                    )
+                    assert(tx.tx != null, "Transaction should not be null")
 
-                  // Verify the spent treasury UTXO matches the recipe input
-                  assert(
-                    tx.treasuryUnresolvedUtxoSpent == recipe.treasuryUtxo,
-                    "Spent treasury UTXO should match recipe input"
-                  )
+                    // Verify the spent treasury UTXO matches the recipe input
+                    assert(
+                      tx.treasuryUnresolvedUtxoSpent == recipe.treasuryUtxo,
+                      "Spent treasury UTXO should match recipe input"
+                    )
 
-                  // Verify treasury state transition from Unresolved to Resolved
-                  assert(
-                    tx.treasuryUnresolvedUtxoSpent.datum.isInstanceOf[Unresolved],
-                    "Input treasury should be Unresolved"
-                  )
-
-                  ()
-          }
-      }
-    )
+                    // Verify treasury state transition from Unresolved to Resolved
+                    assert(
+                      tx.treasuryUnresolvedUtxoSpent.datum.isInstanceOf[Unresolved],
+                      "Input treasury should be Unresolved"
+                    )
+            }
+        }
+    }
 }

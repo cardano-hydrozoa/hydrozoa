@@ -3,7 +3,8 @@ package hydrozoa.rulebased.ledger.dapp.script.plutus
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.multisig.ledger.virtual.commitment.{KzgCommitment, TrustedSetup}
-import munit.FunSuite
+import org.scalatest.funsuite.AnyFunSuite
+import scala.annotation.nowarn
 import scala.io.Source
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString, Data}
 import scalus.cardano.ledger.ScriptHash
@@ -13,25 +14,27 @@ import scalus.prelude.crypto.bls12_381.G1
 import scalus.|>
 import supranational.blst.Scalar
 
-class RuleBasedTreasuryScriptTest extends FunSuite {
+@nowarn("msg=unused value")
+class RuleBasedTreasuryScriptTest extends AnyFunSuite {
 
     test("RuleBasedTreasuryScript object exists and can be referenced") {
-        assertNotEquals(RuleBasedTreasuryScript.toString, null)
+        assert(RuleBasedTreasuryScript.toString != null)
     }
 
     test("Script compiles, size and hash is still the same") {
-        assertEquals(
-          RuleBasedTreasuryScript.compiledScriptHash,
+        assertResult(
           ScriptHash.fromHex("b57b7bab8fdf0b60e98fd69603d55b8f390fd1b69528b8ede8bd877f"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
-        )
+        ) {
+            RuleBasedTreasuryScript.compiledScriptHash
+        }
 
-        assertEquals(
-          RuleBasedTreasuryScript.flatEncoded.length,
+        assertResult(
           9223,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
-        )
-
+        ) {
+            RuleBasedTreasuryScript.flatEncoded.length
+        }
     }
 
     test("Membership check: empty accumulator / subset") {
@@ -41,9 +44,8 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         val subset: List[ScalusScalar] = List()
         val proof = accumulator
 
-        assertEquals(
-          RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof),
-          true
+        assert(
+            RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof)
         )
     }
 
@@ -58,14 +60,14 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         val commitmentPoint1 = KzgCommitment.calculateCommitment(subsetBlst)
         val commitmentPoint2 = KzgCommitment.calculateCommitment(subsetBlst)
 
-        assertEquals(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint2).toArray)
+        assert(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray) ==
+              HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint2).toArray)
         )
 
-        assertEquals(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray),
-          "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+        assert(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint1).toArray) ==
+              "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
         )
     }
 
@@ -82,9 +84,9 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
 
         val commitmentPoint = KzgCommitment.calculateCommitment(subsetBlst)
 
-        assertEquals(
-          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint).toArray),
-          "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
+        assert(
+          HexUtil.encodeHexString(IArray.genericWrapArray(commitmentPoint).toArray) ==
+              "8ec51973adde24a8b6a05f62843f1c2949d01bdc642091f85a9d1803abc074616b545fd6fa25fbc467af2ef112cda832"
         )
     }
 
@@ -109,9 +111,8 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         // Pre-calculated powers of tau
         val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
 
-        assertEquals(
-          RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof),
-          true
+        assert(
+            RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
         )
     }
 
@@ -124,6 +125,7 @@ class RuleBasedTreasuryScriptTest extends FunSuite {
         )
         Data.fromData[ScriptContext](ctxData)
         // println(ctx)
+
         RuleBasedTreasuryValidator.validate(ctxData)
     }
 

@@ -5,6 +5,7 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -12,6 +13,7 @@ import scalus.cardano.ledger.Coin
 import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
 
+@nowarn("msg=unused value")
 class HeadConfigTest extends AnyFunSuite with ScalaCheckPropertyChecks:
 
     private val shelleyAddresses = Gen.listOfN(3, arbitrary[ShelleyAddress]).sample.get

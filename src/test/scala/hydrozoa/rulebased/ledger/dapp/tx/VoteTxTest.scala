@@ -4,14 +4,14 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
@@ -142,35 +142,34 @@ def genVoteTxRecipe(
       validators = testValidators
     )
 
-class VoteTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class VoteTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     // private val log = Logger(getClass)
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
-    }
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 100)
 
     test("Recipe generator works") {
         val exampleRecipe = genVoteTxRecipe().sample.get
         println(exampleRecipe)
     }
 
-    property("Vote tx builds")(
-      Prop.forAll(genVoteTxRecipe()) { recipe =>
-          VoteTx.build(recipe) match {
-              case Left(e) =>
-                  throw RuntimeException(s"Build failed $e")
-              case Right(tx) =>
-                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
+    test("Vote tx builds") {
+        forAll(genVoteTxRecipe()) { recipe =>
+            VoteTx.build(recipe) match {
+                case Left(e) =>
+                    fail(s"Build failed $e")
+                case Right(tx) =>
+                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
-                  // Verify VoteTx structure
-                  assert(
-                    tx.voteUtxoSpent == recipe.voteUtxo,
-                    "Spent vote UTXO should match recipe input"
-                  )
-                  assert(tx.voteUtxoProduced != null, "Vote UTXO produced should not be null")
-                  assert(tx.tx != null, "Transaction should not be null")
-                  ()
-          }
-      }
-    )
+                    // Verify VoteTx structure
+                    assert(
+                      tx.voteUtxoSpent == recipe.voteUtxo,
+                      "Spent vote UTXO should match recipe input"
+                    )
+                    assert(tx.voteUtxoProduced != null, "Vote UTXO produced should not be null")
+                    assert(tx.tx != null, "Transaction should not be null")
+            }
+        }
+    }
 }

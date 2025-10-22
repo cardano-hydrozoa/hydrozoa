@@ -4,14 +4,14 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.Network.Mainnet
@@ -172,31 +172,30 @@ def genTallyTxRecipe(
       validators = testValidators
     )
 
-class TallyTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class TallyTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
-    }
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 10)
 
     test("Tally recipe generator works") {
         val exampleRecipe = genTallyTxRecipe().sample.get
         println(s"Generated TallyTx recipe: $exampleRecipe")
     }
 
-    property("Tally tx builds successfully")(
-      Prop.forAll(genTallyTxRecipe()) { recipe =>
-          TallyTx.build(recipe) match {
-              case Left(e) =>
-                  throw RuntimeException(s"TallyTx build failed: $e")
-              case Right(tx) =>
-                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
+    test("Tally tx builds successfully") {
+        forAll(genTallyTxRecipe()) { recipe =>
+            TallyTx.build(recipe) match {
+                case Left(e) =>
+                    fail(s"TallyTx build failed: $e")
+                case Right(tx) =>
+                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
-                  // Basic smoke test assertions
-                  assert(tx.continuingVoteUtxo != null)
-                  assert(tx.removedVoteUtxo != null)
-                  assert(tx.treasuryUtxo != null)
-                  ()
-          }
-      }
-    )
+                    // Basic smoke test assertions
+                    assert(tx.continuingVoteUtxo != null)
+                    assert(tx.removedVoteUtxo != null)
+                    assert(tx.treasuryUtxo != null)
+            }
+        }
+    }
 }

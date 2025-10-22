@@ -7,22 +7,14 @@ import hydrozoa.lib.tx.{
     TransactionBuilderStep,
     TransactionUnspentOutput
 }
-import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
-import scalus.cardano.ledger.{
-    Coin,
-    Transaction,
-    TransactionHash,
-    TransactionInput,
-    Value,
-    TransactionOutput as TxOutput
-}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
+import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import hydrozoa.multisig.ledger.joint.utxo.Payout
+import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.utils.TxBalance
-
-import scala.annotation.tailrec
+import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
 
 enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
 

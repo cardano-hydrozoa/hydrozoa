@@ -16,8 +16,10 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.tx.DeinitTx.{DeinitTxError, Recipe}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import org.scalacheck.Prop.forAll
-import org.scalacheck.{Gen, Prop}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
 import scalus.cardano.address.Network.Mainnet
@@ -103,7 +105,7 @@ def genShares(n: Int): Gen[List[Rational]] =
           for {
               r <- Gen.choose(1, n - 1)
               randomShares <- Gen.listOfN(r, genRational).suchThat(_.sum <= 1)
-          } yield randomShares  ++ List.fill(n-(r+1))(r"0") :+ (r"1" - randomShares.sum)
+          } yield randomShares ++ List.fill(n - (r + 1))(r"0") :+ (r"1" - randomShares.sum)
       }
     )
 
@@ -132,33 +134,38 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
       validators = testValidators
     )
 
-class DeinitTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 100)
 
     test("Recipe generator works") {
         val exampleRecipe = genSimpleDeinitTxRecipe.sample.get
         println(exampleRecipe)
     }
 
-    property("DeinitTx builds successfully")(
-      forAll(genSimpleDeinitTxRecipe) { recipe =>
-          println(
-            s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._1.size}, shares: ${recipe.shares._1
-                    .map(_._2)}"
-          )
-          DeinitTx.build(recipe) match {
-              case Left(e) =>
-                  throw RuntimeException(s"DeinitTx build failed: $e")
-              case Right(deinitResult) =>
-                  // println(HexUtil.encodeHexString(deinitResult.tx.toCbor))
+    test("DeinitTx builds successfully") {
+        forAll(genSimpleDeinitTxRecipe) { recipe =>
+            println(
+              s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._1.size}, shares: ${recipe.shares._1
+                      .map(_._2)}"
+            )
+            DeinitTx.build(recipe) match {
+                case Left(e) =>
+                    fail(s"DeinitTx build failed: $e")
+                case Right(deinitResult) =>
+                    // println(HexUtil.encodeHexString(deinitResult.tx.toCbor))
 
-                  // Verify DeinitTx structure
-                  assert(deinitResult.tx != null, "Transaction should not be null")
-                  assert(
-                    deinitResult.treasuryUtxoSpent == recipe.treasuryUtxo,
-                    "Spent treasury UTXO should match recipe input"
-                  )
-                  ()
-          }
-      }
-    )
+                    // Verify DeinitTx structure
+                    assert(deinitResult.tx != null, "Transaction should not be null")
+                    assertResult(
+                      recipe.treasuryUtxo,
+                      "Spent treasury UTXO should match recipe input"
+                    ) {
+                        deinitResult.treasuryUtxoSpent
+                    }
+            }
+        }
+    }
 }

@@ -3,20 +3,18 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.lib.tx.*
 import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
 import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import scalus.cardano.ledger.{Sized, TransactionInput}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
-
+import hydrozoa.multisig.protocol.types.Block
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Transaction, Value, TransactionOutput as TxOutput}
-import hydrozoa.multisig.protocol.types.Block
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
 
 sealed trait SettlementTx
     extends Tx,

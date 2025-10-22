@@ -46,7 +46,8 @@ val testEnv: Environment =
       protocolParams = testProtocolParams,
       slotConfig = testSlotConfig,
       evaluator = testEvaluator,
-      network = testNetwork
+      network = testNetwork,
+      era = Era.Conway
     )
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
@@ -64,13 +65,6 @@ val testValidators: Seq[Validator] =
       OutputsHaveTooBigValueStorageSizeValidator,
       OutsideValidityIntervalValidator,
       OutsideForecastValidator
-    )
-
-val testEnv: Environment =
-    Environment(
-        protocolParams = testProtocolParams,
-        evaluator = testEvaluator,
-        network = testNetwork
     )
 
 val testTxBuilderEnvironment: Environment = Environment(
