@@ -71,7 +71,7 @@ def genDepositRecipe(
       datum = depositDatum,
       headAddress = headAddress,
       utxosFunding = fundingUtxos,
-      changeAddress = depositor.address,
+      changeAddress = depositor.address(testNetwork),
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,

@@ -17,7 +17,6 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -84,7 +83,7 @@ def genInitTxRecipe(
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
       validators = testValidators,
-      changeAddress = peers.head.address
+      changeAddress = peers.head.address(testNetwork)
     )
 
 // NOTE: This was just for practice with scalacheck shrinkers. Don't use this -- it is not a good shrinker.
@@ -128,7 +127,7 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
           protocolParams = testProtocolParams,
           evaluator = testEvaluator,
           validators = testValidators,
-          changeAddress = Alice.address
+          changeAddress = Alice.address(testNetwork)
         )
 
         InitializationTx.build(recipeMinAda) match {
@@ -173,7 +172,7 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
           protocolParams = testProtocolParams,
           evaluator = testEvaluator,
           validators = testValidators,
-          changeAddress = Alice.address
+          changeAddress = Alice.address(testNetwork)
         )
 
         InitializationTx.build(recipe) match {
@@ -245,7 +244,7 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
                     val actualMeta = tx.tx.auxiliaryData.map(_.value)
                     val expectedMeta =
-                        MD.apply(Initialization, headMultisigScript.mkAddress(Testnet))
+                        MD.apply(Initialization, headMultisigScript.mkAddress(testNetwork))
                     assert(
                       actualMeta.contains(expectedMeta),
                       s"Unexpected metadata value. Actual: $actualMeta, expected: $expectedMeta"

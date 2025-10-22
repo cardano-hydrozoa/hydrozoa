@@ -29,19 +29,24 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
 
 val costModels = blockfrost544Params.costModels
 
-val evaluator = PlutusScriptEvaluator(
-  SlotConfig.Preprod,
-  initialBudget = ExBudget.enormous,
-  protocolMajorVersion = MajorProtocolVersion.plominPV,
-  costModels = costModels
-)
-
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Testnet
-val testSlotConfig: SlotConfig = SlotConfig.Preprod
 val testProtocolParams: ProtocolParams = blockfrost544Params
-val testEvaluator: PlutusScriptEvaluator = evaluator
 
+def slotConfig(network: Network): SlotConfig = network match {
+    case Network.Testnet => SlotConfig.Preprod
+    case Network.Mainnet => SlotConfig.Mainnet
+    case Network.Other(v) => throw RuntimeException("This network is not supported in tests")
+}
+
+val evaluator = PlutusScriptEvaluator(
+    slotConfig = slotConfig(testNetwork),
+    initialBudget = ExBudget.enormous,
+    protocolMajorVersion = MajorProtocolVersion.plominPV,
+    costModels = costModels
+)
+
+val testEvaluator: PlutusScriptEvaluator = evaluator
 
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
@@ -61,18 +66,9 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
-//val testEnv: Environment =
-//    Environment(
-//        protocolParams = testProtocolParams,
-//        slotConfig = testSlotConfig,
-//        evaluator = testEvaluator,
-//        network = testNetwork,
-//        era = Era.Conway
-//    )
-
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
-  slotConfig = testSlotConfig,
+  slotConfig = slotConfig(testNetwork),
   evaluator = testEvaluator,
   network = testNetwork,
   era = Era.Conway
@@ -86,7 +82,7 @@ val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByt
 val genPolicyId: Gen[PolicyId] = genScriptHash
 
 def genPubkeyAddress(
-    network: Network = Testnet,
+    network: Network = testNetwork,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     genAddrKeyHash.flatMap(akh =>
@@ -94,7 +90,7 @@ def genPubkeyAddress(
     )
 
 def genScriptAddress(
-    network: Network = Testnet,
+    network: Network = testNetwork,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     for {
@@ -126,7 +122,7 @@ def genAdaOnlyPubKeyUtxo(
       txId,
       setMinAda(
         Babbage(
-          address = peer.address,
+          address = peer.address(testNetwork),
           value = Value(Coin(0L)),
           datumOption = None,
           scriptRef = None

@@ -21,8 +21,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
-import scalus.cardano.address.Network.Testnet
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Utxo as _, *}
 import spire.compat.integral
@@ -56,7 +55,7 @@ def genEmptyResolvedTreasuryUtxo(
     } yield {
         val txId = TransactionInput(fallbackTxId, outputIx)
         val spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-        val scriptAddr = ShelleyAddress(Testnet, spp, ShelleyDelegationPart.Null)
+        val scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
         val value = Value(equity) + singleton(headMp, beaconTokenName) + singleton(
           headMp,
           voteTokenName,

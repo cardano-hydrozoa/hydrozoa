@@ -11,7 +11,6 @@ import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
@@ -38,7 +37,7 @@ enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
 
     def walletId: WalletId = TestPeer.mkWalletId(this)
 
-    def address: ShelleyAddress = TestPeer.address(this)
+    def address(network: Network): ShelleyAddress = TestPeer.address(this, network)
 
 object TestPeer:
     private val mnemonic: String =
@@ -82,7 +81,7 @@ object TestPeer:
 
     def mkWalletId(peer: TestPeer): WalletId = WalletId(peer.toString)
 
-    def address(peer: TestPeer, network: Network = Testnet): ShelleyAddress = {
+    def address(peer: TestPeer, network: Network): ShelleyAddress = {
         val (payment, delegation) = addressCache.cache(peer)
         ShelleyAddress(network, payment, delegation)
     }
@@ -134,7 +133,8 @@ def l2EventTransactionFromInputsAndPeer(
     inputs: TaggedOrderedSet[TransactionInput],
     utxoSet: Map[TransactionInput, TransactionOutput],
     inPeer: TestPeer,
-    outPeer: TestPeer
+    outPeer: TestPeer,
+    network: Network
 ): L2EventTransaction = {
 
     val totalVal: Value = inputs.toSeq.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
@@ -143,7 +143,7 @@ def l2EventTransactionFromInputsAndPeer(
       inputs = inputs,
       outputs = IndexedSeq(
         Babbage(
-          address = TestPeer.address(outPeer),
+          address = TestPeer.address(outPeer, network),
           value = totalVal,
           datumOption = None,
           scriptRef = None

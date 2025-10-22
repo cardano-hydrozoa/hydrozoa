@@ -11,7 +11,6 @@ import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -24,7 +23,7 @@ import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
 
-def genDepositDatum(network: Network = Testnet): Gen[DepositUtxo.Datum] = {
+def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
         address <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
@@ -46,7 +45,7 @@ def genDepositDatum(network: Network = Testnet): Gen[DepositUtxo.Datum] = {
 }
 
 def genDepositUtxo(
-    network: Network = Testnet,
+    network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
@@ -92,7 +91,7 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 
 /** Generate a treasury utxo with at least minAda */
 def genTreasuryUtxo(
-    network: Network = Testnet,
+    network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress],
     coin: Option[Coin]
@@ -135,7 +134,7 @@ def genTreasuryUtxo(
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = Testnet
+    network: Network = testNetwork
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     for {
         peers <- genTestPeers

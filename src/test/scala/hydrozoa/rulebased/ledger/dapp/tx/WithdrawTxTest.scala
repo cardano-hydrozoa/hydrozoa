@@ -14,7 +14,6 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
 import scalus.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element, ByteString}
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.FeesOkValidator
@@ -41,7 +40,7 @@ def genResolvedTreasuryUtxo(
         txId = TransactionInput(fallbackTxId, outputIx)
         // Use the correct treasury script hash
         spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-        scriptAddr = ShelleyAddress(Testnet, spp, ShelleyDelegationPart.Null)
+        scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
     } yield RuleBasedTreasuryUtxo(
       beaconTokenName = AssetName(beaconTokenName),
       txId = txId,
