@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import org.scalacheck.*
-import org.scalacheck.Prop.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
@@ -49,32 +48,35 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     test("Build Last Rollout Tx Partial Result") {
          {
             forAll(genLastBuilder) { (builder, args) =>
-                val pr = builder.partialResult(args)
-                println(pr.get.ctx.transaction.body.value.outputs.size)
-                pr.toProp :| "Partial result didn't build successfully" && {
-                    val unsignedSize = pr.get.ctx.transaction.toCbor.length
-                    val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
-                    val maxSize = builder.config.env.protocolParams.maxTxSize
-                    (unsignedSize + witnessesSize <= maxSize) :|
+              val pr = builder.partialResult(args)
+              println(pr.get.ctx.transaction.body.value.outputs.size)
+              assert(pr.isRight, "Partial result didn't build successfully")
+
+              val unsignedSize = pr.get.ctx.transaction.toCbor.length
+              val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
+              val maxSize = builder.config.env.protocolParams.maxTxSize
+              assert(unsignedSize + witnessesSize <= maxSize,
                         "Partial result unsigned tx size plus signature size " +
                             s"($unsignedSize + $witnessesSize = ${unsignedSize + witnessesSize})" +
                             s" exceeds max tx size $maxSize"
-                }
+              )
+            }
             }
         }
+
+
+  test("Complete Last Partial Result")({
+    forAll(genLastBuilder)((builder, args) => {
+      val res = for {
+        pr <- builder.partialResult(args)
+        txId = Arbitrary.arbitrary[TransactionHash].sample.get
+        input = TransactionInput(txId, 0)
+        output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
+        rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+        res <- pr.complete(rolloutUtxo)
+      } yield res
+      assert(res.isRight)
     }
-
-
-    test("Complete Last Partial Result")({
-        Prop.forAll(genLastBuilder)((builder, args) =>
-            (for {
-                pr <- builder.partialResult(args)
-                txId = Arbitrary.arbitrary[TransactionHash].sample.get
-                input = TransactionInput(txId, 0)
-                output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
-                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
-                res <- pr.complete(rolloutUtxo)
-            } yield res).toProp
         )
     })
 
@@ -82,8 +84,8 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     // Not Last
     // ===================================
     test("Build NotLast Partial Result")(
-      Prop.forAll(genNotLastBuilder) { (builder, args) =>
-          builder.partialResult(args).toProp
+      forAll(genNotLastBuilder) { (builder, args) =>
+          assert(builder.partialResult(args).isRight)
       }
     )
 

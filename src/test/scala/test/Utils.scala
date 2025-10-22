@@ -159,11 +159,6 @@ def genByteStringInlineDatumOption(
     )
 
 extension [E, A](either: Either[E, A])
-    def toProp: Prop = either match {
-        case Left(e)  => throw new RuntimeException(e.toString)
-        case Right(a) => Prop.proved
-    }
-
     def get: A = either match {
         case Right(a) => a
     }

@@ -136,23 +136,33 @@ def genSettlementTxSeqBuilder(
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
+    // A helper to generator empty, small, medium, large
+    def genHelper[T](gen : Gen[T]) : Gen[List[T]] = Gen.sized(size =>
+      Gen.frequency(
+//       (1, Gen.const(List.empty)),
+//       (2, Gen.listOfN(size, gen)),
+//       (5, Gen.listOfN(size * 5, gen)),
+//       (2, Gen.listOfN(size * 200, gen)),
+        (1, Gen.listOfN(900, gen))
+      )
+    )
+
     for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
-        deposits <- Gen.listOfN(
-          0,
-          genDepositUtxo(
-            network = network,
-            params = params,
-            headAddress = Some(hns.mkAddress(network))
-          )
+
+        genDeposit = genDepositUtxo(
+          network = network,
+          params = params,
+          headAddress = Some(hns.mkAddress(network))
         )
+        deposits <- Gen.const(List.empty)//genHelper(genDeposit)
 
         env = testTxBuilderEnvironment
-        payouts <- Gen.listOfN(134, genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
+        payouts <- genHelper(genPayoutObligationL1(network))
+        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
           headAddress = Some(hns.mkAddress(network)),
           network = network,

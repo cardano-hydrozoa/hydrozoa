@@ -2,11 +2,12 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
-import org.scalacheck.Prop
+import org.scalacheck.Gen.Parameters
+import org.scalacheck.{Gen, Prop}
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
 import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
@@ -15,10 +16,9 @@ import test.TransactionChain.*
 class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 1)
+        PropertyCheckConfiguration(minSuccessful = 100)
 
     test("Build settlement tx sequence") {
-        // TODO: I guess this generator doesn't work well
         forAll(genSettlementTxSeqBuilder()) { (builder, args, _) =>
             builder.build(args) match {
                 case Left(e)  => fail(s"Build failed $e")
@@ -27,11 +27,14 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
         }
     }
 
-    // FIXME: How to do this in ScalaTest?
-    //override def scalaCheckInitialSeed = "sTq_YFUmSG1l-iE4IHq_srByhYpnUpFgVh-1rRL-gMM="
+   // implicit val params: Option[Gen.Parameters] = Some(Parameters.default.withInitialSeed(-6416358867695214751L))
 
-    test("Observe settlement tx seq") {
-        forAll(genSettlementTxSeqBuilder()) { (builder, args, peers) =>
+    test ("Observe settlement tx seq") {
+        val gen = genSettlementTxSeqBuilder()
+        
+        forAll(gen) { (builder, args, peers) =>
+        {
+            println(args.payoutObligationsRemaining.map(_.output.value.coin.value))
             builder.build(args) match {
                 case Left(e) => throw RuntimeException(s"Build failed: $e")
                 case Right(txSeq) =>
@@ -39,7 +42,6 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                         : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
                         txSeq.settlementTxSeq match {
                             case NoRollouts(settlementTx) => {
-                                println(settlementTx.resolvedUtxos.utxos.keys)
                                 (Vector(settlementTx.tx), settlementTx.resolvedUtxos)
                             }
                             case WithRollouts(settlementTx, rolloutTxSeq) =>
@@ -61,14 +63,13 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                     observeTxChain(signedTxs)(initialState, CardanoMutator, Context()) match {
                         case Left(e) =>
                             throw new RuntimeException(
-                              s"\nFailed: ${e._1}. " +
-                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
-                                  s"\n rollout tx Id: ${signedTxs(1).id}"
+                              s"\nFailed: ${e._1}. " // +
+//                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
+//                                  s"\n rollout tx Id: ${signedTxs(1).id}"
                             )
                         case Right(v) => ()
                     }
-            }
-            Prop.proved.useSeed(Seed(-2258270188750587588L))
+            }}
         }
     }
 }
