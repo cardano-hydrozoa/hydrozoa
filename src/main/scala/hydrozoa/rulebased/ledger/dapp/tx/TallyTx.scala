@@ -2,21 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{
-    AddCollateral,
-    ReferenceOutput,
-    Send,
-    Spend,
-    ValidityEndSlot
-}
-import hydrozoa.lib.tx.{
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     DisputeRedeemer,
@@ -31,7 +16,22 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.Datum.DatumInlined
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.ScriptSource.PlutusScriptValue
+import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{
+    AddCollateral,
+    ReferenceOutput,
+    Send,
+    Spend,
+    ValidityEndSlot
+}
+import scalus.cardano.ledger.txbuilder.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.Option.None as SNone
 
@@ -128,7 +128,7 @@ object TallyTx {
                   List(
                     // Spend the continuing vote utxo with tally redeemer
                     Spend(
-                      TransactionUnspentOutput.fromUtxo(continuingVoteUtxo.utxo),
+                      TransactionUnspentOutput(continuingVoteUtxo.utxo.toScalus),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         continuingRedeemer.toData,
@@ -138,7 +138,7 @@ object TallyTx {
                     ),
                     // Spend the removed vote utxo with tally redeemer
                     Spend(
-                      TransactionUnspentOutput.fromUtxo(removedVoteUtxo.utxo),
+                      TransactionUnspentOutput(removedVoteUtxo.utxo.toScalus),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         removedRedeemer.toData,
@@ -156,7 +156,7 @@ object TallyTx {
                       )
                     ),
                     ReferenceOutput(TransactionUnspentOutput(treasuryUtxo.toUtxo)),
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(collateralUtxo)),
+                    AddCollateral(TransactionUnspentOutput(collateralUtxo.toScalus)),
                     ValidityEndSlot(validityEndSlot)
                   )
                 )

@@ -2,10 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     DisputeRedeemer,
@@ -22,7 +18,11 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.Datum.DatumInlined
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.ScriptSource.PlutusScriptValue
+import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.List as SList
 
@@ -138,7 +138,7 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo)),
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(recipe.collateralUtxo)),
+                    AddCollateral(TransactionUnspentOutput(recipe.collateralUtxo.toScalus)),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

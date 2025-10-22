@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.lib.tx.DiffHandler
 import hydrozoa.{Address, *}
 import io.bullet.borer.Encoder
 import monocle.Monocle.some
@@ -26,6 +25,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.txbuilder.DiffHandler
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}

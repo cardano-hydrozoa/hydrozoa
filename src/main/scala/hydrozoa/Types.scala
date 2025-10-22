@@ -202,6 +202,8 @@ object Utxo:
     extension [L <: AnyLayer](utxo: Utxo[L]) def untagged: (UtxoId[L], Output[L]) = identity(utxo)
     extension [L <: AnyLayer](utxo: Utxo[L]) def output: Output[L] = utxo._2
     extension [L <: AnyLayer](utxo: Utxo[L]) def input: UtxoId[L] = utxo._1
+    extension [L <: AnyLayer](utxo: Utxo[L]) def toScalus: (TransactionInput, TransactionOutput) =
+        (utxo._1.untagged, utxo._2.convert)
 
 type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 

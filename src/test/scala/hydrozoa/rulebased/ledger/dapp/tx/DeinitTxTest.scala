@@ -3,7 +3,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.config.EquityShares
-import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -24,6 +23,7 @@ import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
 import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Utxo as _, *}
 import spire.compat.integral
 import spire.math.Rational

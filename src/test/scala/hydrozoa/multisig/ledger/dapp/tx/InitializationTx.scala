@@ -3,8 +3,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.lib.tx.SomeBuildError
-import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -25,7 +23,8 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TxBalancingError
+import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.ledger.txbuilder.{SomeBuildError, TxBalancingError}
 import test.*
 import test.TestPeer.*
 

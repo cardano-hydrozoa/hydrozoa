@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.{Kleisli, NonEmptyVector}
 import cats.syntax.all.*
-import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder as SingleBuilder
 import hydrozoa.multisig.ledger.dapp.tx.RolloutTx.Builder.PartialResult as SinglePartialResult
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
@@ -11,6 +10,7 @@ import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Ma
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scala.annotation.tailrec
+import scalus.cardano.ledger.txbuilder.SomeBuildError
 
 /** A non-empty chain of rollout transactions in order of chaining.
   *

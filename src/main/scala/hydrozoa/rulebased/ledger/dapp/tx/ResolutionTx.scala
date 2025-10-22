@@ -2,15 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import hydrozoa.lib.tx.{
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{
@@ -30,7 +21,16 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.txbuilder.Datum.DatumInlined
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.ScriptSource.PlutusScriptValue
+import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
+import scalus.cardano.ledger.txbuilder.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class ResolutionTx(
@@ -142,7 +142,7 @@ object ResolutionTx {
                   List(
                     // Spend the tallied vote utxo
                     Spend(
-                      TransactionUnspentOutput.fromUtxo(talliedVoteUtxo.utxo),
+                      TransactionUnspentOutput(talliedVoteUtxo.utxo.toScalus),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         voteRedeemer.toData,
@@ -169,7 +169,7 @@ object ResolutionTx {
                         scriptRef = None
                       )
                     ),
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(collateralUtxo)),
+                    AddCollateral(TransactionUnspentOutput(collateralUtxo.toScalus)),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

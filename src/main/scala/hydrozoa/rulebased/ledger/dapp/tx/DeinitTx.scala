@@ -3,10 +3,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.EquityShares
-import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ScriptSource.{NativeScriptValue, PlutusScriptValue}
-import hydrozoa.lib.tx.TransactionBuilderStep.{Mint, *}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
@@ -20,8 +16,11 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
+import scalus.cardano.ledger.txbuilder.*
+import scalus.cardano.ledger.txbuilder.Datum.DatumInlined
 import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
+import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{Mint, *}
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.cardano.ledger.{Utxo as _, *}
 
@@ -173,8 +172,8 @@ object DeinitTx {
                       )
                     ),
                     // Fees are covered by the collateral to simplify the balancing
-                    Spend(TransactionUnspentOutput.fromUtxo(collateralUtxo), PubKeyWitness),
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(collateralUtxo)),
+                    Spend(TransactionUnspentOutput(collateralUtxo.toScalus), PubKeyWitness),
+                    AddCollateral(TransactionUnspentOutput(collateralUtxo.toScalus)),
                     // Send collateral back as the first output
                     Send(collateralUtxo.output)
                   )
