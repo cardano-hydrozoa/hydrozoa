@@ -4,17 +4,16 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
-import org.scalacheck.{Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -81,14 +80,14 @@ def genTallyVoteUtxo(
 ): Gen[TallyVoteUtxo] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-    val scriptAddr = ShelleyAddress(Mainnet, spp, ShelleyDelegationPart.Null)
+    val scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
 
     val voteTokenAssetName = AssetName(voteTokenName)
     val voteToken = singleton(headMp, voteTokenAssetName)
 
     val voteOutput = Babbage(
       address = scriptAddr,
-      // Sufficient ADA for minUTxO + tally fees
+      // Sufficient ADA for minAda + tally fees
       value = Value(Coin(10_000_000L)) + voteToken,
       datumOption = Some(Inline(voteDatum.toData)),
       scriptRef = None
@@ -139,7 +138,7 @@ def genTallyTxRecipe(
         // Generate compatible vote datums for tallying
         (continuingVoteDatum, removedVoteDatum) <- genCompatibleVoteDatums(peers.length)
 
-        // Generate vote UTxOs with cast votes
+        // Generate a vote utxo with cast votes
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
@@ -172,31 +171,30 @@ def genTallyTxRecipe(
       validators = testValidators
     )
 
-class TallyTxTest extends munit.ScalaCheckSuite {
+@nowarn("msg=unused value")
+class TallyTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(10)
-    }
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 10)
 
     test("Tally recipe generator works") {
         val exampleRecipe = genTallyTxRecipe().sample.get
         println(s"Generated TallyTx recipe: $exampleRecipe")
     }
 
-    property("Tally tx builds successfully")(
-      Prop.forAll(genTallyTxRecipe()) { recipe =>
-          TallyTx.build(recipe) match {
-              case Left(e) =>
-                  throw RuntimeException(s"TallyTx build failed: $e")
-              case Right(tx) =>
-                  // println(HexUtil.encodeHexString(tx.tx.toCbor))
+    test("Tally tx builds successfully") {
+        forAll(genTallyTxRecipe()) { recipe =>
+            TallyTx.build(recipe) match {
+                case Left(e) =>
+                    fail(s"TallyTx build failed: $e")
+                case Right(tx) =>
+                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
-                  // Basic smoke test assertions
-                  assert(tx.continuingVoteUtxo != null)
-                  assert(tx.removedVoteUtxo != null)
-                  assert(tx.treasuryUtxo != null)
-                  ()
-          }
-      }
-    )
+                    // Basic smoke test assertions
+                    assert(tx.continuingVoteUtxo != null)
+                    assert(tx.removedVoteUtxo != null)
+                    assert(tx.treasuryUtxo != null)
+            }
+        }
+    }
 }

@@ -114,7 +114,7 @@ object RuleBasedTreasuryValidator extends Validator {
     def cip67BeaconTokenPrefix = hex"01349900"
 
     // Entry point
-    override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
         log("TreasuryValidator")
 

@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
-
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -13,8 +12,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.PosixTime
 import scalus.ledger.api.v3.{Address, Credential}
 import scalus.prelude.Option as ScalusOption
-
-import scala.collection.immutable.Queue
 
 final case class DepositUtxo(
     private val l1Input: TransactionInput,

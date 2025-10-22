@@ -18,8 +18,6 @@ import supranational.blst.{P1, Scalar}
 
 import java.util.concurrent.TimeUnit
 
-type Utxos = UTxO
-
 def genUtxos(size: Int) =
     genMapOfSizeFromArbitrary[TransactionInput, TransactionOutput](size, size)(using
       transactionInput,

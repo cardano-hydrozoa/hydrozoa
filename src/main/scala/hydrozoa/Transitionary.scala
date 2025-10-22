@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.api.model.{Result, Utxo}
 import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.lib.tx.DiffHandler
 import hydrozoa.{Address, *}
 import io.bullet.borer.Encoder
 import monocle.Monocle.some
@@ -26,11 +25,12 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.txbuilder.DiffHandler
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
+import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
-import scalus.ledger.api.v1.{CurrencySymbol, StakingCredential}
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
 import scalus.{ledger, prelude, |>}
@@ -158,10 +158,10 @@ extension (addr: v3.Address) {
 //    def toIArray: IArray[Byte] =
 //        IArray.from(hash.bytes)
 //}
-//
-def csToPolicyId(cs: CurrencySymbol): PolicyId = {
-    Hash(ByteString.fromArray(cs.bytes))
-}
+
+
+// TODO: upstream
+def csToPolicyId(cs: v1.PolicyId): PolicyId = Hash.scriptHash(cs)
 
 ////////////////////////////////////////////////////
 //// Token Name

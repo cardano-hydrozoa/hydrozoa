@@ -2,8 +2,8 @@ package hydrozoa.rulebased.ledger.dapp.utxo
 
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import scalus.*
+import scalus.builtin.Data
 import scalus.builtin.Data.toData
-import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -30,14 +30,6 @@ final case class RuleBasedTreasuryUtxo(
 }
 
 object RuleBasedTreasuryUtxo {
-
-    /** This is all placeholder stuff: */
-
-    private type H32 = ByteString
-
-    private type KzgCommit = ByteString
-
-    private type VersionMajor = BigInt
 
 //def mkTreasuryDatumUnresolved(
 //    headMp: PolicyId,
@@ -70,4 +62,5 @@ object RuleBasedTreasuryUtxo {
 //            case Failure(e) => None
 //        }
 //    }
+
 }
