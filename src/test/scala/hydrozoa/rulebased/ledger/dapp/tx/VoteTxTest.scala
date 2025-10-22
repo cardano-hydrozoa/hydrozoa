@@ -14,7 +14,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -52,7 +52,7 @@ def genVoteUtxo(
         outputIx <- Gen.choose(1, numberOfPeers)
         txId = TransactionInput(fallbackTxId, outputIx)
         spp = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash)
-        scriptAddr = ShelleyAddress(Mainnet, spp, ShelleyDelegationPart.Null)
+        scriptAddr = ShelleyAddress(Testnet, spp, ShelleyDelegationPart.Null)
 
         voteTokenAssetName = AssetName(voteTokenName)
         voteToken = singleton(headMp, voteTokenAssetName)

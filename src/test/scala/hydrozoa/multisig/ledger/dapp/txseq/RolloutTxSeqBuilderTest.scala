@@ -1,17 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import org.scalacheck.{Arbitrary, Gen, Prop}
-import scalus.cardano.ledger.ArbitraryInstances.{*, given}
+import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
 import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 import test.*
 import test.Generators.Hydrozoa.*
 
-class RolloutTxSeqBuilderTest extends munit.ScalaCheckSuite {
+class RolloutTxSeqBuilderTest extends AnyFunSuite {
 
     val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation.L1])] =
         for {
@@ -24,11 +25,11 @@ class RolloutTxSeqBuilderTest extends munit.ScalaCheckSuite {
                 .map(NonEmptyVector.fromVectorUnsafe)
         } yield (RolloutTxSeq.Builder(config), payouts)
 
-    property("Build partial rollout seq")({
+    test("Build partial rollout seq")({
         Prop.forAll(genBuilder)((builder, payouts) => builder.buildPartial(payouts).toProp)
     })
 
-    property("Finish partial result rollout seq")({
+    test("Finish partial result rollout seq")({
         Prop.forAll(genBuilder)((builder, payouts) =>
             (for {
                 pr <- builder.buildPartial(payouts)

@@ -1,7 +1,6 @@
 package test
 
 import cats.data.NonEmptyVector
-import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
@@ -12,11 +11,11 @@ import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.ArbitraryInstances.{*, given}
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
+import scalus.cardano.ledger.txbuilder.{Environment, TransactionUnspentOutput}
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.

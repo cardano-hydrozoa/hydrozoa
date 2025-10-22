@@ -1,10 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
-import hydrozoa.lib.tx.TransactionBuilder.ResolvedUtxos
-import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
@@ -18,8 +13,14 @@ import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.txbuilder.*
 import scalus.cardano.ledger.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.ledger.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
+
+// Moved temporarily here from the builder
+trait HasResolvedUtxos {
+    def resolvedUtxos: ResolvedUtxos
+}
 
 sealed trait SettlementTx
     extends Tx,
@@ -28,7 +29,7 @@ sealed trait SettlementTx
       TreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
-      TransactionBuilder.ResolvedUtxos.HasResolvedUtxos
+      HasResolvedUtxos
 
 object SettlementTx {
     import Builder.*

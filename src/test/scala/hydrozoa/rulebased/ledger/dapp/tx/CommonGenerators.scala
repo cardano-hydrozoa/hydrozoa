@@ -14,7 +14,7 @@ import org.scalacheck.{Arbitrary, Gen}
 import scalus.builtin.Builtins.serialiseData
 import scalus.builtin.Data.toData
 import scalus.builtin.{BLS12_381_G2_Element, ByteString}
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -26,7 +26,7 @@ import scalus.|>
 import test.*
 
 // Alias for compatibility
-def genPubkeyAddr(network: Network = Mainnet): Gen[ShelleyAddress] = genPubkeyAddress(network)
+def genPubkeyAddr(network: Network = Testnet): Gen[ShelleyAddress] = genPubkeyAddress(network)
 
 /** Common test generators for rule-based transaction tests */
 object CommonGenerators {
@@ -105,7 +105,7 @@ object CommonGenerators {
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
             spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
-            scriptAddr = ShelleyAddress(Mainnet, spp, ShelleyDelegationPart.Null)
+            scriptAddr = ShelleyAddress(Testnet, spp, ShelleyDelegationPart.Null)
 
             beaconTokenAssetName = AssetName(beaconTokenName)
             beaconToken = singleton(headMp, beaconTokenAssetName)
@@ -174,7 +174,7 @@ object CommonGenerators {
     def genShelleyAddress: Gen[ShelleyAddress] =
         for {
             keyHash <- arbitrary[AddrKeyHash]
-            network = Mainnet
+            network = Testnet
         } yield ShelleyAddress(
           network = network,
           payment = ShelleyPaymentPart.Key(keyHash),

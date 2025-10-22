@@ -10,11 +10,8 @@ import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-
-import scala.collection.immutable.Queue
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -22,13 +19,12 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
-import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
 
-def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
+def genDepositDatum(network: Network = Testnet): Gen[DepositUtxo.Datum] = {
     for {
         address <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
@@ -50,7 +46,7 @@ def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
 }
 
 def genDepositUtxo(
-    network: Network = Mainnet,
+    network: Network = Testnet,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
@@ -96,7 +92,7 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 
 /** Generate a treasury utxo with at least minAda */
 def genTreasuryUtxo(
-    network: Network = Mainnet,
+    network: Network = Testnet,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress],
     coin: Option[Coin]

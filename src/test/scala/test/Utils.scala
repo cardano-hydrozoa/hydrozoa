@@ -1,13 +1,13 @@
 package test
+
 import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
-
 import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -30,7 +30,7 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
 val costModels = blockfrost544Params.costModels
 
 val evaluator = PlutusScriptEvaluator(
-  SlotConfig.Mainnet,
+  SlotConfig.Preprod,
   initialBudget = ExBudget.enormous,
   protocolMajorVersion = MajorProtocolVersion.plominPV,
   costModels = costModels
@@ -38,18 +38,11 @@ val evaluator = PlutusScriptEvaluator(
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Testnet
-val testSlotConfig: SlotConfig = SlotConfig.Mainnet
+val testSlotConfig: SlotConfig = SlotConfig.Preprod
 val testProtocolParams: ProtocolParams = blockfrost544Params
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
-val testEnv: Environment =
-    Environment(
-      protocolParams = testProtocolParams,
-      slotConfig = testSlotConfig,
-      evaluator = testEvaluator,
-      network = testNetwork,
-      era = Era.Conway
-    )
+
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
     List(
@@ -68,12 +61,14 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
-val testEnv: Environment =
-    Environment(
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      network = testNetwork
-    )
+//val testEnv: Environment =
+//    Environment(
+//        protocolParams = testProtocolParams,
+//        slotConfig = testSlotConfig,
+//        evaluator = testEvaluator,
+//        network = testNetwork,
+//        era = Era.Conway
+//    )
 
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
@@ -91,7 +86,7 @@ val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByt
 val genPolicyId: Gen[PolicyId] = genScriptHash
 
 def genPubkeyAddress(
-    network: Network = Mainnet,
+    network: Network = Testnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     genAddrKeyHash.flatMap(akh =>
@@ -99,7 +94,7 @@ def genPubkeyAddress(
     )
 
 def genScriptAddress(
-    network: Network = Mainnet,
+    network: Network = Testnet,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     for {

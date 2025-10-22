@@ -1,39 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
-import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import hydrozoa.lib.tx.{
-    SomeBuildError,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
-import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
-import scalus.cardano.ledger.{
-    Coin,
-    Transaction,
-    TransactionHash,
-    TransactionInput,
-    Value,
-    TransactionOutput as TxOutput
-}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.prebalancedDiffHandler
 import scala.annotation.tailrec
-import hydrozoa.{prebalancedDiffHandler, reportDiffHandler}
 import scalus.builtin.ByteString
-import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import scalus.cardano.ledger.txbuilder.{
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
+import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
+import scalus.cardano.ledger.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
 
