@@ -80,7 +80,7 @@ def genEmptyResolvedTreasuryUtxo(
 /** Generate EquityShares for testing */
 def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
     for {
-        addresses <- Gen.listOfN(peers.length, genPubkeyAddr(testNetwork))
+        addresses <- Gen.listOfN(peers.length, genPubkeyAddress(testNetwork))
         shares <- genShares(peers.length)
     } yield {
         val equityList = addresses.zip(shares).map { case (addr, share) =>

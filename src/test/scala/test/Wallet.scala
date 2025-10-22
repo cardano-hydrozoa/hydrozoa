@@ -21,7 +21,7 @@ case class WalletId(name: String)
 
 // Pure function to add a key witness to a transaction.
 def addWitness(tx: Transaction, wit: VKeyWitness): Transaction =
-    val txBytes = TransactionBytes(Cbor.encode(tx).toByteArray)
+    val txBytes = TransactionBytes(tx.toCbor)
     val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
     val witnessSetMap = witnessSetDI.asInstanceOf[Map]
 

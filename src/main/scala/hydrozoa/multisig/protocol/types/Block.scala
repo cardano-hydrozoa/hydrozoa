@@ -291,7 +291,7 @@ object Block {
             }
 
             extension (self: Major) def increment: Major = Major(self + 1)
-            
+
             trait Produced {
                 def majorVersionProduced: Major
             }

@@ -53,7 +53,9 @@ object RolloutTxSeq {
                 override def skipFirst: Option[PartialResult.SkipFirst] = SkipFirst(this)
 
                 /** Finish the singleton rollout transaction by providing the first rollout utxo. */
-                override def finishPostProcess(rolloutSpent: RolloutUtxo): BuildErrorOr[RolloutTxSeq] =
+                override def finishPostProcess(
+                    rolloutSpent: RolloutUtxo
+                ): BuildErrorOr[RolloutTxSeq] =
                     for {
                         onlyCompleted <- only.complete(rolloutSpent)
                     } yield RolloutTxSeq(notLast = Vector.empty, last = onlyCompleted)
@@ -80,7 +82,9 @@ object RolloutTxSeq {
                   * then threading the subsequent rollout utxos through the remainder of the
                   * sequence.
                   */
-                override def finishPostProcess(rolloutSpent: RolloutUtxo): BuildErrorOr[RolloutTxSeq] =
+                override def finishPostProcess(
+                    rolloutSpent: RolloutUtxo
+                ): BuildErrorOr[RolloutTxSeq] =
                     import Many.*
                     for {
                         firstPostProcessed <- first.complete(rolloutSpent)
@@ -189,7 +193,9 @@ object RolloutTxSeq {
           * working towards the first.
           * @return
           */
-        def buildPartial(payouts: NonEmptyVector[Payout.Obligation.L1]): BuildErrorOr[PartialResult] =
+        def buildPartial(
+            payouts: NonEmptyVector[Payout.Obligation.L1]
+        ): BuildErrorOr[PartialResult] =
             for {
                 lastRolloutTx <- singleBuilderLast.partialResult(SingleBuilder.Args.Last(payouts))
                 partialResult <- lastRolloutTx match {
@@ -210,7 +216,7 @@ object RolloutTxSeq {
             } yield partialResult
 
         @tailrec
-        def loop(
+        private def loop(
             current: SinglePartialResult[RolloutTx.NotLast],
             acc: State
         ): BuildErrorOr[PartialResult] =

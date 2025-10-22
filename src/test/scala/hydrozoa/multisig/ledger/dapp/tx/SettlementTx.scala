@@ -10,9 +10,11 @@ import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+
+import scala.collection.immutable.Queue
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Mainnet
+import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -24,59 +26,7 @@ import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
-
-/** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but may be a
-  * good starting point. For example, an arbitrary payout obligation may be for a different network
-  * than the one you intend.
-  *
-  * Import as (...).ArbitraryInstances.{*, given}
-  */
-object ArbitraryInstances {
-
-    /** NOTE: You can't change the network very easily because this is an opaque type. You should
-      * only use this for fuzz testing.
-      */
-    given Arbitrary[Payout.Obligation.L2] = Arbitrary {
-        for {
-            l2Input <- arbitrary[TransactionInput]
-
-            address <- arbitrary[ShelleyAddress]
-            coin <- arbitrary[Coin]
-            datum <- arbitrary[ByteString]
-            output = Babbage(
-              address = address,
-              value = Value(coin),
-              datumOption = Some(Inline(datum.toData)),
-              scriptRef = None
-            )
-        } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
-    }
-
-    given Arbitrary[Payout.Obligation.L1] = Arbitrary {
-        for {
-            l2 <- arbitrary[Payout.Obligation.L2]
-        } yield Payout.Obligation.L1(l2)
-    }
-}
-
-def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
-    for {
-        l2Input <- arbitrary[TransactionInput]
-
-        address0 <- arbitrary[ShelleyAddress]
-        address = address0.copy(network = network)
-        coin <- arbitrary[Coin]
-        datum <- arbitrary[ByteString]
-        output = Babbage(
-          address = address,
-          value = Value(coin),
-          datumOption = Some(Inline(datum.toData)),
-          scriptRef = None
-        )
-    } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
-
-def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
-    genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
+import test.Generators.Hydrozoa.*
 
 def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
     for {
@@ -189,14 +139,14 @@ def genTreasuryUtxo(
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = Mainnet
-): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args)] = {
+    network: Network = Testnet
+): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
         deposits <- Gen.listOfN(
-          10,
+          0,
           genDepositUtxo(
             network = network,
             params = params,
@@ -205,7 +155,7 @@ def genSettlementTxSeqBuilder(
         )
 
         env = testTxBuilderEnvironment
-        payouts <- Gen.listOfN(1000, genPayoutObligationL1(network))
+        payouts <- Gen.listOfN(134, genPayoutObligationL1(network))
         payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
         utxo <- genTreasuryUtxo(
@@ -232,19 +182,7 @@ def genSettlementTxSeqBuilder(
         depositsToSpend = Vector.from(deposits),
         payoutObligationsRemaining = Vector.from(payouts),
         treasuryToSpend = utxo
-      )
+      ),
+      peers
     )
 }
-
-def genFakeMultisigWitnessUtxo(
-    script: HeadMultisigScript,
-    network: Network
-): Gen[TransactionUnspentOutput] = for {
-    utxoId <- Arbitrary.arbitrary[TransactionInput]
-    output = Babbage(
-      script.mkAddress(network),
-      Value.ada(2),
-      None,
-      Some(ScriptRef.apply(script.script))
-    )
-} yield TransactionUnspentOutput((utxoId, output))

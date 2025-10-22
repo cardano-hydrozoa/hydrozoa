@@ -13,14 +13,16 @@ trait Tx {
 }
 
 object Tx {
+
     /** A result that includes additional information besides the built transaction.
-      * 
-      * @tparam T The type of built transaction.
+      *
+      * @tparam T
+      *   The type of built transaction.
       */
     trait AugmentedResult[T] {
         def transaction: T
     }
-    
+
     trait Builder {
         def config: Builder.Config
 
@@ -30,23 +32,23 @@ object Tx {
             // Try to build, balance, and validate the resulting transaction
             txBuilderContext
                 .finalizeContext(
+                  protocolParams = config.env.protocolParams,
+                  diffHandler = ChangeOutputDiffHandler(
                     protocolParams = config.env.protocolParams,
-                    diffHandler = ChangeOutputDiffHandler(
-                        protocolParams = config.env.protocolParams,
-                        changeOutputIdx = 0
-                    ).changeOutputDiffHandler,
-                    evaluator = config.env.evaluator,
-                    validators = config.validators
+                    changeOutputIdx = 0
+                  ).changeOutputDiffHandler,
+                  evaluator = config.env.evaluator,
+                  validators = config.validators
                 )
     }
 
     object Builder {
         type BuildErrorOr[A] = Either[SomeBuildError, A]
-        
+
         trait HasCtx {
             def ctx: TransactionBuilder.Context
         }
-        
+
         final case class Config(
             headNativeScript: HeadMultisigScript,
             headNativeScriptReferenceInput: TransactionUnspentOutput,
@@ -57,14 +59,15 @@ object Tx {
         }
 
         object Incremental {
+
             /** Replace an [[InvalidTransactionSizeException]] with some other value.
               *
               * @param err
-              * The error to replace.
+              *   The error to replace.
               * @param replacement
-              * The replacement value, provided as a lazy argument.
+              *   The replacement value, provided as a lazy argument.
               * @tparam A
-              * The type of the replacement value, usually inferred by Scala.
+              *   The type of the replacement value, usually inferred by Scala.
               * @return
               */
             final def replaceInvalidSizeException[A](

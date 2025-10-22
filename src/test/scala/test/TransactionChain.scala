@@ -3,7 +3,6 @@ package test
 import cats.*
 import cats.data.*
 import cats.syntax.all.*
-import scala.annotation.tailrec
 import scalus.cardano.ledger.rules.{CardanoMutator, STS}
 
 object Kendo {
@@ -39,15 +38,14 @@ object Kendo {
         kendos.scan(kPure)(foldFunc).sequence
     }
 
-    /** If the monad underlying your Kendo can throw an error, you might want to observe the partial
-      * results. This function is like [[kendoScan]], but will return an error alongside the partial
-      * results if it is not successful.
+    /** If the monad underlying your Kendo is a bifunctor where one side designates an error (such
+      * as Either), you might want to observe the partial results. This function is like
+      * [[kendoScan]], but will return an error alongside the partial results if it is not
+      * successful.
       *
       * @param kendos
       *   A list of Kleislis parameterized over a monad F that can throw errors of type E and return
       *   values of type A, such as Either[E,A]
-      * @param monadF
-      * @param appEF
       * @tparam F
       *   A monad that can throw errors
       * @tparam E
@@ -59,36 +57,33 @@ object Kendo {
       *   results. Otherwise, a complete list of results.
       */
     def kendoObserve[F[_, _], E, A](kendos: Seq[Kendo[[X] =>> F[E, X], A]])(implicit
-        appE: ApplicativeError[[X] =>> F[(E, Seq[A]), X], (E, Seq[A])]
-    ): Kleisli[[X] =>> F[(E, Seq[A]), X], A, Seq[A]] = {
-        // TODO: Figure out if this should be a list, vector, queue, or just a Seq
+        monadF: Monad[[X] =>> F[(E, NonEmptyVector[A]), X]],
+        bifunctorF: Bifunctor[F]
+    ): Kleisli[[X] =>> F[(E, Vector[A]), X], A, Vector[A]] = {
 
-        @tailrec
-        def loop(
-            remainingKendos: Seq[Kendo[[X] =>> F[E, X], A]],
-            partialResults: Seq[A]
-        ): F[(E, Seq[A]), Seq[A]] =
-            remainingKendos match {
-                case Nil => appE.pure(partialResults)
-                case nextKendo +: futureKendos => {
-                    val lastResult = partialResults.last
-                    nextKendo.run(lastResult) match {
-                        case e: E => appE.raiseError((e, partialResults))
-                        case a: A => loop(futureKendos, partialResults.appended(a))
-                    }
-                }
-            }
+        // Take something like
+        //    `A => Either[E,A]`
+        // and turn it into
+        //    `NonEmptyVector[A]` => Either[(E, NonEmptyVector[A]), NonEmptyVector[A]]
+        // such that the "input" is always the last entry in the vector.
+        def liftKendo(
+            kendo: Kendo[[X] =>> F[E, X], A]
+        ): Kendo[[X] =>> F[(E, NonEmptyVector[A]), X], NonEmptyVector[A]] =
+            Kleisli((partialResults: NonEmptyVector[A]) => {
+                val previousResult = partialResults.last
+                kendo
+                    .run(previousResult)
+                    .bimap(
+                      error => (error, partialResults),
+                      thisRes => partialResults.append(thisRes)
+                    )
+            })
 
-        kendos match {
-            case Nil => Kleisli(_ => appE.pure(Seq.empty[A]))
-            case headKendo +: tailKendo =>
-                Kleisli(a => {
-                    headKendo.run(a) match {
-                        case Left(headError: E) => appE.raiseError((headError, Seq.empty))
-                        case Right(firstRes: A) => loop(tailKendo, partialResults = Seq(firstRes))
-                    }
-                })
-        }
+        Kleisli((initial: A) =>
+            kendoFold(kendos.map(liftKendo))
+                .run(NonEmptyVector.one(initial))
+                .bimap(_.map(_.toVector), _.toVector)
+        )
     }
 }
 
@@ -101,7 +96,7 @@ object TransactionChain {
 
     /** Runs a list of transactions in sequence, returning the final state or the first error. */
     def foldTxChain(
-        txs: List[Transaction]
+        txs: Seq[Transaction]
     )(
         initialState: State,
         mutator: STS.Mutator = CardanoMutator,
@@ -117,7 +112,7 @@ object TransactionChain {
       * transaction that produced them, or the first error.
       */
     def scanTxChain(
-        txs: List[Transaction]
+        txs: Seq[Transaction]
     )(
         initialState: State,
         mutator: STS.Mutator = CardanoMutator,
@@ -126,28 +121,18 @@ object TransactionChain {
         def liftTx(
             tx: Transaction
         ): Kendo[EitherThatOr[TransactionException], (State, Transaction)] =
-            Kleisli(lastStateAndTx =>
+            Kleisli(previousStateAndTx =>
                 mutator
-                    .transit(context = context, state = lastStateAndTx._1, event = tx) match {
+                    .transit(context = context, state = previousStateAndTx._1, event = tx) match {
                     case Left(e)         => Left(e)
                     case Right(newState) => Right(newState, tx)
                 }
             )
 
         txs match {
-            case Nil => Right(Seq.empty)
-            case headTx +: tailTxs =>
-                mutator.transit(
-                  context = context,
-                  state = initialState,
-                  event = headTx
-                ) match {
-                    case Left(e)            => Left(e)
-                    case Right(secondState) => kendoScan(txs.map(liftTx)).run((secondState, headTx))
-                }
-
+            case Nil               => Right(Seq.empty)
+            case headTx +: tailTxs => kendoScan(tailTxs.map(liftTx)).run((initialState, headTx))
         }
-
     }
 
     /** Observe a chain of transactions. If an error is encountered, it will return a transaction
@@ -162,25 +147,26 @@ object TransactionChain {
         def liftTx(
             tx: Transaction
         ): Kendo[EitherThatOr[TransactionException], (State, Transaction)] =
-            Kleisli(lastStateAndTx =>
+            Kleisli(previousStateAndTx =>
                 mutator
-                    .transit(context = context, state = lastStateAndTx._1, event = tx) match {
+                    .transit(context = context, state = previousStateAndTx._1, event = tx) match {
                     case Left(e)         => Left(e)
                     case Right(newState) => Right(newState, tx)
                 }
             )
         txs match {
+            // No Txs ==> No results
             case Nil => Right(Seq.empty)
+            // Head tx: apply it to the initial state
             case headTx +: tailTxs =>
-                mutator.transit(
-                  context = context,
-                  state = initialState,
-                  event = headTx
-                ) match {
-                    case Left(e) => Left((e, Seq.empty))
-                    case Right(secondState) =>
-                        kendoObserve(txs.map(liftTx)).run((secondState, headTx))
-                }
+                for {
+                    state2 <- mutator
+                        .transit(context, initialState, headTx)
+                        .left
+                        .map((_, Seq.empty))
+                    res <- kendoObserve(tailTxs.map(liftTx)).run((state2, headTx))
+                } yield res
+
         }
     }
 }

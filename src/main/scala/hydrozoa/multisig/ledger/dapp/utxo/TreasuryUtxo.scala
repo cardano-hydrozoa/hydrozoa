@@ -33,15 +33,15 @@ object TreasuryUtxo {
     trait Spent {
         def treasurySpent: TreasuryUtxo
     }
-    
+
     trait ToSpend {
         def treasuryToSpend: TreasuryUtxo
     }
-    
+
     trait Produced {
         def treasuryProduced: TreasuryUtxo
     }
-    
+
     final case class Datum(
         commit: KzgCommit,
         versionMajor: VersionMajor,

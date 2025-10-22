@@ -10,7 +10,7 @@ object Payout {
             l2Input: TransactionInput,
             output: TransactionOutput.Babbage
         )
-        
+
         object L2 {
             trait Many {
                 def payoutObligations: Vector[L2]

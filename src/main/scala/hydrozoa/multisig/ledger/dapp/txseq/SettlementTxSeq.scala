@@ -30,7 +30,8 @@ object SettlementTxSeq {
         def build(args: Args): Either[Builder.Error, Builder.Result] = {
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
                 case None =>
-                    SettlementTx.Builder.NoPayouts(config)
+                    SettlementTx.Builder
+                        .NoPayouts(config)
                         .build(args.toArgsNoPayouts)
                         .left
                         .map(Builder.Error.SettlementError(_))
@@ -43,7 +44,8 @@ object SettlementTxSeq {
                             .left
                             .map(Error.RolloutSeqError(_))
 
-                        settlementTxRes <- SettlementTx.Builder.WithPayouts(config)
+                        settlementTxRes <- SettlementTx.Builder
+                            .WithPayouts(config)
                             .build(args.toArgsWithPayouts(rolloutTxSeqPartial))
                             .left
                             .map(Error.SettlementError(_))
@@ -72,7 +74,7 @@ object SettlementTxSeq {
 
     object Builder {
         import SettlementTx.Builder.Args as SingleArgs
-        
+
         enum Error:
             case SettlementError(e: SomeBuildError)
             case RolloutSeqError(e: SomeBuildError)

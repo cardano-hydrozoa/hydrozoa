@@ -1,5 +1,10 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.tx.*
+import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
+import hydrozoa.lib.tx.TransactionBuilder.ResolvedUtxos
+import hydrozoa.lib.tx.TransactionBuilderStep.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
@@ -22,7 +27,8 @@ sealed trait SettlementTx
       TreasuryUtxo.Spent,
       TreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
-      RolloutUtxo.MbProduced
+      RolloutUtxo.MbProduced,
+      TransactionBuilder.ResolvedUtxos.HasResolvedUtxos
 
 object SettlementTx {
     import Builder.*
@@ -36,7 +42,8 @@ object SettlementTx {
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: TreasuryUtxo,
         override val treasuryProduced: TreasuryUtxo,
-        override val depositsSpent: Vector[DepositUtxo]
+        override val depositsSpent: Vector[DepositUtxo],
+        override val resolvedUtxos: ResolvedUtxos
     ) extends SettlementTx,
           NoRollouts
 
@@ -45,7 +52,8 @@ object SettlementTx {
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: TreasuryUtxo,
         override val treasuryProduced: TreasuryUtxo,
-        override val depositsSpent: Vector[DepositUtxo]
+        override val depositsSpent: Vector[DepositUtxo],
+        override val resolvedUtxos: ResolvedUtxos
     ) extends SettlementTx,
           WithPayouts,
           NoRollouts
@@ -56,7 +64,8 @@ object SettlementTx {
         override val treasurySpent: TreasuryUtxo,
         override val treasuryProduced: TreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
-        override val rolloutProduced: RolloutUtxo
+        override val rolloutProduced: RolloutUtxo,
+        override val resolvedUtxos: ResolvedUtxos
     ) extends SettlementTx,
           WithPayouts,
           RolloutUtxo.Produced
@@ -168,7 +177,9 @@ object SettlementTx {
             for {
                 pessimistic <- basePessimistic(args)
                 addedDeposits <- addDeposits(args, pessimistic)
-                completed <- complete(args, addedDeposits)
+                // Balancing and fees
+                finished <- this.finish(addedDeposits.ctx)
+                completed <- complete(args, addedDeposits.copy(ctx = finished))
             } yield completed
         }
 
@@ -345,7 +356,8 @@ object SettlementTx {
                   treasurySpent = args.treasuryToSpend,
                   treasuryProduced = treasuryProduced,
                   depositsSpent = state.depositsSpent,
-                  tx = state.ctx.transaction
+                  tx = state.ctx.transaction,
+                  resolvedUtxos = state.ctx.resolvedUtxos
                 )
                 Result.NoPayouts(
                   transaction = settlementTx,
@@ -387,7 +399,8 @@ object SettlementTx {
                         treasurySpent = args.treasuryToSpend,
                         treasuryProduced = treasuryProduced,
                         depositsSpent = state.depositsSpent,
-                        tx = tx
+                        tx = tx,
+                        resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
                       depositsToSpend = state.depositsToSpend
@@ -403,7 +416,8 @@ object SettlementTx {
                         treasuryProduced = treasuryProduced,
                         depositsSpent = state.depositsSpent,
                         rolloutProduced = unsafeGetRolloutProduced(state.ctx),
-                        tx = tx
+                        tx = tx,
+                        resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
                       depositsToSpend = state.depositsToSpend,
