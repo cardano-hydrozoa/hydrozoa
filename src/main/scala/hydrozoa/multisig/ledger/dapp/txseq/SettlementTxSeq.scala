@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{SettlementTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
-import scalus.cardano.ledger.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
     def settlementTx: SettlementTx

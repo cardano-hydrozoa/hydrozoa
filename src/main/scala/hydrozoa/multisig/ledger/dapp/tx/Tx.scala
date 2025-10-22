@@ -5,8 +5,8 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.{Environment, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 
 trait Tx {
     def tx: Transaction

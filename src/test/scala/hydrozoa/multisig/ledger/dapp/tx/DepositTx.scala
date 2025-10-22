@@ -12,7 +12,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
 import scalus.prelude.Option as SOption
 import test.*
 

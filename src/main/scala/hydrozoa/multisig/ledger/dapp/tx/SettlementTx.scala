@@ -11,10 +11,10 @@ import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.txbuilder.*
-import scalus.cardano.ledger.txbuilder.ScriptSource.NativeScriptAttached
-import scalus.cardano.ledger.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
 
 // Moved temporarily here from the builder

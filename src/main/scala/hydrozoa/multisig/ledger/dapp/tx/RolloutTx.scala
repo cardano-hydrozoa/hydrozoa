@@ -10,9 +10,9 @@ import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
-import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.ledger.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
+import scalus.cardano.txbuilder.TxBalancingError.CantBalance
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
 

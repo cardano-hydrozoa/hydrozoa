@@ -7,7 +7,7 @@ import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.cardano.ledger.{TransactionHash, TransactionInput}
 import test.*
 import test.Generators.Hydrozoa.*

@@ -22,8 +22,8 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
-import scalus.cardano.ledger.txbuilder.{SomeBuildError, TxBalancingError}
+import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
 import test.*
 import test.TestPeer.*
 

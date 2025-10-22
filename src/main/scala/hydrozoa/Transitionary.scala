@@ -13,6 +13,7 @@ import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+
 import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
@@ -22,12 +23,13 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger.txbuilder.DiffHandler
-import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
+import scalus.cardano.ledger
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash

@@ -7,7 +7,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
@@ -38,7 +38,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         )
 
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 1)
+        PropertyCheckConfiguration(minSuccessful = 1000)
 
     // FIXME: How to do this in ScalaTest?
     //override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
@@ -46,24 +46,24 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     // ===================================
     // Last
     // ===================================
-    test("Build Last Rollout Tx Partial Result")(
-      Prop.forAll(genLastBuilder) { (builder, args) =>
-          {
-              val pr = builder.partialResult(args)
-              println(pr.get.ctx.transaction.body.value.outputs.size)
-              pr.toProp :| "Partial result didn't build successfully"
-              && {
-                  val unsignedSize = pr.get.ctx.transaction.toCbor.length
-                  val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
-                  val maxSize = builder.config.env.protocolParams.maxTxSize
-                  (unsignedSize + witnessesSize <= maxSize) :|
-                      "Partial result unsigned tx size plus signature size " +
-                          s"($unsignedSize + $witnessesSize = ${unsignedSize+witnessesSize})" +
-                          s" exceeds max tx size $maxSize"
-              }
-          }
-      }
-    )
+    test("Build Last Rollout Tx Partial Result") {
+         {
+            forAll(genLastBuilder) { (builder, args) =>
+                val pr = builder.partialResult(args)
+                println(pr.get.ctx.transaction.body.value.outputs.size)
+                pr.toProp :| "Partial result didn't build successfully" && {
+                    val unsignedSize = pr.get.ctx.transaction.toCbor.length
+                    val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
+                    val maxSize = builder.config.env.protocolParams.maxTxSize
+                    (unsignedSize + witnessesSize <= maxSize) :|
+                        "Partial result unsigned tx size plus signature size " +
+                            s"($unsignedSize + $witnessesSize = ${unsignedSize + witnessesSize})" +
+                            s" exceeds max tx size $maxSize"
+                }
+            }
+        }
+    }
+
 
     test("Complete Last Partial Result")({
         Prop.forAll(genLastBuilder)((builder, args) =>

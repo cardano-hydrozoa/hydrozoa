@@ -16,8 +16,8 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
-import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.Environment
+import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget

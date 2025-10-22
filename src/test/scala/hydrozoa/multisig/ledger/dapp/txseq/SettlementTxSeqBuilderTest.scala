@@ -3,11 +3,12 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import org.scalacheck.Prop
+import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
-import scalus.cardano.ledger.txbuilder.TransactionBuilder
+import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
 import test.TransactionChain.*
 
@@ -30,7 +31,7 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
     //override def scalaCheckInitialSeed = "sTq_YFUmSG1l-iE4IHq_srByhYpnUpFgVh-1rRL-gMM="
 
     test("Observe settlement tx seq") {
-        Prop.forAll(genSettlementTxSeqBuilder()) { (builder, args, peers) =>
+        forAll(genSettlementTxSeqBuilder()) { (builder, args, peers) =>
             builder.build(args) match {
                 case Left(e) => throw RuntimeException(s"Build failed: $e")
                 case Right(txSeq) =>
@@ -67,7 +68,7 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                         case Right(v) => ()
                     }
             }
-            Prop.proved
+            Prop.proved.useSeed(Seed(-2258270188750587588L))
         }
     }
 }

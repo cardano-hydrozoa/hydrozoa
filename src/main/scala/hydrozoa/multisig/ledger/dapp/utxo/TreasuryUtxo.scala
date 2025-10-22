@@ -6,7 +6,7 @@ import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
 
 // TODO: Make opaque

@@ -11,10 +11,10 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
-import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.ledger.txbuilder.{LowLevelTxBuilder, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
+import scalus.cardano.txbuilder.{LowLevelTxBuilder, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,
