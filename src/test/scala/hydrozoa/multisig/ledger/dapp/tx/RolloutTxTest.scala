@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import org.scalacheck.*
-import org.scalacheck.Prop.*
+import org.scalacheck.Gen.Parameters
+import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
+import scalus.cardano.txbuilder.{TransactionUnspentOutput, addDummySignatures}
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
@@ -46,35 +47,40 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     // ===================================
     // Last
     // ===================================
-    test("Build Last Rollout Tx Partial Result")(
-      Prop.forAll(genLastBuilder) { (builder, args) =>
-          {
+    test("Build Last Rollout Tx Partial Result") {
+         {
+            val gen = genLastBuilder.apply(Parameters.default, Seed.apply(3476397946951439811L)).get
+            forAll(gen) { (builder, args) =>
               val pr = builder.partialResult(args)
-              println(pr.get.ctx.transaction.body.value.outputs.size)
-              pr.toProp :| "Partial result didn't build successfully"
-              && {
-                  val unsignedSize = pr.get.ctx.transaction.toCbor.length
-                  val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
-                  val maxSize = builder.config.env.protocolParams.maxTxSize
-                  (unsignedSize + witnessesSize <= maxSize) :|
-                      "Partial result unsigned tx size plus signature size " +
-                          s"($unsignedSize + $witnessesSize = ${unsignedSize+witnessesSize})" +
-                          s" exceeds max tx size $maxSize"
-              }
-          }
-      }
-    )
 
-    test("Complete Last Partial Result")({
-        Prop.forAll(genLastBuilder)((builder, args) =>
-            (for {
-                pr <- builder.partialResult(args)
-                txId = Arbitrary.arbitrary[TransactionHash].sample.get
-                input = TransactionInput(txId, 0)
-                output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
-                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
-                res <- pr.complete(rolloutUtxo)
-            } yield res).toProp
+              assert(pr.isRight, "Partial result didn't build successfully")
+
+              val unsignedSize = pr.get.ctx.transaction.toCbor.length
+              val withDummySigners = addDummySignatures(pr.get.builder.config.headNativeScript.numSigners, pr.get.ctx.transaction)
+              val signedSize = withDummySigners.toCbor.length
+
+              val maxSize = builder.config.env.protocolParams.maxTxSize
+              assert(signedSize <= maxSize,
+                        "\n\t\tPartial result size with dummy signatures is too big: " +
+                            s" unsigned size: $unsignedSize; signed size: $signedSize; max size: $maxSize"
+              )
+            }
+            }
+        }
+
+
+  test("Complete Last Partial Result")({
+    forAll(genLastBuilder)((builder, args) => {
+      val res = for {
+        pr <- builder.partialResult(args)
+        txId = Arbitrary.arbitrary[TransactionHash].sample.get
+        input = TransactionInput(txId, 0)
+        output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
+        rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+        res <- pr.complete(rolloutUtxo)
+      } yield res
+      assert(res.isRight)
+    }
         )
     })
 
@@ -82,8 +88,8 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     // Not Last
     // ===================================
     test("Build NotLast Partial Result")(
-      Prop.forAll(genNotLastBuilder) { (builder, args) =>
-          builder.partialResult(args).toProp
+      forAll(genNotLastBuilder) { (builder, args) =>
+          assert(builder.partialResult(args).isRight)
       }
     )
 

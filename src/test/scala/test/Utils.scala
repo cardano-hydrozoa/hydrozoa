@@ -4,6 +4,7 @@ import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
+
 import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -16,8 +17,8 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
-import scalus.cardano.ledger.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.Environment
+import scalus.cardano.txbuilder.TransactionBuilder.{ensureMinAda}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
@@ -120,7 +121,7 @@ def genAdaOnlyPubKeyUtxo(
         value <- genAdaOnlyValue
     } yield (
       txId,
-      setMinAda(
+      ensureMinAda(
         Babbage(
           address = peer.address(testNetwork),
           value = Value(Coin(0L)),
@@ -134,7 +135,7 @@ def genAdaOnlyPubKeyUtxo(
 // Get the minAda for an Ada only pubkey utxo
 def minPubkeyAda(params: ProtocolParams = blockfrost544Params) = {
     val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get.focus(_._2.value.coin.value).replace(0L)
-    setMinAda(utxo._2, blockfrost544Params).value.coin
+    ensureMinAda(utxo._2, blockfrost544Params).value.coin
 }
 
 def sumUtxoValues(utxos: Seq[(TransactionInput, TransactionOutput)]): Value =
@@ -159,11 +160,6 @@ def genByteStringInlineDatumOption(
     )
 
 extension [E, A](either: Either[E, A])
-    def toProp: Prop = either match {
-        case Left(e)  => throw new RuntimeException(e.toString)
-        case Right(a) => Prop.proved
-    }
-
     def get: A = either match {
         case Right(a) => a
     }

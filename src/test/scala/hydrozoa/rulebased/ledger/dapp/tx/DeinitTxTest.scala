@@ -22,7 +22,7 @@ import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Utxo as _, *}
 import spire.compat.integral
 import spire.math.Rational
@@ -71,7 +71,7 @@ def genEmptyResolvedTreasuryUtxo(
         )
 
         // Respect minAda
-        val outputMinAda = treasuryUtxo.toUtxo._2.setMinAda(testProtocolParams)
+        val outputMinAda = treasuryUtxo.toUtxo._2.ensureMinAda(testProtocolParams)
         treasuryUtxo.copy(value = outputMinAda.value)
     }
 }

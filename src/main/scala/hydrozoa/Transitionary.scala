@@ -13,6 +13,7 @@ import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+
 import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
@@ -22,12 +23,13 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger.txbuilder.DiffHandler
-import scalus.cardano.ledger.txbuilder.TxBalancingError.CantBalance
+import scalus.cardano.ledger
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
@@ -479,48 +481,7 @@ extension (self: TransactionOutput)
                     case None        => None
                 }
         }
-
-    /** Recursively calculate the minAda for UTxO using given parameters.
-      *
-      * @param params
-      *   Protocol params (for minAda calculation)
-      * @param update
-      *   A function that takes the calculated minAda for the [[candidateOutput]] and modifies the
-      *   output to calculate the new minAda. By default, it is [[replaceAdaUpdate]]
-      * @return
-      *   An output that has the [[update]] function applied to it until the minAda condition is
-      *   satisfied for the UTxO
-      */
-
-    def setMinAda(
-        params: ProtocolParams,
-        update: (Coin, TransactionOutput) => TransactionOutput = replaceAdaUpdate
-    ): TransactionOutput = {
-
-        @tailrec
-        def go(output: TransactionOutput): TransactionOutput =
-            val minAda = MinCoinSizedTransactionOutput(Sized(output), params)
-            if minAda <= output.value.coin
-            then output
-            else go(update(minAda, output))
-
-        go(self)
-    }
-
-/** A default update function for use with `setMinAda`. It replaces the output's coin with the given coin.
-  */
-def replaceAdaUpdate(coin: Coin, to: TransactionOutput): TransactionOutput = {
-    to match {
-        case s: TransactionOutput.Shelley => s.focus(_.value.coin).replace(coin)
-        case b: TransactionOutput.Babbage => b.focus(_.value.coin).replace(coin)
-    }
-}
-
-def keepRawL[A: Encoder](): Lens[KeepRaw[A], A] = {
-    val get: KeepRaw[A] => A = (kr => kr.value)
-    val replace: A => KeepRaw[A] => KeepRaw[A] = (a => kr => KeepRaw(a))
-    Lens[KeepRaw[A], A](get)(replace)
-}
+    def ensureMinAda(params: ProtocolParams) : TransactionOutput = TransactionBuilder.ensureMinAda(self, params)
 
 def txBodyL: Lens[Transaction, TransactionBody] = {
     val get: Transaction => TransactionBody = tx =>

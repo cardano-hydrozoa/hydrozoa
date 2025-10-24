@@ -16,17 +16,17 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Datum.DatumInlined
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.ledger.txbuilder.ScriptSource.PlutusScriptValue
-import scalus.cardano.ledger.txbuilder.TransactionBuilderStep.{
+import scalus.cardano.txbuilder.Datum.DatumInlined
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
+import scalus.cardano.txbuilder.TransactionBuilderStep.{
     AddCollateral,
     ReferenceOutput,
     Send,
     Spend,
     ValidityEndSlot
 }
-import scalus.cardano.ledger.txbuilder.{
+import scalus.cardano.txbuilder.{
     SomeBuildError,
     ThreeArgumentPlutusScriptWitness,
     TransactionBuilder,
