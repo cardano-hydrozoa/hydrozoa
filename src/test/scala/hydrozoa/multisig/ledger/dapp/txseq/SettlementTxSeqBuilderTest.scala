@@ -27,14 +27,11 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
         }
     }
 
-   // implicit val params: Option[Gen.Parameters] = Some(Parameters.default.withInitialSeed(-6416358867695214751L))
-
     test ("Observe settlement tx seq") {
         val gen = genSettlementTxSeqBuilder()
         
         forAll(gen) { (builder, args, peers) =>
         {
-            println(args.payoutObligationsRemaining.map(_.output.value.coin.value))
             builder.build(args) match {
                 case Left(e) => throw RuntimeException(s"Build failed: $e")
                 case Right(txSeq) =>

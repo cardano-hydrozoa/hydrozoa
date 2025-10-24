@@ -44,6 +44,7 @@ object SettlementTxSeq {
                             .left
                             .map(Error.RolloutSeqError(_))
 
+
                         settlementTxRes <- SettlementTx.Builder
                             .WithPayouts(config)
                             .build(args.toArgsWithPayouts(rolloutTxSeqPartial))
@@ -76,8 +77,8 @@ object SettlementTxSeq {
         import SettlementTx.Builder.Args as SingleArgs
 
         enum Error:
-            case SettlementError(e: SomeBuildError)
-            case RolloutSeqError(e: SomeBuildError)
+            case SettlementError(e: (SomeBuildError, String))
+            case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Result(
             settlementTxSeq: SettlementTxSeq,

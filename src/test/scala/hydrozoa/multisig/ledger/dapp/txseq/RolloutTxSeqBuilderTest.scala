@@ -43,7 +43,10 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
                 rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
                 res <- pr.finishPostProcess(rolloutUtxo)
             } yield res
-            assert(res.isRight)
+            res match {
+                case Left(e) => fail(e.toString())
+                case _ => ()
+            }
         )
     }
     )

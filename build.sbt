@@ -3,7 +3,7 @@
 //  DockerPlugin
 //)
 
-val scalusVersion = "0.12.1+239-5b5a241d+20251022-1618-SNAPSHOT" 
+val scalusVersion = "0.13.0+2-b6de41fe-SNAPSHOT"
 val bloxbeanVersion = "0.7.0"
 
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")
@@ -58,7 +58,8 @@ lazy val core = (project in file("."))
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
         "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
-        "org.typelevel" %% "spire" % "0.18.0"
+        "org.typelevel" %% "spire" % "0.18.0",
+        "com.lihaoyi" %% "sourcecode" % "0.3.0"
 
         // "io.netty" % "netty-all" % "4.2.4.Final"
       ),

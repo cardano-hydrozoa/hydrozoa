@@ -17,11 +17,12 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
+import test.Generators.Other
 
 def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
@@ -62,7 +63,7 @@ def genDepositUtxo(
           scriptRef = None
         )
 
-        depositMinAda = setMinAda(mockUtxo, params).value.coin
+        depositMinAda = ensureMinAda(mockUtxo, params).value.coin
 
         depositAmount <- arbitrary[Coin].map(_ + depositMinAda)
 
@@ -110,7 +111,7 @@ def genTreasuryUtxo(
           headTn
         )
 
-        treasuryMinAda = setMinAda(
+        treasuryMinAda = ensureMinAda(
           TreasuryUtxo(
             headTokenName = headTn,
             txId = txId,
@@ -136,15 +137,14 @@ def genSettlementTxSeqBuilder(
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
-    // A helper to generator empty, small, medium, large
-    def genHelper[T](gen : Gen[T]) : Gen[List[T]] = Gen.sized(size =>
+    // A helper to generator empty, small, medium, large (up to 1000)
+    def genHelper[T](gen : Gen[T]) : Gen[Vector[T]] = Gen.sized(size =>
       Gen.frequency(
-//       (1, Gen.const(List.empty)),
-//       (2, Gen.listOfN(size, gen)),
-//       (5, Gen.listOfN(size * 5, gen)),
-//       (2, Gen.listOfN(size * 200, gen)),
-        (1, Gen.listOfN(900, gen))
-      )
+       (1, Gen.const(Vector.empty)),
+       (2, Other.vectorOfN(size, gen)),
+       (5, Other.vectorOfN(size * 5, gen)),
+        (1, Other.vectorOfN(1, gen))
+      ).map(_.take(1000))
     )
 
     for {
@@ -157,7 +157,7 @@ def genSettlementTxSeqBuilder(
           params = params,
           headAddress = Some(hns.mkAddress(network))
         )
-        deposits <- Gen.const(List.empty)//genHelper(genDeposit)
+        deposits <- genHelper(genDeposit)
 
         env = testTxBuilderEnvironment
 
@@ -182,10 +182,8 @@ def genSettlementTxSeqBuilder(
       ),
       SettlementTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
-        // TODO: generating a list and turning it into a queue is suboptimal
-        // @Peter from George: Is the above still relevant?
-        depositsToSpend = Vector.from(deposits),
-        payoutObligationsRemaining = Vector.from(payouts),
+        depositsToSpend = deposits,
+        payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo
       ),
       peers

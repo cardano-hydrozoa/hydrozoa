@@ -12,7 +12,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
 
@@ -53,7 +53,7 @@ def genDepositRecipe(
               datumOption = Some(Inline(depositDatum.toData)),
               scriptRef = None
             )
-            setMinAda(candidate, params).value.coin
+            ensureMinAda(candidate, params).value.coin
         }
 
         depositAmount <- Gen.posNum[Long].map(n => Coin(n) + depositMinAda)

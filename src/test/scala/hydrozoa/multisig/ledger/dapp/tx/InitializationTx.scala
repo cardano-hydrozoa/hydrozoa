@@ -22,7 +22,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.TransactionBuilder.setMinAda
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
 import test.*
 import test.TestPeer.*
@@ -48,7 +48,7 @@ val minInitTreasuryAda: Coin = {
       datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
       scriptRef = None
     )
-    setMinAda(mockTreasury, blockfrost544Params).value.coin
+    ensureMinAda(mockTreasury, blockfrost544Params).value.coin
 }
 
 def genInitTxRecipe(

@@ -108,6 +108,13 @@ object Generators {
     }
 
     object Other {
+        def vectorOf[A](g: Gen[A]): Gen[Vector[A]] =
+            Gen.containerOf[Vector, A](g)
+
+        def vectorOfN[A](n: Int, g: Gen[A]): Gen[Vector[A]] = {
+            Gen.containerOfN[Vector, A](n, g)
+        }
+        
         def nonEmptyVectorOf[A](g: Gen[A]): Gen[NonEmptyVector[A]] =
             Gen.nonEmptyContainerOf[Vector, A](g).map(NonEmptyVector.fromVectorUnsafe)
 
