@@ -3,13 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{
-    AuxiliaryData,
-    Transaction,
-    TransactionMetadatum,
-    TransactionMetadatumLabel
-}
-
+import scalus.cardano.ledger.{AuxiliaryData, Metadatum, Transaction, TransactionMetadatum, TransactionMetadatumLabel, Word64}
 import Metadata.L1TxTypes.*
 
 object Metadata {
@@ -49,11 +43,11 @@ object Metadata {
     def apply(txType: L1TxTypes, headAddress: ShelleyAddress): AuxiliaryData = {
         MD(
           Map(
-            TransactionMetadatumLabel(CIP67.Tags.head) ->
-                TransactionMetadatum.Map(entries =
+            Word64(CIP67.Tags.head) ->
+                Metadatum.Map(entries =
                     Map(
-                      TransactionMetadatum.Text(typeToString(txType))
-                          -> TransactionMetadatum.Bytes(headAddress.toBytes)
+                      Metadatum.Text(typeToString(txType))
+                          -> Metadatum.Bytes(headAddress.toBytes)
                     )
                 )
           )
@@ -79,19 +73,19 @@ object Metadata {
                 case _      => Left(AuxDataIsNotMetadata)
             }
             mv <- md.metadata
-                .get(TransactionMetadatumLabel(CIP67.Tags.head))
+                .get(Word64(CIP67.Tags.head))
                 .toRight(MissingCIP67Tag)
             mdMap <- mv match {
-                case m: TransactionMetadatum.Map => Right(m.entries)
+                case m: Metadatum.Map => Right(m.entries)
                 case _                           => Left(MetadataValueIsNotMap)
             }
             _ <- if mdMap.size == 1 then Right(()) else Left(WrongNumberOfTxTypeKeys(mdMap.size))
             txType <- mdMap.head._1 match {
-                case TransactionMetadatum.Text(s) => stringToType(s).toRight(MalformedTxTypeKey)
+                case Metadatum.Text(s) => stringToType(s).toRight(MalformedTxTypeKey)
                 case _                            => Left(MalformedTxTypeKey)
             }
             addr <- mdMap.head._2 match {
-                case TransactionMetadatum.Bytes(b) =>
+                case Metadatum.Bytes(b) =>
                     Address.fromByteString(b) match {
                         case sa: ShelleyAddress => Right(sa)
                         case _                  => Left(MalformedHeadAddress)

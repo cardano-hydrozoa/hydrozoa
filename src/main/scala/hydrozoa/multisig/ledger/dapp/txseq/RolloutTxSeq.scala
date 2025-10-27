@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Ma
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import scala.annotation.tailrec
-import scalus.cardano.ledger.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.SomeBuildError
 
 /** A non-empty chain of rollout transactions in order of chaining.
   *

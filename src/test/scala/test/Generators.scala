@@ -15,7 +15,7 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.{Environment, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -108,6 +108,13 @@ object Generators {
     }
 
     object Other {
+        def vectorOf[A](g: Gen[A]): Gen[Vector[A]] =
+            Gen.containerOf[Vector, A](g)
+
+        def vectorOfN[A](n: Int, g: Gen[A]): Gen[Vector[A]] = {
+            Gen.containerOfN[Vector, A](n, g)
+        }
+        
         def nonEmptyVectorOf[A](g: Gen[A]): Gen[NonEmptyVector[A]] =
             Gen.nonEmptyContainerOf[Vector, A](g).map(NonEmptyVector.fromVectorUnsafe)
 

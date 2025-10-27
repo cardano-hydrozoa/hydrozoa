@@ -8,8 +8,8 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Timelock.{AllOf, Signature}
-import scalus.cardano.ledger.txbuilder.ScriptSource.NativeScriptAttached
-import scalus.cardano.ledger.txbuilder.{ExpectedSigner, NativeScriptWitness}
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.{ExpectedSigner, NativeScriptWitness}
 
 case class HeadMultisigScript(private val script0: Script.Native) {
     val script: Script.Native = script0
