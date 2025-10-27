@@ -41,7 +41,7 @@ import scala.language.implicitConversions
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, ToData}
-import scalus.cardano.address.{Address as SAddress, Network, ShelleyAddress}
+import scalus.cardano.address.{Address as SAddress, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
@@ -202,6 +202,8 @@ object Utxo:
     extension [L <: AnyLayer](utxo: Utxo[L]) def untagged: (UtxoId[L], Output[L]) = identity(utxo)
     extension [L <: AnyLayer](utxo: Utxo[L]) def output: Output[L] = utxo._2
     extension [L <: AnyLayer](utxo: Utxo[L]) def input: UtxoId[L] = utxo._1
+    extension [L <: AnyLayer](utxo: Utxo[L]) def toScalus: (TransactionInput, TransactionOutput) =
+        (utxo._1.untagged, utxo._2.convert)
 
 type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 
@@ -284,9 +286,3 @@ type PosixTime = BigInt
 
 // FIXME: move to another module
 def timeCurrent: PosixTime = java.time.Instant.now.getEpochSecond
-
-// FIXME: should be a parameter
-val networkL1static = Network.Testnet
-
-// FIXME: should be a parameter
-val hydrozoaL2Network = Network.Testnet

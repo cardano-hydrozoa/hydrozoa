@@ -1,17 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
-
-import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
+import org.scalacheck.*
 import org.scalacheck.Prop.*
-import org.scalacheck.{Prop, Test as ScalaCheckTest, *}
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.ArbitraryInstances.{*, given}
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.txbuilder.TransactionUnspentOutput
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
 
-class RolloutTxTest extends munit.ScalaCheckSuite {
+class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
             config <- genTxConfig()
@@ -36,15 +37,16 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
           RolloutTx.Builder.Args.NotLast(payouts, rolloutSpentVal)
         )
 
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(1)
-    }
-    override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 1)
+
+    // FIXME: How to do this in ScalaTest?
+    //override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
 
     // ===================================
     // Last
     // ===================================
-    property("Build Last Rollout Tx Partial Result")(
+    test("Build Last Rollout Tx Partial Result")(
       Prop.forAll(genLastBuilder) { (builder, args) =>
           {
               val pr = builder.partialResult(args)
@@ -55,7 +57,7 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
                   val witnessesSize = (32 + 64) * builder.config.headNativeScript.numSigners
                   val maxSize = builder.config.env.protocolParams.maxTxSize
                   (unsignedSize + witnessesSize <= maxSize) :|
-                      s"Partial result unsigned tx size plus signature size " +
+                      "Partial result unsigned tx size plus signature size " +
                           s"($unsignedSize + $witnessesSize = ${unsignedSize+witnessesSize})" +
                           s" exceeds max tx size $maxSize"
               }
@@ -63,7 +65,7 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
       }
     )
 
-    property("Complete Last Partial Result")({
+    test("Complete Last Partial Result")({
         Prop.forAll(genLastBuilder)((builder, args) =>
             (for {
                 pr <- builder.partialResult(args)
@@ -79,11 +81,19 @@ class RolloutTxTest extends munit.ScalaCheckSuite {
     // ===================================
     // Not Last
     // ===================================
-    property("Build NotLast Partial Result")(
+    test("Build NotLast Partial Result")(
       Prop.forAll(genNotLastBuilder) { (builder, args) =>
           builder.partialResult(args).toProp
       }
     )
 
-    property("Post-process last rollout tx partial result")(???)
+    test("Post-process last rollout tx partial result")(???)
+    
+    test("Build Last Rollout Tx") {
+        forAll(genLastBuilder) { (builder, args) =>
+            builder.partialResult(args) match
+                case Left(e)  => fail(e.toString)
+                case Right(_) => ()
+        }
+    }
 }
