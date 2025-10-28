@@ -3,7 +3,8 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AuxiliaryData, Metadatum, Transaction, TransactionMetadatum, TransactionMetadatumLabel, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Metadatum, Transaction, Word64}
+
 import Metadata.L1TxTypes.*
 
 object Metadata {

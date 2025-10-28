@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.c
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
@@ -25,9 +26,6 @@ import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
-
-import VoteState.VoteDatum
-import VoteState.VoteStatus
 
 @Compile
 object DisputeResolutionValidator extends Validator {
@@ -156,8 +154,7 @@ object DisputeResolutionValidator extends Validator {
 
     // Utility to decide which vote is higher
     def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.NoVote
-        import VoteStatus.Vote
+        import VoteStatus.{NoVote, Vote}
         a match {
             case NoVote => b
             case Vote(ad) =>
@@ -168,7 +165,12 @@ object DisputeResolutionValidator extends Validator {
         }
 
     // Entry point
-    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(
+        datum: Option[Data],
+        redeemer: Data,
+        tx: TxInfo,
+        ownRef: TxOutRef
+    ): Unit =
 
         log("DisputeResolution")
 
@@ -295,7 +297,7 @@ object DisputeResolutionValidator extends Validator {
               * |  key = 0  |        |  key = 1  |        |  key = 2  |        |  key = 3  |
               * | link = 1  |        | link = 2  |-+      | link = 3  |        | link = 0  |-+
               * |CONTINUING |        |  REMOVED  | |      |CONTINUING |        |  REMOVED  | |
-              * |                                  |                 |                       |
+              * |                                  |      |                                  |
               * v                                  |       v                                 |
               * +-----------+                      |       +-----------+                     |
               * |  key = 0  |                      |       |  key = 2  |                     |
@@ -306,10 +308,10 @@ object DisputeResolutionValidator extends Validator {
               * +-----------+                                                   |
               * |  key = 0  |                                                   |
               * | link = 0  |<--------------------------------------------------+
-              * |   FINAL  |
+              * |   FINAL   |
               *
               * NB:
-              * 1. `peer` is always set to None
+              * 1. `peer` is always set to None since it's not needed and since it's not relevant
               * 2. the higher `vote` is selected
               * 3. we start pair-wise from the beginning, but an arbitrary adjacent votes can be tallied
               */

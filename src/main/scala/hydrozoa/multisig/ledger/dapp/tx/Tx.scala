@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
@@ -8,8 +9,6 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 import sourcecode.*
-
-import scala.Function.const
 
 trait Tx {
     def tx: Transaction

@@ -16,13 +16,14 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.ledger.value.Coin as VCoin
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
-import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -114,20 +115,23 @@ object DeinitTx {
 
         val minAda0 = minAda(params)
 
-        val distribution = shares.distribute(treasuryEquity)
-        val initial = EquityProduced(distribution.dust)
+        import EquityShares.RuleBasedRegime.*
+        val distribution = shares.distribute(???, ???)(VCoin.unsafeApply(treasuryEquity.value))
 
-        distribution.shares.foldLeft(initial)((acc, share) => {
+        val initial = EquityProduced(Coin(distribution.dust.convert))
+
+        distribution.payouts.foldLeft(initial)((acc, share) => {
+            val shareAsCoin = Coin(share._2.convert)
             val output =
                 Babbage(
                   address = share._1,
-                  value = Value.apply(share._2),
+                  value = Value.apply(shareAsCoin),
                   datumOption = None,
                   scriptRef = None
                 )
-            if share._2 >= minAda0(output)
+            if shareAsCoin >= minAda0(output)
             then EquityProduced(acc.outputs :+ output, acc.dust)
-            else EquityProduced(acc.outputs, Some(share._2 + acc.dust.getOrElse(Coin.zero)))
+            else EquityProduced(acc.outputs, Some(shareAsCoin + acc.dust.getOrElse(Coin.zero)))
         })
 
     private def minAda(params: ProtocolParams)(output: TransactionOutput) =

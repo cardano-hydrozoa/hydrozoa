@@ -21,6 +21,7 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
@@ -31,7 +32,6 @@ import scalus.cardano.txbuilder.{
     TransactionBuilder,
     TransactionUnspentOutput
 }
-import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,

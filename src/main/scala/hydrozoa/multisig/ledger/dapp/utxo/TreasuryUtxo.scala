@@ -6,8 +6,8 @@ import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 
 // TODO: Make opaque
 final case class TreasuryUtxo(
@@ -30,6 +30,8 @@ final case class TreasuryUtxo(
 }
 
 object TreasuryUtxo {
+
+    /** If SomeTx extends TreasuryUtxo.Spent it means that tx is spending it. */
     trait Spent {
         def treasurySpent: TreasuryUtxo
     }
@@ -38,6 +40,7 @@ object TreasuryUtxo {
         def treasuryToSpend: TreasuryUtxo
     }
 
+    /** If SomeTx extends TresuryUtxo.Produced it means that tx is producing it. */
     trait Produced {
         def treasuryProduced: TreasuryUtxo
     }
