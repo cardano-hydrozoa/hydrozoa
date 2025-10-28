@@ -2,6 +2,7 @@ package hydrozoa.config
 
 import hydrozoa.config.Assumptions.*
 import scalus.cardano.ledger.value.Coin
+import spire.compat.ordering
 import spire.math.UByte
 
 case class CollectiveContingency(
@@ -27,7 +28,7 @@ case class IndividualContingency(
 object IndividualContingency:
     def apply: IndividualContingency =
         IndividualContingency(
-          Coin.Aggregate.max(List(minCollateral, minAdaBabbageAdaOnlyBaseAddressUtxo)),
+          List(minCollateral, minAdaBabbageAdaOnlyBaseAddressUtxo).max,
           minAdaBabbageVoteUtxo,
           worstCaseVoteTxFee,
           worstCaseTallyTxFee

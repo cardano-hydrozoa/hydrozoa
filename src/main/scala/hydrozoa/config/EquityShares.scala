@@ -1,10 +1,9 @@
 package hydrozoa.config
 
 import hydrozoa.AddressL1
-import java.math.RoundingMode as JRoundingMode
-import scala.math.BigDecimal.RoundingMode
 import scalus.cardano.ledger.value.Coin
 import spire.compat.integral
+import spire.implicits.additiveSemigroupOps
 import spire.math.Number.apply
 import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
@@ -36,28 +35,20 @@ object EquityShares:
     ): Either[HeadConfigError, EquityShares] = {
         import collectiveContingency.*
     import individualContingency.*
+
         val sharesSum = shares.values.map(_._2).sum
         for {
-            // Check quity shares
-            _ <- Either.cond(
-              sharesSum === r"1",
-              (),
-              HeadConfigError.SharesMustSumToOne(sharesSum)
-            )
+            // Check sum(quity shares) = 1
+            _ <- Either.cond(sharesSum === r"1", (), HeadConfigError.SharesMustSumToOne(sharesSum))
 
             collateralUtxo = collateralDeposit + voteTxFee
             voteUtxo = voteDeposit + tallyTxFee
             peerShares = shares.view
                 .mapValues((address, share) => {
-                    val collectiveContingencyShare = (fallbackTxFee + defaultVoteDeposit)
-                        .scale(share.toBigDecimal(32, JRoundingMode.HALF_EVEN))
-                    // TODO: magic unwrapping, unsafeToCoin
-                    val fallbackDeposit = Coin
-                        .Unbounded(
-                          collectiveContingencyShare
-                              .round(RoundingMode.UP) + collateralUtxo + voteUtxo
-                        )
-                        .unsafeToCoin
+                    val collectiveContingencyShare =
+                        (fallbackTxFee + defaultVoteDeposit).scaleFractional(share)
+                    val fallbackDeposit =
+                        (collectiveContingencyShare + collateralUtxo + voteUtxo).unsafeToCoin()
                     PeerShare(address, share, fallbackDeposit)
                 })
                 .toMap
@@ -76,44 +67,50 @@ object EquityShares:
 
     type Dust = Coin
 
-    object MultisigRegime:
+    /** Distribution of equity and deposits for multisig regime
+      */
+    object MultisigRegimeDistribution:
         extension (self: EquityShares)
             def distribute(equity: Coin): Distribution = {
-                val parts = self.peerShares.values.map(v =>
-                    v.payoutAddress -> (v.fallbackDeposit, equity
-                        .scale(v.equityShare.toBigDecimal(32, JRoundingMode.UP))
-                        .round(RoundingMode.DOWN)
-                        .unsafeToCoin)
-                )
-                val equityPayoutsTotal = parts.foldLeft(Coin.Unbounded.zero)((acc, part) =>
-                    Coin.Unbounded(acc + part._2._2.toCoinUnbounded)
-                )
-                val payouts = parts
-                    .map((a, parts) => a -> Coin.Unbounded(parts._1 + parts._2).unsafeToCoin)
+
+                // (AddressL1, (fallbackDeposit, equity payouts))
+                val payoutsParts: Iterable[(AddressL1, (Coin, Coin))] =
+                    self.peerShares.values.map(v =>
+                        v.payoutAddress -> (
+                          v.fallbackDeposit,
+                          equity
+                              .scaleFractional(v.equityShare)
+                              // TODO: RoundingMode.DOWN
+                              .unsafeToCoin()
+                        )
+                    )
+
+                val equityPayoutsTotal =
+                    payoutsParts
+                        .foldLeft(Coin.Unbounded.zero)((acc, p) => acc + p._2._2)
+                        .unsafeToCoin
+
+                val dust = (equity - equityPayoutsTotal).unsafeToCoin
+
+                val payouts = payoutsParts
+                    .map((a, p) => a -> (p._1 + p._2).unsafeToCoin)
                     .toMap
-                val dust = Coin.Unbounded(equity.toCoinUnbounded - equityPayoutsTotal).unsafeToCoin
+
                 Distribution(payouts, dust)
             }
 
-    object RuleBasedRegime:
+    object RuleBasedRegimeDistribution:
         extension (self: EquityShares)
             def distribute(defaultVoteDeposit: Coin, voteDeposit: Coin)(
                 equity: Coin
             ): Distribution = {
                 val payouts = self.peerShares.values.map(v =>
-                    v.payoutAddress -> Coin
-                        .Fractional(
-                          voteDeposit.toCoinFractional +
-                              (equity + defaultVoteDeposit).scale(
-                                v.equityShare.toBigDecimal(32, JRoundingMode.UP)
-                              )
-                        )
-                        .round(RoundingMode.DOWN)
-                        .unsafeToCoin
+                    v.payoutAddress ->
+                        ((equity + defaultVoteDeposit).scaleFractional(v.equityShare) + voteDeposit)
+                            // TODO: RoundingMode.DOWN
+                            .unsafeToCoin()
                 )
-                val equityPayoutsTotal = payouts.foldLeft(Coin.Unbounded.zero)((acc, part) =>
-                    Coin.Unbounded(acc + part._2.toCoinUnbounded)
-                )
-                val dust = Coin.Unbounded(equity.toCoinUnbounded - equityPayoutsTotal).unsafeToCoin
+                val equityPayoutsTotal = payouts.foldLeft(Coin.Unbounded.zero)((acc, p) => acc + p._2).unsafeToCoin
+                val dust = (equity - equityPayoutsTotal).unsafeToCoin
                 Distribution(payouts.toMap, dust)
             }

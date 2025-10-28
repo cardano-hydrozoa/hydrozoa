@@ -115,13 +115,13 @@ object DeinitTx {
 
         val minAda0 = minAda(params)
 
-        import EquityShares.RuleBasedRegime.*
+        import EquityShares.RuleBasedRegimeDistribution.*
         val distribution = shares.distribute(???, ???)(VCoin.unsafeApply(treasuryEquity.value))
 
-        val initial = EquityProduced(Coin(distribution.dust.convert))
+        val initial = EquityProduced(Coin(distribution.dust.underlying))
 
         distribution.payouts.foldLeft(initial)((acc, share) => {
-            val shareAsCoin = Coin(share._2.convert)
+            val shareAsCoin = Coin(share._2.underlying)
             val output =
                 Babbage(
                   address = share._1,

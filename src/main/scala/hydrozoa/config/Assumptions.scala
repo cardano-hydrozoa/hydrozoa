@@ -1,8 +1,10 @@
 package hydrozoa.config
 
-import scala.math.BigDecimal.RoundingMode.UP
 import scalus.cardano.ledger.value.Coin
-import spire.math.{SafeLong, UByte}
+import spire.compat.ordering
+import spire.implicits.additiveSemigroupOps
+import spire.math.UByte
+
 
 object Assumptions:
 
@@ -10,15 +12,15 @@ object Assumptions:
     // Params / constants
     // ===================================
 
-    // Serialized size of ADA-only utxo with staking and payment credentials
+    // Serialized size of ADA-only utxo at the base address (with staking and payment credentials)
     val adaOnlyBaseAddressUtxoBytes: Int = 67
 
-    // Max serialized size of vote utxo (with/without vote)
+    // Max serialized size of a vote utxo (with/without vote)
     val maxVoteUtxoBytes: Int = 150
 
     // TODO: use protocol params
     val coinsPerUtxoByte: Coin = Coin.unsafeApply(4310)
-    val collateralPercentage: BigDecimal = 1.5f
+    val collateralPercentage: BigDecimal = 1.5
 
     // ===================================
     // Assumptions
@@ -36,37 +38,27 @@ object Assumptions:
 
     // Babbage min ADA for ADA-only utxo with staking and payment credentials
     val minAdaBabbageAdaOnlyBaseAddressUtxo = calculateBabbageUtxoStorageCost(
-        adaOnlyBaseAddressUtxoBytes
+      adaOnlyBaseAddressUtxoBytes
     )
 
     val minAdaBabbageVoteUtxo = calculateBabbageUtxoStorageCost(maxVoteUtxoBytes)
 
-    // TODO: This is why having `scale[I](i: I)(using int Integral[I])` would be nice
     def calculateBabbageUtxoStorageCost(byteSize: Int): Coin =
-        coinsPerUtxoByte.scale(SafeLong(160 + byteSize)).unsafeToCoin
+        coinsPerUtxoByte.scaleIntegral(160 + byteSize).unsafeToCoin
 
     // ===================================
     // Minimal collateral
     // ===================================
 
     // Collateral required for vote tx and tally tx
-    val minCollateral: Coin = Coin.Aggregate
-        // TODO: vararg version?
-        .max(
-            List(
-                worstCaseVoteTxFee,
-                worstCaseTallyTxFee
-            )
-        )
-        .scale(collateralPercentage)
-        .round(UP)
-        .unsafeToCoin
+    val minCollateral: Coin =
+        List(worstCaseVoteTxFee, worstCaseTallyTxFee).max
+            .scaleFractional(collateralPercentage)
+            .unsafeToCoin()
 
-    // TODO: here would be nice to get rid of `.toCoinUnbounded
     def calculateWorstCaseFallbackTxFees(numberOfPeers: UByte): Coin =
-        worstCaseVariableFeeFallbackTxPerPeer
-            // FIXME: is there better way to go UByte -> SafeLong?
-            .scale(SafeLong(numberOfPeers.toInt) + worstCaseFixedFeeFallbackTx.toCoinUnbounded)
+        (worstCaseVariableFeeFallbackTxPerPeer
+            .scaleIntegral(numberOfPeers.toInt) + worstCaseFixedFeeFallbackTx)
             .unsafeToCoin
 
 end Assumptions
