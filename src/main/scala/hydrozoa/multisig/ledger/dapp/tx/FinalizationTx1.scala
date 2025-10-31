@@ -8,8 +8,15 @@ import hydrozoa.multisig.ledger.dapp.utxo.{
     RolloutUtxo,
     TreasuryUtxo
 }
-import scalus.cardano.ledger.Transaction
+import monocle.Focus.focus
+import monocle.Lens
+import monocle.Monocle.refocus
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.cardano.txbuilder.TxBalancingError.Failed
+import scalus.|>
 
 sealed trait FinalizationTx1
     extends Tx,
@@ -47,11 +54,15 @@ object FinalizationTx1 {
     object Builder {
 
         /** Stage 1 of finalization tx building - upgrading the settlement tx (which takes no
-          * deposits) into a finalization tx.
+          * deposits) into a finalization tx. This conversion must NOT increase the tx size. This is
+          * guaranteed by the following invariant: `size(treasuryUtxo.datum) < size(inputRef)`. The
+          * upgrade is done by making two changes and following rebalancing:
+          *   - spending multisig regime utxo
+          *   - turning the treasury output into the residual treasury output.
           *
           * @param multisigUtxoToSpend
           *
-          * @param settlementTxArg
+          * @param settlementTx
           *   wrapper around [[SettlementTx]] with dependent Result
           *
           * @return
@@ -61,36 +72,141 @@ object FinalizationTx1 {
           *   - SettlementTx.WithRollouts -> FinalizationTx1.WithRollouts
           */
         def upgrade(
+            config: Tx.Builder.Config,
             multisigUtxoToSpend: MultisigRegimeUtxo
-        )(settlementTxArg: Args.Some): BuildErrorOr[settlementTxArg.Result] = {
-            ???
+        )(settlementTx: Args.Some): BuildErrorOr[settlementTx.Result] = {
+            val tx = settlementTx.tx.tx
+            val i = 0
+            val treasuryOutput = tx.body.value.outputs(i).value
+
+            val residualTreasuryOutput = TransactionOutput.apply(
+              treasuryOutput.address,
+              treasuryOutput.value + multisigUtxoToSpend.value
+            )
+
+            val addMultisigRegimeInput = (inputs: TaggedOrderedSet[TransactionInput]) =>
+                TaggedOrderedSet.from(appendDistinct(multisigUtxoToSpend.utxoId, inputs.toSeq))
+
+            val txUpgraded: Transaction = tx
+                |> txInputsL.modify(addMultisigRegimeInput)
+                |> txOutputsL.refocus(_.index(i)).replace(Sized.apply(residualTreasuryOutput))
+
+            for {
+
+                // Rebalance
+                resolvedUtxos <- settlementTx.tx.resolvedUtxos
+                    .addUtxo(multisigUtxoToSpend.asUtxo)
+                    // TODO: simplify, that's awful
+                    .toRight(
+                      (
+                        SomeBuildError.BalancingError.apply(
+                          Failed(new IllegalStateException("error calculating resolvedUtxos"))
+                        ),
+                        "error calculating resolvedUtxos"
+                      )
+                    )
+
+                rebalanced <- LowLevelTxBuilder
+                    .balanceFeeAndChange(
+                      txUpgraded,
+                      i,
+                      config.env.protocolParams,
+                      resolvedUtxos.utxos,
+                      config.env.evaluator
+                    )
+                    // TODO: simplify, too wordy
+                    .left
+                    .map(e =>
+                        (
+                          SomeBuildError.BalancingError.apply(e),
+                          "error rebalancing stage 1 finalization tx "
+                        )
+                    )
+
+            } yield {
+                val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
+                  treasuryTokenName = settlementTx.tx.treasurySpent.headTokenName,
+                  multisigRegimeTokenName = multisigUtxoToSpend.multisigRegimeTokenName,
+                  utxoId = TransactionInput(rebalanced.id, 0),
+                  // FIXME: Why Shelley?
+                  address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
+                  value = residualTreasuryOutput.value
+                )
+                settlementTx.mkResult(rebalanced, residualTreasuryUtxo, resolvedUtxos)
+            }
+        }
+
+        // TODO: upstream
+        def txOutputsL: Lens[Transaction, IndexedSeq[Sized[TransactionOutput]]] = {
+            txBodyL.refocus(_.outputs)
         }
 
         object Args:
 
             sealed trait Some:
+                def tx: SettlementTx
+
                 type Result
 
+                def mkResult(
+                    tx: Transaction,
+                    residualTreasuryProduced: ResidualTreasuryUtxo,
+                    resolvedUtxos: ResolvedUtxos
+                ): Result
+
             // no payouts
-            final case class NoPayoutsArg(tx: SettlementTx.NoPayouts) extends Some:
+            final case class NoPayoutsArg(override val tx: SettlementTx.NoPayouts) extends Some:
                 override type Result = FinalizationTx1.NoPayouts
+                override def mkResult(
+                    tx: Transaction,
+                    residualTreasuryProduced: ResidualTreasuryUtxo,
+                    resolvedUtxos: ResolvedUtxos
+                ): Result =
+                    NoPayouts(tx, this.tx.treasurySpent, residualTreasuryProduced, resolvedUtxos)
 
             extension (self: SettlementTx.NoPayouts) def toArgs1 = NoPayoutsArg(self)
 
             // with only direct payouts
-            final case class WithOnlyDirectPayoutsArgs(tx: SettlementTx.WithOnlyDirectPayouts)
-                extends Some:
+            final case class WithOnlyDirectPayoutsArgs(
+                override val tx: SettlementTx.WithOnlyDirectPayouts
+            ) extends Some:
                 override type Result = FinalizationTx1.WithOnlyDirectPayouts
+
+                override def mkResult(
+                    tx: Transaction,
+                    residualTreasuryProduced: ResidualTreasuryUtxo,
+                    resolvedUtxos: ResolvedUtxos
+                ): Result = WithOnlyDirectPayouts(
+                  tx,
+                  this.tx.treasurySpent,
+                  residualTreasuryProduced,
+                  resolvedUtxos
+                )
 
             extension (self: SettlementTx.WithOnlyDirectPayouts)
                 def toArgs1 = WithOnlyDirectPayoutsArgs(self)
 
             // with rollouts
             final case class WithRolloutsArgs(
-                tx: SettlementTx.WithRollouts,
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                override val tx: SettlementTx.WithRollouts,
+                private val rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Some:
                 override type Result = WithRolloutsResult
+
+                override def mkResult(
+                    tx: Transaction,
+                    residualTreasuryProduced: ResidualTreasuryUtxo,
+                    resolvedUtxos: ResolvedUtxos
+                ): Result = WithRolloutsResult(
+                  WithRollouts(
+                    tx,
+                    this.tx.treasurySpent,
+                    residualTreasuryProduced,
+                    this.tx.rolloutProduced,
+                    resolvedUtxos
+                  ),
+                  this.rolloutTxSeqPartial
+                )
 
             final case class WithRolloutsResult(
                 tx: FinalizationTx1.WithRollouts,

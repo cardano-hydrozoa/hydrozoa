@@ -10,15 +10,15 @@ import scalus.cardano.txbuilder.TransactionUnspentOutput
   * needed anymore and also to guarantee the size of upgraded settlement tx won't increase.
   */
 final case class ResidualTreasuryUtxo(
-    headTokenName: AssetName,
-    multisigTokenName: AssetName,
-    txId: TransactionInput,
+    treasuryTokenName: AssetName,
+    multisigRegimeTokenName: AssetName,
+    utxoId: TransactionInput,
     address: ShelleyAddress,
     value: Value
 ) {
     val asUtxo: TransactionUnspentOutput =
         TransactionUnspentOutput(
-          txId,
+          utxoId,
           TransactionOutput.apply(
             address = address,
             value = value

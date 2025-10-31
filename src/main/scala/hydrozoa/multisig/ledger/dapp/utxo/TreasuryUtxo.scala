@@ -11,6 +11,7 @@ import scalus.cardano.txbuilder.TransactionUnspentOutput
 // TODO: Make opaque
 final case class TreasuryUtxo(
     headTokenName: AssetName,
+    // TODO: rename to utxoId
     txId: TransactionInput,
     address: ShelleyAddress,
     datum: TreasuryUtxo.Datum,

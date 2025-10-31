@@ -50,7 +50,7 @@ object FinalizationTxSeq {
     ) {
         def build(args: Args): Either[Builder.Error, FinalizationTxSeq] = {
 
-            val upgrade = FinalizationTx1.Builder.upgrade(args.multisigRegimeUtxoToSpend)
+            val upgrade = FinalizationTx1.Builder.upgrade(config, args.multisigRegimeUtxoToSpend)
 
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
 

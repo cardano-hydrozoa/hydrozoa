@@ -7,13 +7,13 @@ import scalus.cardano.txbuilder.TransactionUnspentOutput
 
 final case class MultisigRegimeUtxo(
     multisigRegimeTokenName: AssetName,
-    txId: TransactionInput,
+    utxoId: TransactionInput,
     address: ShelleyAddress,
     value: Value
 ) {
     val asUtxo: TransactionUnspentOutput =
         TransactionUnspentOutput(
-          txId,
+          utxoId,
           TransactionOutput.apply(
             address = address,
             value = value
