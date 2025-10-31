@@ -23,7 +23,7 @@ final case class DepositUtxo(
     def toUtxo: (TransactionInput, TransactionOutput) =
         (
           l1Input,
-          Babbage(
+          TransactionOutput.apply(
             address = l1OutputAddress,
             value = Value(l1OutputValue),
             datumOption = Some(Inline(toData(l1OutputDatum))),

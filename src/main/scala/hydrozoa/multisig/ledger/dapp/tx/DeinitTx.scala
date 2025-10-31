@@ -107,12 +107,12 @@ object DeinitTx:
 
         def mkPayouts: Either[String, List[TransactionBuilderStep]] = {
             // FIXME: remove later
-            val treasuryVCoin = Coin.unsafeApply(treasuryToSpend.value.coin.value)
+            val treasuryNewCoin = Coin.unsafeApply(treasuryToSpend.value.coin.value)
 
             val distribute = MultisigRegimeDistribution.distribute(equityShares)
 
             for {
-                equity <- (treasuryVCoin - equityShares.totalFallbackDeposit).toCoin match
+                equity <- (treasuryNewCoin - equityShares.totalFallbackDeposit).toCoin match
                     case Left(ArithmeticError.Underflow) =>
                         Left("residual treasury can't be less then total deposits")
                     case Right(equity) => Right(equity)

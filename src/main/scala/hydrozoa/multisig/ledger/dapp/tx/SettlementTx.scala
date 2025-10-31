@@ -17,10 +17,6 @@ import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
-// Moved temporarily here from the builder
-trait HasResolvedUtxos {
-    def resolvedUtxos: ResolvedUtxos
-}
 
 sealed trait SettlementTx
     extends Tx,
@@ -38,6 +34,7 @@ object SettlementTx {
     sealed trait WithPayouts extends SettlementTx
     sealed trait NoRollouts extends SettlementTx
 
+    // FIXME: extends NoRollouts is enough
     case class NoPayouts(
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,

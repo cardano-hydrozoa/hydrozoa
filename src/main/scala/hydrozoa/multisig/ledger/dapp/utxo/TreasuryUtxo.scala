@@ -5,7 +5,6 @@ import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
 import scalus.cardano.txbuilder.TransactionUnspentOutput
 
@@ -20,11 +19,10 @@ final case class TreasuryUtxo(
     val asUtxo: TransactionUnspentOutput =
         TransactionUnspentOutput(
           txId,
-          Babbage(
+          TransactionOutput.apply(
             address = address,
             value = value,
-            datumOption = Some(Inline(datum.toData)),
-            scriptRef = None
+            datumOption = Some(Inline(datum.toData))
           )
         )
 }
@@ -36,13 +34,21 @@ object TreasuryUtxo {
         def treasurySpent: TreasuryUtxo
     }
 
-    trait ToSpend {
-        def treasuryToSpend: TreasuryUtxo
-    }
-
-    /** If SomeTx extends TresuryUtxo.Produced it means that tx is producing it. */
+    /** If SomeTx extends TreasuryUtxo.Produced it means that tx is producing it. */
     trait Produced {
         def treasuryProduced: TreasuryUtxo
+    }
+
+    /** If SomeTx extends TreasuryUtxo.MbProduced it means that tx produced it optionally. */
+    trait MbProduced {
+        final def mbTreasuryProduced: Option[TreasuryUtxo] = this match
+            case produced: (this.type & Produced) => Some(produced.treasuryProduced)
+            case _                                => None
+    }
+
+    /** If some args extend this, it means that args contain it. */
+    trait ToSpend {
+        def treasuryToSpend: TreasuryUtxo
     }
 
     final case class Datum(
