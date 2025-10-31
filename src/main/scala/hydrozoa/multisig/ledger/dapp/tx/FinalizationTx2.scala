@@ -1,11 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx1.Builder.txOutputsL
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.utxo
 import hydrozoa.multisig.ledger.dapp.utxo.{ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
-import scalus.cardano.ledger.Transaction
-import scalus.cardano.txbuilder.TransactionBuilder
+import monocle.Focus.refocus
+import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.cardano.txbuilder.{TransactionBuilder, txBodyL}
+import scalus.|>
 
 sealed trait FinalizationTx2
     extends Tx,
@@ -77,36 +80,105 @@ object FinalizationTx2 {
           *   - FinalizationTx1.WithOnlyDirectPayouts -> FinalizationTx2.WithOnlyDirectPayouts |
           *     Finalization2.WithOnlyDirectPayoutsMerged
           *
-          *   - FinalizationTx1.WithRollouts -> FinalizationTx2.WithRollouts |
-          *     FinalizationTx2.WithRolloutsMerged
+          *   - FinalizationTx1.WithRollouts(in fact: TxWithRolloutTxSeq) ->
+          *     FinalizationTx2.WithRollouts | FinalizationTx2.WithRolloutsMerged
           */
         def build(deinitTx: DeinitTx)(args: Args.Some): BuildErrorOr[args.Result] =
-            ???
+
+            val deinitOutputs: List[Sized[TransactionOutput]] =
+                deinitTx.tx.body.value.outputs.toList
+            val mint: Option[Mint] = deinitTx.tx.body.value.mint
+            val deinitFee: Coin = deinitTx.tx.body.value.fee
+
+            val originalTx = args.tx.tx
+
+            // This should be done with the tx builder
+            val optimisticTrial = originalTx
+                |> txOutputsL.modify(outputs => outputs.tail ++ deinitOutputs)
+                |> txBodyL.refocus(_.mint).replace(mint)
+                |> txBodyL.refocus(_.fee).modify(fee => fee + deinitFee)
+
+            // TODO: validate optimisticTrial
+            val isValid = ???
+
+            if isValid
+            then Right(args.mkMergedResult(optimisticTrial))
+            else Right(args.mkSeparateResult)
 
         // TODO: pull up deinitTx by currying build?
         object Args:
             trait Some:
-                type Result <: FinalizationTx2
+                def tx: FinalizationTx1
+                final type Result = SeparateResult | MergedResult
+                type SeparateResult
+                type MergedResult
+                def mkSeparateResult: SeparateResult
+                def mkMergedResult(mergedFinalizationTx: Transaction): MergedResult
 
             final case class NoPayoutsArg(
-                tx: FinalizationTx1.NoPayouts
+                override val tx: FinalizationTx1.NoPayouts
             ) extends Some:
-                type Result = NoPayouts | NoPayoutsMerged
+                type SeparateResult = NoPayouts
+                type MergedResult = NoPayoutsMerged
+
+                override def mkSeparateResult: SeparateResult =
+                    NoPayouts(
+                      tx.tx,
+                      tx.treasurySpent,
+                      tx.residualTreasuryProduced,
+                      tx.resolvedUtxos
+                    )
+
+                override def mkMergedResult(mergedFinalizationTx: Transaction): MergedResult =
+                    NoPayoutsMerged(mergedFinalizationTx, tx.treasurySpent, tx.resolvedUtxos)
 
             extension (self: FinalizationTx1.NoPayouts) def toArgs2 = NoPayoutsArg(self)
 
             final case class WithOnlyDirectPayoutsArg(
-                tx: FinalizationTx1.WithOnlyDirectPayouts
+                override val tx: FinalizationTx1.WithOnlyDirectPayouts
             ) extends Some:
-                type Result = WithOnlyDirectPayouts | WithOnlyDirectPayoutsMerged
+                type SeparateResult = WithOnlyDirectPayouts
+                type MergedResult = WithOnlyDirectPayoutsMerged
+
+                override def mkSeparateResult: SeparateResult =
+                    WithOnlyDirectPayouts(
+                      tx.tx,
+                      tx.treasurySpent,
+                      tx.residualTreasuryProduced,
+                      tx.resolvedUtxos
+                    )
+                override def mkMergedResult(mergedFinalizationTx: Transaction): MergedResult =
+                    WithOnlyDirectPayoutsMerged(
+                      mergedFinalizationTx,
+                      tx.treasurySpent,
+                      tx.resolvedUtxos
+                    )
 
             extension (self: FinalizationTx1.WithOnlyDirectPayouts)
                 def toArgs2 = WithOnlyDirectPayoutsArg(self)
 
             final case class WithRolloutsArg(
-                tx: FinalizationTx1.WithRollouts
+                override val tx: FinalizationTx1.WithRollouts
             ) extends Some:
-                type Result = WithRollouts | WithRolloutsMerged
+                type SeparateResult = WithRollouts
+                type MergedResult = WithRolloutsMerged
+
+                override def mkSeparateResult: SeparateResult =
+                    WithRollouts(
+                      tx.tx,
+                      tx.treasurySpent,
+                      tx.residualTreasuryProduced,
+                      tx.rolloutProduced,
+                      tx.resolvedUtxos
+                    )
+
+                override def mkMergedResult(mergedFinalizationTx: Transaction): MergedResult =
+                    WithRolloutsMerged(
+                      mergedFinalizationTx,
+                      tx.treasurySpent,
+                      tx.rolloutProduced,
+                      tx.resolvedUtxos
+                    )
 
             extension (self: FinalizationTx1.WithRollouts) def toArgs2 = WithRolloutsArg(self)
     }
