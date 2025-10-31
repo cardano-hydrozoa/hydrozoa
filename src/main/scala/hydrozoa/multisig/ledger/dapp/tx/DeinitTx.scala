@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.config.EquityShares
 import hydrozoa.config.EquityShares.MultisigRegimeDistribution
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
 import scala.Function.const
 import scalus.cardano.ledger.value.Coin
@@ -30,22 +30,22 @@ import spire.implicits.additiveGroupOps
   *     amounts recalculated after the fees are calculated.
   */
 case class DeinitTx(
-    override val treasurySpent: TreasuryUtxo,
+    override val residualTreasurySpent: ResidualTreasuryUtxo,
     override val tx: Transaction
 ) extends Tx,
-      TreasuryUtxo.Spent
+      ResidualTreasuryUtxo.Spent
 
 object DeinitTx:
 
     final case class Builder(
-        treasuryToSpend: TreasuryUtxo,
+        residualTreasuryToSpend: ResidualTreasuryUtxo,
         equityShares: EquityShares,
         config: Tx.Builder.Config
     ) {
         def postProcess(ctx: TransactionBuilder.Context): DeinitTx =
-            DeinitTx(treasuryToSpend, ctx.transaction)
+            DeinitTx(residualTreasuryToSpend, ctx.transaction)
 
-        private val steps = Steps(treasuryToSpend, equityShares, config)
+        private val steps = Steps(residualTreasuryToSpend, equityShares, config)
 
         def build: BuildErrorOr[DeinitTx] = for {
             payouts <- steps.mkPayouts.left
@@ -67,7 +67,7 @@ object DeinitTx:
             res <- ctx
                 .finalizeContext(
                   config.env.protocolParams,
-                  SharePayoutsDiffHandler.handler(treasuryToSpend, equityShares),
+                  SharePayoutsDiffHandler.handler(residualTreasuryToSpend, equityShares),
                   config.env.evaluator,
                   config.validators
                 )
@@ -76,7 +76,7 @@ object DeinitTx:
     }
 
     private case class Steps(
-        treasuryToSpend: TreasuryUtxo,
+        residualTreasuryToSpend: ResidualTreasuryUtxo,
         equityShares: EquityShares,
         config: Tx.Builder.Config
     ) {
@@ -91,23 +91,26 @@ object DeinitTx:
             ReferenceOutput(config.headNativeScriptReferenceInput)
 
         private def spendTreasury =
-            Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
+            Spend(residualTreasuryToSpend.asUtxo, config.headNativeScript.witness)
 
         private def burnHeadTokens = {
             List(
-              Mint(
-                config.headNativeScript.policyId,
-                treasuryToSpend.headTokenName,
-                -1L,
-                config.headNativeScript.witness
-              )
-              // TODO: burn witness token
+              residualTreasuryToSpend.treasuryTokenName,
+              residualTreasuryToSpend.multisigRegimeTokenName
             )
+                .map(
+                  Mint(
+                    config.headNativeScript.policyId,
+                    _,
+                    -1L,
+                    config.headNativeScript.witness
+                  )
+                )
         }
 
         def mkPayouts: Either[String, List[TransactionBuilderStep]] = {
             // FIXME: remove later
-            val treasuryNewCoin = Coin.unsafeApply(treasuryToSpend.value.coin.value)
+            val treasuryNewCoin = Coin.unsafeApply(residualTreasuryToSpend.value.coin.value)
 
             val distribute = MultisigRegimeDistribution.distribute(equityShares)
 
@@ -133,13 +136,16 @@ object DeinitTx:
       * replaced.
       */
     object SharePayoutsDiffHandler:
-        def handler(treasuryToSpend: TreasuryUtxo, equityShares: EquityShares): DiffHandler = (
+        def handler(
+            residualTreasuryToSpend: ResidualTreasuryUtxo,
+            equityShares: EquityShares
+        ): DiffHandler = (
             diff: Long,
             tx: Transaction
         ) => {
 
             // FIXME: remove later
-            val treasuryVCoin = Unbounded.apply(treasuryToSpend.value.coin.value)
+            val treasuryVCoin = Unbounded.apply(residualTreasuryToSpend.value.coin.value)
 
             val distribute = MultisigRegimeDistribution.distribute(equityShares)
             val diffCoin = Coin.unsafeApply(diff)

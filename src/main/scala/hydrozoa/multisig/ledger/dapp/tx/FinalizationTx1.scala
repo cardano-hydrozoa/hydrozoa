@@ -146,7 +146,7 @@ object FinalizationTx1 {
             sealed trait Some:
                 def tx: SettlementTx
 
-                type Result
+                type Result <: FinalizationTx1
 
                 def mkResult(
                     tx: Transaction,
@@ -191,13 +191,13 @@ object FinalizationTx1 {
                 override val tx: SettlementTx.WithRollouts,
                 private val rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Some:
-                override type Result = WithRolloutsResult
+                override type Result = TxWithRolloutTxSeq
 
                 override def mkResult(
                     tx: Transaction,
                     residualTreasuryProduced: ResidualTreasuryUtxo,
                     resolvedUtxos: ResolvedUtxos
-                ): Result = WithRolloutsResult(
+                ): Result = TxWithRolloutTxSeq(
                   WithRollouts(
                     tx,
                     this.tx.treasurySpent,
@@ -208,10 +208,15 @@ object FinalizationTx1 {
                   this.rolloutTxSeqPartial
                 )
 
-            final case class WithRolloutsResult(
-                tx: FinalizationTx1.WithRollouts,
+            final case class TxWithRolloutTxSeq(
+                finalizationTx: FinalizationTx1.WithRollouts,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
-            )
+            ) extends FinalizationTx1 {
+                override def tx: Transaction = finalizationTx.tx
+                override def treasurySpent: TreasuryUtxo = finalizationTx.treasurySpent
+                override def residualTreasuryProduced: ResidualTreasuryUtxo = finalizationTx.residualTreasuryProduced
+                override def resolvedUtxos: ResolvedUtxos = finalizationTx.resolvedUtxos
+            }
 
             def apply(r: SettlementTx.Builder.Result.WithPayouts): Some =
                 r match

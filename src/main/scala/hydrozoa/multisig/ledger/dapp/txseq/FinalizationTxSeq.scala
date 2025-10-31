@@ -5,7 +5,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx1.Builder.Args.{WithRolloutsResult, toArgs1}
+import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx1.Builder.Args.{TxWithRolloutTxSeq, toArgs1}
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx2.Builder.Args.toArgs2
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
@@ -67,10 +67,12 @@ object FinalizationTxSeq {
                         finalizationTx1 <- upgrade(settlementTx.transaction.toArgs1).left
                             .map(Builder.Error.FinalizationTx1Error(_))
 
-                        treasuryToSpend = ???
-
                         deinitTx <- DeinitTx.Builder
-                            .apply(treasuryToSpend, args.equityShares, config)
+                            .apply(
+                              finalizationTx1.residualTreasuryProduced,
+                              args.equityShares,
+                              config
+                            )
                             .build
                             .left
                             .map(Builder.Error.DeinitTxError(_))
@@ -106,10 +108,12 @@ object FinalizationTxSeq {
                           FinalizationTx1.Builder.Args(settlementTxRes)
                         ).left.map(Builder.Error.FinalizationTx1Error(_))
 
-                        treasuryToSpend = ???
-
                         deinitTx <- DeinitTx.Builder
-                            .apply(treasuryToSpend, args.equityShares, config)
+                            .apply(
+                              finalizationTx1.residualTreasuryProduced,
+                              args.equityShares,
+                              config
+                            )
                             .build
                             .left
                             .map(Builder.Error.DeinitTxError(_))
@@ -131,7 +135,7 @@ object FinalizationTxSeq {
                                             Right(FinalizationTxSeq.Monolithic(tx2))
                                     }
 
-                                case res: WithRolloutsResult =>
+                                case res: TxWithRolloutTxSeq =>
                                     for {
 
                                         finalizationTx2 <- finalizationStage2Builder(
@@ -154,6 +158,13 @@ object FinalizationTxSeq {
                                         case tx: FinalizationTx2.WithRolloutsMerged =>
                                             FinalizationTxSeq.WithRollouts(tx, rolloutTxSeq)
                                     }
+
+                                // TODO: maybe we can do better
+                                case _: FinalizationTx1.NoPayouts =>
+                                    throw RuntimeException("not possible")
+                                case _: FinalizationTx1.WithRollouts =>
+                                    throw RuntimeException("not possible")
+
                             }
                     } yield finalizationTxSeq
             }
