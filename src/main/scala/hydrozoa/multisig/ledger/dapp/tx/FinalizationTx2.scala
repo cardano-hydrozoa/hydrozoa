@@ -1,13 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx1.Builder.txOutputsL
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.utxo
 import hydrozoa.multisig.ledger.dapp.utxo.{ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
 import monocle.Focus.refocus
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{TransactionBuilder, txBodyL}
+import scalus.cardano.txbuilder.{TransactionBuilder, txBodyL, txOutputsL}
 import scalus.|>
 
 sealed trait FinalizationTx2

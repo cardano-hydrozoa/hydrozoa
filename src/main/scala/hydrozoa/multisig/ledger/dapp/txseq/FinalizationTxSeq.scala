@@ -64,7 +64,7 @@ object FinalizationTxSeq {
                             .map(Builder.Error.SettlementError(_))
 
                         // Upgrade to finalization tx stage 1
-                        finalizationTx1 <- upgrade(settlementTx.transaction.toArgs1).left
+                        finalizationTx1 <- upgrade(settlementTx.toArgs1).left
                             .map(Builder.Error.FinalizationTx1Error(_))
 
                         deinitTx <- DeinitTx.Builder
