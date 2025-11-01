@@ -1,25 +1,29 @@
 package hydrozoa.config
 
 import hydrozoa.*
+import hydrozoa.config.HeadConfigError.{NonUniqueVerificationKey, SharesMustSumToOne}
+import scalus.cardano.ledger.value.Coin
+import spire.implicits.*
 import spire.math.{Rational, UByte}
 
-import HeadConfigError.{NonConsistentShares, NonUniqueVerificationKey}
 
 // ===================================
 // Raw config
 // ===================================
 
-/** Raw config
-  */
+/** Raw config */
 case class RawConfig(
     peers: List[PeerSection]
 )
 
-/** An element of a raw head config that describes a peer.
-  */
+/** An element of a raw head config that describes a peer */
 case class PeerSection(
+    // The verification key of peer's key pair used to control peer's L1 address
+    // and also for signing L2 block headers (what else?)
     verificationKeyBytes: VerificationKeyBytes,
-    equityWithdrawAddress: AddressL1,
+    // The address to pay out back contingency deposits and equity shares.
+    payoutAddress: AddressL1,
+    // The peer's share of equity
     equityShare: Rational
 )
 
@@ -30,14 +34,21 @@ case class PeerSection(
 /** Fully parsed head config.
   */
 case class HeadConfig(
-    peers: Map[UByte, VerificationKeyBytes],
-    shares: EquityShares
+    // Mapping form alphabetically assigned UByte index
+    verificationKeys: Map[UByte, VerificationKeyBytes],
+    // Collective contingency
+    collectiveContingency: CollectiveContingency,
+    // Individual contingency (every peer has the same contingency)
+    individualContingency: IndividualContingency,
+    // Peers shares
+    equityShares: EquityShares
 )
 
 object HeadConfig:
 
     def parse(rawConfig: RawConfig): Either[HeadConfigError, HeadConfig] = for {
-        keys <- {
+        // Check key uniqueness
+        keysUnique <- {
             val sortedVKs = rawConfig.peers.map(_.verificationKeyBytes).sortBy(_.bytes)
             val duplicates =
                 sortedVKs.groupMapReduce(identity)(_ => 1)(_ + _).filter((_, cnt) => cnt > 1)
@@ -47,23 +58,54 @@ object HeadConfig:
               NonUniqueVerificationKey(duplicates.keys.toSet)
             )
         }
-        _ <- Either.cond(keys.length < 255, (), HeadConfigError.TooManyPeers(keys.length))
-        peers = keys.zipWithIndex.map((k, i) => (UByte.apply(i), k)).toMap
-        equityShares <- EquityShares.apply(
-          rawConfig.peers.map(i => (i.equityWithdrawAddress, i.equityShare))
+        // Check number of peers
+        _ <- Either.cond(
+          keysUnique.sizeIs < 255,
+          (),
+          HeadConfigError.TooManyPeers(keysUnique.length)
         )
-    } yield HeadConfig(
-      peers = peers,
-      shares = equityShares
-    )
+        // Attach indices to verification keys
+        verificationKeys = keysUnique.zipWithIndex.map((k, i) => (UByte.apply(i), k)).toMap
+        // Convert list of peer config section into map indexed by the verification key
+        peerSectionMap = rawConfig.peers.map(s => s.verificationKeyBytes -> s).toMap
+        // Contingency
+        collectiveContingency = CollectiveContingency.apply(UByte(keysUnique.size))
+        individualContingency = IndividualContingency.apply
+        // Construct contingencyDepositsAndEquityShares
+        peersShares = verificationKeys.map((id, i) =>
+            val section = peerSectionMap(i)
+            id -> (section.payoutAddress, section.equityShare)
+        )
+        contingencyDepositsAndEquityShares <- EquityShares.apply(
+          peersShares,
+          collectiveContingency,
+          individualContingency
+        )
+    } yield {
+
+        HeadConfig(
+          verificationKeys = verificationKeys,
+          collectiveContingency = collectiveContingency,
+          individualContingency = individualContingency,
+          equityShares = contingencyDepositsAndEquityShares
+        )
+    }
+
+end HeadConfig
 
 enum HeadConfigError:
     case NonUniqueVerificationKey(duplicates: Set[VerificationKeyBytes])
-    case NonConsistentShares(total: Rational)
     case TooManyPeers(count: Int)
+    case SharesMustSumToOne(total: Rational)
+    case TooSmallCollateralDeposit(peer: UByte, minimal: Coin, actual: Coin)
+    case TooSmallVoteDeposit(peer: UByte, minimal: Coin, actual: Coin)
 
     def explain: String = this match
         case NonUniqueVerificationKey(duplicates) =>
-            s"A duplicate verification key(s): ${duplicates.map(_.bytes.toHex)}"
-        case NonConsistentShares(total) => s"Shares do not sum to 1, got total: $total"
-        case TooManyPeers(count)        => s"Too many peers: $count, maximum allowed is 255"
+            s"A duplicate verification key(s) found: ${duplicates.map(_.bytes.toHex)}"
+        case TooManyPeers(count)       => s"Too many peers: $count, maximum allowed is 255"
+        case SharesMustSumToOne(total) => s"Shares do not sum up to one, got total: $total"
+        case TooSmallCollateralDeposit(peer, minimal, actual) =>
+            s"The peer ${peer} has too small collateral deposit: ${actual}, minimal is: {minimal}"
+        case TooSmallVoteDeposit(peer, minimal, actual) =>
+            s"The peer ${peer} has too small vote deposit: ${actual}, minimal is: {minimal}"

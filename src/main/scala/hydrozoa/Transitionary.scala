@@ -9,12 +9,9 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
-import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
-
-import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
 import scalus.bloxbean.Interop
@@ -23,12 +20,10 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.txbuilder.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger
-import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential
@@ -43,11 +38,11 @@ import scalus.{ledger, prelude, |>}
 val emptyTxBody: TransactionBody = TransactionBody(
   inputs = TaggedOrderedSet.empty,
   outputs = IndexedSeq.empty,
-  fee = Coin(0)
+  fee = Coin.zero
 )
 
 val emptyContext: Context =
-    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+    Context(fee = Coin.zero, env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
 
 val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
 //
@@ -220,7 +215,7 @@ extension (v: v3.Value) {
 /** Create a value with the specified policy id, asset name, and quantity (default 1) */
 def singleton(policyId: PolicyId, assetName: AssetName, quantity: Int = 1): Value = {
     Value(
-      coin = Coin(0L),
+      coin = Coin.zero,
       assets = MultiAsset(assets = SortedMap((policyId, SortedMap((assetName, quantity)))))
     )
 }

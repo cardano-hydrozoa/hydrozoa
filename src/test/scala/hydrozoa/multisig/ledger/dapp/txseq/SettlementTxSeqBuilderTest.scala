@@ -2,9 +2,6 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
-import org.scalacheck.Gen.Parameters
-import org.scalacheck.{Gen, Prop}
-import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*

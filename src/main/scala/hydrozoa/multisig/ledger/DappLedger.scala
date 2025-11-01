@@ -11,8 +11,8 @@ import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
+import scalus.cardano.txbuilder.SomeBuildError
 
 final case class DappLedger(headAddress: ShelleyAddress)(
     private val state: Ref[IO, State]

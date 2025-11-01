@@ -1,27 +1,22 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.protocol.types.Block
-
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, Value, TransactionOutput as TxOutput}
 
-// Moved temporarily here from the builder
-trait HasResolvedUtxos {
-    def resolvedUtxos: ResolvedUtxos
-}
 
 sealed trait SettlementTx
     extends Tx,
@@ -39,6 +34,7 @@ object SettlementTx {
     sealed trait WithPayouts extends SettlementTx
     sealed trait NoRollouts extends SettlementTx
 
+    // FIXME: extends NoRollouts is enough
     case class NoPayouts(
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
@@ -108,7 +104,8 @@ object SettlementTx {
 
         trait Result[T <: SettlementTx]
             extends Tx.AugmentedResult[T],
-              DepositUtxo.Many.Spent.Partition
+              DepositUtxo.Many.Spent.Partition,
+              HasCtx
 
         object Result {
             sealed trait WithPayouts extends Result[SettlementTx.WithPayouts]
@@ -117,20 +114,23 @@ object SettlementTx {
             case class NoPayouts(
                 override val transaction: SettlementTx.NoPayouts,
                 override val depositsSpent: Vector[DepositUtxo],
-                override val depositsToSpend: Vector[DepositUtxo]
+                override val depositsToSpend: Vector[DepositUtxo],
+                override val ctx: TransactionBuilder.Context
             ) extends Result[SettlementTx.NoPayouts]
 
             case class WithOnlyDirectPayouts(
                 override val transaction: SettlementTx.WithOnlyDirectPayouts,
                 override val depositsSpent: Vector[DepositUtxo],
-                override val depositsToSpend: Vector[DepositUtxo]
+                override val depositsToSpend: Vector[DepositUtxo],
+                override val ctx: TransactionBuilder.Context
             ) extends WithPayouts
 
             case class WithRollouts(
                 override val transaction: SettlementTx.WithRollouts,
                 override val depositsSpent: Vector[DepositUtxo],
                 override val depositsToSpend: Vector[DepositUtxo],
-                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
+                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
+                override val ctx: TransactionBuilder.Context
             ) extends WithPayouts
         }
 
@@ -370,7 +370,8 @@ object SettlementTx {
                 Result.NoPayouts(
                   transaction = settlementTx,
                   depositsSpent = state.depositsSpent,
-                  depositsToSpend = state.depositsToSpend
+                  depositsToSpend = state.depositsToSpend,
+                  ctx = state.ctx
                 )
             }
 
@@ -411,7 +412,8 @@ object SettlementTx {
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
-                      depositsToSpend = state.depositsToSpend
+                      depositsToSpend = state.depositsToSpend,
+                      ctx = state.ctx
                     )
 
                 def withRollouts(
@@ -429,7 +431,8 @@ object SettlementTx {
                       ),
                       depositsSpent = state.depositsSpent,
                       depositsToSpend = state.depositsToSpend,
-                      rolloutTxSeqPartial = rollouts
+                      rolloutTxSeqPartial = rollouts,
+                      ctx = state.ctx
                     )
 
                 mergeResult match {

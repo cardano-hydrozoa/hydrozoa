@@ -6,7 +6,6 @@ import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
-
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
