@@ -2,7 +2,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{
+    BuildErrorOr,
+    explain,
+    explainAppendConst,
+    explainConst
+}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.prebalancedDiffHandler
@@ -13,9 +18,19 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{
+    ModifyAuxiliaryData,
+    ReferenceOutput,
+    Send,
+    Spend
+}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.{
+    SomeBuildError,
+    TransactionBuilder,
+    TransactionBuilderStep,
+    TransactionUnspentOutput
+}
 
 enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
 
@@ -89,7 +104,7 @@ object RolloutTx {
               */
             final def complete(rolloutSpent: RolloutUtxo): BuildErrorOr[T] = for {
                 addedRolloutSpend <- addRolloutSpent(rolloutSpent)
-                  .explainAppendConst("could not complete partial result")
+                    .explainAppendConst("could not complete partial result")
             } yield builder.postProcess(addedRolloutSpend)
 
             /** Just add the missing [[RolloutUtxo]] input to the transaction being built and return
@@ -105,14 +120,17 @@ object RolloutTx {
             ): BuildErrorOr[TransactionBuilder.Context] = {
                 val steps = List(SpendRollout.spendRollout(builder.config, rolloutSpent.utxo))
                 for {
-                    addedRolloutInput <- TransactionBuilder.modify(ctx, steps)
-                      .explain(const("Could not add rollout to context"))
-                    finished <- addedRolloutInput.finalizeContext(
-                      protocolParams = builder.config.env.protocolParams,
-                      diffHandler = prebalancedDiffHandler,
-                      evaluator = builder.config.env.evaluator,
-                      validators = builder.config.validators
-                    ).explain(const("Could not finalize context after spending rollout input"))
+                    addedRolloutInput <- TransactionBuilder
+                        .modify(ctx, steps)
+                        .explain(const("Could not add rollout to context"))
+                    finished <- addedRolloutInput
+                        .finalizeContext(
+                          protocolParams = builder.config.env.protocolParams,
+                          diffHandler = prebalancedDiffHandler,
+                          evaluator = builder.config.env.evaluator,
+                          validators = builder.config.validators
+                        )
+                        .explain(const("Could not finalize context after spending rollout input"))
                 } yield finished
             }
         }
@@ -243,12 +261,14 @@ object RolloutTx {
 
         private final def addPayouts(args: ArgsType): BuildErrorOr[PartialResult[T]] = {
             for {
-                ctx <- TransactionBuilder.build(
-                  config.env.network,
-                  BasePessimistic.commonSteps(config) ++ RolloutOutput
-                      .mbSendRollout(config, args.mbRolloutOutputValue)
-                      .toList
-                ).explainConst("adding base pessimistic failed")
+                ctx <- TransactionBuilder
+                    .build(
+                      config.env.network,
+                      BasePessimistic.commonSteps(config) ++ RolloutOutput
+                          .mbSendRollout(config, args.mbRolloutOutputValue)
+                          .toList
+                    )
+                    .explainConst("adding base pessimistic failed")
 
                 withPayout <- tryAddPayout(
                   ctx,
@@ -281,7 +301,9 @@ object RolloutTx {
                             )
                             addPayoutsLoop(newState)
                         case Left(err) =>
-                            Tx.Builder.Incremental.replaceInvalidSizeException(err._1, state).explainConst(err._2)
+                            Tx.Builder.Incremental
+                                .replaceInvalidSizeException(err._1, state)
+                                .explainConst(err._2)
                     }
                 case _Empty => Right(state)
             }
@@ -301,7 +323,9 @@ object RolloutTx {
         ): BuildErrorOr[(TransactionBuilder.Context, Value)] =
             val payoutStep = Send(payoutObligation.output)
             for {
-                newCtx <- TransactionBuilder.modify(ctx, List(payoutStep)).explainConst("could not add payout")
+                newCtx <- TransactionBuilder
+                    .modify(ctx, List(payoutStep))
+                    .explainConst("could not add payout")
                 valueNeededWithFee <- Placeholder.trialFinish(this, newCtx)
             } yield (newCtx, valueNeededWithFee)
     }
@@ -383,7 +407,8 @@ object RolloutTx {
                 } yield res
                 res match {
                     case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException)) =>
-                        Left(SomeBuildError.ValidationError(e)).explainConst("trail to add payout failed")
+                        Left(SomeBuildError.ValidationError(e))
+                            .explainConst("trail to add payout failed")
                     case Left(SomeBuildError.BalancingError(CantBalance(diff))) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)

@@ -17,7 +17,6 @@ import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
-
 sealed trait SettlementTx
     extends Tx,
       Block.Version.Major.Produced,
@@ -85,7 +84,8 @@ object SettlementTx {
             extends Builder[SettlementTx.WithPayouts] {
 
             override type ArgsType = Args.WithPayouts
-            override type ResultType = Result.WithPayouts
+            override type ResultType =
+                Result.WithOnlyDirectPayouts | Result.WithRollouts // WithResult.WithPayouts
 
             override def complete(
                 args: ArgsType,
@@ -112,6 +112,7 @@ object SettlementTx {
             type NoRollouts = Result[SettlementTx.NoRollouts]
 
             case class NoPayouts(
+                // TODO: already in the context
                 override val transaction: SettlementTx.NoPayouts,
                 override val depositsSpent: Vector[DepositUtxo],
                 override val depositsToSpend: Vector[DepositUtxo],
@@ -119,6 +120,7 @@ object SettlementTx {
             ) extends Result[SettlementTx.NoPayouts]
 
             case class WithOnlyDirectPayouts(
+                // TODO: already in the context
                 override val transaction: SettlementTx.WithOnlyDirectPayouts,
                 override val depositsSpent: Vector[DepositUtxo],
                 override val depositsToSpend: Vector[DepositUtxo],
@@ -126,6 +128,7 @@ object SettlementTx {
             ) extends WithPayouts
 
             case class WithRollouts(
+                // TODO: already in the context
                 override val transaction: SettlementTx.WithRollouts,
                 override val depositsSpent: Vector[DepositUtxo],
                 override val depositsToSpend: Vector[DepositUtxo],
@@ -180,8 +183,9 @@ object SettlementTx {
                 pessimistic <- basePessimistic(args)
                 addedDeposits <- addDeposits(args, pessimistic)
                 // Balancing and fees
-                finished <- this.finish(addedDeposits.ctx)
-                  .explainConst("finishing settlement tx failed")
+                finished <- this
+                    .finish(addedDeposits.ctx)
+                    .explainConst("finishing settlement tx failed")
                 completed <- complete(args, addedDeposits.copy(ctx = finished))
             } yield completed
         }
@@ -191,13 +195,15 @@ object SettlementTx {
                 BasePessimistic.steps(config, args)
             for {
                 ctx <- TransactionBuilder
-                  .build(config.env.network, steps)
-                  .explainConst("base pessimistic build failed")
+                    .build(config.env.network, steps)
+                    .explainConst("base pessimistic build failed")
                 addedPessimisticRollout <- BasePessimistic.mbApplySendRollout(
                   args.treasuryToSpend,
                   args.mbRolloutValue
                 )(ctx)
-                _ <- finish(addedPessimisticRollout).explainConst("finishing base pessimistic failed")
+                _ <- finish(addedPessimisticRollout).explainConst(
+                  "finishing base pessimistic failed"
+                )
             } yield State[T](
               ctx = ctx,
               depositsSpent = Vector.empty,
@@ -226,8 +232,9 @@ object SettlementTx {
                                 )
                                 loop(newState)
                             case Left(err) =>
-                                Tx.Builder.Incremental.replaceInvalidSizeException(err._1, state)
-                                .explainConst(err._2)
+                                Tx.Builder.Incremental
+                                    .replaceInvalidSizeException(err._1, state)
+                                    .explainConst(err._2)
                         }
                     case _Empty => Right(state)
                 }
@@ -245,13 +252,16 @@ object SettlementTx {
                   )
                 )
                 for {
-                    newCtx <- TransactionBuilder.modify(ctx, List(depositStep))
-                      .explainConst(s"adding deposit utxo failed. Deposit utxo: $deposit")
+                    newCtx <- TransactionBuilder
+                        .modify(ctx, List(depositStep))
+                        .explainConst(s"adding deposit utxo failed. Deposit utxo: $deposit")
                     // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits
                     //
                     // Ensure that at least the pessimistic rollout output fits into the transaction.
                     addedPessimisticRollout <- addPessimisticRollout(newCtx)
-                    _ <- finish(addedPessimisticRollout).explainConst("finishing for tryAddDeposit failed.")
+                    _ <- finish(addedPessimisticRollout).explainConst(
+                      "finishing for tryAddDeposit failed."
+                    )
                 } yield newCtx
 
             loop(initialState)
@@ -318,8 +328,9 @@ object SettlementTx {
             ): BuildErrorOr[TransactionBuilder.Context] = {
                 val extraStep = Send(rolloutOutput(treasuryToSpend, rolloutValue))
                 for {
-                    newCtx <- TransactionBuilder.modify(ctx, List(extraStep))
-                      .explainConst("sending the rollout tx failed")
+                    newCtx <- TransactionBuilder
+                        .modify(ctx, List(extraStep))
+                        .explainConst("sending the rollout tx failed")
                 } yield newCtx
             }
 
@@ -390,7 +401,7 @@ object SettlementTx {
                 args: Args.WithPayouts,
                 state: State[SettlementTx.WithPayouts],
                 mergeResult: Merge.Result
-            ): Result.WithPayouts = {
+            ): Result.WithOnlyDirectPayouts | Result.WithRollouts = {
                 import Merge.Result.*
 
                 val tx = state.ctx.transaction
@@ -495,8 +506,8 @@ object SettlementTx {
                 treasuryToSpend: TreasuryUtxo,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ): BuildErrorOr[(State[SettlementTx.WithPayouts], Merge.Result)] =
-                import state.*
                 import Merge.Result.*
+                import state.*
 
                 val firstRolloutTxPartial = rolloutTxSeqPartial.firstOrOnly
 
@@ -509,8 +520,8 @@ object SettlementTx {
 
                 val optimisticTrial: BuildErrorOr[TransactionBuilder.Context] = for {
                     newCtx <- TransactionBuilder
-                      .modify(ctx, optimisticSteps)
-                      .explainConst("adding optimistic steps failed")
+                        .modify(ctx, optimisticSteps)
+                        .explainConst("adding optimistic steps failed")
                     finished <- finish(newCtx).explainConst("finishing optimistic trial failed")
                 } yield finished
 
@@ -520,7 +531,9 @@ object SettlementTx {
                           treasuryToSpend,
                           firstRolloutTxPartial.inputValueNeeded
                         )(ctx)
-                        finished <- finish(newCtx).explainConst("finishing pessimistic backup failed")
+                        finished <- finish(newCtx).explainConst(
+                          "finishing pessimistic backup failed"
+                        )
                     } yield finished
 
                 // Keep the optimistic transaction (which merged the settlement tx with the first rollout tx)

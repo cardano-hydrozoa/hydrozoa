@@ -1,100 +1,433 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-//TODO: remove
-
-import hydrozoa.*
-import hydrozoa.multisig.ledger.DappLedger
-import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import scala.language.implicitConversions
-import scalus.cardano.address.{Network, ShelleyAddress}
+import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
+import hydrozoa.multisig.ledger.dapp.utxo.{
+    MultisigRegimeUtxo,
+    ResidualTreasuryUtxo,
+    RolloutUtxo,
+    TreasuryUtxo
+}
+import hydrozoa.multisig.protocol.types.Block
+import hydrozoa.prebalancedDiffHandler
+import monocle.Focus.focus
+import monocle.Monocle.refocus
+import scala.Function.const
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.txbuilder.{LowLevelTxBuilder, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, Send, Spend}
+import scalus.|>
 
-final case class FinalizationTx(
-    private val treasurySpent: TreasuryUtxo,
-    override val tx: Transaction
-) extends Tx
+sealed trait FinalizationTx
+    extends Tx,
+      Block.Version.Major.Produced,
+      TreasuryUtxo.Spent,
+      ResidualTreasuryUtxo.MbProduced,
+      RolloutUtxo.MbProduced,
+      HasResolvedUtxos
 
 object FinalizationTx {
-    case class Recipe(
-        majorVersion: Int,
-        utxosWithdrawn: Set[(TransactionInput, TransactionOutput)],
-        headNativeScript: HeadMultisigScript,
-        treasuryUtxo: TreasuryUtxo,
-        changeAddress: ShelleyAddress,
-        headTokenName: AssetName,
-        network: Network,
-        protocolParams: ProtocolParams,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
-    )
 
-    def build(recipe: Recipe): Either[SomeBuildError, FinalizationTx] = {
-        val beaconTokenBurn: TransactionBuilderStep.Mint =
-            TransactionBuilderStep.Mint(
-              recipe.headNativeScript.policyId,
-              recipe.headTokenName,
-              -1L,
-              NativeScriptWitness(
-                NativeScriptValue(recipe.headNativeScript.script),
-                recipe.headNativeScript.requiredSigners
-              )
+    sealed trait Monolithic extends FinalizationTx
+
+    sealed trait MergedDeinit extends FinalizationTx
+
+    sealed trait WithDeinit extends FinalizationTx, ResidualTreasuryUtxo.Produced
+
+    case class NoPayouts(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val residualTreasuryProduced: ResidualTreasuryUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends WithDeinit,
+          MergedDeinit
+
+    case class NoPayoutsMerged(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends Monolithic,
+          MergedDeinit
+
+    case class WithOnlyDirectPayouts(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val residualTreasuryProduced: ResidualTreasuryUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends WithDeinit
+
+    case class WithOnlyDirectPayoutsMerged(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends Monolithic,
+          MergedDeinit
+
+    case class WithRollouts(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val residualTreasuryProduced: ResidualTreasuryUtxo,
+        override val rolloutProduced: RolloutUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends FinalizationTx,
+          ResidualTreasuryUtxo.Produced,
+          RolloutUtxo.Produced,
+          WithDeinit
+
+    case class WithRolloutsMerged(
+        override val majorVersionProduced: Block.Version.Major,
+        override val tx: Transaction,
+        override val treasurySpent: TreasuryUtxo,
+        override val rolloutProduced: RolloutUtxo,
+        override val resolvedUtxos: ResolvedUtxos
+    ) extends FinalizationTx,
+          RolloutUtxo.Produced,
+          MergedDeinit
+
+    object Builder {
+
+        /** Stage 1 of finalization tx building is upgrading the settlement tx (which takes no
+          * deposits) into a finalization tx. This conversion must NOT increase the tx size. This is
+          * guaranteed by the following invariant: `size(treasuryUtxo.datum) < size(inputRef)`.
+          *
+          * @param multisigUtxoToSpend
+          * @param args
+          *   wrapper around [[SettlementTx]] with dependent Result
+          * @return
+          *   Dependent mapping:
+          *   - SettlementTx.NoPayouts -> FinalizationTx1.NoPayouts
+          *   - SettlementTx.WithOnlyDirectPayouts -> FinalizationTx1.WithOnlyDirectPayouts
+          *   - SettlementTx.WithRollouts -> FinalizationTx1.WithRollouts
+          */
+        def upgrade(
+            config: Tx.Builder.Config,
+            multisigUtxoToSpend: MultisigRegimeUtxo
+        )(args: Args.Some): BuildErrorOr[args.Result] = {
+
+            val ctx = args.input.ctx
+            val tx = ctx.transaction
+
+            // Manually upgrade the treasury output
+            val treasuryOutputIndex = args.input.transaction.treasuryProduced.txId.index
+            val treasuryOutput = tx.body.value.outputs(treasuryOutputIndex).value
+
+            val residualTreasuryOutput = TransactionOutput.apply(
+              treasuryOutput.address,
+              treasuryOutput.value + multisigUtxoToSpend.value
             )
 
-        val createWithdrawnUtxos: Seq[Send] =
-            recipe.utxosWithdrawn.toSeq.map(utxo => Send(utxo._2))
+            val ctxUpgraded: TransactionBuilder.Context = ctx |> unsafeCtxTxOutputsL
+                .refocus(_.index(treasuryOutputIndex))
+                .replace(Sized.apply(residualTreasuryOutput))
 
-        val spendTreasury: Spend = Spend(
-          utxo = recipe.treasuryUtxo.asUtxo,
-          witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
-        )
+            // Additional step
+            val addMultisigRegimeInputStep =
+                Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witness)
 
-        val addChangeOutput: Send = Send(
-          Babbage(
-            recipe.headNativeScript.mkAddress(recipe.network),
-            Value.zero,
-            None,
-            None
-          )
-        )
+            for {
 
-        val addMetaData = ModifyAuxiliaryData(_ =>
-            Some(
-              MD(
-                MD.L1TxTypes.Finalization,
-                recipe.headNativeScript.mkAddress(recipe.network)
-              )
-            )
-        )
+                ctx <- TransactionBuilder
+                    .modify(ctxUpgraded, List(addMultisigRegimeInputStep))
+                    .explain(const("Could not modify (upgrade) settlement tx"))
 
-        val steps: Seq[TransactionBuilderStep] = createWithdrawnUtxos
-            .appended(beaconTokenBurn)
-            .appended(spendTreasury)
-            .appended(addChangeOutput)
-            .appended(addMetaData)
+                diffHandler = new ChangeOutputDiffHandler(
+                  config.env.protocolParams,
+                  treasuryOutputIndex
+                ).changeOutputDiffHandler
 
-        for {
-            unbalanced <- TransactionBuilder
-                .build(recipe.network, steps)
-            finalized <- unbalanced
-                .finalizeContext(
-                  protocolParams = recipe.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
-                    1
-                  ).changeOutputDiffHandler,
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                rebalanced <- ctx
+                    .finalizeContext(
+                      config.env.protocolParams,
+                      diffHandler,
+                      config.env.evaluator,
+                      config.validators
+                    )
+                    .explain(const("Could not finalize context for finalization partial result"))
+
+            } yield {
+                val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
+                  treasuryTokenName = args.input.transaction.treasurySpent.headTokenName,
+                  multisigRegimeTokenName = multisigUtxoToSpend.multisigRegimeTokenName,
+                  utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
+                  // FIXME: Shall we be more specific about which outputs have which addresses?
+                  address = residualTreasuryOutput.address.asInstanceOf[ShelleyAddress],
+                  value = residualTreasuryOutput.value
                 )
-        } yield FinalizationTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
-    }
+                args.mkResult(rebalanced, residualTreasuryUtxo)
+            }
+        }
 
+        object Args:
+
+            sealed trait Some:
+                def input: Input
+
+                type Input <: SettlementTx.Builder.Result[_ <: SettlementTx]
+                type Result <: PartialResult
+
+                def mkResult(
+                    ctx: TransactionBuilder.Context,
+                    residualTreasuryProduced: ResidualTreasuryUtxo
+                ): Result
+
+            // no payouts
+            final case class NoPayoutsArg(override val input: SettlementTx.Builder.Result.NoPayouts)
+                extends Some:
+                override type Input = SettlementTx.Builder.Result.NoPayouts
+                override type Result = PartialResult.NoPayouts
+
+                override def mkResult(
+                    ctx: TransactionBuilder.Context,
+                    residualTreasuryProduced: ResidualTreasuryUtxo
+                ): Result =
+                    PartialResult.NoPayouts(
+                      this.input.transaction.treasurySpent,
+                      residualTreasuryProduced,
+                      ctx
+                    )
+
+            extension (self: SettlementTx.Builder.Result.NoPayouts) def toArgs1 = NoPayoutsArg(self)
+
+            // with only direct payouts
+            final case class WithOnlyDirectPayoutsArgs(
+                override val input: SettlementTx.Builder.Result.WithOnlyDirectPayouts
+            ) extends Some:
+                override type Input = SettlementTx.Builder.Result.WithOnlyDirectPayouts
+                override type Result = PartialResult.WithOnlyDirectPayouts
+
+                override def mkResult(
+                    ctx: TransactionBuilder.Context,
+                    residualTreasuryProduced: ResidualTreasuryUtxo
+                ): Result = PartialResult.WithOnlyDirectPayouts(
+                  this.input.transaction.treasurySpent,
+                  residualTreasuryProduced,
+                  ctx
+                )
+
+            extension (self: SettlementTx.Builder.Result.WithOnlyDirectPayouts)
+                def toArgs1 = WithOnlyDirectPayoutsArgs(self)
+
+            // with rollouts
+            final case class WithRolloutsArgs(
+                override val input: SettlementTx.Builder.Result.WithRollouts
+            ) extends Some:
+                override type Input = SettlementTx.Builder.Result.WithRollouts
+
+                override type Result = PartialResult.WithRollouts
+
+                override def mkResult(
+                    ctx: TransactionBuilder.Context,
+                    residualTreasuryProduced: ResidualTreasuryUtxo
+                ): Result = PartialResult.WithRollouts(
+                  this.input.transaction.treasurySpent,
+                  residualTreasuryProduced,
+                  this.input.transaction.rolloutProduced,
+                  ctx
+                )
+
+            extension (self: SettlementTx.Builder.Result.WithRollouts)
+                def toArgs1 = WithRolloutsArgs(self)
+
+        sealed trait PartialResult
+            extends HasCtx,
+              TreasuryUtxo.Spent,
+              ResidualTreasuryUtxo.Produced,
+              RolloutUtxo.MbProduced {
+
+            type ResultFinal <: FinalizationTx
+
+            final type Result = SeparateResult | MergedResult
+            type SeparateResult <: WithDeinit
+            type MergedResult <: MergedDeinit
+
+            def mkSeparateResult(majorVersionProduced: Block.Version.Major): SeparateResult
+
+            def mkMergedResult(
+                mergedFinalizationTx: Transaction,
+                majorVersionProduced: Block.Version.Major
+            ): MergedResult
+
+            /* Stage 2 of finalization tx building - an attempt to merge with a deinit tx.
+             */
+            final def complete(
+                deinitTx: DeinitTx,
+                majorVersionProduced: Block.Version.Major,
+                config: Tx.Builder.Config
+            ): BuildErrorOr[Result] =
+
+                /** TODO: update
+                  *
+                  * @param args
+                  * @return
+                  *   Mapping:
+                  *   - FinalizationTx2.NoPayouts -> FinalizationTx2.NoPayouts |
+                  *     FinalizationTx2.NoPayoutsMerged
+                  *
+                  *   - FinalizationTx1.WithOnlyDirectPayouts ->
+                  *     FinalizationTx2.WithOnlyDirectPayouts |
+                  *     Finalization2.WithOnlyDirectPayoutsMerged
+                  *
+                  *   - FinalizationTx1.WithRollouts(in fact: TxWithRolloutTxSeq) ->
+                  *     FinalizationTx2.WithRollouts | FinalizationTx2.WithRolloutsMerged
+                  */
+
+                // Preserve the original tx
+                val originalTx = ctx.transaction
+
+                val residualTreasuryIndex = this.residualTreasuryProduced.utxoId.index
+
+                extension [A](list: IndexedSeq[A])
+                    def removeAt(index: Int): IndexedSeq[A] =
+                        list.take(index) ++ list.drop(index + 1)
+
+                val ctxUpgraded = ctx |> unsafeCtxTxOutputsL
+                    .modify(outputs => outputs.removeAt(residualTreasuryIndex))
+
+                // Additional steps
+
+                val deinitOutputSteps =
+                    deinitTx.tx.body.value.outputs.toList.map(o => Send(o.value))
+                val mintSteps = deinitTx.tx.body.value.mint.get.assets.toList
+                    .flatMap(p =>
+                        p._2.map(a => MintStep(p._1, a._1, a._2, config.headNativeScript.witness))
+                    )
+                val feeStep = Fee(originalTx.body.value.fee + deinitTx.tx.body.value.fee)
+
+                val res = for {
+                    ctx <- TransactionBuilder
+                        .modify(ctxUpgraded, deinitOutputSteps ++ mintSteps :+ feeStep)
+                    res <- ctx
+                        .finalizeContext(
+                          config.env.protocolParams,
+                          prebalancedDiffHandler,
+                          config.env.evaluator,
+                          config.validators
+                        )
+                } yield res
+
+                val separateResult = mkSeparateResult(majorVersionProduced)
+
+                Right(
+                  res match {
+                      case Right(ctx) => mkMergedResult(ctx.transaction, majorVersionProduced)
+                      case Left(
+                            SomeBuildError.ValidationError(e: InvalidTransactionSizeException)
+                          ) =>
+                          separateResult
+                      // FIXME: ?
+                      case Left(_) => separateResult
+                  }
+                )
+        }
+
+        object PartialResult {
+
+            case class NoPayouts(
+                override val treasurySpent: TreasuryUtxo,
+                override val residualTreasuryProduced: ResidualTreasuryUtxo,
+                override val ctx: TransactionBuilder.Context
+            ) extends PartialResult {
+                type SeparateResult = FinalizationTx.NoPayouts
+                type MergedResult = FinalizationTx.NoPayoutsMerged
+
+                override def mkSeparateResult(
+                    majorVersionProduced: Block.Version.Major
+                ): SeparateResult =
+                    FinalizationTx.NoPayouts(
+                      majorVersionProduced,
+                      ctx.transaction,
+                      treasurySpent,
+                      residualTreasuryProduced,
+                      ctx.resolvedUtxos
+                    )
+
+                override def mkMergedResult(
+                    mergedFinalizationTx: Transaction,
+                    majorVersionProduced: Block.Version.Major
+                ): MergedResult =
+                    FinalizationTx.NoPayoutsMerged(
+                      majorVersionProduced,
+                      mergedFinalizationTx,
+                      treasurySpent,
+                      ctx.resolvedUtxos
+                    )
+            }
+
+            case class WithOnlyDirectPayouts(
+                override val treasurySpent: TreasuryUtxo,
+                override val residualTreasuryProduced: ResidualTreasuryUtxo,
+                override val ctx: TransactionBuilder.Context
+            ) extends PartialResult {
+                type SeparateResult = FinalizationTx.WithOnlyDirectPayouts
+                type MergedResult = FinalizationTx.WithOnlyDirectPayoutsMerged
+
+                override def mkSeparateResult(
+                    majorVersionProduced: Block.Version.Major
+                ): SeparateResult =
+                    FinalizationTx.WithOnlyDirectPayouts(
+                      majorVersionProduced,
+                      ctx.transaction,
+                      treasurySpent,
+                      residualTreasuryProduced,
+                      ctx.resolvedUtxos
+                    )
+
+                override def mkMergedResult(
+                    mergedFinalizationTx: Transaction,
+                    majorVersionProduced: Block.Version.Major
+                ): MergedResult =
+                    FinalizationTx.WithOnlyDirectPayoutsMerged(
+                      majorVersionProduced,
+                      mergedFinalizationTx,
+                      treasurySpent,
+                      ctx.resolvedUtxos
+                    )
+            }
+
+            case class WithRollouts(
+                override val treasurySpent: TreasuryUtxo,
+                override val residualTreasuryProduced: ResidualTreasuryUtxo,
+                override val rolloutProduced: RolloutUtxo,
+                override val ctx: TransactionBuilder.Context
+            ) extends PartialResult,
+                  RolloutUtxo.Produced {
+
+                type SeparateResult = FinalizationTx.WithRollouts
+                type MergedResult = FinalizationTx.WithRolloutsMerged
+
+                override def mkSeparateResult(
+                    majorVersionProduced: Block.Version.Major
+                ): SeparateResult =
+                    FinalizationTx.WithRollouts(
+                      majorVersionProduced,
+                      ctx.transaction,
+                      treasurySpent,
+                      residualTreasuryProduced,
+                      rolloutProduced,
+                      ctx.resolvedUtxos
+                    )
+
+                override def mkMergedResult(
+                    mergedFinalizationTx: Transaction,
+                    majorVersionProduced: Block.Version.Major
+                ): MergedResult =
+                    FinalizationTx.WithRolloutsMerged(
+                      majorVersionProduced,
+                      mergedFinalizationTx,
+                      treasurySpent,
+                      rolloutProduced,
+                      ctx.resolvedUtxos
+                    )
+            }
+        }
+    }
 }

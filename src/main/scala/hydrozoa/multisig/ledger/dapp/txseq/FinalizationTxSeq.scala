@@ -5,8 +5,8 @@ import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx1.Builder.Args.{TxWithRolloutTxSeq, toArgs1}
-import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx2.Builder.Args.toArgs2
+import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
+import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
@@ -15,28 +15,28 @@ import hydrozoa.multisig.protocol.types.Block.Version.Major
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum FinalizationTxSeq {
-    def finalizationTx: FinalizationTx2
+    def finalizationTx: FinalizationTx
 
     /** Merged deinit, optional direct payouts */
     case Monolithic(
-        override val finalizationTx: FinalizationTx2.Monolithic
+        override val finalizationTx: FinalizationTx.Monolithic
     )
 
     /** Separate deinit, optional direct payouts */
     case WithDeinit(
-        override val finalizationTx: FinalizationTx2.WithDeinit,
+        override val finalizationTx: FinalizationTx.WithDeinit,
         deinitTx: DeinitTx
     )
 
     /** Merged deinit, optional direct payouts, and rollout */
     case WithRollouts(
-        override val finalizationTx: FinalizationTx2.WithRolloutsMerged,
+        override val finalizationTx: FinalizationTx.WithRolloutsMerged,
         rolloutTxSeq: RolloutTxSeq
     )
 
     /** Separate deinit, optional direct payouts, and rollout */
     case WithDeinitAndRollouts(
-        override val finalizationTx: FinalizationTx2.WithRollouts,
+        override val finalizationTx: FinalizationTx.WithRollouts,
         deinitTx: DeinitTx,
         rolloutTxSeq: RolloutTxSeq
     )
@@ -50,26 +50,34 @@ object FinalizationTxSeq {
     ) {
         def build(args: Args): Either[Builder.Error, FinalizationTxSeq] = {
 
-            val upgrade = FinalizationTx1.Builder.upgrade(config, args.multisigRegimeUtxoToSpend)
+            val upgrade = FinalizationTx.Builder.upgrade(config, args.multisigRegimeUtxoToSpend)
 
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
 
                 case None =>
                     for {
                         // SettlementTx, but with no deposits
-                        settlementTx <- SettlementTx.Builder
+                        settlementTxRes <- SettlementTx.Builder
                             .NoPayouts(config)
                             .build(args.toArgsNoPayouts)
                             .left
                             .map(Builder.Error.SettlementError(_))
 
-                        // Upgrade to finalization tx stage 1
-                        finalizationTx1 <- upgrade(settlementTx.toArgs1).left
-                            .map(Builder.Error.FinalizationTx1Error(_))
+                        // Upgrade the settlement tx into the partial finalization
+                        // NB: this won't work!
+                        // finalizationPartial <- upgrade(fromSettlementResult(settlementTxRes)).left
+                        finalizationPartial <- upgrade(settlementTxRes.toArgs1).left
+                            .map(Builder.Error.FinalizationPartialError(_))
 
+                        //// This is exhaustive!
+                        // _ = finalizationPartial match {
+                        //    case _: PartialResult.NoPayouts => ()
+                        // }
+
+                        // Build deinit tx
                         deinitTx <- DeinitTx.Builder
                             .apply(
-                              finalizationTx1.residualTreasuryProduced,
+                              finalizationPartial.residualTreasuryProduced,
                               args.equityShares,
                               config
                             )
@@ -77,14 +85,15 @@ object FinalizationTxSeq {
                             .left
                             .map(Builder.Error.DeinitTxError(_))
 
-                        finalizationTx2 <- FinalizationTx2.Builder
-                            .build(deinitTx)(finalizationTx1.toArgs2)
+                        // Complete finalization tx
+                        finalizationTx <- finalizationPartial
+                            .complete(deinitTx, args.majorVersionProduced, config)
                             .left
-                            .map(Builder.Error.FinalizationTx2Error(_))
+                            .map(Builder.Error.FinalizationCompleteError(_))
 
-                    } yield finalizationTx2 match {
-                        case tx: FinalizationTx2.NoPayouts       => WithDeinit(tx, deinitTx)
-                        case tx: FinalizationTx2.NoPayoutsMerged => Monolithic(tx)
+                    } yield finalizationTx match {
+                        case tx: FinalizationTx.NoPayouts       => WithDeinit(tx, deinitTx)
+                        case tx: FinalizationTx.NoPayoutsMerged => Monolithic(tx)
                     }
 
                 case Some(nePayouts) =>
@@ -103,14 +112,19 @@ object FinalizationTxSeq {
                             .left
                             .map(Error.SettlementError(_))
 
-                        // Upgrade to finalization tx stage 1
-                        finalizationTx1 <- upgrade(
-                          FinalizationTx1.Builder.Args(settlementTxRes)
-                        ).left.map(Builder.Error.FinalizationTx1Error(_))
+                        finalizationPartial <- settlementTxRes match {
+                            case s: SettlementTx.Builder.Result.WithOnlyDirectPayouts =>
+                                upgrade(s.toArgs1).left
+                                    .map(Builder.Error.FinalizationPartialError(_))
+                            case s: SettlementTx.Builder.Result.WithRollouts =>
+                                upgrade(s.toArgs1).left
+                                    .map(Builder.Error.FinalizationPartialError(_))
+                        }
 
+                        // Build deinit tx
                         deinitTx <- DeinitTx.Builder
                             .apply(
-                              finalizationTx1.residualTreasuryProduced,
+                              finalizationPartial.residualTreasuryProduced,
                               args.equityShares,
                               config
                             )
@@ -118,53 +132,43 @@ object FinalizationTxSeq {
                             .left
                             .map(Builder.Error.DeinitTxError(_))
 
-                        finalizationStage2Builder = FinalizationTx2.Builder.build(deinitTx)
-
+                        // Complete finalization tx and build the sequence
                         finalizationTxSeq <-
-                            finalizationTx1 match {
-
-                                case tx: FinalizationTx1.WithOnlyDirectPayouts =>
-                                    val finalizationTx2 = finalizationStage2Builder(
-                                      tx.toArgs2
-                                    ).toOption.get
-
-                                    finalizationTx2 match {
-                                        case tx2: FinalizationTx2.WithOnlyDirectPayouts =>
-                                            Right(FinalizationTxSeq.WithDeinit(tx2, deinitTx))
-                                        case tx2: FinalizationTx2.WithOnlyDirectPayoutsMerged =>
-                                            Right(FinalizationTxSeq.Monolithic(tx2))
+                            finalizationPartial match {
+                                case withOnlyDirectPayout: PartialResult.WithOnlyDirectPayouts =>
+                                    for {
+                                        finalizationTx <- withOnlyDirectPayout
+                                            .complete(deinitTx, args.majorVersionProduced, config)
+                                            .left
+                                            .map(Builder.Error.FinalizationCompleteError(_))
+                                    } yield finalizationTx match {
+                                        case tx2: FinalizationTx.WithOnlyDirectPayouts =>
+                                            FinalizationTxSeq.WithDeinit(tx2, deinitTx)
+                                        case tx2: FinalizationTx.WithOnlyDirectPayoutsMerged =>
+                                            FinalizationTxSeq.Monolithic(tx2)
                                     }
 
-                                case res: TxWithRolloutTxSeq =>
+                                case withRollouts: PartialResult.WithRollouts =>
                                     for {
-
-                                        finalizationTx2 <- finalizationStage2Builder(
-                                          res._1.toArgs2
-                                        ).left.map(Builder.Error.FinalizationTx2Error(_))
-
-                                        rolloutTxSeq <- res._2
-                                            .finishPostProcess(finalizationTx2.rolloutProduced)
+                                        finalizationTx <- withRollouts
+                                            .complete(deinitTx, args.majorVersionProduced, config)
+                                            .left
+                                            .map(Builder.Error.FinalizationCompleteError(_))
+                                        rolloutTxSeq <- rolloutTxSeqPartial
+                                            .finishPostProcess(withRollouts.rolloutProduced)
                                             .left
                                             .map(Error.RolloutSeqError(_))
-
-                                    } yield finalizationTx2 match {
-                                        case tx: FinalizationTx2.WithRollouts =>
+                                    } yield finalizationTx match {
+                                        case tx: FinalizationTx.WithRollouts =>
                                             FinalizationTxSeq
                                                 .WithDeinitAndRollouts(
-                                                  tx,
-                                                  deinitTx,
-                                                  rolloutTxSeq
+                                                    tx,
+                                                    deinitTx,
+                                                    rolloutTxSeq
                                                 )
-                                        case tx: FinalizationTx2.WithRolloutsMerged =>
+                                        case tx: FinalizationTx.WithRolloutsMerged =>
                                             FinalizationTxSeq.WithRollouts(tx, rolloutTxSeq)
                                     }
-
-                                // TODO: maybe we can do better
-                                case _: FinalizationTx1.NoPayouts =>
-                                    throw RuntimeException("not possible")
-                                case _: FinalizationTx1.WithRollouts =>
-                                    throw RuntimeException("not possible")
-
                             }
                     } yield finalizationTxSeq
             }
@@ -175,9 +179,9 @@ object FinalizationTxSeq {
 
         enum Error:
             case SettlementError(e: (SomeBuildError, String))
-            case FinalizationTx1Error(e: (SomeBuildError, String))
             case DeinitTxError(e: (SomeBuildError, String))
-            case FinalizationTx2Error(e: (SomeBuildError, String))
+            case FinalizationPartialError(e: (SomeBuildError, String))
+            case FinalizationCompleteError(e: (SomeBuildError, String))
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
