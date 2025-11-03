@@ -1,11 +1,10 @@
 package test
 
+import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen.const
-
-import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Testnet
@@ -18,11 +17,13 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.Environment
-import scalus.cardano.txbuilder.TransactionBuilder.{ensureMinAda}
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
+
+import scala.language.postfixOps
 
 val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
@@ -114,7 +115,8 @@ val genAdaOnlyValue: Gen[Value] =
 // TODO: make this take all fields as Option and default to generation if None.
 def genAdaOnlyPubKeyUtxo(
     peer: TestPeer,
-    params: ProtocolParams = blockfrost544Params
+    params: ProtocolParams = blockfrost544Params,
+    network : Network = Testnet
 ): Gen[(TransactionInput, Babbage)] =
     for {
         txId <- arbitrary[TransactionInput]
@@ -123,7 +125,7 @@ def genAdaOnlyPubKeyUtxo(
       txId,
       ensureMinAda(
         Babbage(
-          address = peer.address(testNetwork),
+          address = peer.address(network),
           value = Value(Coin(0L)),
           datumOption = None,
           scriptRef = None

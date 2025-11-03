@@ -8,6 +8,7 @@ object CIP67 {
         val head: Long = 4937L // "HYDR" (hydrozoa) on the phone pad
         val rollout: Long = 7655L // "ROLL" (rollout) on the phone pad
         val vote: Long = 8683L // "VOTE" (dispute) on the phone pad
+        val multiSigRegime : Long = 1234L // FIXME
     }
 
     class TokenNames(seedUtxo: TransactionInput) {
@@ -27,6 +28,8 @@ object CIP67 {
         val voteTokenName: AssetName = prefixToken(CIP67.Tags.vote)
 
         val rolloutTokenName: AssetName = prefixToken(CIP67.Tags.rollout)
+        
+        val multisigRegimeTokenName : AssetName = prefixToken(CIP67.Tags.multiSigRegime)
     }
 
 }
