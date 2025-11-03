@@ -37,7 +37,7 @@ object EquityShares:
         individualContingency: IndividualContingency
     ): Either[HeadConfigError, EquityShares] = {
         import collectiveContingency.*
-    import individualContingency.*
+        import individualContingency.*
 
         val sharesSum = shares.values.map(_._2).sum
         for {

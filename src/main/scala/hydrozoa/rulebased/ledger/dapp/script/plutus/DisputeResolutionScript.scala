@@ -4,10 +4,7 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{
-    Continuing,
-    Removed
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
@@ -26,6 +23,8 @@ import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
+
+import scala.annotation.tailrec
 
 @Compile
 object DisputeResolutionValidator extends Validator {
@@ -108,7 +107,7 @@ object DisputeResolutionValidator extends Validator {
     private inline val VoteMajorVersionCheck =
         "The versionMajor field must match between treasury and voteRedeemer"
     private inline val VoteVoteOutputExists =
-        "There should exist one continuing vote output with the same set of tokens"
+        "There should exist one continuing vote output with the same value"
     private inline val VoteOutputDatumCheck =
         "voteStatus field of voteOutput must be a correct Vote"
     private inline val VoteOutputDatumAdditionalChecks =
@@ -250,10 +249,27 @@ object DisputeResolutionValidator extends Validator {
                   treasuryDatum.peers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
                 )
-                @annotation.unused
-                val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
-                    require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                )
+
+                // Temporary workaround
+                import scalus.prelude.List.{Cons, Nil}
+                @tailrec
+                def verifySignatures(a: List[ByteString], b: List[ByteString]): Unit =
+                    a match
+                        case Cons(h1, t1) =>
+                            b match
+                                case Cons(h2, t2) =>
+                                    require(verifyEd25519Signature(h1, msg, h2))
+                                    verifySignatures(t1, t2)
+                                case Nil          => ()
+                        case Nil => ()
+
+                verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
+
+                //@annotation.unused
+                //val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                //    //require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
+                //)
+
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
                   voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor,
@@ -262,7 +278,8 @@ object DisputeResolutionValidator extends Validator {
 
                 // Vote output
                 val voteOutput = tx.outputs.find(o =>
-                    o.value.containsExactlyOneAsset(headMp, disputeId, voteTokenAmount)
+                    // We decided to use collateral, now the value should be preserved.
+                    o.value === voteInput.value
                 ) match
                     case Some(e) => e
                     case None    => fail(VoteVoteOutputExists)
@@ -286,9 +303,11 @@ object DisputeResolutionValidator extends Validator {
                     case _ => fail(VoteOutputDatumCheck)
                 }
 
+                // When vote is cast, we don't need the peer in the datum anymore
+                require(None === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
+
                 // All other fields of voteInput and voteOutput must match.
                 require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
-                require(voteDatum.peer === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
 
             /** Tallying is done as follows:
@@ -421,12 +440,23 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the vote output
 
-                // 8. Let continuingOutput be an output with the same address and the sum of all
-                // tokens (including ADA) in continuingInput and removedInput.
+                // 8. Let continuingOutput be an output with:
+                // - same address
+                // - combined tokens
+                // - ada amount that is not less than ada in continuing input + max (0, (ada in removed input - tx fees))
+
+                // This is better that require(removedInput.value.getLovelace - tx.fee), since this may prevent the
+                // tx from getting through.
+                val residualAda = {
+                    val residualAda = removedInput.value.getLovelace - tx.fee
+                    if residualAda > 0 then residualAda else BigInt(0)
+                }
+
                 val continuingOutput = tx.outputs
                     .find(o =>
                         o.address === continuingInput.address
-                            && o.value === continuingInput.value + removedInput.value
+                            && o.value.onlyNonAdaAsset === (continuingInput.value + removedInput.value).onlyNonAdaAsset
+                            && o.value.getLovelace >= continuingInput.value.getLovelace + residualAda
                     )
                     .getOrFail(AbsentOrWrongContinuingOutput)
 

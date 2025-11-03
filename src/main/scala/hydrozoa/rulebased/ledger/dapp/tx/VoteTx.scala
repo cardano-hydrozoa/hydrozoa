@@ -25,6 +25,7 @@ import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.prelude.List as SList
+import scalus.prelude.Option.None as ScalusNone
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?
@@ -64,7 +65,8 @@ object VoteTx {
                     case Success(voteDatum) =>
                         if voteDatum.voteStatus == NoVote then
                             val updatedVoteDatum = voteDatum.copy(
-                              voteStatus = VoteStatus.Vote(
+                                peer = ScalusNone,
+                                voteStatus = VoteStatus.Vote(
                                 VoteDetails(
                                   recipe.blockHeader.commitment,
                                   recipe.blockHeader.versionMinor
@@ -113,6 +115,9 @@ object VoteTx {
                 .build(
                   recipe.network,
                   List(
+                    // Use collateral to pay fees
+                    Spend(TransactionUnspentOutput(recipe.collateralUtxo.toScalus), PubKeyWitness),
+                    Send(recipe.collateralUtxo._2),
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
                     Spend(

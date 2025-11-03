@@ -3,6 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.EquityShares
+import hydrozoa.config.EquityShares.RuleBasedRegimeDistribution.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
@@ -11,19 +12,20 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
     Unresolved
 }
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
-import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.value.Coin as VCoin
+import scalus.cardano.ledger.value.Coin as NewCoin
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
+
+import scala.collection.immutable.SortedMap
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -35,12 +37,13 @@ final case class DeinitTx(
   * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,
   * it goes for the fees.
   *
-  * Since the treasury is locked at the Plutus script it requires the collateral. It's used for fees
-  * as well, which simplifies the building - we don't need to subtract fees from the treasury.
+  * Since the treasury is locked at the Plutus script it requires the collateral. This collateral is
+  * used for fees as well, which simplifies building - we don't need to subtract fees from the
+  * treasury.
   *
   * When it comes to multi-signing, all nodes cannot be built _exactly_ the same transaction since
   * every will use their own collateral. This should be addressed when implementing automatic
-  * signing if we decide to have it.
+  * signing if we decide to have it, for now we expect this operation to be done manually.
   *
   * All head tokens under the head's policy id (and only those) should be burnt.
   */
@@ -49,6 +52,8 @@ object DeinitTx {
     case class Recipe(
         headNativeScript: HeadMultisigScript,
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        defaultVoteDeposit: Coin,
+        voteDeposit: Coin,
         shares: EquityShares,
         collateralUtxo: Utxo[L1],
         env: Environment,
@@ -63,19 +68,16 @@ object DeinitTx {
     import DeinitTxError.*
 
     def build(recipe: Recipe): Either[SomeBuildError | DeinitTxError, DeinitTx] = {
-        val treasuryUtxo = recipe.treasuryUtxo
-        val policyId = recipe.headNativeScript.policyId
+        import recipe.*
+
+        val policyId = headNativeScript.policyId
 
         for {
             _ <- checkTreasury(treasuryUtxo)
 
             headTokens <- extractHeadTokens(policyId, treasuryUtxo)
 
-            equityOutputs = mkEquityProduced(
-              treasuryUtxo.value.coin,
-              recipe.shares,
-              recipe.env.protocolParams
-            )
+            equityOutputs = mkEquityProduced(recipe)
 
             result <- buildDeinitTx(recipe, equityOutputs.outputs, equityOutputs.dust, headTokens)
         } yield result
@@ -107,16 +109,17 @@ object DeinitTx {
         def apply(dust: Coin): EquityProduced =
             EquityProduced(List.empty, Option.when(dust < Coin.zero)(dust))
 
-    private def mkEquityProduced(
-        treasuryEquity: Coin,
-        shares: EquityShares,
-        params: ProtocolParams
-    ): EquityProduced =
+    private def mkEquityProduced(recipe: Recipe): EquityProduced =
+        import recipe.*
 
-        val minAda0 = minAda(params)
+        val minAda0 = minAda(env.protocolParams)
 
-        import EquityShares.RuleBasedRegimeDistribution.*
-        val distribution = shares.distribute(???, ???)(VCoin.unsafeApply(treasuryEquity.value))
+        val defaultVoteDepositNewCoin = NewCoin.unsafeApply(defaultVoteDeposit.value)
+        val voteDepositNewCoin = NewCoin.unsafeApply(voteDeposit.value)
+        val treasuryEquityNewCoin = NewCoin.unsafeApply(treasuryUtxo.value.coin.value)
+
+        val distribution =
+            shares.distribute(defaultVoteDepositNewCoin, voteDepositNewCoin)(treasuryEquityNewCoin)
 
         val initial = EquityProduced(Coin(distribution.dust.underlying))
 

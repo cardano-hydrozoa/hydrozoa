@@ -1,6 +1,7 @@
 package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
@@ -11,6 +12,7 @@ import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
@@ -159,7 +161,7 @@ class VoteTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 case Left(e) =>
                     fail(s"Build failed $e")
                 case Right(tx) =>
-                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
+                     //println(HexUtil.encodeHexString(tx.tx.toCbor))
 
                     // Verify VoteTx structure
                     assert(
