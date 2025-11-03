@@ -10,6 +10,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
+import scala.annotation.tailrec
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
@@ -23,8 +24,6 @@ import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
 import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
-
-import scala.annotation.tailrec
 
 @Compile
 object DisputeResolutionValidator extends Validator {

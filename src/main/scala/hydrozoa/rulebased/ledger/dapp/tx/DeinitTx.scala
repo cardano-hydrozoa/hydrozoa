@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
     Unresolved
 }
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
+import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -24,8 +25,6 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
-
-import scala.collection.immutable.SortedMap
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,

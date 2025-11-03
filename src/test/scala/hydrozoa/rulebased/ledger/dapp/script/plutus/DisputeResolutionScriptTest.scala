@@ -1,9 +1,8 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
 
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.ledger.ScriptHash
-
 import scala.annotation.nowarn
+import scalus.cardano.ledger.ScriptHash
 
 @nowarn("msg=unused value")
 class DisputeResolutionScriptTest extends AnyFunSuite {
