@@ -24,6 +24,7 @@ import scalus.prelude.List as SList
 
 final case class FallbackTx(
     treasurySpent: TreasuryUtxo,
+    treasuryProduced : TreasuryUtxo,
     override val tx: Transaction
 ) extends Tx
 
@@ -32,12 +33,17 @@ final case class FallbackTx(
 Fallback tx spec:
 
  - [ ] Spend both the treasury and multisig regime utxos.
- - [ ] Burn the multisig regime token.Mint N+1 vote tokens.
- - [ ]Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)
+ - [ ] Burn the multisig regime token.
+ - [ ] Mint N+1 vote tokens.
+ - [ ] Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)
  - [ ] Produce default vote utxo with minimum ADA, plus a vote token.
  - [ ] Produce one vote utxo per peer, containing minimum ADA plus a configured allowance for one tally tx fee, plus a vote token.
  - [ ] Produce one collateral utxo per peer, containing minimum ADA plus a configured allowance for one vote tx fee.
  - [ ] Cover the tx fee and ADA for all non-treasury outputs using funds from the multisig regime utxo.
+ - [ ] TreasuryOutput at index 0
+ - [ ] Default vote at index 1
+ - [ ] Per-peer vote utxos at next indices
+ - [ ] Collateral utxos at next indicies
  */
 
 
@@ -47,6 +53,7 @@ object FallbackTx {
         treasuryUtxo: TreasuryUtxo,
         disputeTreasuryAddress: ShelleyAddress,
         disputeResolutionAddress: ShelleyAddress,
+        tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
         votingDuration: PosixTime,
@@ -160,7 +167,10 @@ object FallbackTx {
                   evaluator = recipe.config.env.evaluator,
                   validators = recipe.config.validators
                 )
-        } yield FallbackTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
-
+        } yield FallbackTx(
+            treasurySpent = recipe.treasuryUtxo, 
+            treasuryProduced = 
+            ???, tx = finalized.transaction
+        )
     }
 }

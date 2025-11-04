@@ -1,10 +1,47 @@
 package hydrozoa.rulebased.ledger.dapp.state
 
+import cats.data.NonEmptyList
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{
+    KzgCommitment,
+    VoteDatum,
+    VoteDetails,
+    VoteStatus
+}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.ledger.api.v3.PubKeyHash
 import scalus.prelude.{===, Eq, Option}
+
+object VoteDatum {
+    def default(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
+        key = 0,
+        // N.B.: Version "Branch: (None) @ c28633a • Commit date: 2025-10-16" of the spec says
+        // to set link to `0 < peersN ? 1 : 0`. But we have peers as a NonEmptyList, so this is just 1.
+        link = 1,
+        peer = Option.None,
+        voteStatus = VoteStatus.Vote(VoteDetails(commitment = commitment, versionMinor = 0))
+    )
+
+    def apply(peers: NonEmptyList[PubKeyHash]): NonEmptyList[VoteState.VoteDatum] = {
+        {
+            val numPeers = peers.length
+            val mapFunc = (x: (PubKeyHash, Int)) => {
+                val i = x._2
+                val pkh = x._1
+                VoteState.VoteDatum(
+                    key = i,
+                    link = if i < numPeers then i + 1 else 0,
+                    peer = Option.Some(pkh),
+                    voteStatus = NoVote
+                )
+            }
+            peers.zipWithIndex.map(mapFunc)
+        }
+    }
+}
+
 
 @Compile
 object VoteState:
@@ -15,6 +52,7 @@ object VoteState:
         peer: Option[PubKeyHash],
         voteStatus: VoteStatus
     )
+
 
     given FromData[VoteDatum] = FromData.derived
     given ToData[VoteDatum] = ToData.derived

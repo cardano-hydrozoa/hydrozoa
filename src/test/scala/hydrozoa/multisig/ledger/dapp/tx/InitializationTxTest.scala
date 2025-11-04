@@ -100,51 +100,49 @@ object InitializationTxTest extends Properties("InitializationTx") {
                 val mulitsigRegimeTokenName = CIP67.TokenNames(recipe.seedUtxo).multisigRegimeTokenName
                 val txOutputs : Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
 
-                recipe.spentUtxos.toList.map(utxo => iTx.tx.body.value.inputs.toSeq.contains(utxo.input)).reduce(_ && _)
-                    :| "Configured inputs are spent"
-                    && iTx.tx.body.value.inputs.toSeq.contains(recipe.seedUtxo) :| "Seed input is spent"
-                    && iTx.tx.body.value.mint.contains(Mint(MultiAsset(SortedMap(
-                  headNativeScript.policyId -> SortedMap(headTokenName -> 1L, mulitsigRegimeTokenName -> 1L)))))
-                    :| "Only Treasury token and mulReg tokens minted"
+                ("Configured inputs are spent" |: recipe.spentUtxos.toList.map(utxo => 
+                    iTx.tx.body.value.inputs.toSeq.contains(utxo.input)).reduce(_ && _))
+                    && ("Seed input is spent" |:
+                     iTx.tx.body.value.inputs.toSeq.contains(recipe.seedUtxo) )
+                    &&  ("Only Treasury token and mulReg tokens minted" |: iTx.tx.body.value.mint.contains(Mint(MultiAsset(SortedMap(
+                  headNativeScript.policyId -> SortedMap(headTokenName -> 1L, mulitsigRegimeTokenName -> 1L))))))
                     && {
 
                     val expectedTreasuryIndex = iTx.treasuryProduced.asUtxo.input.index
                     // Treasury output checks
-                    (txOutputs(expectedTreasuryIndex) ==
-                    iTx.treasuryProduced.asUtxo.output)
-                    :| "initialization tx contains treasury output at correct index"
-                    && (iTx.tx.id == iTx.treasuryProduced.asUtxo.input.transactionId)
-                    :| "initialization tx id coherent with produced treasury output"
-                    && (iTx.treasuryProduced.asUtxo.output.value.assets ==
-                    MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L))))
-                    :| "treasury utxo only contains head token in multiassets"
-                    && (iTx.treasuryProduced.asUtxo.output.value.coin >= recipe.initialDeposit)
-                    :| "treasury utxo contains at least initial deposit"
-                } && {
-                  (txOutputs(iTx.multisigRegimeUtxo.input.index) ==
-                    iTx.multisigRegimeUtxo.output)
-                    :| "initialization tx contains MR output at correct index"
-                    && (iTx.tx.id == iTx.multisigRegimeUtxo.input.transactionId)
-                    :| "initialization tx id coherent with produced MR output"
-                    && (iTx.multisigRegimeUtxo.output.value.assets ==
-                    MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(mulitsigRegimeTokenName -> 1L))))
-                    :| "MR utxo only contains MR token in multiassets"
-                    && (iTx.multisigRegimeUtxo.output.value.coin >= maxNonPlutusTxFee(recipe.env.protocolParams))
-                    :| "MR utxo contains at least enough coin for fallback deposit"
+                    ("initialization tx contains treasury output at correct index" |: 
+                        (txOutputs(expectedTreasuryIndex) ==  iTx.treasuryProduced.asUtxo.output))
+                      && ("initialization tx id coherent with produced treasury output" |:
+                        (iTx.tx.id == iTx.treasuryProduced.asUtxo.input.transactionId))
+                      && ("treasury utxo only contains head token in multiassets" |: 
+                        (iTx.treasuryProduced.asUtxo.output.value.assets ==
+                            MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))))
+                      &&  ("treasury utxo contains at least initial deposit" |: 
+                            (iTx.treasuryProduced.asUtxo.output.value.coin >= recipe.initialDeposit))
+                    
+                    } && {
+                    ("initialization tx contains MR output at correct index" |: 
+                        (txOutputs(iTx.multisigRegimeUtxo.input.index) ==
+                        iTx.multisigRegimeUtxo.output))
+                      && ( "initialization tx id coherent with produced MR output" |:
+                            (iTx.tx.id == iTx.multisigRegimeUtxo.input.transactionId))
+                      && ("MR utxo only contains MR token in multiassets" |:
+                        (iTx.multisigRegimeUtxo.output.value.assets ==
+                        MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(mulitsigRegimeTokenName -> 1L)))))
+                      && ("MR utxo contains at least enough coin for fallback deposit" |:
+                            (iTx.multisigRegimeUtxo.output.value.coin >= maxNonPlutusTxFee(recipe.env.protocolParams)))
                 } && {
                   val actual = iTx.tx.auxiliaryData.map(_.value)
                   val expected =
                     MD.apply(Initialization, iTx.treasuryProduced.address)
-                  (actual.contains(expected) :| s"Unexpected metadata value. Actual: $actual, expected: $expected")
+                  (s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual.contains(expected))
                 } && {
                   val bytes = iTx.tx.toCbor
-
                   given OriginalCborByteArray = OriginalCborByteArray(bytes)
-
-                  (iTx.tx == Cbor
+                  "Cbor round-tripping failed" |: (iTx.tx == Cbor
                     .decode(bytes)
                     .to[Transaction]
-                    .value) :| "Cbor round-tripping failed"
+                    .value) 
                 }
             }
     }

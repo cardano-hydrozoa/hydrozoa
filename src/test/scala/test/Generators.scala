@@ -3,6 +3,7 @@ package test
 import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
@@ -70,10 +71,12 @@ object Generators {
                 peers <- genTestPeers
                 hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
                 multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
+                seedUtxo <- arbitrary[TransactionInput]
             } yield
                 (Tx.Builder.Config(
                     headNativeScript = hns,
                     headNativeScriptReferenceInput = multisigWitnessUtxo,
+                    tokenNames = TokenNames(seedUtxo), 
                     env = env,
                     validators = validators), peers)
 
