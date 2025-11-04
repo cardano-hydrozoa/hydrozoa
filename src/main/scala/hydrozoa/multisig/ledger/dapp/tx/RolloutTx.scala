@@ -406,16 +406,16 @@ object RolloutTx {
 
                 } yield res
                 res match {
-                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)) =>
-                        Left(SomeBuildError.ValidationError(e, ctx))
+                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, errorCtx)) =>
+                        Left(SomeBuildError.ValidationError(e, errorCtx))
                             .explainConst("trail to add payout failed")
-                    case Left(SomeBuildError.BalancingError(CantBalance(diff), ctx)) =>
+                    case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)
-                    case _ =>
+                    case e =>
                         throw new RuntimeException(
-                          "impossible; " +
-                              "loop only has one possible Lefts"
+                          "should be impossible; " +
+                              s"loop only has two possible Lefts, but got ${e}"
                         )
                 }
             }
