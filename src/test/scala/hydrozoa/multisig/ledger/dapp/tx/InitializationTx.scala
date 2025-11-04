@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import cats.syntax.all.*
+import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
@@ -20,6 +21,7 @@ import scalus.cardano.txbuilder.TransactionUnspentOutput
 import test.*
 import test.TestPeer.*
 
+import scala.annotation.nowarn
 import scala.collection.immutable.SortedMap
 
 // The minimum ada required for the initial treasury utxo
@@ -50,23 +52,30 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
     for {
         peers <- genTestPeers
 
-        spentUtxos <- Gen
-            .nonEmptyListOf(genAdaOnlyPubKeyUtxo(peers.head)).map(NonEmptyList.fromListUnsafe)
+        // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
+        // a max non-plutus fee
+        seedUtxo <- genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(minInitTreasuryAda
+          + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)))
+        otherSpentUtxos <- Gen
+          .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
 
-//        // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
-//        // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
-//        // output
-//        initialDeposit <- choose(
-//          minInitTreasuryAda.value,
-//          sumUtxoValues(seedUtxos.toList).coin.value - estimatedFee.value - minPubkeyAda().value
-//        ).map(Coin(_))
+        spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
+
+        // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
+        // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
+        // output
+        initialDeposit <- Gen.choose(
+          minInitTreasuryAda.value,
+          sumUtxoValues(spentUtxos.toList).coin.value
+            - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
+            - minPubkeyAda().value
+        ).map(Coin(_))
 
     }
         yield InitializationTx.Recipe(
           seedUtxo = spentUtxos.head._1,
           spentUtxos = spentUtxos.map(utxo => TransactionUnspentOutput(utxo._1, utxo._2)),
-          initialDeposit = Coin(0L),
-          fallbackCoin = Coin(0L),
+          initialDeposit = initialDeposit,
           peers = peers.map(_.wallet.exportVerificationKeyBytes),
           env = testTxBuilderEnvironment,
           validators = testValidators,
@@ -85,18 +94,19 @@ object InitializationTxTest extends Properties("InitializationTx") {
                 val headNativeScript = HeadMultisigScript(recipe.peers)
                 val headTokenName = CIP67.TokenNames(recipe.seedUtxo).headTokenName
                 val mulitsigRegimeTokenName = CIP67.TokenNames(recipe.seedUtxo).multisigRegimeTokenName
+                val txOutputs : Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
 
-                recipe.spentUtxos.toList.map(iTx.tx.body.value.inputs.toSeq.contains(_)).reduce(_ && _)
+                recipe.spentUtxos.toList.map(utxo => iTx.tx.body.value.inputs.toSeq.contains(utxo.input)).reduce(_ && _)
                     :| "Configured inputs are spent"
                     && iTx.tx.body.value.inputs.toSeq.contains(recipe.seedUtxo) :| "Seed input is spent"
-                    && (iTx.tx.body.value.mint ==
-                            Some(Mint(MultiAsset(SortedMap(
-                                headNativeScript.policyId -> SortedMap(headTokenName -> 1L),
-                                headNativeScript.policyId -> SortedMap(mulitsigRegimeTokenName -> 1L))))))
+                    && iTx.tx.body.value.mint.contains(Mint(MultiAsset(SortedMap(
+                  headNativeScript.policyId -> SortedMap(headTokenName -> 1L, mulitsigRegimeTokenName -> 1L)))))
                     :| "Only Treasury token and mulReg tokens minted"
                     && {
+
+                    val expectedTreasuryIndex = iTx.treasuryProduced.asUtxo.input.index
                     // Treasury output checks
-                  (iTx.tx.body.value.outputs.map(_.value)(iTx.treasuryProduced.asUtxo.input.index) ==
+                    (txOutputs(expectedTreasuryIndex) ==
                     iTx.treasuryProduced.asUtxo.output)
                     :| "initialization tx contains treasury output at correct index"
                     && (iTx.tx.id == iTx.treasuryProduced.asUtxo.input.transactionId)
@@ -107,15 +117,15 @@ object InitializationTxTest extends Properties("InitializationTx") {
                     && (iTx.treasuryProduced.asUtxo.output.value.coin >= recipe.initialDeposit)
                     :| "treasury utxo contains at least initial deposit"
                 } && {
-                  (iTx.tx.body.value.outputs.map(_.value)(iTx.multisigRegimeUtxo.input.index) ==
+                  (txOutputs(iTx.multisigRegimeUtxo.input.index) ==
                     iTx.multisigRegimeUtxo.output)
                     :| "initialization tx contains MR output at correct index"
                     && (iTx.tx.id == iTx.multisigRegimeUtxo.input.transactionId)
                     :| "initialization tx id coherent with produced MR output"
                     && (iTx.multisigRegimeUtxo.output.value.assets ==
-                    MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L))))
+                    MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(mulitsigRegimeTokenName -> 1L))))
                     :| "MR utxo only contains MR token in multiassets"
-                    && (iTx.multisigRegimeUtxo.output.value.coin >= recipe.fallbackCoin)
+                    && (iTx.multisigRegimeUtxo.output.value.coin >= maxNonPlutusTxFee(recipe.env.protocolParams))
                     :| "MR utxo contains at least enough coin for fallback deposit"
                 }
             }

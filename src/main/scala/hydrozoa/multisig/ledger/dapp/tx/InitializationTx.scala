@@ -41,7 +41,6 @@ object InitializationTx {
                                // Must contain the seedUtxo TransactionInput
                                private val spentUtxos0: NonEmptyList[TransactionUnspentOutput],
                                initialDeposit: Coin,
-                               fallbackCoin: Coin,
                                peers: NonEmptyList[VerificationKeyBytes],
                                env: Environment,
                                validators: Seq[Validator],
@@ -58,26 +57,33 @@ object InitializationTx {
                         // Must contain the seedUtxo TransactionInput
                         spentUtxos: NonEmptyList[TransactionUnspentOutput],
                         initialDeposit: Coin,
-                        fallbackCoin: Coin,
                         peers: NonEmptyList[VerificationKeyBytes],
                         env: Environment,
                         validators: Seq[Validator],
                         changeAddress: ShelleyAddress
                     ): Option[InitializationTx.Recipe] =
             if spentUtxos.map(_.input).toList.contains(seedUtxo)
-            then Some(new Recipe(seedUtxo, spentUtxos, initialDeposit, fallbackCoin, peers, env, validators, changeAddress))
+            then Some(new Recipe(seedUtxo, spentUtxos, initialDeposit, peers, env, validators, changeAddress))
             else None
     }
 
-    private val mockTi : TransactionInput = TransactionInput(transactionId = TransactionHash.fromByteString(ByteString.fill(32, 0.toByte)), index = 0)
-    private val mockAddr  = Address(ShelleyAddress(network = Testnet,
-        Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
-        delegation = Null))
-    private val mockTo : TransactionOutput = Babbage(address = mockAddr, value = Value.zero, datumOption = None)
 
-    private val mockMRUtxo : TransactionUnspentOutput = TransactionUnspentOutput(
-      mockTi, mockTo
-    )
+    /*
+    Initialization tx spec:
+    - Spend configured inputs, ensuring that the configured seed utxo is among them.
+    - Mint the treasury and multisig regime tokens.Produce the initial treasury with at least the configured value, plus the treasury token.
+    - Produce the multisig regime utxo with the fallback deposit (i.e. sufficient funds to cover the fallback tx), plus the multisig regime token.
+    - Cover the tx fee using the treasury output in the diff handler.
+    - Fail if there aren't enough spent funds to cover all these requirements.
+Fallback tx spec:
+
+    Spend both the treasury and multisig regime utxos.
+
+Burn the multisig regime token.Mint N+1 vote tokens.Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)Produce default vote utxo with minimum ADA, plus a vote token.Produce one vote utxo per peer, containing minimum ADA plus a configured allowance for one tally tx fee, plus a vote token.Produce one collateral utxo per peer, containing minimum ADA plus a configured allowance for one vote tx fee.Cover the tx fee and ADA for all non-treasury outputs using funds from the multisig regime utxo.
+     */
+
+
+
 
     def build(recipe: Recipe): Either[SomeBuildError, InitializationTx] = {
         ////////////////////////////////////////////////////////////
@@ -104,8 +110,12 @@ object InitializationTx {
         val mrTokenName = CIP67.TokenNames(recipe.seedUtxo).multisigRegimeTokenName
         val mrToken: MultiAsset = MultiAsset(SortedMap(
           headNativeScript.policyId -> SortedMap(mrTokenName -> 1L)
-        ))    
-        val mrValue = Value(Coin.zero, mrToken) + Value(recipe.fallbackCoin)
+        ))
+
+        // Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
+        //Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
+        // (this is the deposit to cover the fallback transaction fee)
+        val mrValue = Value(maxNonPlutusTxFee(recipe.env.protocolParams), mrToken)
 
         val datum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
@@ -138,15 +148,14 @@ object InitializationTx {
             headNativeScript.requiredSigners
           )
         )
-        
-        
+        val hmrwOutput =Babbage(headAddress, mrValue, None, None).ensureMinAda(recipe.env.protocolParams)
+
 
         val createTreasury: Send = Send(
           Babbage(headAddress, headValue, Some(Inline(datum.toData)), None)
         )
 
         val createChangeOutput = Send(Babbage(recipe.changeAddress, Value.zero, None, None))
-        val createHMRWOutput: Send = Send(Babbage(headAddress, mrValue, None, None))
 
         val modifyAuxiliaryData =
             ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
@@ -155,8 +164,8 @@ object InitializationTx {
             .appended(mintBeaconToken)
             .appended(mintMRToken)
             .appended(createTreasury)
+            .appended(Send(hmrwOutput))
             .appended(createChangeOutput)
-            .appended(createHMRWOutput)
             .appended(modifyAuxiliaryData)
 
         ////////////////////////////////////////////////////////////
@@ -174,7 +183,7 @@ object InitializationTx {
                   protocolParams = recipe.env.protocolParams,
                   diffHandler = new ChangeOutputDiffHandler(
                     recipe.env.protocolParams,
-                    1
+                    2
                   ).changeOutputDiffHandler,
                   evaluator = recipe.env.evaluator,
                   validators = recipe.validators
@@ -192,7 +201,7 @@ object InitializationTx {
             value = headValue
           ),
           tx = finalized.transaction,
-          multisigRegimeUtxo = mockMRUtxo
+          multisigRegimeUtxo = TransactionUnspentOutput(TransactionInput(finalized.transaction.id, 1), hmrwOutput)
         ))
     }
 

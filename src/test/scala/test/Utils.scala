@@ -16,7 +16,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.txbuilder.Environment
+import scalus.cardano.txbuilder.{Datum, Environment}
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
@@ -116,18 +116,30 @@ val genAdaOnlyValue: Gen[Value] =
 def genAdaOnlyPubKeyUtxo(
     peer: TestPeer,
     params: ProtocolParams = blockfrost544Params,
-    network : Network = Testnet
+    network : Network = Testnet,
+    /** `None` for minAda; Some(Coin)` to generate lovelace values with some minimum amount*/
+    genCoinWithMinimum : Option[Coin] = None,
+    /**  `None` for no datum; `Some(gen)` to generate an optional datum*/
+    datumGenerator : Option[Gen[Option[DatumOption]]] = None
 ): Gen[(TransactionInput, Babbage)] =
     for {
         txId <- arbitrary[TransactionInput]
         value <- genAdaOnlyValue
+        coin <- genCoinWithMinimum match{
+          case None => Gen.const(Coin(0))
+          case Some(min) => arbitrary[Coin].map(_ + min) 
+        }
+        datum <- datumGenerator match {
+          case None => Gen.const(None)
+          case Some(gen) => gen
+        }
     } yield (
       txId,
       ensureMinAda(
         Babbage(
           address = peer.address(network),
-          value = Value(Coin(0L)),
-          datumOption = None,
+          value = Value(coin),
+          datumOption = datum,
           scriptRef = None
         ),
         params
