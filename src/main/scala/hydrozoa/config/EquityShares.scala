@@ -3,7 +3,7 @@ import hydrozoa.AddressL1
 import scalus.cardano.ledger.value.coin.Coin
 import spire.compat.numeric
 import spire.math.Number.apply
-import spire.math.{Rational, UByte}
+import spire.math.{Rational, SafeLong, UByte}
 import spire.syntax.literals.r
 
 /** This represents the head's distributable liabilities due to shareholders (peers), see
@@ -111,8 +111,10 @@ object EquityShares:
     object RuleBasedRegimeDistribution:
         extension (self: EquityShares)
             def distribute(defaultVoteDeposit: Coin, voteDeposit: Coin)(
-                equity: Coin
+                treasuryCoin: Coin
             ): Distribution = {
+                // TODO: check this calculation
+                val equity = (treasuryCoin -~ defaultVoteDeposit -~ (voteDeposit *~ SafeLong(self.peerShares.size))).unsafeToCoin
                 val payouts = self.peerShares.values.map(v =>
                     v.payoutAddress ->
                         Coin.unsafeApply(
@@ -121,6 +123,6 @@ object EquityShares:
                 )
                 val equityPayoutsTotal =
                     payouts.foldLeft(Coin.Unbounded.zero)((acc, p) => acc +~ p._2).unsafeToCoin
-                val dust = (equity -~ equityPayoutsTotal).unsafeToCoin
+                val dust = (treasuryCoin -~ equityPayoutsTotal).unsafeToCoin
                 Distribution(payouts.toMap, dust)
             }

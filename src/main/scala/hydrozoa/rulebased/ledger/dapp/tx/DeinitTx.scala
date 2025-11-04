@@ -115,10 +115,10 @@ object DeinitTx {
 
         val defaultVoteDepositNewCoin = NewCoin.unsafeApply(defaultVoteDeposit.value)
         val voteDepositNewCoin = NewCoin.unsafeApply(voteDeposit.value)
-        val treasuryEquityNewCoin = NewCoin.unsafeApply(treasuryUtxo.value.coin.value)
+        val treasuryNewCoin = NewCoin.unsafeApply(treasuryUtxo.value.coin.value)
 
         val distribution =
-            shares.distribute(defaultVoteDepositNewCoin, voteDepositNewCoin)(treasuryEquityNewCoin)
+            shares.distribute(defaultVoteDepositNewCoin, voteDepositNewCoin)(treasuryNewCoin)
 
         val initial = EquityProduced(Coin(distribution.dust.underlying))
 

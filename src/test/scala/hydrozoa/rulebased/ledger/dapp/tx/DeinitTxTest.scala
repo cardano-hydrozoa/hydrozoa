@@ -79,16 +79,22 @@ def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
         addresses <- Gen.listOfN(peers.length, genPubkeyAddress(testNetwork))
         shares <- genShares(peers.length)
     } yield {
-        val peerShares = addresses.zip(shares).zipWithIndex.map { case ((addr, share), index) =>
-            import spire.math.UByte
-            UByte(index) -> (Address[L1](addr), share)
-        }.toMap
+        val peerShares = addresses
+            .zip(shares)
+            .zipWithIndex
+            .map { case ((addr, share), index) =>
+                import spire.math.UByte
+                UByte(index) -> (Address[L1](addr), share)
+            }
+            .toMap
 
-        EquityShares.apply(
-            shares = peerShares,
-            collectiveContingency = CollectiveContingency.apply(UByte(peers.size)),
-            individualContingency = IndividualContingency.apply
-        ).getOrElse(throw RuntimeException("error generating shares"))
+        EquityShares
+            .apply(
+              shares = peerShares,
+              collectiveContingency = CollectiveContingency.apply(UByte(peers.size)),
+              individualContingency = IndividualContingency.apply
+            )
+            .getOrElse(throw RuntimeException("error generating shares"))
     }
 
 def genRational: Gen[Rational] =
@@ -113,10 +119,16 @@ def genShares(n: Int): Gen[List[Rational]] =
 
 /** Generate a simplified DeinitTx Recipe for testing */
 def genSimpleDeinitTxRecipe: Gen[Recipe] =
+
     for {
         (hns, headTokenName, peers, peersVks, versionMajor, setupSize, fallbackTxId) <-
             genHeadParams
-        equity <- Gen.choose(0L, 100_000_000L).map(Coin(_))
+        // Min treasury
+        defaultVoteDeposit = Coin(CollectiveContingency.apply(UByte(peers.size)).defaultVoteDeposit.underlying)
+        voteDeposit = Coin(IndividualContingency.apply.voteDeposit.underlying)
+        minTreasury = defaultVoteDeposit + Coin(voteDeposit.value * peers.size)
+
+        equity <- Gen.choose(minTreasury.value, 10000_000_000L).map(Coin(_))
         treasuryUtxo <- genEmptyResolvedTreasuryUtxo(
           fallbackTxId,
           hns.policyId,
@@ -127,16 +139,19 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
         )
         shares <- genEquityShares(peers)
         collateralUtxo <- genCollateralUtxo
-    } yield Recipe(
-      headNativeScript = hns,
-      treasuryUtxo = treasuryUtxo,
-      defaultVoteDeposit = Coin(350000),
-      voteDeposit = Coin(400000),
-      shares = shares,
-      collateralUtxo = collateralUtxo,
-      env = testTxBuilderEnvironment,
-      validators = testValidators
-    )
+    } yield {
+        Recipe(
+            headNativeScript = hns,
+            treasuryUtxo = treasuryUtxo,
+            defaultVoteDeposit =
+                defaultVoteDeposit,
+            voteDeposit = voteDeposit,
+            shares = shares,
+            collateralUtxo = collateralUtxo,
+            env = testTxBuilderEnvironment,
+            validators = testValidators
+        )
+    }
 
 @nowarn("msg=unused value")
 class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -151,10 +166,10 @@ class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     test("DeinitTx builds successfully") {
         forAll(genSimpleDeinitTxRecipe) { recipe =>
-            //println(
+            // println(
             //  s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._2.size}, shares: ${recipe.shares._2
             //          .map(_._2)}"
-            //)
+            // )
             DeinitTx.build(recipe) match {
                 case Left(e) =>
                     fail(s"DeinitTx build failed: $e")
