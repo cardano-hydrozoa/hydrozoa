@@ -2,33 +2,29 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
-import hydrozoa.lib.tx.TransactionBuilder.setMinAda
-import hydrozoa.lib.tx.TransactionUnspentOutput
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-
-import scala.collection.immutable.Queue
-import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.{Mainnet, Testnet}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
+import test.Generators.Other
 
-def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
+def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
         address <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
@@ -50,7 +46,7 @@ def genDepositDatum(network: Network = Mainnet): Gen[DepositUtxo.Datum] = {
 }
 
 def genDepositUtxo(
-    network: Network = Mainnet,
+    network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
@@ -67,7 +63,7 @@ def genDepositUtxo(
           scriptRef = None
         )
 
-        depositMinAda = setMinAda(mockUtxo, params).value.coin
+        depositMinAda = ensureMinAda(mockUtxo, params).value.coin
 
         depositAmount <- arbitrary[Coin].map(_ + depositMinAda)
 
@@ -96,7 +92,7 @@ val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
 
 /** Generate a treasury utxo with at least minAda */
 def genTreasuryUtxo(
-    network: Network = Mainnet,
+    network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
     headAddress: Option[ShelleyAddress],
     coin: Option[Coin]
@@ -115,7 +111,7 @@ def genTreasuryUtxo(
           headTn
         )
 
-        treasuryMinAda = setMinAda(
+        treasuryMinAda = ensureMinAda(
           TreasuryUtxo(
             headTokenName = headTn,
             txId = txId,
@@ -139,25 +135,34 @@ def genTreasuryUtxo(
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = Testnet
+    network: Network = testNetwork
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
+    // A helper to generator empty, small, medium, large (up to 1000)
+    def genHelper[T](gen : Gen[T]) : Gen[Vector[T]] = Gen.sized(size =>
+      Gen.frequency(
+       (1, Gen.const(Vector.empty)),
+       (2, Other.vectorOfN(size, gen)),
+       (5, Other.vectorOfN(size * 5, gen)),
+        (1, Other.vectorOfN(1, gen))
+      ).map(_.take(1000))
+    )
+
     for {
         peers <- genTestPeers
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
         majorVersion <- Gen.posNum[Int]
-        deposits <- Gen.listOfN(
-          0,
-          genDepositUtxo(
-            network = network,
-            params = params,
-            headAddress = Some(hns.mkAddress(network))
-          )
+
+        genDeposit = genDepositUtxo(
+          network = network,
+          params = params,
+          headAddress = Some(hns.mkAddress(network))
         )
+        deposits <- genHelper(genDeposit)
 
         env = testTxBuilderEnvironment
-        payouts <- Gen.listOfN(134, genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
+        payouts <- genHelper(genPayoutObligationL1(network))
+        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
           headAddress = Some(hns.mkAddress(network)),
           network = network,
@@ -177,10 +182,8 @@ def genSettlementTxSeqBuilder(
       ),
       SettlementTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
-        // TODO: generating a list and turning it into a queue is suboptimal
-        // @Peter from George: Is the above still relevant?
-        depositsToSpend = Vector.from(deposits),
-        payoutObligationsRemaining = Vector.from(payouts),
+        depositsToSpend = deposits,
+        payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo
       ),
       peers

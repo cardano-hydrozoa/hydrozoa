@@ -1,14 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
-import hydrozoa.lib.tx.ScriptSource.{NativeScriptAttached, NativeScriptValue}
-import hydrozoa.lib.tx.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import hydrozoa.lib.tx.{
-    NativeScriptWitness,
-    SomeBuildError,
-    TransactionBuilder,
-    TransactionBuilderStep
-}
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -19,8 +11,10 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
+import scalus.cardano.txbuilder.{LowLevelTxBuilder, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,

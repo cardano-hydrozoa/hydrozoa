@@ -1,5 +1,5 @@
 package test
-import hydrozoa.lib.tx.TransactionBuilder.setMinAda
+
 import monocle.syntax.all.*
 import org.scalacheck.*
 import org.scalacheck.Arbitrary.arbitrary
@@ -8,7 +8,7 @@ import org.scalacheck.Gen.const
 import scala.language.postfixOps
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
-import scalus.cardano.address.Network.{Mainnet, Testnet}
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
@@ -17,7 +17,8 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
+import scalus.cardano.txbuilder.Environment
+import scalus.cardano.txbuilder.TransactionBuilder.{ensureMinAda}
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.prelude.Option as SOption
 import scalus.uplc.eval.ExBudget
@@ -27,19 +28,27 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
   this.getClass.getResourceAsStream("/blockfrost-params-epoch-544.json")
 )
 
-val costModels = CostModels.fromProtocolParams(blockfrost544Params)
-
-val evaluator = PlutusScriptEvaluator(
-  SlotConfig.Mainnet,
-  initialBudget = ExBudget.enormous,
-  protocolMajorVersion = MajorProtocolVersion.plominPV,
-  costModels = costModels
-)
+val costModels = blockfrost544Params.costModels
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
 val testNetwork: Network = Testnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
+
+def slotConfig(network: Network): SlotConfig = network match {
+    case Network.Testnet => SlotConfig.Preprod
+    case Network.Mainnet => SlotConfig.Mainnet
+    case Network.Other(v) => throw RuntimeException("This network is not supported in tests")
+}
+
+val evaluator = PlutusScriptEvaluator(
+    slotConfig = slotConfig(testNetwork),
+    initialBudget = ExBudget.enormous,
+    protocolMajorVersion = MajorProtocolVersion.plominPV,
+    costModels = costModels
+)
+
 val testEvaluator: PlutusScriptEvaluator = evaluator
+
 val testValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
     List(
@@ -58,15 +67,9 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
-val testEnv: Environment =
-    Environment(
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      network = testNetwork
-    )
-
 val testTxBuilderEnvironment: Environment = Environment(
   protocolParams = testProtocolParams,
+  slotConfig = slotConfig(testNetwork),
   evaluator = testEvaluator,
   network = testNetwork,
   era = Era.Conway
@@ -80,7 +83,7 @@ val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByt
 val genPolicyId: Gen[PolicyId] = genScriptHash
 
 def genPubkeyAddress(
-    network: Network = Mainnet,
+    network: Network = testNetwork,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     genAddrKeyHash.flatMap(akh =>
@@ -88,7 +91,7 @@ def genPubkeyAddress(
     )
 
 def genScriptAddress(
-    network: Network = Mainnet,
+    network: Network = testNetwork,
     delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
 ): Gen[ShelleyAddress] =
     for {
@@ -118,9 +121,9 @@ def genAdaOnlyPubKeyUtxo(
         value <- genAdaOnlyValue
     } yield (
       txId,
-      setMinAda(
+      ensureMinAda(
         Babbage(
-          address = peer.address,
+          address = peer.address(testNetwork),
           value = Value(Coin(0L)),
           datumOption = None,
           scriptRef = None
@@ -132,7 +135,7 @@ def genAdaOnlyPubKeyUtxo(
 // Get the minAda for an Ada only pubkey utxo
 def minPubkeyAda(params: ProtocolParams = blockfrost544Params) = {
     val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get.focus(_._2.value.coin.value).replace(0L)
-    setMinAda(utxo._2, blockfrost544Params).value.coin
+    ensureMinAda(utxo._2, blockfrost544Params).value.coin
 }
 
 def sumUtxoValues(utxos: Seq[(TransactionInput, TransactionOutput)]): Value =
@@ -157,11 +160,6 @@ def genByteStringInlineDatumOption(
     )
 
 extension [E, A](either: Either[E, A])
-    def toProp: Prop = either match {
-        case Left(e)  => throw new RuntimeException(e.toString)
-        case Right(a) => Prop.proved
-    }
-
     def get: A = either match {
         case Right(a) => a
     }

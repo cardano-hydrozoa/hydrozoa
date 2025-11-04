@@ -13,7 +13,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import scalus.*
-import scalus.builtin.Builtins.{blake2b_224, serialiseData, verifyEd25519Signature}
+import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
@@ -168,7 +168,7 @@ object DisputeResolutionValidator extends Validator {
         }
 
     // Entry point
-    override def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
 
         log("DisputeResolution")
 
@@ -482,9 +482,6 @@ object DisputeResolutionValidator extends Validator {
 
 }
 
-/** Native Scalus implementation for DisputeResolutionScript Eliminates dependency on Bloxbean for
-  * script creation
-  */
 object DisputeResolutionScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
     // Using def instead of lazy val to avoid stack overflow during tests
@@ -535,8 +532,8 @@ object DisputeResolutionScript {
 //      VoteStatus.Vote(VoteDetails(ByteString.empty, BigInt(0)))
 //    )
 
-def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
-    PubKeyHash(blake2b_224(peer.bytes))
+//def hashVerificationKey(peer: VerificationKeyBytes): PubKeyHash =
+//    PubKeyHash(blake2b_224(peer.bytes))
 
 //def mkVoteDatum(key: Int, peersN: Int, peer: VerificationKeyBytes): VoteDatum =
 //    VoteDatum(

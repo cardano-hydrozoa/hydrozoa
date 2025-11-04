@@ -1,13 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.{SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.Environment
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
+import sourcecode.*
+
+import scala.Function.const
 
 trait Tx {
     def tx: Transaction
@@ -44,7 +46,38 @@ object Tx {
     }
 
     object Builder {
-        type BuildErrorOr[A] = Either[SomeBuildError, A]
+        type BuildErrorOr[A] = Either[(SomeBuildError, String), A]
+
+        extension [E, A](either: Either[E, A])
+            /**
+             * Augment an Either with a string on the Left, including source locations. Defaults to only
+             * providing source location.
+             * */
+            def explain(mkString: E => String = ((_: E) => ""))
+                       (implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] =
+                either.left.map(e => (e, s"[${file.value}:${line.value} in ${enclosing.value}] " + s"${mkString(e)}"))
+
+            /** Like `explain`, but only taking a string  */
+            def explainConst(string : String) (implicit line: Line, file: File, enclosing: Enclosing) :
+                Either[(E, String), A] = either.explain(const(string))
+
+        extension [E, A](augmentedEither: Either[(E, String), A])
+            def explainReplace(string: String)(implicit line: Line, file: File, enclosing: Enclosing):
+                Either[(E, String), A] = {
+                    val oldEither = augmentedEither.left.map(_._1)
+                    oldEither.explainConst(string)
+            }
+
+            def explainModify(modifyString : String => String)(implicit line: Line, file: File, enclosing: Enclosing):
+                Either[(E, String), A] = {
+                augmentedEither.left.map(t => (t._1, modifyString(t._2)))
+            }
+
+            def explainAppendConst(string : String)(implicit line: Line, file: File, enclosing: Enclosing):
+                Either[(E, String), A] = {
+                augmentedEither.explainModify(_ + s";\n[${file.value}:${line.value} in ${enclosing.value}] $string")
+            }
+
 
         trait HasCtx {
             def ctx: TransactionBuilder.Context

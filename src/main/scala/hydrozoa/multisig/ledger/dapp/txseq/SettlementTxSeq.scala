@@ -1,12 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.{SettlementTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
+import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
     def settlementTx: SettlementTx
@@ -44,6 +44,7 @@ object SettlementTxSeq {
                             .left
                             .map(Error.RolloutSeqError(_))
 
+
                         settlementTxRes <- SettlementTx.Builder
                             .WithPayouts(config)
                             .build(args.toArgsWithPayouts(rolloutTxSeqPartial))
@@ -76,8 +77,8 @@ object SettlementTxSeq {
         import SettlementTx.Builder.Args as SingleArgs
 
         enum Error:
-            case SettlementError(e: SomeBuildError)
-            case RolloutSeqError(e: SomeBuildError)
+            case SettlementError(e: (SomeBuildError, String))
+            case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Result(
             settlementTxSeq: SettlementTxSeq,

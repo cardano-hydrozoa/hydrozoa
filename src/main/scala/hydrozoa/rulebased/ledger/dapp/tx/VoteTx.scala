@@ -2,10 +2,6 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.Datum.DatumInlined
-import hydrozoa.lib.tx.ScriptSource.PlutusScriptValue
-import hydrozoa.lib.tx.TransactionBuilderStep.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     DisputeRedeemer,
@@ -19,13 +15,16 @@ import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.Datum.DatumInlined
+import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
+import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.List as SList
-// import hydrozoa.datumOption // TODO: Will be needed if we add datum hash support
 
 final case class VoteTx(
     // TODO: what we want to keep here if anything?
@@ -139,7 +138,7 @@ object VoteTx {
                       )
                     ),
                     ReferenceOutput(TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo)),
-                    AddCollateral(TransactionUnspentOutput.fromUtxo(recipe.collateralUtxo)),
+                    AddCollateral(TransactionUnspentOutput(recipe.collateralUtxo.toScalus)),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

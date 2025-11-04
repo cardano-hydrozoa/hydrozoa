@@ -1,16 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.{Test as ScalaCheckTest, *}
+import org.scalacheck.Gen
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
 
@@ -51,7 +53,7 @@ def genDepositRecipe(
               datumOption = Some(Inline(depositDatum.toData)),
               scriptRef = None
             )
-            setMinAda(candidate, params).value.coin
+            ensureMinAda(candidate, params).value.coin
         }
 
         depositAmount <- Gen.posNum[Long].map(n => Coin(n) + depositMinAda)
@@ -69,37 +71,35 @@ def genDepositRecipe(
       datum = depositDatum,
       headAddress = headAddress,
       utxosFunding = fundingUtxos,
-      changeAddress = depositor.address,
+      changeAddress = depositor.address(testNetwork),
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
       validators = testValidators
     )
 
-class DepositTxTest extends munit.ScalaCheckSuite {
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
-    }
+class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 100)
 
     // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="
 
-    property("Build deposit tx")(
-      Prop.forAll(genDepositRecipe()) { recipe =>
-          DepositTx.build(recipe) match {
-              case Left(e) => throw RuntimeException(s"Build failed $e")
-              case Right(tx) =>
-                  DepositTx.parse(tx.tx.toCbor) match {
-                      case Left(e) =>
-                          throw RuntimeException(
-                            "Produced deposit tx cannot be deserialized from CBOR"
-                          )
-                      case Right(cborParsed) if cborParsed != tx =>
-                          // println(ByteString.fromArray(tx.tx.toCbor).toHex)
-                          // assertEquals(expected = tx.tx.body.value.outputs(1), obtained = cborParsed.tx.body.value.outputs(1))
-                          assertEquals(tx, cborParsed)
-                      case _ => ()
-                  }
-          }
-      }
-    )
+    test("Build deposit tx") {
+        forAll(genDepositRecipe()) { recipe =>
+            DepositTx.build(recipe) match {
+                case Left(e) => fail(s"Build failed $e")
+                case Right(tx) =>
+                    DepositTx.parse(tx.tx.toCbor) match {
+                        case Left(e) =>
+                            fail("Produced deposit tx cannot be deserialized from CBOR")
+                        case Right(cborParsed) if cborParsed != tx =>
+                            // println(ByteString.fromArray(tx.tx.toCbor).toHex)
+                            // assert(expected = tx.tx.body.value.outputs(1), obtained = cborParsed.tx.body.value.outputs(1))
+                            assertResult(tx)(cborParsed)
+                        case _ => ()
+                    }
+            }
+        }
+    }
 }

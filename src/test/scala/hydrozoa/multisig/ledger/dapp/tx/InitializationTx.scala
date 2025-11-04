@@ -3,8 +3,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
-import hydrozoa.lib.tx.SomeBuildError
-import hydrozoa.lib.tx.TransactionBuilder.setMinAda
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
@@ -13,17 +11,19 @@ import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import org.scalacheck.Gen.choose
-import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Arbitrary, Gen, Prop, Test as ScalaCheckTest}
+import org.scalacheck.{Arbitrary, Gen}
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.annotation.nowarn
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.txbuilder.TxBalancingError
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
+import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
 import test.*
 import test.TestPeer.*
 
@@ -48,7 +48,7 @@ val minInitTreasuryAda: Coin = {
       datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
       scriptRef = None
     )
-    setMinAda(mockTreasury, blockfrost544Params).value.coin
+    ensureMinAda(mockTreasury, blockfrost544Params).value.coin
 }
 
 def genInitTxRecipe(
@@ -83,7 +83,7 @@ def genInitTxRecipe(
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
       validators = testValidators,
-      changeAddress = peers.head.address
+      changeAddress = peers.head.address(testNetwork)
     )
 
 // NOTE: This was just for practice with scalacheck shrinkers. Don't use this -- it is not a good shrinker.
@@ -99,15 +99,16 @@ def genInitTxRecipe(
 //
 //}
 
-class InitializationTxTest extends munit.ScalaCheckSuite {
-    override def scalaCheckTestParameters: ScalaCheckTest.Parameters = {
-        ScalaCheckTest.Parameters.default.withMinSuccessfulTests(100)
-    }
+@nowarn("msg=unused value")
+class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+
+    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
+        PropertyCheckConfiguration(minSuccessful = 100)
 
     val anyAddr: ShelleyAddress = Arbitrary.arbitrary[ShelleyAddress].sample.get
 
     // TODO: this test doesn't work since the new builder set minAda in all outputs by default
-    test("Test minAda violation in the treasury".ignore) {
+    ignore("Test minAda violation in the treasury") {
 
         // Seed UTxO with 100 ADA
         val seedUtxo = genAdaOnlyPubKeyUtxo(Alice).sample.get
@@ -126,11 +127,11 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
           protocolParams = testProtocolParams,
           evaluator = testEvaluator,
           validators = testValidators,
-          changeAddress = Alice.address
+          changeAddress = Alice.address(testNetwork)
         )
 
         InitializationTx.build(recipeMinAda) match {
-            case Left(e) => throw RuntimeException("Build failed but should have succeeded")
+            case Left(e) => fail("Build failed but should have succeeded")
             case Right(tx) =>
                 println(HexUtil.encodeHexString(tx.tx.toCbor))
         }
@@ -147,9 +148,9 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                 ()
             case Right(tx) =>
                 println(HexUtil.encodeHexString(tx.tx.toCbor))
-                throw RuntimeException("Build succeeded, but should have failed")
+                fail("Build succeeded, but should have failed")
             case Left(e) =>
-                throw RuntimeException(s"Build failed, but for the wrong reason: $e")
+                fail(s"Build failed, but for the wrong reason: $e")
         }
     }
 
@@ -171,7 +172,7 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
           protocolParams = testProtocolParams,
           evaluator = testEvaluator,
           validators = testValidators,
-          changeAddress = Alice.address
+          changeAddress = Alice.address(testNetwork)
         )
 
         InitializationTx.build(recipe) match {
@@ -181,68 +182,75 @@ class InitializationTxTest extends munit.ScalaCheckSuite {
                   )
                 ) =>
                 ()
-            case Right(_) => throw RuntimeException("Build succeeded, but should have failed")
-            case Left(e)  => throw RuntimeException(s"Build failed, but for the wrong reason: $e")
+            case Right(_) => fail("Build succeeded, but should have failed")
+            case Left(e)  => fail(s"Build failed, but for the wrong reason: $e")
         }
     }
 
-    property("Build initialization tx")(
-      Prop.forAll(genInitTxRecipe()) { recipe =>
-          InitializationTx.build(recipe) match {
-              case Left(e) => throw RuntimeException(s"Build failed $e")
-              case Right(tx) =>
-                  val headMultisigScript = HeadMultisigScript(recipe.peers)
-                  val headTokenName =
-                      CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
+    test("Build initialization tx") {
+        forAll(genInitTxRecipe()) { recipe =>
+            InitializationTx.build(recipe) match {
+                case Left(e) => fail(s"Build failed $e")
+                case Right(tx) =>
+                    val headMultisigScript = HeadMultisigScript(recipe.peers)
+                    val headTokenName =
+                        CIP67.TokenNames(recipe.seedUtxos.map(_._1).head).headTokenName
 
-                  val bytes = tx.tx.toCbor
-                  given OriginalCborByteArray = OriginalCborByteArray(bytes)
+                    val bytes = tx.tx.toCbor
+                    given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
-                  // println(HexUtil.encodeHexString(bytes))
+                    // println(HexUtil.encodeHexString(bytes))
 
-                  (tx.tx == Cbor
-                      .decode(bytes)
-                      .to[Transaction]
-                      .value) :| "Cbor round-tripping failed"
-                  &&
-                  (tx.tx.body.value.fee.value != 0L) :| "Tx Fee should not be 0"
-                  && (tx.tx.body.value.outputs.size === 2)
-                      :| "Initialization tx should have a treasury output and change output"
-                      &&
-                      (tx.treasuryProduced.asUtxo._2 ==
-                          tx.tx.body.value.outputs.head.value) :|
+                    assertResult(tx.tx, "Cbor round-tripping failed")(
+                      Cbor.decode(bytes).to[Transaction].value
+                    )
+                    assert(tx.tx.body.value.fee.value != 0L, "Tx Fee should not be 0")
+                    assert(
+                      tx.tx.body.value.outputs.size == 2,
+                      "Initialization tx should have a treasury output and change output"
+                    )
+                    assert(
+                      tx.treasuryProduced.asUtxo._2 == tx.tx.body.value.outputs.head.value,
                       "treasury output in InitializationTx value not coherent with actual transaction produced"
-                      && (
-                        tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script
-                      ) :| "Head multisig script not as expected"
-                      && (tx.treasuryProduced.headTokenName == headTokenName)
-                      :| "Unexpected head token name in treasury output"
-                      && (tx.treasuryProduced.asUtxo._2.value.assets.assets
+                    )
+                    assert(
+                      tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script,
+                      "Head multisig script not as expected"
+                    )
+                    assert(
+                      tx.treasuryProduced.headTokenName == headTokenName,
+                      "Unexpected head token name in treasury output"
+                    )
+                    assert(
+                      tx.treasuryProduced.asUtxo._2.value.assets.assets
                           .get(headMultisigScript.policyId)
-                          .get(
-                            headTokenName
-                          ) === 1L) :| "treasury output does not contain correct head token"
-                      && {
-                          val actual = tx.treasuryProduced.asUtxo._2.value
-                          val expected = Value(
-                            coin = recipe.initialDeposit,
-                            assets = MultiAsset(assets =
-                                SortedMap(
-                                  (headMultisigScript.policyId, SortedMap((headTokenName, 1L)))
-                                )
-                            )
+                          .get(headTokenName) == 1L,
+                      "treasury output does not contain correct head token"
+                    )
+
+                    val actual = tx.treasuryProduced.asUtxo._2.value
+                    val expected = Value(
+                      coin = recipe.initialDeposit,
+                      assets = MultiAsset(assets =
+                          SortedMap(
+                            (headMultisigScript.policyId, SortedMap((headTokenName, 1L)))
                           )
-                          (actual == expected) :| s"Unexpected treasury value. Actual: $actual, expected: $expected"
-                      }
-                      && {
-                          val actual = tx.tx.auxiliaryData.map(_.value)
-                          val expected =
-                              MD.apply(Initialization, headMultisigScript.mkAddress(Mainnet))
-                          actual.contains(expected)
-                              :| s"Unexpected metadata value. Actual: $actual, expected: $expected"
-                      }
-          }
-      }
-    )
+                      )
+                    )
+                    assert(
+                      actual == expected,
+                      s"Unexpected treasury value. Actual: $actual, expected: $expected"
+                    )
+
+                    val actualMeta = tx.tx.auxiliaryData.map(_.value)
+                    val expectedMeta =
+                        MD.apply(Initialization, headMultisigScript.mkAddress(testNetwork))
+                    assert(
+                      actualMeta.contains(expectedMeta),
+                      s"Unexpected metadata value. Actual: $actualMeta, expected: $expectedMeta"
+                    )
+            }
+        }
+    }
 
 }

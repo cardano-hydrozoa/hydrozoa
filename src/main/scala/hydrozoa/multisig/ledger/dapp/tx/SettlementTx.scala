@@ -1,23 +1,27 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.lib.tx.*
-import hydrozoa.lib.tx.ScriptSource.NativeScriptAttached
-import hydrozoa.lib.tx.TransactionBuilder.ResolvedUtxos
-import hydrozoa.lib.tx.TransactionBuilderStep.*
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import scalus.cardano.ledger.{Sized, TransactionInput}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.protocol.types.Block
 
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Transaction, Value, TransactionOutput as TxOutput}
-import hydrozoa.multisig.protocol.types.Block
+import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
+import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, Value, TransactionOutput as TxOutput}
+
+// Moved temporarily here from the builder
+trait HasResolvedUtxos {
+    def resolvedUtxos: ResolvedUtxos
+}
 
 sealed trait SettlementTx
     extends Tx,
@@ -26,7 +30,7 @@ sealed trait SettlementTx
       TreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
-      TransactionBuilder.ResolvedUtxos.HasResolvedUtxos
+      HasResolvedUtxos
 
 object SettlementTx {
     import Builder.*
@@ -177,6 +181,7 @@ object SettlementTx {
                 addedDeposits <- addDeposits(args, pessimistic)
                 // Balancing and fees
                 finished <- this.finish(addedDeposits.ctx)
+                  .explainConst("finishing settlement tx failed")
                 completed <- complete(args, addedDeposits.copy(ctx = finished))
             } yield completed
         }
@@ -185,12 +190,14 @@ object SettlementTx {
             val steps =
                 BasePessimistic.steps(config, args)
             for {
-                ctx <- TransactionBuilder.build(config.env.network, steps)
+                ctx <- TransactionBuilder
+                  .build(config.env.network, steps)
+                  .explainConst("base pessimistic build failed")
                 addedPessimisticRollout <- BasePessimistic.mbApplySendRollout(
                   args.treasuryToSpend,
                   args.mbRolloutValue
                 )(ctx)
-                _ <- finish(addedPessimisticRollout)
+                _ <- finish(addedPessimisticRollout).explainConst("finishing base pessimistic failed")
             } yield State[T](
               ctx = ctx,
               depositsSpent = Vector.empty,
@@ -219,7 +226,8 @@ object SettlementTx {
                                 )
                                 loop(newState)
                             case Left(err) =>
-                                Tx.Builder.Incremental.replaceInvalidSizeException(err, state)
+                                Tx.Builder.Incremental.replaceInvalidSizeException(err._1, state)
+                                .explainConst(err._2)
                         }
                     case _Empty => Right(state)
                 }
@@ -238,11 +246,12 @@ object SettlementTx {
                 )
                 for {
                     newCtx <- TransactionBuilder.modify(ctx, List(depositStep))
+                      .explainConst(s"adding deposit utxo failed. Deposit utxo: $deposit")
                     // TODO: update the non-ADA assets in the treasury output, based on the absorbed deposits
                     //
                     // Ensure that at least the pessimistic rollout output fits into the transaction.
                     addedPessimisticRollout <- addPessimisticRollout(newCtx)
-                    _ <- finish(addedPessimisticRollout)
+                    _ <- finish(addedPessimisticRollout).explainConst("finishing for tryAddDeposit failed.")
                 } yield newCtx
 
             loop(initialState)
@@ -310,6 +319,7 @@ object SettlementTx {
                 val extraStep = Send(rolloutOutput(treasuryToSpend, rolloutValue))
                 for {
                     newCtx <- TransactionBuilder.modify(ctx, List(extraStep))
+                      .explainConst("sending the rollout tx failed")
                 } yield newCtx
             }
 
@@ -495,8 +505,10 @@ object SettlementTx {
                     rolloutTx.body.value.outputs.map(sendOutput).toList
 
                 val optimisticTrial: BuildErrorOr[TransactionBuilder.Context] = for {
-                    newCtx <- TransactionBuilder.modify(ctx, optimisticSteps)
-                    finished <- finish(newCtx)
+                    newCtx <- TransactionBuilder
+                      .modify(ctx, optimisticSteps)
+                      .explainConst("adding optimistic steps failed")
+                    finished <- finish(newCtx).explainConst("finishing optimistic trial failed")
                 } yield finished
 
                 lazy val pessimisticBackup: BuildErrorOr[TransactionBuilder.Context] =
@@ -505,7 +517,7 @@ object SettlementTx {
                           treasuryToSpend,
                           firstRolloutTxPartial.inputValueNeeded
                         )(ctx)
-                        finished <- finish(newCtx)
+                        finished <- finish(newCtx).explainConst("finishing pessimistic backup failed")
                     } yield finished
 
                 // Keep the optimistic transaction (which merged the settlement tx with the first rollout tx)

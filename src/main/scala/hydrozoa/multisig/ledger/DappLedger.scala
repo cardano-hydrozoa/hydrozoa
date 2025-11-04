@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
-import hydrozoa.lib.tx.SomeBuildError
 import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
@@ -12,6 +11,7 @@ import scala.jdk.CollectionConverters.*
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
+import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
 
 final case class DappLedger(headAddress: ShelleyAddress)(
