@@ -1,21 +1,33 @@
 package test
 
-import cats.data.NonEmptyVector
+import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import monocle.*
+import monocle.syntax.all.*
+import scalus.cardano.ledger.ArbitraryInstances.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.builtin.ByteString
+import scalus.builtin.{ByteString, Data}
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Network, ShelleyAddress}
-import scalus.cardano.ledger.*
+import scalus.cardano.address.Network.Testnet
+import scalus.cardano.address.{Network, *}
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.ShelleyPaymentPart.Key
+import scalus.cardano.ledger.{Coin, *}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
+import scalus.prelude.Option as SOption
+
+import scala.collection.immutable.SortedMap
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -30,18 +42,99 @@ object Generators {
         // ===================================
         // Generators
         // ===================================
-        def genTxConfig(
-            env: Environment = testTxBuilderEnvironment,
-            validators: Seq[Validator] = testValidators
-        ): Gen[Tx.Builder.Config] =
+        /** Generate random bytestring data. Good for testing user-provided, untrusted data against size
+         * attacks
+         */
+        def genByteStringData: Gen[Data] =
+            Gen.sized(size => genByteStringOfN(size).flatMap(_.toData))
+
+        /** Generate an inline datum with random bytestring data. Optionally, set the relative frequencies
+         * for an empty datum
+         */
+        def genByteStringInlineDatumOption(
+                                              noneFrequency: Int = 0,
+                                              someFrequency: Int = 1
+                                          ): Gen[SOption[DatumOption]] =
+            Gen.frequency(
+                (someFrequency, genByteStringData.map(data => SOption.Some(Inline(data)))),
+                (noneFrequency, SOption.None)
+            )
+
+        /**
+         * Generates the general configuration for a hydrozoa (non-init) transaction, and returns
+         * the set of peers to use for signing.
+         */
+        def genTxBuilderConfigAndPeers(env: Environment = testTxBuilderEnvironment, validators : Seq[Validator] = testValidators):
+                Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
                 peers <- genTestPeers
                 hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
                 multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
-            } yield Config(hns, multisigWitnessUtxo, env, validators)
+            } yield
+                (Tx.Builder.Config(
+                    headNativeScript = hns,
+                    headNativeScriptReferenceInput = multisigWitnessUtxo,
+                    env = env,
+                    validators = validators), peers)
+
+        def genTxConfig(env: Environment = testTxBuilderEnvironment, validators : Seq[Validator] = testValidators):
+             Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, validators).map(_._1)
+
+        val genHeadTokenName: Gen[AssetName] =
+            for {
+                ti <- arbitrary[TransactionInput]
+            } yield CIP67.TokenNames(ti).headTokenName
+
+
+        val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
+            for {
+                mv <- Gen.posNum[BigInt]
+                // Verify that this is the correct length!
+                kzg <- genByteStringOfN(32)
+                paramsHash <- genByteStringOfN(32)
+
+            } yield TreasuryUtxo.Datum(commit = kzg, versionMajor = mv, paramsHash = paramsHash)
+        }
+        
+            
+            
+
+        /** Generate a positive Ada value */
+        val genAdaOnlyValue: Gen[Value] =
+            for {
+                coin <- arbitrary[Coin]
+            } yield Value(coin)
+
 
         def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
             genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
+
+        val genAddrKeyHash: Gen[AddrKeyHash] =
+            genByteStringOfN(28).map(AddrKeyHash.fromByteString)
+
+        val genScriptHash: Gen[ScriptHash] = genByteStringOfN(28).map(ScriptHash.fromByteString)
+
+        val genPolicyId: Gen[PolicyId] = genScriptHash
+
+        def genPubkeyAddress(
+                                network: Network = testNetwork,
+                                delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
+                            ): Gen[ShelleyAddress] =
+            genAddrKeyHash.flatMap(akh =>
+                ShelleyAddress(network = network, payment = Key(akh), delegation = delegation)
+            )
+
+        def genScriptAddress(
+                                network: Network = testNetwork,
+                                delegation: ShelleyDelegationPart = ShelleyDelegationPart.Null
+                            ): Gen[ShelleyAddress] =
+            for {
+                sh <- genScriptHash
+            } yield ShelleyAddress(
+                network = network,
+                payment = ShelleyPaymentPart.Script(sh),
+                delegation = delegation
+            )    
 
         def genFakeMultisigWitnessUtxo(
             script: HeadMultisigScript,
@@ -71,6 +164,91 @@ object Generators {
                   scriptRef = None
                 )
             } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
+
+        /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index, no
+         * datum, no script ref
+         */
+        // TODO: make this take all fields as Option and default to generation if None.
+        def genAdaOnlyPubKeyUtxo(
+                                    peer: TestPeer,
+                                    params: ProtocolParams = blockfrost544Params,
+                                    network: Network = Testnet,
+
+                                    /** `None` for minAda; Some(Coin)` to generate lovelace values with some minimum amount */
+                                    genCoinWithMinimum: Option[Coin] = None,
+
+                                    /** `None` for no datum; `Some(gen)` to generate an optional datum */
+                                    datumGenerator: Option[Gen[Option[DatumOption]]] = None
+                                ): Gen[(TransactionInput, Babbage)] =
+            for {
+                txId <- arbitrary[TransactionInput]
+                value <- genAdaOnlyValue
+                coin <- genCoinWithMinimum match {
+                    case None => Gen.const(Coin(0))
+                    case Some(min) => arbitrary[Coin].map(_ + min)
+                }
+                datum <- datumGenerator match {
+                    case None => Gen.const(None)
+                    case Some(gen) => gen
+                }
+            } yield (
+                txId,
+                ensureMinAda(
+                    Babbage(
+                        address = peer.address(network),
+                        value = Value(coin),
+                        datumOption = datum,
+                        scriptRef = None
+                    ),
+                    params
+                ).asInstanceOf[Babbage]
+            ).focus(_._2.value).modify(_ + value)
+
+        /** Generate a treasury utxo with at least minAda */
+        def genTreasuryUtxo(
+                               network: Network = testNetwork,
+                               params: ProtocolParams = blockfrost544Params,
+                               headAddress: Option[ShelleyAddress],
+                               coin: Option[Coin] = None // None to generate
+                           ): Gen[TreasuryUtxo] =
+            for {
+                txId <- arbitrary[TransactionInput]
+                headTn <- genHeadTokenName
+
+                scriptAddress = headAddress.getOrElse({
+                    ShelleyAddress(network, ShelleyPaymentPart.Script(genScriptHash.sample.get), Null)
+                })
+                datum <- genTreasuryDatum
+
+                treasuryToken : Value = Value(Coin.zero, MultiAsset(SortedMap(
+                    scriptAddress.payment.asInstanceOf[ShelleyPaymentPart.Script].hash -> 
+                        SortedMap(headTn -> 1L))))
+
+                treasuryMinAda = ensureMinAda(
+                    TreasuryUtxo(
+                        headTokenName = headTn,
+                        txId = txId,
+                        address = scriptAddress,
+                        datum = datum,
+                        value = Value(Coin(0L)) + treasuryToken
+                    ).asUtxo._2,
+                    params
+                ).value.coin
+
+                treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
+
+            } yield TreasuryUtxo(
+                headTokenName = headTn,
+                txId = txId,
+                datum = datum,
+                address = scriptAddress,
+                value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
+            )
+
+        /** Generate a treasury utxo according to a builder config */
+        def genTreasuryUtxo(config : Config) : Gen[TreasuryUtxo] =
+            genTreasuryUtxo(network = config.env.network, params = config.env.protocolParams,
+                headAddress = Some(config.headAddress), coin = None)
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a

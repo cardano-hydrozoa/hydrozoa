@@ -67,24 +67,6 @@ object InitializationTx {
             else None
     }
 
-
-    /*
-    Initialization tx spec:
-    - Spend configured inputs, ensuring that the configured seed utxo is among them.
-    - Mint the treasury and multisig regime tokens.Produce the initial treasury with at least the configured value, plus the treasury token.
-    - Produce the multisig regime utxo with the fallback deposit (i.e. sufficient funds to cover the fallback tx), plus the multisig regime token.
-    - Cover the tx fee using the treasury output in the diff handler.
-    - Fail if there aren't enough spent funds to cover all these requirements.
-Fallback tx spec:
-
-    Spend both the treasury and multisig regime utxos.
-
-Burn the multisig regime token.Mint N+1 vote tokens.Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)Produce default vote utxo with minimum ADA, plus a vote token.Produce one vote utxo per peer, containing minimum ADA plus a configured allowance for one tally tx fee, plus a vote token.Produce one collateral utxo per peer, containing minimum ADA plus a configured allowance for one vote tx fee.Cover the tx fee and ADA for all non-treasury outputs using funds from the multisig regime utxo.
-     */
-
-
-
-
     def build(recipe: Recipe): Either[SomeBuildError, InitializationTx] = {
         ////////////////////////////////////////////////////////////
         // Data extraction

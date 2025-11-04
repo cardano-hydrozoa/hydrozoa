@@ -17,7 +17,7 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
 
     val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation.L1])] =
         for {
-            config <- genTxConfig()
+            (config, _) <- genTxBuilderConfigAndPeers()
             payouts <- Gen
                 .containerOfN[Vector, Payout.Obligation.L1](
                   160,

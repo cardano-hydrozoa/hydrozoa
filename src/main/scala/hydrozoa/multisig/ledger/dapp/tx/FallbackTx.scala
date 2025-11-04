@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token
+import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
@@ -27,45 +27,57 @@ final case class FallbackTx(
     override val tx: Transaction
 ) extends Tx
 
+
+/*
+Fallback tx spec:
+
+ - [ ] Spend both the treasury and multisig regime utxos.
+ - [ ] Burn the multisig regime token.Mint N+1 vote tokens.
+ - [ ]Produce a rule-based treasury utxo, containing all treasury utxo funds (i.e. don't deduct the fee)
+ - [ ] Produce default vote utxo with minimum ADA, plus a vote token.
+ - [ ] Produce one vote utxo per peer, containing minimum ADA plus a configured allowance for one tally tx fee, plus a vote token.
+ - [ ] Produce one collateral utxo per peer, containing minimum ADA plus a configured allowance for one vote tx fee.
+ - [ ] Cover the tx fee and ADA for all non-treasury outputs using funds from the multisig regime utxo.
+ */
+
+
 object FallbackTx {
     case class Recipe(
-        headScript: HeadMultisigScript,
+        config : Tx.Builder.Config,
         treasuryUtxo: TreasuryUtxo,
         disputeTreasuryAddress: ShelleyAddress,
         disputeResolutionAddress: ShelleyAddress,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
         votingDuration: PosixTime,
-        network: Network,
-        protocolParams: ProtocolParams,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
     )
 
     def build(recipe: Recipe): Either[SomeBuildError, FallbackTx] = {
         //////////////////////////////////////
         // Pre-processing
         val multisigDatum: TreasuryUtxo.Datum = recipe.treasuryUtxo.datum
+        
+        val hns = recipe.config.headNativeScript
 
         // FIXME: This isn't correct, I'm not totally sure what it should be
         val voteTokenName = CIP67.TokenNames(recipe.treasuryUtxo.asUtxo._1).voteTokenName
 
         val newTreasuryDatum = UnresolvedDatum(
-          headMp = recipe.headScript.policyId,
+          headMp = hns.policyId,
           disputeId = voteTokenName.bytes,
-          peers = SList.from(recipe.headScript.requiredSigners.map(_.hash)),
-          peersN = recipe.headScript.numSigners,
+          peers = SList.from(hns.requiredSigners.map(_.hash)),
+          peersN = hns.numSigners,
           deadlineVoting = recipe.votingDuration,
           versionMajor = multisigDatum.versionMajor,
           params = multisigDatum.paramsHash,
           // KZG setup I think?
-          setup = ???
+          setup = SList.empty
         )
 
         def mkVoteToken(amount: Long): MultiAsset = MultiAsset(
           SortedMap(
             (
-              recipe.headScript.policyId,
+              hns.policyId,
               SortedMap((voteTokenName, amount))
             )
           )
@@ -87,11 +99,11 @@ object FallbackTx {
         def mkDefVoteDatum(i: Int, unit: Unit): VoteDatum = ???
         def mkVoteDatum(i: Int, i1: Int, hash: AddrKeyHash): VoteDatum = ???
 
-        mkVoteOutput(mkDefVoteDatum(recipe.headScript.numSigners, ()))
+        mkVoteOutput(mkDefVoteDatum(hns.numSigners, ()))
 
         val voteUtxos: List[TransactionOutput] =
-            recipe.headScript.requiredSigners.toList.zipWithIndex.map((peer, key) =>
-                val datum = mkVoteDatum(key + 1, recipe.headScript.numSigners, peer.hash)
+            hns.requiredSigners.toList.zipWithIndex.map((peer, key) =>
+                val datum = mkVoteDatum(key + 1, hns.numSigners, peer.hash)
                 mkVoteOutput(datum)
             )
 
@@ -103,8 +115,8 @@ object FallbackTx {
             Spend(
               recipe.treasuryUtxo.asUtxo,
               witness = NativeScriptWitness(
-                scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners = recipe.headScript.requiredSigners
+                scriptSource = NativeScriptValue(hns.script),
+                additionalSigners = hns.requiredSigners
               )
             )
 
@@ -118,9 +130,9 @@ object FallbackTx {
         )
 
         val mintVoteTokens = Mint(
-          recipe.headScript.policyId,
+          hns.policyId,
           assetName = voteTokenName,
-          amount = recipe.headScript.numSigners + 1L,
+          amount = hns.numSigners + 1L,
           witness = NativeScriptWitness(NativeScriptAttached, Set.empty)
         )
 
@@ -136,17 +148,17 @@ object FallbackTx {
         // Build and finalize
         for {
             unbalanced <- TransactionBuilder
-                .build(recipe.network, steps)
+                .build(recipe.config.env.network, steps)
             finalized <- unbalanced
                 .finalizeContext(
-                  recipe.protocolParams,
+                  recipe.config.env.protocolParams,
                   // FIXME: Check change handling
                   diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
+                    recipe.config.env.protocolParams,
                     0
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
+                  evaluator = recipe.config.env.evaluator,
+                  validators = recipe.config.validators
                 )
         } yield FallbackTx(treasurySpent = recipe.treasuryUtxo, tx = finalized.transaction)
 

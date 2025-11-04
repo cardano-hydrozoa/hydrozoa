@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
@@ -15,6 +16,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
+import test.Generators.Hydrozoa.*
 
 var counter = AtomicLong(0L)
 

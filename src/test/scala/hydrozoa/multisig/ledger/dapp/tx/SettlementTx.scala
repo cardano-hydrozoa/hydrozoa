@@ -75,62 +75,8 @@ def genDepositUtxo(
       l1RefScript = None
     )
 
-val genHeadTokenName: Gen[AssetName] =
-    for {
-        ti <- arbitrary[TransactionInput]
-    } yield CIP67.TokenNames(ti).headTokenName
 
-val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
-    for {
-        mv <- Gen.posNum[BigInt]
-        // Verify that this is the correct length!
-        kzg <- genByteStringOfN(32)
-        paramsHash <- genByteStringOfN(32)
 
-    } yield TreasuryUtxo.Datum(commit = kzg, versionMajor = mv, paramsHash = paramsHash)
-}
-
-/** Generate a treasury utxo with at least minAda */
-def genTreasuryUtxo(
-    network: Network = testNetwork,
-    params: ProtocolParams = blockfrost544Params,
-    headAddress: Option[ShelleyAddress],
-    coin: Option[Coin]
-): Gen[TreasuryUtxo] =
-    for {
-        txId <- arbitrary[TransactionInput]
-        headTn <- genHeadTokenName
-
-        scriptAddress = headAddress.getOrElse({
-            ShelleyAddress(network, ShelleyPaymentPart.Script(genScriptHash.sample.get), Null)
-        })
-        datum <- genTreasuryDatum
-
-        treasuryToken = singleton(
-          scriptAddress.payment.asInstanceOf[ShelleyPaymentPart.Script].hash,
-          headTn
-        )
-
-        treasuryMinAda = ensureMinAda(
-          TreasuryUtxo(
-            headTokenName = headTn,
-            txId = txId,
-            address = scriptAddress,
-            datum = datum,
-            value = Value(Coin(0L)) + treasuryToken
-          ).asUtxo._2,
-          params
-        ).value.coin
-
-        treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
-
-    } yield TreasuryUtxo(
-      headTokenName = headTn,
-      txId = txId,
-      datum = datum,
-      address = scriptAddress,
-      value = Value(coin.getOrElse(treasuryAda)) + treasuryToken
-    )
 
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
@@ -148,8 +94,8 @@ def genSettlementTxSeqBuilder(
     )
 
     for {
-        peers <- genTestPeers
-        hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
+        (config, peers) <- genTxBuilderConfigAndPeers() 
+        hns = config.headNativeScript
         majorVersion <- Gen.posNum[Int]
 
         genDeposit = genDepositUtxo(
@@ -159,8 +105,6 @@ def genSettlementTxSeqBuilder(
         )
         deposits <- genHelper(genDeposit)
 
-        env = testTxBuilderEnvironment
-
         payouts <- genHelper(genPayoutObligationL1(network))
         payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
@@ -169,17 +113,10 @@ def genSettlementTxSeqBuilder(
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
-        multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
+
 
     } yield (
-      SettlementTxSeq.Builder(config =
-          Tx.Builder.Config(
-            headNativeScript = hns,
-            headNativeScriptReferenceInput = multisigWitnessUtxo,
-            env = testTxBuilderEnvironment,
-            validators = testValidators
-          )
-      ),
+      SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,

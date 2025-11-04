@@ -6,10 +6,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    RuleBasedTreasuryScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.ResolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
@@ -18,6 +15,7 @@ import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+
 import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
@@ -28,6 +26,7 @@ import spire.compat.integral
 import spire.math.Rational
 import spire.syntax.literals.r
 import test.*
+import test.Generators.Hydrozoa.genPubkeyAddress
 
 def genEmptyResolvedTreasuryUtxo(
     fallbackTxId: TransactionHash,

@@ -23,6 +23,7 @@ import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
 import scalus.|>
 import test.*
+import test.Generators.Hydrozoa.genPubkeyAddress
 
 // Alias for compatibility
 def genPubkeyAddr(network: Network = testNetwork): Gen[ShelleyAddress] = genPubkeyAddress(network)
