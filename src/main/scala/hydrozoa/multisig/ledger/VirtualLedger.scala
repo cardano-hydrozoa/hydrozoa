@@ -15,10 +15,10 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.State as ScalusState
 
 private def toScalusState(state: State): ScalusState =
-    emptyState.copy(utxo = state.activeUtxos)
+    emptyState.copy(utxos = state.activeUtxos)
 
 private def fromScalusState(sstate: ScalusState): State =
-    State(sstate.utxo)
+    State(sstate.utxos)
 
 trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
@@ -158,7 +158,7 @@ object VirtualLedger {
 
         def apply(tx: Tx.Serialized): IO[ApplyInternalTx] = for {
             deferredResponse <- Deferred[IO, Either[ErrorApplyInternalTx, Unit]]
-        } yield (ApplyInternalTx(tx, deferredResponse))
+        } yield ApplyInternalTx(tx, deferredResponse)
     }
 
     // Withdrawal Tx
@@ -176,7 +176,7 @@ object VirtualLedger {
             deferredResponse <- Deferred[IO, Either[ErrorApplyWithdrawalTx, List[
               TransactionOutput
             ]]]
-        } yield (ApplyWithdrawalTx(tx, deferredResponse))
+        } yield ApplyWithdrawalTx(tx, deferredResponse)
     }
 
     // Genesis Tx

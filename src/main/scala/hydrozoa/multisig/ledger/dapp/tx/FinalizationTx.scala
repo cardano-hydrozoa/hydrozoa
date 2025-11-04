@@ -320,7 +320,7 @@ object FinalizationTx {
                   res match {
                       case Right(ctx) => mkMergedResult(ctx.transaction, majorVersionProduced)
                       case Left(
-                            SomeBuildError.ValidationError(e: InvalidTransactionSizeException)
+                            SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)
                           ) =>
                           separateResult
                       // FIXME: ?

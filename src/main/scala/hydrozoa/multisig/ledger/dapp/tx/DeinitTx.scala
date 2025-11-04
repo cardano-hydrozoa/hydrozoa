@@ -6,8 +6,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
 import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
 import scala.Function.const
-import scalus.cardano.ledger.value.Coin
-import scalus.cardano.ledger.value.Coin.{ArithmeticError, Unbounded}
+import scalus.cardano.ledger.value.coin.Coin
+import scalus.cardano.ledger.value.coin.Coin.Unbounded
 import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -50,9 +50,10 @@ object DeinitTx:
         def build: BuildErrorOr[DeinitTx] = for {
             payouts <- steps.mkPayouts.left
                 .map(s =>
-                    // Use tx-specific errors
+                    // TODO: Allow errors other than SomeBuildError to be raised
                     SomeBuildError.BalancingError.apply(
-                      TxBalancingError.Failed(IllegalStateException(s))
+                      context = TransactionBuilder.Context.empty(config.env.network),
+                      e = TxBalancingError.Failed(IllegalStateException(s))
                     )
                 )
                 .explain(const("Could not distribute equity"))
@@ -115,10 +116,9 @@ object DeinitTx:
             val distribute = MultisigRegimeDistribution.distribute(equityShares)
 
             for {
-                equity <- (treasuryNewCoin - equityShares.totalFallbackDeposit).toCoin match
-                    case Left(ArithmeticError.Underflow) =>
-                        Left("residual treasury can't be less then total deposits")
-                    case Right(equity) => Right(equity)
+                equity <- (treasuryNewCoin -~ equityShares.totalFallbackDeposit).toCoin.left.map(
+                  _ => "residual treasury can't be less then total deposits"
+                )
 
                 distribution = distribute(equity)
 
@@ -135,7 +135,7 @@ object DeinitTx:
     /** A handler that re-distributes diff amount over all shares. Outputs (and optionally fee) are
       * replaced.
       */
-    object SharePayoutsDiffHandler:
+    private object SharePayoutsDiffHandler:
         def handler(
             residualTreasuryToSpend: ResidualTreasuryUtxo,
             equityShares: EquityShares
@@ -152,16 +152,14 @@ object DeinitTx:
 
             for {
                 equity <-
-                    (treasuryVCoin - (equityShares.totalFallbackDeposit + diffCoin)).toCoin match
-                        case Left(ArithmeticError.Underflow) =>
-                            Left(
-                              TxBalancingError.Failed(
-                                IllegalStateException(
-                                  "residual treasury can't be less then total deposits"
-                                )
+                    (treasuryVCoin - (equityShares.totalFallbackDeposit +~ diffCoin)).toCoin.left
+                        .map(_ =>
+                            TxBalancingError.Failed(
+                              IllegalStateException(
+                                "residual treasury can't be less then total deposits"
                               )
                             )
-                        case Right(equity) => Right(equity)
+                        )
 
                 distribution = distribute(equity)
 

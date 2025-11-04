@@ -23,7 +23,7 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TxBalancingError}
 import test.*
 import test.TestPeer.*
 
@@ -142,7 +142,8 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         InitializationTx.build(recipeLessThanMinAda) match {
             case Left(
                   SomeBuildError.ValidationError(
-                    e: TransactionException.OutputsHaveNotEnoughCoinsException
+                    e: TransactionException.OutputsHaveNotEnoughCoinsException,
+                    _
                   )
                 ) =>
                 ()
@@ -178,7 +179,8 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         InitializationTx.build(recipe) match {
             case Left(
                   SomeBuildError.BalancingError(
-                    e: TxBalancingError.InsufficientFunds
+                    e: TxBalancingError.InsufficientFunds,
+                    _
                   )
                 ) =>
                 ()
@@ -214,7 +216,7 @@ class InitializationTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                       "treasury output in InitializationTx value not coherent with actual transaction produced"
                     )
                     assert(
-                      tx.tx.witnessSet.nativeScripts.head == headMultisigScript.script,
+                      tx.tx.witnessSet.nativeScripts.toSet.head == headMultisigScript.script,
                       "Head multisig script not as expected"
                     )
                     assert(

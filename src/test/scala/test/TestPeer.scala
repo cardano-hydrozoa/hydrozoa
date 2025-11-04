@@ -15,7 +15,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedOrderedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
@@ -105,7 +105,7 @@ def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
   * the given key
   */
 def l2EventWithdrawalFromInputsAndPeer(
-    inputs: TaggedOrderedSet[TransactionInput],
+    inputs: TaggedSortedSet[TransactionInput],
     peer: TestPeer
 ): L2EventWithdrawal = {
     val txBody: TransactionBody = TransactionBody(
@@ -130,7 +130,7 @@ def l2EventWithdrawalFromInputsAndPeer(
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
-    inputs: TaggedOrderedSet[TransactionInput],
+    inputs: TaggedSortedSet[TransactionInput],
     utxoSet: Map[TransactionInput, TransactionOutput],
     inPeer: TestPeer,
     outPeer: TestPeer,

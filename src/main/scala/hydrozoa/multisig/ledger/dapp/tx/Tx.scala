@@ -122,7 +122,7 @@ object Tx {
                 replacement: => A
             ): Either[SomeBuildError, A] = {
                 err match
-                    case SomeBuildError.ValidationError(ve) =>
+                    case SomeBuildError.ValidationError(ve, ctx) =>
                         ve match {
                             case _: InvalidTransactionSizeException =>
                                 Right(replacement)

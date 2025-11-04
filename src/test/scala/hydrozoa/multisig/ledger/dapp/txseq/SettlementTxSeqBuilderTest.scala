@@ -47,7 +47,7 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                                 )
                         }
 
-                    val initialState: State = State(utxo = unsignedTxsAndUtxos._2.utxos)
+                    val initialState: State = State(utxos = unsignedTxsAndUtxos._2.utxos)
 
                     val signedTxs: Vector[Transaction] =
                         peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>

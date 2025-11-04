@@ -238,7 +238,7 @@ object UtxoSet:
             (
               Context(fee = Coin(0L), env = UtxoEnv.default),
               State(
-                utxo = utxoSetL2.untagged.map((k, v) => k.untagged -> v.untagged),
+                utxos = utxoSetL2.untagged.map((k, v) => k.untagged -> v.untagged),
                 certState = CertState.empty
               )
             )

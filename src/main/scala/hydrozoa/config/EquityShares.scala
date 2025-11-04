@@ -1,10 +1,7 @@
 package hydrozoa.config
-
 import hydrozoa.AddressL1
-import scalus.cardano.ledger.value.Coin
-import scalus.cardano.ledger.value.Coin.Unbounded
+import scalus.cardano.ledger.value.coin.Coin
 import spire.compat.numeric
-import spire.implicits.additiveSemigroupOps
 import spire.math.Number.apply
 import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
@@ -16,7 +13,13 @@ case class EquityShares private (
     private val peerShares: Map[UByte, PeerEquityShare]
 ) {
     def totalFallbackDeposit: Coin =
-        peerShares.values.map(_.fallbackDeposit).sumCoins.unsafeToCoin
+        peerShares.values.map(_.fallbackDeposit).coinSum.unsafeToCoin
+
+//    // TODO: remove unsafe Option.get
+//    def shareWeights: Distribution.NormalizedWeights = Distribution.parseNormalizedWeights(
+//      NonEmptyList.fromList(peerShares.iterator.toList).get,
+//      _._2.equityShare
+//    ).get
 }
 
 /** Peers's equity share and deposit. */
@@ -44,14 +47,16 @@ object EquityShares:
             // Check sum(quity shares) = 1
             _ <- Either.cond(sharesSum === r"1", (), HeadConfigError.SharesMustSumToOne(sharesSum))
 
-            collateralUtxo = collateralDeposit + voteTxFee
-            voteUtxo = voteDeposit + tallyTxFee
+            collateralUtxo = collateralDeposit +~ voteTxFee
+            voteUtxo = voteDeposit +~ tallyTxFee
             peerShares = shares.view
                 .mapValues((address, share) => {
                     val collectiveContingencyShare =
-                        (fallbackTxFee + defaultVoteDeposit).scaleFractional(share)
+                        (fallbackTxFee +~ defaultVoteDeposit) *~ share
                     val fallbackDeposit =
-                        (collectiveContingencyShare + collateralUtxo + voteUtxo).unsafeToCoin()
+                        Coin.unsafeApply(
+                          (collectiveContingencyShare +~ collateralUtxo +~ voteUtxo).underlying.ceil.toLong
+                        )
                     PeerEquityShare(address, share, fallbackDeposit)
                 })
                 .toMap
@@ -87,22 +92,17 @@ object EquityShares:
                 equityShares.peerShares.values.map(v =>
                     v.payoutAddress -> (
                       v.fallbackDeposit,
-                      equity
-                          .scaleFractional(v.equityShare)
-                          // TODO: RoundingMode.DOWN
-                          .unsafeToCoin()
+                      Coin.unsafeApply((equity *~ v.equityShare).underlying.floor.toLong)
                     )
                 )
 
             val equityPayoutsTotal =
-                payoutsParts
-                    .foldLeft(Unbounded.zero)((acc, p) => acc + p._2._2)
-                    .unsafeToCoin
+                payoutsParts.iterator.map(_._2._2).toList.coinSum.unsafeToCoin
 
-            val dust = (equity - equityPayoutsTotal).unsafeToCoin
+            val dust = (equity -~ equityPayoutsTotal).unsafeToCoin
 
             val payouts = payoutsParts
-                .map((a, p) => a -> (p._1 + p._2).unsafeToCoin)
+                .map((a, p) => a -> (p._1 +~ p._2).unsafeToCoin)
                 .toMap
 
             Distribution(payouts, dust)
@@ -115,12 +115,12 @@ object EquityShares:
             ): Distribution = {
                 val payouts = self.peerShares.values.map(v =>
                     v.payoutAddress ->
-                        ((equity + defaultVoteDeposit).scaleFractional(v.equityShare) + voteDeposit)
-                            // TODO: RoundingMode.DOWN
-                            .unsafeToCoin()
+                        Coin.unsafeApply(
+                          ((equity +~ defaultVoteDeposit) *~ v.equityShare +~ voteDeposit).underlying.floor.toLong
+                        )
                 )
                 val equityPayoutsTotal =
-                    payouts.foldLeft(Coin.Unbounded.zero)((acc, p) => acc + p._2).unsafeToCoin
-                val dust = (equity - equityPayoutsTotal).unsafeToCoin
+                    payouts.foldLeft(Coin.Unbounded.zero)((acc, p) => acc +~ p._2).unsafeToCoin
+                val dust = (equity -~ equityPayoutsTotal).unsafeToCoin
                 Distribution(payouts.toMap, dust)
             }

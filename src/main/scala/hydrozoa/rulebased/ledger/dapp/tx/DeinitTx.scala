@@ -18,7 +18,7 @@ import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.value.Coin as NewCoin
+import scalus.cardano.ledger.value.coin.Coin as NewCoin
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined

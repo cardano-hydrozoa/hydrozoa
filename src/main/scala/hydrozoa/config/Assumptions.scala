@@ -1,10 +1,8 @@
 package hydrozoa.config
 
-import scalus.cardano.ledger.value.Coin
+import scalus.cardano.ledger.value.coin.Coin
 import spire.compat.ordering
-import spire.implicits.additiveSemigroupOps
-import spire.math.UByte
-
+import spire.math.{Rational, SafeLong, UByte}
 
 object Assumptions:
 
@@ -20,7 +18,7 @@ object Assumptions:
 
     // TODO: use protocol params
     val coinsPerUtxoByte: Coin = Coin.unsafeApply(4310)
-    val collateralPercentage: BigDecimal = 1.5
+    val collateralPercentage: Rational = Rational(150, 100)
 
     // ===================================
     // Assumptions
@@ -44,7 +42,7 @@ object Assumptions:
     val minAdaBabbageVoteUtxo = calculateBabbageUtxoStorageCost(maxVoteUtxoBytes)
 
     def calculateBabbageUtxoStorageCost(byteSize: Int): Coin =
-        coinsPerUtxoByte.scaleIntegral(160 + byteSize).unsafeToCoin
+        (coinsPerUtxoByte *~ SafeLong(160 + byteSize)).unsafeToCoin
 
     // ===================================
     // Minimal collateral
@@ -52,13 +50,14 @@ object Assumptions:
 
     // Collateral required for vote tx and tally tx
     val minCollateral: Coin =
-        List(worstCaseVoteTxFee, worstCaseTallyTxFee).max
-            .scaleFractional(collateralPercentage)
-            .unsafeToCoin()
+        Coin.unsafeApply(
+          (List(worstCaseVoteTxFee, worstCaseTallyTxFee).max
+              *~ collateralPercentage).underlying.ceil.toLong
+        )
 
     def calculateWorstCaseFallbackTxFees(numberOfPeers: UByte): Coin =
         (worstCaseVariableFeeFallbackTxPerPeer
-            .scaleIntegral(numberOfPeers.toInt) + worstCaseFixedFeeFallbackTx)
-            .unsafeToCoin
+            *~ SafeLong(numberOfPeers.toInt)
+            +~ worstCaseFixedFeeFallbackTx).unsafeToCoin
 
 end Assumptions

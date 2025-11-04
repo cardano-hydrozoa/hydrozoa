@@ -130,9 +130,9 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
     } yield Recipe(
       headNativeScript = hns,
       treasuryUtxo = treasuryUtxo,
-      defaultVoteDeposit = ???,
-      voteDeposit = ???,
-      shares = ???, //shares,
+      defaultVoteDeposit = Coin(350000),
+      voteDeposit = Coin(400000),
+      shares = shares,
       collateralUtxo = collateralUtxo,
       env = testTxBuilderEnvironment,
       validators = testValidators

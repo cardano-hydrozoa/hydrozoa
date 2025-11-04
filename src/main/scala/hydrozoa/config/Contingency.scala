@@ -1,7 +1,7 @@
 package hydrozoa.config
 
 import hydrozoa.config.Assumptions.*
-import scalus.cardano.ledger.value.Coin
+import scalus.cardano.ledger.value.coin.Coin
 import spire.compat.ordering
 import spire.math.UByte
 

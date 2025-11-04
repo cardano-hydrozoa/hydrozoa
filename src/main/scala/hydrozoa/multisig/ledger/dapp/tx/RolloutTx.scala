@@ -406,10 +406,10 @@ object RolloutTx {
 
                 } yield res
                 res match {
-                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException)) =>
-                        Left(SomeBuildError.ValidationError(e))
+                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)) =>
+                        Left(SomeBuildError.ValidationError(e, ctx))
                             .explainConst("trail to add payout failed")
-                    case Left(SomeBuildError.BalancingError(CantBalance(diff))) =>
+                    case Left(SomeBuildError.BalancingError(CantBalance(diff), ctx)) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)
                     case _ =>
