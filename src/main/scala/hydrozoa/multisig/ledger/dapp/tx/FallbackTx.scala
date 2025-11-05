@@ -1,20 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
+import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.token
-import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
-import scala.collection.immutable.SortedMap
+import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, VoteUtxoCast}
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Network, ShelleyAddress}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
@@ -22,11 +20,17 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 import scalus.ledger.api.v1.PosixTime
 import scalus.prelude.List as SList
 
+import scala.collection.immutable.SortedMap
+
 final case class FallbackTx(
     treasurySpent: TreasuryUtxo,
     treasuryProduced : TreasuryUtxo,
+    consumedHMRWUtxo : TransactionUnspentOutput,
+    producedDefaultVoteUtxo : VoteUtxoCast,
+    producedPeerVoteUtxos : NonEmptyList[OwnVoteUtxo],
+    producedCollateralUtxos : NonEmptyList[TransactionUnspentOutput],
     override val tx: Transaction
-) extends Tx
+) extends Tx 
 
 
 /*
@@ -66,7 +70,6 @@ object FallbackTx {
         
         val hns = recipe.config.headNativeScript
 
-        // FIXME: This isn't correct, I'm not totally sure what it should be
         val voteTokenName = CIP67.TokenNames(recipe.treasuryUtxo.asUtxo._1).voteTokenName
 
         val newTreasuryDatum = UnresolvedDatum(

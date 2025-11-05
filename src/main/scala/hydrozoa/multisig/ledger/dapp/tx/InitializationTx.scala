@@ -125,10 +125,7 @@ object InitializationTx {
           headNativeScript.script.scriptHash,
           mrTokenName,
           1,
-          NativeScriptWitness(
-            NativeScriptValue(headNativeScript.script),
-            headNativeScript.requiredSigners
-          )
+          headNativeScript.witness
         )
         val hmrwOutput =Babbage(headAddress, mrValue, None, None).ensureMinAda(recipe.env.protocolParams)
 
@@ -143,12 +140,12 @@ object InitializationTx {
             ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
 
         val steps = spendAllUtxos
-            .appended(mintBeaconToken)
-            .appended(mintMRToken)
-            .appended(createTreasury)
-            .appended(Send(hmrwOutput))
-            .appended(createChangeOutput)
-            .appended(modifyAuxiliaryData)
+            :+ mintBeaconToken
+            :+ mintMRToken
+            :+ createTreasury
+            :+ Send(hmrwOutput)
+            :+ createChangeOutput
+            :+ modifyAuxiliaryData
 
         ////////////////////////////////////////////////////////////
         // Build and finalize

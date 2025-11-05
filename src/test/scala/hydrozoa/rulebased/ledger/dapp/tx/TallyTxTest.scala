@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
 import org.scalacheck.Gen
@@ -36,8 +36,7 @@ def genCastVoteDatum(
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = SOption.None, // Tally votes don't have peer field set
-      voteStatus = VoteStatus.Vote(VoteDetails(commitment, versionMinor))
+      voteStatus = VoteStatus.Voted(commitment, versionMinor)
     )
 
 /** Generate a pair of compatible vote datums for tallying
@@ -58,15 +57,13 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
         continuingDatum = VoteDatum(
           key = continuingKey,
           link = removedKey, // Key constraint: continuing vote links to removed vote
-          peer = SOption.None,
-          voteStatus = VoteStatus.Vote(VoteDetails(continuingCommitment, continuingVersionMinor))
+          voteStatus = VoteStatus.Voted(continuingCommitment, continuingVersionMinor)
         )
 
         removedDatum = VoteDatum(
           key = removedKey,
           link = nextLink,
-          peer = SOption.None,
-          voteStatus = VoteStatus.Vote(VoteDetails(removedCommitment, removedVersionMinor))
+          voteStatus = VoteStatus.Voted(removedCommitment, removedVersionMinor)
         )
     } yield (continuingDatum, removedDatum)
 

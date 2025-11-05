@@ -7,7 +7,7 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.c
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
 import org.scalacheck.Gen
@@ -37,8 +37,7 @@ def genTalliedVoteDatum(
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = SOption.None, // Resolution votes don't have peer field set
-      voteStatus = VoteStatus.Vote(VoteDetails(commitment, versionMinor))
+      voteStatus = VoteStatus.Voted(commitment, versionMinor)
     )
 
 def genResolutionTallyVoteUtxo(

@@ -4,17 +4,11 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryScript
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{
-    ResolvedDatum,
-    RuleBasedTreasuryDatum,
-    UnresolvedDatum
-}
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
+
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.Network
@@ -25,12 +19,7 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import scalus.cardano.txbuilder.{
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class ResolutionTx(
@@ -72,7 +61,7 @@ object ResolutionTx {
 
     private def extractVoteDetails(
         talliedUtxo: TallyVoteUtxo
-    ): Either[ResolutionTxError, VoteDetails] = {
+    ): Either[ResolutionTxError, (KzgCommitment, BigInt)] = {
         import ResolutionTxError.*
 
         val voteOutput = talliedUtxo.utxo.output.untagged
@@ -81,8 +70,8 @@ object ResolutionTx {
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
-                            case VoteStatus.NoVote            => Left(TalliedNoVote)
-                            case VoteStatus.Vote(voteDetails) => Right(voteDetails)
+                            case VoteStatus.AwaitingVote(_)            => Left(TalliedNoVote)
+                            case VoteStatus.Voted(commitment, versionMinor) => Right((commitment, versionMinor))
                         }
                     case Failure(e) =>
                         Left(
@@ -110,13 +99,13 @@ object ResolutionTx {
 
     private def mkResolvedTreasuryDatum(
         unresolved: UnresolvedDatum,
-        voteDetails: VoteDetails
+        voteDetails: (KzgCommitment, BigInt)
     ): RuleBasedTreasuryDatum = {
 
         val resolvedDatum = ResolvedDatum(
           headMp = unresolved.headMp,
-          utxosActive = voteDetails.commitment,
-          version = (unresolved.versionMajor, voteDetails.versionMinor),
+          utxosActive = voteDetails._1,
+          version = (unresolved.versionMajor, voteDetails._2),
           params = unresolved.params,
           setup = unresolved.setup
         )

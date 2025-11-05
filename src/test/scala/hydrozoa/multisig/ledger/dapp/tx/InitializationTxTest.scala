@@ -19,6 +19,7 @@ import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.txbuilder.TransactionUnspentOutput
 import test.*
@@ -29,6 +30,7 @@ import scala.collection.immutable.SortedMap
 
 // The minimum ada required for the initial treasury utxo
 val minInitTreasuryAda: Coin = {
+    val mockTreasury2 = MinCoinSizedTransactionOutput
     val mockTreasury = Babbage(
       // This is a pubkey address, but the script address should be the same size
       address = genPubkeyAddress().sample.get,

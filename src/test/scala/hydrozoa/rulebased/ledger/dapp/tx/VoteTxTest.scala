@@ -32,12 +32,11 @@ def genPeerVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDatu
         // key == 0 is the default `NoVote`, here we need a datum for OwnVoteUtxo
         key <- Gen.choose(1, peersVKs.length)
         link = (key + 1) % (peersVKs.length + 1)
-        peer = Some(peersVKs.toList(key - 1).pubKeyHash)
+        peer = peersVKs.toList(key - 1).pubKeyHash
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = peer.map(SOption.Some(_)).getOrElse(SOption.None),
-      voteStatus = VoteStatus.NoVote
+      voteStatus = VoteStatus.AwaitingVote(peer)
     )
 
 def genVoteUtxo(
@@ -64,7 +63,7 @@ def genVoteUtxo(
           scriptRef = None
         )
     } yield OwnVoteUtxo(
-      AddrKeyHash(voteDatum.peer.get.hash),
+      AddrKeyHash(???), // FIXME: voteDatum.peer.get.hash),
       Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
     )
 

@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
     Unresolved
 }
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.*
@@ -183,18 +183,18 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    case NoVote            => fail(ResolveUnexpectedNoVote)
-                    case Vote(voteDetails) =>
+                    case AwaitingVote(_)            => fail(ResolveUnexpectedNoVote)
+                    case Voted(commitment, versionMinor) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
                         require(
                           treasuryOutputDatum.version._1 == unresolvedDatum.versionMajor &&
-                              treasuryOutputDatum.version._2 == voteDetails.versionMinor,
+                              treasuryOutputDatum.version._2 == versionMinor,
                           ResolveVersionCheck
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.utxosActive === voteDetails.commitment,
+                          treasuryOutputDatum.utxosActive === commitment,
                           ResolveUtxoActiveCheck
                         )
 

@@ -8,8 +8,8 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     OnchainBlockHeader,
     VoteRedeemer
 }
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
@@ -62,18 +62,19 @@ object VoteTx {
             case Some(DatumOption.Inline(datumData)) =>
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
-                        if voteDatum.voteStatus == NoVote then
-                            val updatedVoteDatum = voteDatum.copy(
-                              voteStatus = VoteStatus.Vote(
-                                VoteDetails(
-                                  recipe.blockHeader.commitment,
-                                  recipe.blockHeader.versionMinor
+                        voteDatum.voteStatus match {
+                            case AwaitingVote(_) => {
+                                val updatedVoteDatum = voteDatum.copy(
+                                    voteStatus = VoteStatus.Voted(
+                                        recipe.blockHeader.commitment,
+                                        recipe.blockHeader.versionMinor
+                                    )
                                 )
-                              )
-                            )
-                            buildVoteTx(recipe, updatedVoteDatum)
-                        else Left(VoteAlreadyCast)
-
+                                buildVoteTx(recipe, updatedVoteDatum)
+                            }
+                            case _ => Left(VoteAlreadyCast)
+                        } 
+                        
                     case Failure(e) =>
                         Left(
                           InvalidVoteDatum(

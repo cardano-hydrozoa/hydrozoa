@@ -105,7 +105,7 @@ object TallyTx {
               continuing.voteStatus,
               removed.voteStatus
             )
-            Right(VoteDatum(continuing.key, removed.link, SNone, higherVote))
+            Right(VoteDatum(continuing.key, removed.link, higherVote))
         }
     }
 
