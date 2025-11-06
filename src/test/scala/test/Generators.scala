@@ -10,20 +10,19 @@ import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import monocle.*
 import monocle.syntax.all.*
-import scalus.cardano.ledger.ArbitraryInstances.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scalus.builtin.{ByteString, Data}
 import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.Network.Testnet
-import scalus.cardano.address.{Network, *}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.ledger.{Coin, *}
-import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.address.*
+import scalus.cardano.ledger.ArbitraryInstances.{*, given}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
 import scalus.prelude.Option as SOption
@@ -70,13 +69,17 @@ object Generators {
             for {
                 peers <- genTestPeers
                 hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-                multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(hns, env.network)
                 seedUtxo <- arbitrary[TransactionInput]
+                tokenNames = TokenNames(seedUtxo)
+                multisigWitnessUtxo <- genFakeMultisigWitnessUtxo(
+                    hns,
+                    env.network,
+                    Some(tokenNames.multisigRegimeTokenName))
             } yield
                 (Tx.Builder.Config(
                     headNativeScript = hns,
                     headNativeScriptReferenceInput = multisigWitnessUtxo,
-                    tokenNames = TokenNames(seedUtxo), 
+                    tokenNames = tokenNames,
                     env = env,
                     validators = validators), peers)
 
@@ -141,12 +144,24 @@ object Generators {
 
         def genFakeMultisigWitnessUtxo(
             script: HeadMultisigScript,
-            network: Network
+            network: Network,
+            // Pass this if you need a specific token name for coherence with the rest of your test.
+            // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
+            hmrwTokenName: Option[AssetName] = None
         ): Gen[TransactionUnspentOutput] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
+
+            hmrwTn <- hmrwTokenName match {
+                case None => arbitrary[TransactionInput].flatMap(ti => CIP67.TokenNames(ti).multisigRegimeTokenName)
+                case Some(n) => Gen.const(n)
+            }
+            hmrwToken = Value(Coin.zero, MultiAsset(SortedMap(script.policyId -> SortedMap(
+                hmrwTn -> 1L
+            ))))
+
             output = Babbage(
               script.mkAddress(network),
-              Value.ada(2),
+                Value.ada(2) + hmrwToken,
               None,
               Some(ScriptRef.apply(script.script))
             )
