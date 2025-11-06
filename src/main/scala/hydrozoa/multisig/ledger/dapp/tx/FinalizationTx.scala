@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
+import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.prebalancedDiffHandler
@@ -130,8 +131,8 @@ object FinalizationTx {
                 ctx |> unsafeCtxTxOutputsL
                     .refocus(_.index(treasuryOutputIndex))
                     .replace(Sized.apply(residualTreasuryOutput))
-                |> unsafeCtxTxReferenceInputsL
-                    .replace(TaggedSortedSet.empty)
+                    |> unsafeCtxTxReferenceInputsL
+                        .replace(TaggedSortedSet.empty)
 
             // Additional step - spend multisig regime utxo
             val spendMultisigRegimeUtxoStep =
@@ -231,10 +232,11 @@ object FinalizationTx {
                     ctx: TransactionBuilder.Context,
                     residualTreasuryProduced: ResidualTreasuryUtxo
                 ): Result = PartialResult.WithRollouts(
-                  this.input.transaction.treasurySpent,
+                  input.transaction.treasurySpent,
                   residualTreasuryProduced,
-                  this.input.transaction.rolloutProduced,
-                  ctx
+                  input.transaction.rolloutProduced.focus(_.utxo.input.transactionId).replace(ctx.transaction.id),
+                  ctx,
+                  input.rolloutTxSeqPartial
                 )
 
             extension (self: SettlementTx.Builder.Result.WithRollouts)
@@ -398,7 +400,8 @@ object FinalizationTx {
                 override val treasurySpent: TreasuryUtxo,
                 override val residualTreasuryProduced: ResidualTreasuryUtxo,
                 override val rolloutProduced: RolloutUtxo,
-                override val ctx: TransactionBuilder.Context
+                override val ctx: TransactionBuilder.Context,
+                rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult,
             ) extends PartialResult,
                   RolloutUtxo.Produced {
 

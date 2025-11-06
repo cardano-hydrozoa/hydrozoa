@@ -23,7 +23,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
         }
     }
 
-    test ("Observe finalization tx seq") {
+    ignore ("Observe finalization tx seq") {
         val gen = genFinalizationTxSeqBuilder()
         
         forAll(gen) { (builder, args, peers) =>

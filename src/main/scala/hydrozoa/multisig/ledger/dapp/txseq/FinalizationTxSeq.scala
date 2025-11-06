@@ -154,7 +154,7 @@ object FinalizationTxSeq {
                                             .complete(deinitTx, args.majorVersionProduced, config)
                                             .left
                                             .map(Builder.Error.FinalizationCompleteError(_))
-                                        rolloutTxSeq <- rolloutTxSeqPartial
+                                        rolloutTxSeq <- withRollouts.rolloutTxSeqPartial
                                             .finishPostProcess(withRollouts.rolloutProduced)
                                             .left
                                             .map(Error.RolloutSeqError(_))

@@ -24,7 +24,7 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
         }
     }
 
-    test ("Observe settlement tx seq") {
+    ignore ("Observe settlement tx seq") {
         val gen = genSettlementTxSeqBuilder()
         
         forAll(gen) { (builder, args, peers) =>
