@@ -11,7 +11,6 @@ import scalus.cardano.ledger.value.coin.Coin.Unbounded
 import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import spire.implicits.additiveGroupOps
 
 /** The Deinit tx in the multisig regime acts mostly the same way the eponymous tx in the rule-based
   * regime:
@@ -134,6 +133,8 @@ object DeinitTx:
 
     /** A handler that re-distributes diff amount over all shares. Outputs (and optionally fee) are
       * replaced.
+      *
+      * NB: diff is inputs - (outputs + fee)
       */
     private object SharePayoutsDiffHandler:
         def handler(
@@ -144,38 +145,42 @@ object DeinitTx:
             tx: Transaction
         ) => {
 
-            // FIXME: remove later
-            val treasuryVCoin = Unbounded.apply(residualTreasuryToSpend.value.coin.value)
+            if diff == 0 then Right(tx)
+            else
+                val distribute = MultisigRegimeDistribution.distribute(equityShares)
 
-            val distribute = MultisigRegimeDistribution.distribute(equityShares)
-            val diffCoin = Coin.unsafeApply(diff)
+                // FIXME: remove later
+                val treasuryVCoin = Unbounded.apply(residualTreasuryToSpend.value.coin.value)
 
-            for {
-                equity <-
-                    (treasuryVCoin - (equityShares.totalFallbackDeposit +~ diffCoin)).toCoin.left
-                        .map(_ =>
-                            TxBalancingError.Failed(
-                              IllegalStateException(
-                                "residual treasury can't be less then total deposits"
-                              )
+                val feeCoin = Unbounded.apply(tx.body.value.fee.value)
+
+                for {
+                    // equityShares.totalFallbackDeposit is added by the distributor
+                    equity <-
+                        (treasuryVCoin -~ equityShares.totalFallbackDeposit -~ feeCoin).toCoin.left
+                            .map(_ =>
+                                TxBalancingError.Failed(
+                                  IllegalStateException(
+                                    "residual treasury can't be less then total deposits"
+                                  )
+                                )
                             )
-                        )
 
-                distribution = distribute(equity)
+                    distribution = distribute(equity)
 
-                outputs = distribution.payouts
-                    .map(p => Sized(TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying))))
-                    .toList
+                    outputs = distribution.payouts
+                        .map(p => Sized(TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying))))
+                        .toList
 
-            } yield {
-                val tb = tx.body.value
-                    .focus(_.outputs)
-                    .replace(IndexedSeq.from(outputs))
-                    .focus(_.fee)
-                    .modify(fee => OldCoin.apply(fee.value + distribution.dust.underlying))
-                val t = tx.copy(body = KeepRaw(tb))
-                t
-            }
+                } yield {
+                    val tb = tx.body.value
+                        .focus(_.outputs)
+                        .replace(IndexedSeq.from(outputs))
+                        .focus(_.fee)
+                        .modify(fee => OldCoin.apply(fee.value + distribution.dust.underlying))
+                    val t = tx.copy(body = KeepRaw(tb))
+                    t
+                }
 
         }
 

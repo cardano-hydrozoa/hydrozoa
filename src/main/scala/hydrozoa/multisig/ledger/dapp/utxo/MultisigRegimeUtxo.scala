@@ -1,22 +1,26 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{AssetName, ScriptRef, TransactionInput, TransactionOutput, Value}
 import scalus.cardano.txbuilder.TransactionUnspentOutput
 
 final case class MultisigRegimeUtxo(
     multisigRegimeTokenName: AssetName,
     utxoId: TransactionInput,
     address: ShelleyAddress,
-    value: Value
+    value: Value,
+    script: HeadMultisigScript
 ) {
     val asUtxo: TransactionUnspentOutput =
         TransactionUnspentOutput(
           utxoId,
           TransactionOutput.apply(
             address = address,
-            value = value
+            value = value,
+              datumOption = None,
+              scriptRef = Some(ScriptRef.apply(script.script))
           )
         )
 }
@@ -33,8 +37,4 @@ object MultisigRegimeUtxo {
         def multisigRegimeUtxoSpent: MultisigRegimeUtxo
     }
 
-    /// ** If some args extend this, it means that args contain it. */
-    // trait ToSpend {
-    //    def multisigUtxoToSpend: MultisigUtxo
-    // }
 }

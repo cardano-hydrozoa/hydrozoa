@@ -73,6 +73,7 @@ def genEmptyResolvedTreasuryUtxo(
     }
 }
 
+// TODO: move away from rule-based, it's used in both regimes
 /** Generate EquityShares for testing */
 def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
     for {

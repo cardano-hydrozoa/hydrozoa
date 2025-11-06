@@ -2,12 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
-import hydrozoa.multisig.ledger.dapp.utxo.{
-    MultisigRegimeUtxo,
-    ResidualTreasuryUtxo,
-    RolloutUtxo,
-    TreasuryUtxo
-}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.prebalancedDiffHandler
 import monocle.Focus.focus
@@ -18,7 +13,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL}
+import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, Send, Spend}
 import scalus.|>
 
@@ -97,7 +92,11 @@ object FinalizationTx {
 
         /** Stage 1 of finalization tx building is upgrading the settlement tx (which takes no
           * deposits) into a finalization tx. This conversion must NOT increase the tx size. This is
-          * guaranteed by the following invariant: `size(treasuryUtxo.datum) < size(inputRef)`.
+          * guaranteed because:
+          *   - exactly one ref input (the multisig regime utxo) is moved to inputs
+          *   - its spending witness is already included
+          *   - increase of residual treasury output value always be compensated by the removed
+          *     datum
           *
           * @param multisigUtxoToSpend
           * @param args
@@ -116,7 +115,9 @@ object FinalizationTx {
             val ctx = args.input.ctx
             val tx = ctx.transaction
 
-            // Manually upgrade the treasury output
+            // Direct tx editing:
+            // - upgrade the treasury output
+            // - remove multisig regime utxo from referenced utxos by setting it to the empty set
             val treasuryOutputIndex = args.input.transaction.treasuryProduced.txId.index
             val treasuryOutput = tx.body.value.outputs(treasuryOutputIndex).value
 
@@ -125,18 +126,20 @@ object FinalizationTx {
               treasuryOutput.value + multisigUtxoToSpend.value
             )
 
-            val ctxUpgraded: TransactionBuilder.Context = ctx |> unsafeCtxTxOutputsL
-                .refocus(_.index(treasuryOutputIndex))
-                .replace(Sized.apply(residualTreasuryOutput))
+            val ctxUpgraded: TransactionBuilder.Context =
+                ctx |> unsafeCtxTxOutputsL
+                    .refocus(_.index(treasuryOutputIndex))
+                    .replace(Sized.apply(residualTreasuryOutput))
+                |> unsafeCtxTxReferenceInputsL
+                    .replace(TaggedSortedSet.empty)
 
-            // Additional step
-            val addMultisigRegimeInputStep =
+            // Additional step - spend multisig regime utxo
+            val spendMultisigRegimeUtxoStep =
                 Spend(multisigUtxoToSpend.asUtxo, config.headNativeScript.witness)
 
             for {
-
                 ctx <- TransactionBuilder
-                    .modify(ctxUpgraded, List(addMultisigRegimeInputStep))
+                    .modify(ctxUpgraded, List(spendMultisigRegimeUtxoStep))
                     .explain(const("Could not modify (upgrade) settlement tx"))
 
                 diffHandler = new ChangeOutputDiffHandler(
@@ -171,7 +174,7 @@ object FinalizationTx {
             sealed trait Some:
                 def input: Input
 
-                type Input <: SettlementTx.Builder.Result[_ <: SettlementTx]
+                type Input <: SettlementTx.Builder.Result[? <: SettlementTx]
                 type Result <: PartialResult
 
                 def mkResult(
@@ -271,11 +274,9 @@ object FinalizationTx {
                   *   Mapping:
                   *   - FinalizationTx2.NoPayouts -> FinalizationTx2.NoPayouts |
                   *     FinalizationTx2.NoPayoutsMerged
-                  *
                   *   - FinalizationTx1.WithOnlyDirectPayouts ->
                   *     FinalizationTx2.WithOnlyDirectPayouts |
                   *     Finalization2.WithOnlyDirectPayoutsMerged
-                  *
                   *   - FinalizationTx1.WithRollouts(in fact: TxWithRolloutTxSeq) ->
                   *     FinalizationTx2.WithRollouts | FinalizationTx2.WithRolloutsMerged
                   */
