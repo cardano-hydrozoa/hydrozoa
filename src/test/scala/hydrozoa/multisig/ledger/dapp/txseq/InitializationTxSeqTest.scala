@@ -20,7 +20,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
-import scalus.cardano.txbuilder.{TransactionBuilder, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -82,11 +82,12 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
     )
 
 object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
+    import Prop.forAll
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p.withMinSuccessfulTests(10_000)
     }
 
-    property("Initialization Tx Seq Happy Path") = Prop.forAll(genArgs) { (args, testPeers) =>
+    val _ = property("Initialization Tx Seq Happy Path") = forAll(genArgs) { (args, testPeers) =>
         {
             // Collect all the props in a mutable buffer, and then combine them at the end
             val props = mutable.Buffer.empty[Prop]
@@ -204,8 +205,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val actual = iTx.tx.auxiliaryData.map(_.value)
                 val expected =
                     MD.apply(Initialization, iTx.treasuryProduced.address)
-                (s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
-                    .contains(expected))
+                s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
+                    .contains(expected)
             })
 
             props.append({
@@ -363,10 +364,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
 
-                (fbTx.tx == Cbor
+                fbTx.tx == Cbor
                     .decode(bytes)
                     .to[Transaction]
-                    .value)
+                    .value
             })
 
             props.append({
@@ -386,11 +387,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             // TODO: This whole "sign and observe" is duplicated from the settlement tx seq test. We can factor
             // it out into utils
-
-            val unsignedTxsAndUtxos
-            : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
-                (Vector(iTx.tx, fbTx.tx), iTx.resolvedUtxos)
-
 
             val initialState : State = State(utxo = iTx.resolvedUtxos.utxos )
 
