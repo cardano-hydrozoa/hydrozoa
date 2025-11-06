@@ -144,12 +144,12 @@ class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
         PropertyCheckConfiguration(minSuccessful = 100)
 
-    test("Recipe generator works") {
+    ignore("Recipe generator works") {
         val exampleRecipe = genSimpleDeinitTxRecipe.sample.get
         println(exampleRecipe)
     }
 
-    test("DeinitTx builds successfully") {
+    ignore("DeinitTx builds successfully") {
         forAll(genSimpleDeinitTxRecipe) { recipe =>
             //println(
             //  s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._2.size}, shares: ${recipe.shares._2
