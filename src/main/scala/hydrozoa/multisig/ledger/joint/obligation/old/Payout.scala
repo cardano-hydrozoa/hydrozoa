@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.joint.utxo
+package hydrozoa.multisig.ledger.joint.obligation.old
 
 import cats.data.NonEmptyVector
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}

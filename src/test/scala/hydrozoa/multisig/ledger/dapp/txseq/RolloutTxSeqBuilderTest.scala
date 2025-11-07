@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
