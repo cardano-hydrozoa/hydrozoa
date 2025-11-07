@@ -16,13 +16,13 @@ import scalus.builtin.ByteString.hex
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
-import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.{Utxo as _, *}
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,

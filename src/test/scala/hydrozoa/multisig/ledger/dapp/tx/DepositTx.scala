@@ -15,6 +15,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
+import test.Generators.Hydrozoa.*
 
 var counter = AtomicLong(0L)
 

@@ -4,7 +4,11 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
+    BlockTypeL2,
+    OnchainBlockHeader,
+    given
+}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
@@ -23,6 +27,7 @@ import scalus.ledger.api.v3.TokenName
 import scalus.prelude.List as SList
 import scalus.|>
 import test.*
+import test.Generators.Hydrozoa.genPubkeyAddress
 
 // Alias for compatibility
 def genPubkeyAddr(network: Network = testNetwork): Gen[ShelleyAddress] = genPubkeyAddress(network)
@@ -137,13 +142,15 @@ object CommonGenerators {
             addr <- genPubkeyAddress(testNetwork)
             value <- Gen.choose(5_000_000L, 50_000_000L).map(v => Value(Coin(v)))
         } yield Utxo[L1](
-            UtxoId[L1](TransactionInput(txId, ix)),
-            Output[L1](Babbage(
-                address = Address[L1](addr),
-                value = value,
-                datumOption = None,
-                scriptRef = None
-            ))
+          UtxoId[L1](TransactionInput(txId, ix)),
+          Output[L1](
+            Babbage(
+              address = Address[L1](addr),
+              value = value,
+              datumOption = None,
+              scriptRef = None
+            )
+          )
         )
 
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[OnchainBlockHeader] =

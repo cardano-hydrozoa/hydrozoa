@@ -8,8 +8,8 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
     OnchainBlockHeader,
     VoteRedeemer
 }
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.NoVote
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
@@ -18,12 +18,12 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.List as SList
 
 final case class VoteTx(
@@ -62,17 +62,18 @@ object VoteTx {
             case Some(DatumOption.Inline(datumData)) =>
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
-                        if voteDatum.voteStatus == NoVote then
-                            val updatedVoteDatum = voteDatum.copy(
-                              voteStatus = VoteStatus.Vote(
-                                VoteDetails(
-                                  recipe.blockHeader.commitment,
-                                  recipe.blockHeader.versionMinor
+                        voteDatum.voteStatus match {
+                            case AwaitingVote(_) => {
+                                val updatedVoteDatum = voteDatum.copy(
+                                  voteStatus = VoteStatus.Voted(
+                                    recipe.blockHeader.commitment,
+                                    recipe.blockHeader.versionMinor
+                                  )
                                 )
-                              )
-                            )
-                            buildVoteTx(recipe, updatedVoteDatum)
-                        else Left(VoteAlreadyCast)
+                                buildVoteTx(recipe, updatedVoteDatum)
+                            }
+                            case _ => Left(VoteAlreadyCast)
+                        }
 
                     case Failure(e) =>
                         Left(

@@ -14,7 +14,13 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.txbuilder.{LowLevelTxBuilder, NativeScriptWitness, SomeBuildError, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.{
+    LowLevelTxBuilder,
+    NativeScriptWitness,
+    SomeBuildError,
+    TransactionBuilder,
+    TransactionBuilderStep
+}
 
 final case class FinalizationTx(
     private val treasurySpent: TreasuryUtxo,

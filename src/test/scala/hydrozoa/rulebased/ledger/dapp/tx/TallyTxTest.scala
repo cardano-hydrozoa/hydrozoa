@@ -4,8 +4,11 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
 import org.scalacheck.Gen
@@ -20,7 +23,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
-import scalus.prelude.Option as SOption
 import test.*
 
 /** Generate a vote datum with a cast vote for tally testing
@@ -36,8 +38,7 @@ def genCastVoteDatum(
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = SOption.None, // Tally votes don't have peer field set
-      voteStatus = VoteStatus.Vote(VoteDetails(commitment, versionMinor))
+      voteStatus = VoteStatus.Voted(commitment, versionMinor)
     )
 
 /** Generate a pair of compatible vote datums for tallying
@@ -58,15 +59,13 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
         continuingDatum = VoteDatum(
           key = continuingKey,
           link = removedKey, // Key constraint: continuing vote links to removed vote
-          peer = SOption.None,
-          voteStatus = VoteStatus.Vote(VoteDetails(continuingCommitment, continuingVersionMinor))
+          voteStatus = VoteStatus.Voted(continuingCommitment, continuingVersionMinor)
         )
 
         removedDatum = VoteDatum(
           key = removedKey,
           link = nextLink,
-          peer = SOption.None,
-          voteStatus = VoteStatus.Vote(VoteDetails(removedCommitment, removedVersionMinor))
+          voteStatus = VoteStatus.Voted(removedCommitment, removedVersionMinor)
         )
     } yield (continuingDatum, removedDatum)
 
@@ -122,7 +121,7 @@ def genTallyTxRecipe(
         voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           peersVKs,
           paramsHash,
@@ -130,7 +129,7 @@ def genTallyTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-            hns.policyId,
+          hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -142,7 +141,7 @@ def genTallyTxRecipe(
         continuingVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           continuingVoteDatum,
           AddrKeyHash(peers.head.wallet.exportVerificationKeyBytes.pubKeyHash.hash)
@@ -151,7 +150,7 @@ def genTallyTxRecipe(
         removedVoteUtxo <- genTallyVoteUtxo(
           fallbackTxId,
           2, // Output index 2
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           removedVoteDatum,
           AddrKeyHash(peers.toList(1).wallet.exportVerificationKeyBytes.pubKeyHash.hash)

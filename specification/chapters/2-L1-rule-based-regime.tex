@@ -160,7 +160,7 @@ The transaction body is as follows:
     Let \code{mt} be its datum.
   \item Let \code{headMp} be the head's native script minting policy.
   \item Let \code{deadlineVoting} be the voting deadline for this dispute, as defined by the L2 consensus for this fallback to the rule-based regime.
-  \item Let \code{disputeId} be the CIP-67 prefix for 3477, concatenated with the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the \code{multisigTreasury} output reference.
+  \item Let \code{disputeId} be the CIP-67 prefix for 8683 concatenated with the Blake2b-224 hash (\codeMath{\mathcal{H}_{28}}) of the \code{multisigTreasury} output reference.
   \item Let \code{peers} be a list of the peers' public keys and \code{peersN} be its length.%
     \footnote{The indices of the \code{peers} list (and all other lists in this specification) start from \inlineColored{1}.}
   \item Mint (\code{peersN} + 1) dispute tokens of (\code{headMp}, \code{disputeId}).

@@ -9,12 +9,9 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
-import io.bullet.borer.Encoder
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
-
-import scala.annotation.tailrec
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
 import scalus.bloxbean.Interop
@@ -23,12 +20,10 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, *}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.txbuilder.*
 import scalus.cardano.ledger.BloxbeanToLedgerTranslation.toLedgerValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger
-import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v1.Credential.{PubKeyCredential, ScriptCredential}
 import scalus.ledger.api.v1.StakingCredential
@@ -41,7 +36,7 @@ import scalus.{ledger, prelude, |>}
 // "Empty" values used for building up real values and for testing
 
 val emptyTxBody: TransactionBody = TransactionBody(
-  inputs = TaggedOrderedSet.empty,
+  inputs = TaggedOrderedSet.empty[TransactionInput],
   outputs = IndexedSeq.empty,
   fee = Coin(0)
 )
@@ -160,7 +155,6 @@ extension (addr: v3.Address) {
 //    def toIArray: IArray[Byte] =
 //        IArray.from(hash.bytes)
 //}
-
 
 // TODO: upstream
 def csToPolicyId(cs: v1.PolicyId): PolicyId = Hash.scriptHash(cs)
@@ -481,7 +475,8 @@ extension (self: TransactionOutput)
                     case None        => None
                 }
         }
-    def ensureMinAda(params: ProtocolParams) : TransactionOutput = TransactionBuilder.ensureMinAda(self, params)
+    def ensureMinAda(params: ProtocolParams): TransactionOutput =
+        TransactionBuilder.ensureMinAda(self, params)
 
 def txBodyL: Lens[Transaction, TransactionBody] = {
     val get: Transaction => TransactionBody = tx =>
@@ -539,3 +534,11 @@ def reportDiffHandler: DiffHandler = (diff, _) => Left(CantBalance(diff))
   */
 def prebalancedDiffHandler: DiffHandler =
     (diff, tx) => if diff == 0 then Right(tx) else Left(CantBalance(diff))
+
+/** Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
+  * Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
+  */
+def maxNonPlutusTxFee(params: ProtocolParams): Coin = Coin(
+  params.txFeeFixed +
+      params.maxTxSize * params.txFeePerByte
+)

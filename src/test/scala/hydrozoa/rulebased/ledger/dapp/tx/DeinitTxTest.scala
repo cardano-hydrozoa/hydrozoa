@@ -22,12 +22,13 @@ import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.ByteString.hex
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.txbuilder.SomeBuildError
 import spire.compat.integral
 import spire.math.Rational
 import spire.syntax.literals.r
 import test.*
+import test.Generators.Hydrozoa.genPubkeyAddress
 
 def genEmptyResolvedTreasuryUtxo(
     fallbackTxId: TransactionHash,

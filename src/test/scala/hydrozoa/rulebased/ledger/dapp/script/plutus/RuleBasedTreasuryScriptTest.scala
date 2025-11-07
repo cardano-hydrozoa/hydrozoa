@@ -45,7 +45,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val proof = accumulator
 
         assert(
-            RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof)
+          RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof)
         )
     }
 
@@ -112,7 +112,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
 
         assert(
-            RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
+          RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
         )
     }
 

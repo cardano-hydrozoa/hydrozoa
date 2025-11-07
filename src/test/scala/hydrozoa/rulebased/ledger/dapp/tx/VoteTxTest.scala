@@ -4,7 +4,10 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
@@ -18,8 +21,7 @@ import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPay
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.api.v3.{PubKeyHash, TokenName}
-import scalus.prelude.Option as SOption
+import scalus.ledger.api.v3.TokenName
 import test.*
 
 /** key != 0
@@ -32,12 +34,11 @@ def genPeerVoteDatum(peersVKs: NonEmptyList[VerificationKeyBytes]): Gen[VoteDatu
         // key == 0 is the default `NoVote`, here we need a datum for OwnVoteUtxo
         key <- Gen.choose(1, peersVKs.length)
         link = (key + 1) % (peersVKs.length + 1)
-        peer = Some(peersVKs.toList(key - 1).pubKeyHash)
+        peer = peersVKs.toList(key - 1).pubKeyHash
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = peer.map(SOption.Some(_)).getOrElse(SOption.None),
-      voteStatus = VoteStatus.NoVote
+      voteStatus = VoteStatus.AwaitingVote(peer)
     )
 
 def genVoteUtxo(
@@ -64,7 +65,7 @@ def genVoteUtxo(
           scriptRef = None
         )
     } yield OwnVoteUtxo(
-      AddrKeyHash(voteDatum.peer.get.hash),
+      AddrKeyHash(???), // FIXME: voteDatum.peer.get.hash),
       Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
     )
 
@@ -90,7 +91,7 @@ def genVoteTxRecipe(
         voteTokenName = cip67DisputeTokenPrefix.concat(headTokensSuffix)
 
         treasuryDatum <- genTreasuryUnresolvedDatum(
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           peersVKs,
           paramsHash,
@@ -98,7 +99,7 @@ def genVoteTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-            hns.policyId,
+          hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -108,7 +109,7 @@ def genVoteTxRecipe(
         voteUtxo <- genVoteUtxo(
           fallbackTxId,
           peers.length,
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           voteDatum
         )
