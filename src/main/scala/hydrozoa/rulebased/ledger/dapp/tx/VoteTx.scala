@@ -18,12 +18,12 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.prelude.List as SList
 
 final case class VoteTx(
@@ -65,16 +65,16 @@ object VoteTx {
                         voteDatum.voteStatus match {
                             case AwaitingVote(_) => {
                                 val updatedVoteDatum = voteDatum.copy(
-                                    voteStatus = VoteStatus.Voted(
-                                        recipe.blockHeader.commitment,
-                                        recipe.blockHeader.versionMinor
-                                    )
+                                  voteStatus = VoteStatus.Voted(
+                                    recipe.blockHeader.commitment,
+                                    recipe.blockHeader.versionMinor
+                                  )
                                 )
                                 buildVoteTx(recipe, updatedVoteDatum)
                             }
                             case _ => Left(VoteAlreadyCast)
-                        } 
-                        
+                        }
+
                     case Failure(e) =>
                         Left(
                           InvalidVoteDatum(

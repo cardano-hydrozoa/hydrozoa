@@ -5,12 +5,14 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.{Fallback, Initialization}
-import hydrozoa.multisig.ledger.dapp.tx.{minInitTreasuryAda, Metadata as MD}
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, minInitTreasuryAda}
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
+import scala.collection.immutable.SortedMap
+import scala.collection.mutable
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -25,9 +27,6 @@ import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TransactionChain.observeTxChain
-
-import scala.collection.immutable.SortedMap
-import scala.collection.mutable
 
 // TODO: make the spentUtxos contain arbitrary assets, not just ada.
 val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
@@ -312,24 +311,31 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     ).ensureMinAda(config.env.protocolParams)
                 )
                 val actualPeerVoteOutputs = NonEmptyList.fromListUnsafe(
-                    fbTxBody.outputs.slice(2, config.headNativeScript.numSigners + 2).toList.map(_.value))
+                  fbTxBody.outputs
+                      .slice(2, config.headNativeScript.numSigners + 2)
+                      .toList
+                      .map(_.value)
+                )
                 val reportedPeerVoteOutputs = fbTx.producedPeerVoteUtxos.map(_.output)
                 actualPeerVoteOutputs == reportedPeerVoteOutputs
-                    && expectedPeerVoteOutputs == reportedPeerVoteOutputs
+                && expectedPeerVoteOutputs == reportedPeerVoteOutputs
 
             })
 
             props.append(
               "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
                   val expectedHMRWCoin: Coin =
-                    maxNonPlutusTxFee(env.protocolParams)
-                        + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
+                      maxNonPlutusTxFee(env.protocolParams)
+                          + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
                   config.headNativeScriptReferenceInput.output.value.coin == expectedHMRWCoin
               }
             )
 
             props.append("collateral utxos created per peer" |: {
-                val sortedKeys = config.headNativeScript.requiredSigners.map(_.hash).toList.sorted(using Hash.Ordering)
+                val sortedKeys = config.headNativeScript.requiredSigners
+                    .map(_.hash)
+                    .toList
+                    .sorted(using Hash.Ordering)
                 val addrs = NonEmptyList.fromListUnsafe(
                   sortedKeys
                       .map(key =>
@@ -350,12 +356,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     )
                 )
                 val actualCollateralUtxos = NonEmptyList.fromListUnsafe(
-                    fbTxBody.outputs.drop(2 + config.headNativeScript.numSigners).map(_.value).toList)
+                  fbTxBody.outputs.drop(2 + config.headNativeScript.numSigners).map(_.value).toList
+                )
                 val reportedCollateralUtxos = fbTx.producedCollateralUtxos.map(_.output)
-                actualCollateralUtxos == reportedCollateralUtxos
-                    &&
-                    // FIXME: The order is different. We should make the order consistent, sorted in terms of PKH
-                    actualCollateralUtxos.toList.toSet == expectedCollateralUtxos.toList.toSet
+                // FIXME: https://github.com/cardano-hydrozoa/hydrozoa/issues/237
+                (actualCollateralUtxos == reportedCollateralUtxos)
+                && (actualCollateralUtxos.toList.toSet == expectedCollateralUtxos.toList.toSet)
             })
 
             props.append("Cbor round-tripping failed" |: {
@@ -387,9 +393,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // TODO: This whole "sign and observe" is duplicated from the settlement tx seq test. We can factor
             // it out into utils
 
-            val initialState : State = State(utxo = iTx.resolvedUtxos.utxos )
+            val initialState: State = State(utxo = iTx.resolvedUtxos.utxos)
 
-            val signedTxs : Vector[Transaction] =
+            val signedTxs: Vector[Transaction] =
                 testPeers.foldLeft(Vector(iTx.tx, fbTx.tx))((txsToSign, peer) =>
                     txsToSign.map(tx => signTx(peer, tx))
                 )
@@ -397,7 +403,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val observationRes = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
 
             props.append("Sequence Observation successful" |: observationRes.isRight)
-
 
             props.fold(Prop(true))(_ && _)
         }

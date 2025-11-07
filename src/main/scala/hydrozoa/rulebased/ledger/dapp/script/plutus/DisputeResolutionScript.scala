@@ -12,8 +12,8 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.c
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
@@ -154,7 +154,12 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should match vote datum on (headMp, disputeId)"
 
     // Entry point
-    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(
+        datum: Option[Data],
+        redeemer: Data,
+        tx: TxInfo,
+        ownRef: TxOutRef
+    ): Unit =
 
         log("DisputeResolution")
 
@@ -178,7 +183,7 @@ object DisputeResolutionValidator extends Validator {
                 // Check vote status
                 val votePeer = voteDatum.voteStatus match {
                     case AwaitingVote(pkh) => pkh
-                    case _ => fail(VoteAlreadyCast)
+                    case _                 => fail(VoteAlreadyCast)
                 }
 
                 // Check signature
@@ -263,11 +268,11 @@ object DisputeResolutionValidator extends Validator {
                 voteOutputDatum.voteStatus match {
                     case VoteStatus.Voted(commitment, versionMinor) =>
                         require(
-                            versionMinor == voteRedeemer.blockHeader.versionMinor,
+                          versionMinor == voteRedeemer.blockHeader.versionMinor,
                           VoteOutputDatumCheck
                         )
                         require(
-                            commitment == voteRedeemer.blockHeader.commitment,
+                          commitment == voteRedeemer.blockHeader.commitment,
                           VoteOutputDatumCheck
                         )
                     case _ => fail(VoteOutputDatumCheck)
@@ -366,13 +371,14 @@ object DisputeResolutionValidator extends Validator {
                 // If the voteStatus of either continuingInput or removedInput is NoVote,
                 // all the following must be satisfied
                 if (
-                    (continuingDatum.voteStatus match {
+                  (continuingDatum.voteStatus match {
                       case VoteStatus.AwaitingVote(_) => true
-                      case VoteStatus.Voted(_, _) => removedDatum.voteStatus match {
-                        case VoteStatus.AwaitingVote(_) => true
-                        case VoteStatus.Voted(_, _) => false
-                      }
-                    })
+                      case VoteStatus.Voted(_, _) =>
+                          removedDatum.voteStatus match {
+                              case VoteStatus.AwaitingVote(_) => true
+                              case VoteStatus.Voted(_, _)     => false
+                          }
+                  })
                 ) {
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
@@ -480,7 +486,8 @@ object DisputeResolutionValidator extends Validator {
             case Voted(_commitmentA, versionMinorA) =>
                 b match {
                     case AwaitingVote(_) => a
-                    case Voted(_commitmentB, versionMinorB) => if versionMinorA > versionMinorB then a else b
+                    case Voted(_commitmentB, versionMinorB) =>
+                        if versionMinorA > versionMinorB then a else b
                 }
         }
 

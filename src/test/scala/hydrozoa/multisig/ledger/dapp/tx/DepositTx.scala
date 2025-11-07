@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen

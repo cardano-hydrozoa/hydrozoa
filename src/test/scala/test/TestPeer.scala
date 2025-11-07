@@ -15,7 +15,19 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedOrderedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
+import scalus.cardano.ledger.{
+    Coin,
+    Hash,
+    KeepRaw,
+    Sized,
+    TaggedOrderedSet,
+    Transaction as STransaction,
+    TransactionBody,
+    TransactionInput,
+    TransactionOutput,
+    TransactionWitnessSet,
+    Value
+}
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)

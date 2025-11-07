@@ -45,10 +45,8 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
             } yield res
             res match {
                 case Left(e) => fail(e.toString())
-                case _ => ()
+                case _       => ()
             }
         )
-    }
-    )
+    })
 }
-

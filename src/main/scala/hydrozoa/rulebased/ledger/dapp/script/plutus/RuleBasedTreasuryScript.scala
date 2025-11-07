@@ -102,7 +102,7 @@ object RuleBasedTreasuryValidator extends Validator {
         "Accumulator in the output should be properly updated"
 
     // Deinit redeemer
-    private inline val DeinitRequiresResolvedTreasury = 
+    private inline val DeinitRequiresResolvedTreasury =
         "Deinitialization is not possible until the dispute is resolved"
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
@@ -114,7 +114,12 @@ object RuleBasedTreasuryValidator extends Validator {
     def cip67BeaconTokenPrefix = hex"01349900"
 
     // Entry point
-    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(
+        datum: Option[Data],
+        redeemer: Data,
+        tx: TxInfo,
+        ownRef: TxOutRef
+    ): Unit =
 
         log("TreasuryValidator")
 
@@ -183,7 +188,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    case AwaitingVote(_)            => fail(ResolveUnexpectedNoVote)
+                    case AwaitingVote(_)                 => fail(ResolveUnexpectedNoVote)
                     case Voted(commitment, versionMinor) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).

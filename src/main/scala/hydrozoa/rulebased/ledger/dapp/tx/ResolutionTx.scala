@@ -4,23 +4,34 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryScript
+}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{
+    ResolvedDatum,
+    RuleBasedTreasuryDatum,
+    UnresolvedDatum
+}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
-
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.txbuilder.{
+    SomeBuildError,
+    ThreeArgumentPlutusScriptWitness,
+    TransactionBuilder,
+    TransactionUnspentOutput
+}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,
@@ -70,8 +81,9 @@ object ResolutionTx {
                 Try(fromData[VoteDatum](datumData)) match {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
-                            case VoteStatus.AwaitingVote(_)            => Left(TalliedNoVote)
-                            case VoteStatus.Voted(commitment, versionMinor) => Right((commitment, versionMinor))
+                            case VoteStatus.AwaitingVote(_) => Left(TalliedNoVote)
+                            case VoteStatus.Voted(commitment, versionMinor) =>
+                                Right((commitment, versionMinor))
                         }
                     case Failure(e) =>
                         Left(

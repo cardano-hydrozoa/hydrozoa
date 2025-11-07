@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.Ini
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee}
+import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.*
@@ -18,8 +19,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
-
-import scala.collection.immutable.SortedMap
 
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
@@ -76,7 +75,7 @@ object InitializationTxSeq {
             // ===================================
             val initTreasuryDatum = TreasuryUtxo.mkInitMultisigTreasuryDatum
 
-            val initialTreasuryUtxo: Babbage = Babbage(
+            Babbage(
               address = headAddress,
               value = headValue,
               datumOption = Some(Inline(initTreasuryDatum.toData)),

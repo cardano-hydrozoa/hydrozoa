@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import scala.collection.immutable.SortedMap
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
@@ -21,15 +22,13 @@ import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
 
-import scala.collection.immutable.SortedMap
-
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
     resultingConfig: Tx.Builder.Config,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction
-                                 ) extends Tx,
-    HasResolvedUtxos
+) extends Tx,
+      HasResolvedUtxos
 
 object InitializationTx {
 
@@ -42,29 +41,29 @@ object InitializationTx {
         val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
         val changeAddress = ShelleyAddress(env.network, changePP, Null)
 
-
         val mrTokenName = CIP67.TokenNames(recipe.spentUtxos.seedUtxo.input).multisigRegimeTokenName
-        val mrToken: MultiAsset = MultiAsset(SortedMap(
+        val mrToken: MultiAsset = MultiAsset(
+          SortedMap(
             headNativeScript.policyId -> SortedMap(multisigRegimeTokenName -> 1L)
-        ))
+          )
+        )
 
         // Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
-        //Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
+        // Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
         // (this is the deposit to cover the fallback transaction fee)
-        val mrValue = Value(
-            recipe.hmrwCoin,
-            mrToken)
-
+        val mrValue = Value(recipe.hmrwCoin, mrToken)
 
         /////////////////////////////////////////////////////////
         // Steps
         val spendAllUtxos: Seq[Spend] = Seq(Spend(recipe.spentUtxos.seedUtxo)) ++
-            recipe.spentUtxos.fundingUtxos.map(utxo =>
-                Spend(
-                  TransactionUnspentOutput.apply(utxo._1, utxo._2),
-                  PubKeyWitness
+            recipe.spentUtxos.fundingUtxos
+                .map(utxo =>
+                    Spend(
+                      TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                      PubKeyWitness
+                    )
                 )
-            ).toList
+                .toList
 
         val mintBeaconToken = Mint(
           headNativeScript.script.scriptHash,
@@ -82,13 +81,20 @@ object InitializationTx {
           1,
           headNativeScript.witness
         )
-        val hmrwOutput = Babbage(headAddress, mrValue, None, Some(ScriptRef(headNativeScript.script)))
-            .ensureMinAda(recipe.env.protocolParams)
+        val hmrwOutput =
+            Babbage(headAddress, mrValue, None, Some(ScriptRef(headNativeScript.script)))
+                .ensureMinAda(recipe.env.protocolParams)
 
-        val createTreasury: Send = Send(Babbage(headNativeScript.mkAddress(env.network),
-            value = Value(initialDeposit,
-                MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))),
-            datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData))))
+        val createTreasury: Send = Send(
+          Babbage(
+            headNativeScript.mkAddress(env.network),
+            value = Value(
+              initialDeposit,
+              MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))
+            ),
+            datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
+          )
+        )
 
         val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
 
@@ -131,40 +137,41 @@ object InitializationTx {
               index = 0
             ),
             address = headAddress,
-              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
-              value = createTreasury.output.value
+            datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+            value = createTreasury.output.value
           ),
           tx = finalized.transaction,
-            resultingConfig = Tx.Builder.Config(
-                headNativeScript = headNativeScript,
-                headNativeScriptReferenceInput =
-                    TransactionUnspentOutput(TransactionInput(finalized.transaction.id, 1), hmrwOutput),
-                tokenNames = tokenNames,
-                env = env,
-                validators = validators
-            ),
-            resolvedUtxos = finalized.resolvedUtxos
+          resultingConfig = Tx.Builder.Config(
+            headNativeScript = headNativeScript,
+            headNativeScriptReferenceInput =
+                TransactionUnspentOutput(TransactionInput(finalized.transaction.id, 1), hmrwOutput),
+            tokenNames = tokenNames,
+            env = env,
+            validators = validators
+          ),
+          resolvedUtxos = finalized.resolvedUtxos
         )
     }
 
-    final case class SpentUtxos(seedUtxo: TransactionUnspentOutput, fundingUtxos: List[TransactionUnspentOutput]) {
+    final case class SpentUtxos(
+        seedUtxo: TransactionUnspentOutput,
+        fundingUtxos: List[TransactionUnspentOutput]
+    ) {
         def all: NonEmptyList[TransactionUnspentOutput] = NonEmptyList(seedUtxo, fundingUtxos)
     }
 
     final case class Recipe(
-                               spentUtxos: SpentUtxos,
-                               headNativeScript: HeadMultisigScript,
-                               initialDeposit: Coin,
-                               tokenNames: TokenNames,
-                               // The amount of coin to cover the minAda for the vote UTxOs and collateral
-                               // utxos in the fallback transaction (inclusive of the max fallback tx fee)
-                               hmrwCoin: Coin,
-                               env: Environment,
-                               validators: Seq[Validator],
-                               changePP: ShelleyPaymentPart
-                           ) {
-    }
-
+        spentUtxos: SpentUtxos,
+        headNativeScript: HeadMultisigScript,
+        initialDeposit: Coin,
+        tokenNames: TokenNames,
+        // The amount of coin to cover the minAda for the vote UTxOs and collateral
+        // utxos in the fallback transaction (inclusive of the max fallback tx fee)
+        hmrwCoin: Coin,
+        env: Environment,
+        validators: Seq[Validator],
+        changePP: ShelleyPaymentPart
+    ) {}
 
     sealed trait ParseError
 
