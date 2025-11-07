@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import scala.annotation.tailrec
 import scalus.cardano.txbuilder.SomeBuildError
 

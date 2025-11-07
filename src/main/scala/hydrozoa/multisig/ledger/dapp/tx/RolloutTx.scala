@@ -4,7 +4,7 @@ import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.prebalancedLovelaceDiffHandler
 import scala.Function.const
 import scala.annotation.tailrec

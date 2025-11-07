@@ -4,7 +4,7 @@ import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.multisig.protocol.types.Block
 import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError

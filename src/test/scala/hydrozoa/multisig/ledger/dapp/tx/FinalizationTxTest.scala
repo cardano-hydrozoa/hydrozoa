@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Arbitrary.arbitrary
