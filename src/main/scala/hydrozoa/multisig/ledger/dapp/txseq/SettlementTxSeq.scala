@@ -44,7 +44,6 @@ object SettlementTxSeq {
                             .left
                             .map(Error.RolloutSeqError(_))
 
-
                         settlementTxRes <- SettlementTx.Builder
                             .WithPayouts(config)
                             .build(args.toArgsWithPayouts(rolloutTxSeqPartial))

@@ -25,6 +25,7 @@ import spire.compat.integral
 import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
 import test.*
+import test.Generators.Hydrozoa.genPubkeyAddress
 
 def genEmptyResolvedTreasuryUtxo(
     fallbackTxId: TransactionHash,

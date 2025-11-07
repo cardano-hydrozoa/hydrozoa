@@ -9,6 +9,7 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.c
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scala.annotation.tailrec
 import scalus.*
@@ -150,18 +151,6 @@ object DisputeResolutionValidator extends Validator {
     private inline val ResolveTreasuryVoteMatch =
         "Treasury datum should match vote datum on (headMp, disputeId)"
 
-    // Utility to decide which vote is higher
-    def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{NoVote, Vote}
-        a match {
-            case NoVote => b
-            case Vote(ad) =>
-                b match {
-                    case NoVote   => a
-                    case Vote(bd) => if ad.versionMinor > bd.versionMinor then a else b
-                }
-        }
-
     // Entry point
     override inline def spend(
         datum: Option[Data],
@@ -190,10 +179,13 @@ object DisputeResolutionValidator extends Validator {
                     case _ => fail()
 
                 // Check vote status
-                require(voteDatum.voteStatus === VoteStatus.NoVote, VoteAlreadyCast)
+                val votePeer = voteDatum.voteStatus match {
+                    case AwaitingVote(pkh) => pkh
+                    case _                 => fail(VoteAlreadyCast)
+                }
 
                 // Check signature
-                require(voteDatum.peer.forall(tx.signatories.contains(_)), VoteMustBeSignedByPeer)
+                require((tx.signatories.contains(votePeer)), VoteMustBeSignedByPeer)
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
@@ -290,21 +282,18 @@ object DisputeResolutionValidator extends Validator {
                 // voteStatus field of voteOutput must be a Vote matching voteRedeemer
                 // on the utxosActive and versionMinor fields.
                 voteOutputDatum.voteStatus match {
-                    case VoteStatus.Vote(voteDetails) =>
+                    case VoteStatus.Voted(commitment, versionMinor) =>
                         require(
-                          voteDetails.versionMinor == voteRedeemer.blockHeader.versionMinor,
+                          versionMinor == voteRedeemer.blockHeader.versionMinor,
                           VoteOutputDatumCheck
                         )
                         require(
-                          voteDetails.commitment == voteRedeemer.blockHeader.commitment,
+                          commitment == voteRedeemer.blockHeader.commitment,
                           VoteOutputDatumCheck
                         )
                     case _ => fail(VoteOutputDatumCheck)
                 }
-
-                // When vote is cast, we don't need the peer in the datum anymore
-                require(None === voteOutputDatum.peer, VoteOutputDatumAdditionalChecks)
-
+                
                 // All other fields of voteInput and voteOutput must match.
                 require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
@@ -398,8 +387,14 @@ object DisputeResolutionValidator extends Validator {
                 // If the voteStatus of either continuingInput or removedInput is NoVote,
                 // all the following must be satisfied
                 if (
-                  continuingDatum.voteStatus === VoteStatus.NoVote
-                  || removedDatum.voteStatus === VoteStatus.NoVote
+                  (continuingDatum.voteStatus match {
+                      case VoteStatus.AwaitingVote(_) => true
+                      case VoteStatus.Voted(_, _) =>
+                          removedDatum.voteStatus match {
+                              case VoteStatus.AwaitingVote(_) => true
+                              case VoteStatus.Voted(_, _)     => false
+                          }
+                  })
                 ) {
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
@@ -475,7 +470,6 @@ object DisputeResolutionValidator extends Validator {
 
                 // 11. All other fields of continuingInput and continuingOutput must match.
                 require(continuingOutputDatum.key === continuingDatum.key, KeyCheck)
-                require(continuingOutputDatum.peer === None)
 
             case DisputeRedeemer.Resolve =>
                 log("Resolve")
@@ -510,6 +504,19 @@ object DisputeResolutionValidator extends Validator {
                 // in treasury.
                 require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
                 require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
+
+    // Utility to decide which vote is higher
+    def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
+        import VoteStatus.{AwaitingVote, Voted}
+        a match {
+            case AwaitingVote(_) => b
+            case Voted(_commitmentA, versionMinorA) =>
+                b match {
+                    case AwaitingVote(_) => a
+                    case Voted(_commitmentB, versionMinorB) =>
+                        if versionMinorA > versionMinorB then a else b
+                }
+        }
 
 }
 

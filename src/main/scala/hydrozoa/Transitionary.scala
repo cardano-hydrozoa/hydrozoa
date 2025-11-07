@@ -156,7 +156,6 @@ extension (addr: v3.Address) {
 //        IArray.from(hash.bytes)
 //}
 
-
 // TODO: upstream
 def csToPolicyId(cs: v1.PolicyId): PolicyId = Hash.scriptHash(cs)
 
@@ -476,7 +475,8 @@ extension (self: TransactionOutput)
                     case None        => None
                 }
         }
-    def ensureMinAda(params: ProtocolParams) : TransactionOutput = TransactionBuilder.ensureMinAda(self, params)
+    def ensureMinAda(params: ProtocolParams): TransactionOutput =
+        TransactionBuilder.ensureMinAda(self, params)
 
 def txBodyL: Lens[Transaction, TransactionBody] = {
     val get: Transaction => TransactionBody = tx =>
@@ -534,3 +534,11 @@ def reportDiffHandler: DiffHandler = (diff, _) => Left(CantBalance(diff))
   */
 def prebalancedDiffHandler: DiffHandler =
     (diff, tx) => if diff == 0 then Right(tx) else Left(CantBalance(diff))
+
+/** Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
+  * Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277
+  */
+def maxNonPlutusTxFee(params: ProtocolParams): Coin = Coin(
+  params.txFeeFixed +
+      params.maxTxSize * params.txFeePerByte
+)

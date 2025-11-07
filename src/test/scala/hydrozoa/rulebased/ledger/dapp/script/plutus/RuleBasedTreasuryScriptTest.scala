@@ -23,7 +23,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
 
     test("Script compiles, size and hash is still the same") {
         assertResult(
-          ScriptHash.fromHex("0eeeb29fbe72f5d039c0f5440593ac2ab4f727da64c28a7d0866d977"),
+          ScriptHash.fromHex("99bedd97429cabed42c5362c4c9dbfc72882672452f3c89898d7f79e"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         ) {
             RuleBasedTreasuryScript.compiledScriptHash
@@ -45,7 +45,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val proof = accumulator
 
         assert(
-            RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof)
+          RuleBasedTreasuryValidator.checkMembership(crs_g2, accumulator, subset, proof)
         )
     }
 
@@ -112,7 +112,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         val crsG2 = TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
 
         assert(
-            RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
+          RuleBasedTreasuryValidator.checkMembership(crsG2, accumulator, subset, proof)
         )
     }
 

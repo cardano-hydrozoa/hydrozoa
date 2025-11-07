@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
     Unresolved
 }
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.{NoVote, Vote}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.builtin.*
@@ -102,7 +102,7 @@ object RuleBasedTreasuryValidator extends Validator {
         "Accumulator in the output should be properly updated"
 
     // Deinit redeemer
-    private inline val DeinitRequiresResolvedTreasury = 
+    private inline val DeinitRequiresResolvedTreasury =
         "Deinitialization is not possible until the dispute is resolved"
     private inline val DeinitTokensNotFound =
         "Head tokens was not found in treasury input"
@@ -114,7 +114,12 @@ object RuleBasedTreasuryValidator extends Validator {
     def cip67BeaconTokenPrefix = hex"01349900"
 
     // Entry point
-    override inline def spend(datum: Option[Data], redeemer: Data, tx: TxInfo, ownRef: TxOutRef): Unit =
+    override inline def spend(
+        datum: Option[Data],
+        redeemer: Data,
+        tx: TxInfo,
+        ownRef: TxOutRef
+    ): Unit =
 
         log("TreasuryValidator")
 
@@ -183,18 +188,18 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    case NoVote            => fail(ResolveUnexpectedNoVote)
-                    case Vote(voteDetails) =>
+                    case AwaitingVote(_)                 => fail(ResolveUnexpectedNoVote)
+                    case Voted(commitment, versionMinor) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
                         require(
                           treasuryOutputDatum.version._1 == unresolvedDatum.versionMajor &&
-                              treasuryOutputDatum.version._2 == voteDetails.versionMinor,
+                              treasuryOutputDatum.version._2 == versionMinor,
                           ResolveVersionCheck
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.utxosActive === voteDetails.commitment,
+                          treasuryOutputDatum.utxosActive === commitment,
                           ResolveUtxoActiveCheck
                         )
 

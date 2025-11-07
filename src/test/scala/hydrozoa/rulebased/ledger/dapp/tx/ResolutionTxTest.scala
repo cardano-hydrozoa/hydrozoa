@@ -5,9 +5,12 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{
+    DisputeResolutionScript,
+    RuleBasedTreasuryValidator
+}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteDetails, VoteStatus}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.TallyVoteUtxo
 import org.scalacheck.Gen
@@ -22,7 +25,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3.TokenName
-import scalus.prelude.Option as SOption
 import test.*
 
 /** Generate a tallied vote datum with Vote status for resolution testing
@@ -37,8 +39,7 @@ def genTalliedVoteDatum(
     } yield VoteDatum(
       key = key,
       link = link,
-      peer = SOption.None, // Resolution votes don't have peer field set
-      voteStatus = VoteStatus.Vote(VoteDetails(commitment, versionMinor))
+      voteStatus = VoteStatus.Voted(commitment, versionMinor)
     )
 
 def genResolutionTallyVoteUtxo(
@@ -102,7 +103,7 @@ def genResolutionTxRecipe(
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-            hns.policyId,
+          hns.policyId,
           beaconTokenName,
           treasuryDatum
         )
@@ -117,7 +118,7 @@ def genResolutionTxRecipe(
         talliedVoteUtxo <- genResolutionTallyVoteUtxo(
           fallbackTxId,
           1, // Output index 1
-            hns.policyId,
+          hns.policyId,
           voteTokenName,
           peersVKs.size + 1, // number of vote tokens in the tallied utxo
           talliedVoteDatum,

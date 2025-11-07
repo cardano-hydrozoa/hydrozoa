@@ -27,6 +27,15 @@ final case class MultisigRegimeUtxo(
 
 object MultisigRegimeUtxo {
 
+    def apply(multisigRegimeTokenName: AssetName, utxoId: TransactionInput, output: TransactionOutput, script: HeadMultisigScript): MultisigRegimeUtxo =
+        MultisigRegimeUtxo(
+            multisigRegimeTokenName,
+            utxoId,
+            output.address.asInstanceOf[ShelleyAddress],
+            output.value,
+            script
+        )
+    
     /** If some tx extends this, it means that tx is producing it. */
     trait Produced {
         def multisigRegimeUtxoProduced: MultisigRegimeUtxo

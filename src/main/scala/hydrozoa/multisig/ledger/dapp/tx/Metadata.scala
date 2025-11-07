@@ -78,12 +78,12 @@ object Metadata {
                 .toRight(MissingCIP67Tag)
             mdMap <- mv match {
                 case m: Metadatum.Map => Right(m.entries)
-                case _                           => Left(MetadataValueIsNotMap)
+                case _                => Left(MetadataValueIsNotMap)
             }
             _ <- if mdMap.size == 1 then Right(()) else Left(WrongNumberOfTxTypeKeys(mdMap.size))
             txType <- mdMap.head._1 match {
                 case Metadatum.Text(s) => stringToType(s).toRight(MalformedTxTypeKey)
-                case _                            => Left(MalformedTxTypeKey)
+                case _                 => Left(MalformedTxTypeKey)
             }
             addr <- mdMap.head._2 match {
                 case Metadatum.Bytes(b) =>

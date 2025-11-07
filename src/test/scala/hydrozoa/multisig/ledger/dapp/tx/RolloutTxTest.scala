@@ -42,46 +42,48 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         PropertyCheckConfiguration(minSuccessful = 1)
 
     // FIXME: How to do this in ScalaTest?
-    //override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
+    // override def scalaCheckInitialSeed = "espemfZrEC9vyjQ_8nzYe9Pikzd1423i2sM8_TQft9E="
 
     // ===================================
     // Last
     // ===================================
     test("Build Last Rollout Tx Partial Result") {
-         {
+        {
             val gen = genLastBuilder.apply(Parameters.default, Seed.apply(3476397946951439811L)).get
             forAll(gen) { (builder, args) =>
-              val pr = builder.partialResult(args)
+                val pr = builder.partialResult(args)
 
-              assert(pr.isRight, "Partial result didn't build successfully")
+                assert(pr.isRight, "Partial result didn't build successfully")
 
-              val unsignedSize = pr.get.ctx.transaction.toCbor.length
-              val withDummySigners = addDummySignatures(pr.get.builder.config.headNativeScript.numSigners, pr.get.ctx.transaction)
-              val signedSize = withDummySigners.toCbor.length
+                val unsignedSize = pr.get.ctx.transaction.toCbor.length
+                val withDummySigners = addDummySignatures(
+                  pr.get.builder.config.headNativeScript.numSigners,
+                  pr.get.ctx.transaction
+                )
+                val signedSize = withDummySigners.toCbor.length
 
-              val maxSize = builder.config.env.protocolParams.maxTxSize
-              assert(signedSize <= maxSize,
-                        "\n\t\tPartial result size with dummy signatures is too big: " +
-                            s" unsigned size: $unsignedSize; signed size: $signedSize; max size: $maxSize"
-              )
-            }
+                val maxSize = builder.config.env.protocolParams.maxTxSize
+                assert(
+                  signedSize <= maxSize,
+                  "\n\t\tPartial result size with dummy signatures is too big: " +
+                      s" unsigned size: $unsignedSize; signed size: $signedSize; max size: $maxSize"
+                )
             }
         }
-
-
-  test("Complete Last Partial Result")({
-    forAll(genLastBuilder)((builder, args) => {
-      val res = for {
-        pr <- builder.partialResult(args)
-        txId = Arbitrary.arbitrary[TransactionHash].sample.get
-        input = TransactionInput(txId, 0)
-        output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
-        rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
-        res <- pr.complete(rolloutUtxo)
-      } yield res
-      assert(res.isRight)
     }
-        )
+
+    test("Complete Last Partial Result")({
+        forAll(genLastBuilder)((builder, args) => {
+            val res = for {
+                pr <- builder.partialResult(args)
+                txId = Arbitrary.arbitrary[TransactionHash].sample.get
+                input = TransactionInput(txId, 0)
+                output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
+                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+                res <- pr.complete(rolloutUtxo)
+            } yield res
+            assert(res.isRight)
+        })
     })
 
     // ===================================
@@ -94,7 +96,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     )
 
     ignore("Post-process last rollout tx partial result")(???)
-    
+
     test("Build Last Rollout Tx") {
         forAll(genLastBuilder) { (builder, args) =>
             builder.partialResult(args) match

@@ -33,7 +33,6 @@ import scalus.cardano.txbuilder.{
     TransactionBuilder,
     TransactionUnspentOutput
 }
-import scalus.prelude.Option.None as SNone
 
 final case class TallyTx(
     continuingVoteUtxo: TallyVoteUtxo,
@@ -105,7 +104,7 @@ object TallyTx {
               continuing.voteStatus,
               removed.voteStatus
             )
-            Right(VoteDatum(continuing.key, removed.link, SNone, higherVote))
+            Right(VoteDatum(continuing.key, removed.link, higherVote))
         }
     }
 

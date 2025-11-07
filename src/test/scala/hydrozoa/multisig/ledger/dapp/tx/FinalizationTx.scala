@@ -83,16 +83,16 @@ def genFinalizationTxSeqBuilder(
     )
 
     for {
-        peers <- genTestPeers
-        hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
-        majorVersion <- Gen.posNum[Int]
+        res <- genTxBuilderConfigAndPeers()
+        (config, peers) = res
 
-        env = testTxBuilderEnvironment
+        majorVersion <- Gen.posNum[Int]
 
         payouts <- genHelper(genPayoutObligationL1(network))
         payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
 
-        headAddress = hns.mkAddress(network)
+        headAddress = config.headNativeScript.mkAddress(network)
+
         treasuryUtxo <- genTreasuryUtxo(
           headAddress = Some(headAddress),
           network = network,
@@ -101,28 +101,18 @@ def genFinalizationTxSeqBuilder(
 
         shares <- genEquityShares(peers)
 
-        multisigRegimeUtxo <- genMultisigRegimeUtxo(
-          network,
-          params,
-          Some(headAddress),
-          Some(Coin(shares.totalFallbackDeposit.underlying)),
-          hns
-        )
-
     } yield (
-      FinalizationTxSeq.Builder(config =
-          Tx.Builder.Config(
-            headNativeScript = hns,
-            headNativeScriptReferenceInput = multisigRegimeUtxo.asUtxo,
-            env = testTxBuilderEnvironment,
-            validators = testValidators
-          )
-      ),
+      FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
-        multisigRegimeUtxoToSpend = multisigRegimeUtxo,
+        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
+          config.tokenNames.multisigRegimeTokenName,
+          config.headNativeScriptReferenceInput.input,
+          config.headNativeScriptReferenceInput.output,
+          config.headNativeScript
+        ),
         equityShares = shares
       ),
       peers
