@@ -2,7 +2,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{
+    BuildErrorOr,
+    explain,
+    explainAppendConst,
+    explainConst
+}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.prebalancedDiffHandler
@@ -12,7 +17,14 @@ import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
+import scalus.cardano.ledger.{
+    Coin,
+    Transaction,
+    TransactionHash,
+    TransactionInput,
+    TransactionOutput as TxOutput,
+    Value
+}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{
     ModifyAuxiliaryData,
     ReferenceOutput,
