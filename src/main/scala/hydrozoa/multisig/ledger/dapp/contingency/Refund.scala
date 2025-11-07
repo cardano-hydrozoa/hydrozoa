@@ -3,26 +3,31 @@ package hydrozoa.multisig.ledger.dapp.contingency
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.petri.boundary.Boundary
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
+import scalus.ledger.api.v3.PosixTime
 
 import scala.annotation.targetName
 
 object Refund {
+    final case class Instructions (
+        refundStartTime: PosixTime,
+        refundUtxo: TransactionOutput.Babbage
+    )
 
     /** A refund contingency created to ensure that an L1 deposit's funds don't get stranded.
       */
     final case class Contingency(
         depositUtxoId: TransactionInput,
-        refundUtxo: TransactionOutput.Babbage
-    ) extends Boundary.SourceSide[TransactionInput, TransactionOutput.Babbage] {
+        refundInstructions: Refund.Instructions
+    ) extends Boundary.SourceSide[TransactionInput, Refund.Instructions] {
         override type B = Contingency.Implemented
         override type TargetId = TransactionInput
 
         override def sourceId: TransactionInput = depositUtxoId
 
-        override def place: TransactionOutput.Babbage = refundUtxo
+        override def place: Refund.Instructions = refundInstructions
 
         override def attachTarget(refundUtxoId: TransactionInput): Contingency.Implemented =
-            Contingency.Implemented(refundUtxoId, depositUtxoId, refundUtxo)
+            Contingency.Implemented(refundUtxoId, depositUtxoId, refundInstructions)
 
         /** Record that the refund contingency has been implemented by an L1 refund transaction that
           * produced a corresponding refund utxo.
@@ -39,10 +44,10 @@ object Refund {
 
         type Detached = Detached.DetachedType
 
-        object Detached extends Boundary.Detached[TransactionInput, TransactionOutput.Babbage] {
+        object Detached extends Boundary.Detached[TransactionInput, Refund.Instructions] {
             override type S = Contingency
 
-            override def apply(x: TransactionOutput.Babbage): Detached.DetachedType = super.apply(x)
+            override def apply(x: Refund.Instructions): Detached.DetachedType = super.apply(x)
 
             override def attach(
                 detached: Contingency.Detached,
@@ -62,7 +67,7 @@ object Refund {
         type Masked = Masked.MaskedType
 
         object Masked
-            extends Boundary.Masked[Contingency, TransactionInput, TransactionOutput.Babbage] {
+            extends Boundary.Masked[Contingency, TransactionInput, Refund.Instructions] {
             override def apply(contingency: Contingency): Refund.Contingency.Masked =
                 super.apply(contingency)
 
@@ -92,13 +97,13 @@ object Refund {
         final case class Implemented(
             depositUtxoId: TransactionInput,
             refundUtxoId: TransactionInput,
-            refundUtxo: TransactionOutput.Babbage
-        ) extends Boundary[TransactionInput, TransactionInput, TransactionOutput.Babbage] {
+            refundInstructions: Refund.Instructions
+        ) extends Boundary[TransactionInput, TransactionInput, Refund.Instructions] {
             override def sourceId: TransactionInput = depositUtxoId
 
             override def targetId: TransactionInput = refundUtxoId
 
-            override def place: TransactionOutput.Babbage = refundUtxo
+            override def place: Refund.Instructions = refundInstructions
         }
     }
 }
