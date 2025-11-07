@@ -586,7 +586,7 @@ object SettlementTx {
                 val treasuryOutput = outputs.head.value
 
                 treasurySpent.copy(
-                  txId = TransactionInput(transactionId = tx.id, index = 0),
+                  utxoId = TransactionInput(transactionId = tx.id, index = 0),
                   datum = BasePessimistic.treasuryOutputDatum(majorVersion),
                   value = treasuryOutput.value
                 )

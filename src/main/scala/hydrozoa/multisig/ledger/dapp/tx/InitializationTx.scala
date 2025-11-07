@@ -65,7 +65,7 @@ object InitializationTx {
                 )
                 .toList
 
-        val mintBeaconToken = Mint(
+        val mintTreasuryToken = Mint(
           headNativeScript.script.scriptHash,
           headTokenName,
           1,
@@ -98,16 +98,16 @@ object InitializationTx {
 
         val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
 
-        val modifyAuxiliaryData =
+        val addMetadata =
             ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
 
         val steps = spendAllUtxos
-            :+ mintBeaconToken
+            :+ mintTreasuryToken
             :+ mintMRToken
             :+ createTreasury
             :+ Send(hmrwOutput)
             :+ createChangeOutput
-            :+ modifyAuxiliaryData
+            :+ addMetadata
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -131,8 +131,8 @@ object InitializationTx {
 
         } yield InitializationTx(
           treasuryProduced = TreasuryUtxo(
-            headTokenName = headTokenName,
-            txId = TransactionInput(
+            treasuryTokenName = headTokenName,
+            utxoId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
             ),

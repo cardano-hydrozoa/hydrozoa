@@ -10,16 +10,15 @@ import scalus.cardano.txbuilder.TransactionUnspentOutput
 
 // TODO: Make opaque
 final case class TreasuryUtxo(
-    headTokenName: AssetName,
-    // TODO: rename to utxoId
-    txId: TransactionInput,
+    treasuryTokenName: AssetName,
+    utxoId: TransactionInput,
     address: ShelleyAddress,
     datum: TreasuryUtxo.Datum,
     value: Value
 ) {
     val asUtxo: TransactionUnspentOutput =
         TransactionUnspentOutput(
-          txId,
+          utxoId,
           TransactionOutput.apply(
             address = address,
             value = value,

@@ -119,7 +119,7 @@ object FinalizationTx {
             // Direct tx editing:
             // - upgrade the treasury output
             // - remove multisig regime utxo from referenced utxos by setting it to the empty set
-            val treasuryOutputIndex = args.input.transaction.treasuryProduced.txId.index
+            val treasuryOutputIndex = args.input.transaction.treasuryProduced.utxoId.index
             val treasuryOutput = tx.body.value.outputs(treasuryOutputIndex).value
 
             val residualTreasuryOutput = TransactionOutput.apply(
@@ -159,7 +159,7 @@ object FinalizationTx {
 
             } yield {
                 val residualTreasuryUtxo = ResidualTreasuryUtxo.apply(
-                  treasuryTokenName = args.input.transaction.treasurySpent.headTokenName,
+                  treasuryTokenName = args.input.transaction.treasurySpent.treasuryTokenName,
                   multisigRegimeTokenName = multisigUtxoToSpend.multisigRegimeTokenName,
                   utxoId = TransactionInput(rebalanced.transaction.id, treasuryOutputIndex),
                   // FIXME: Shall we be more specific about which outputs have which addresses?

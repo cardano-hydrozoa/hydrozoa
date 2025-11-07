@@ -21,7 +21,7 @@ class DisputeResolutionScriptTest extends AnyFunSuite {
         }
 
         assertResult(
-          13696,
+          13708,
           "Script size should be stable. In case the script is modified please update the test."
         ) {
             DisputeResolutionScript.flatEncoded.length
