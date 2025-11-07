@@ -8,6 +8,7 @@ import scalus.cardano.ledger.Transaction
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{
     Environment,
     SomeBuildError,
@@ -123,7 +124,7 @@ object Tx {
                 replacement: => A
             ): Either[SomeBuildError, A] = {
                 err match
-                    case SomeBuildError.ValidationError(ve) =>
+                    case SomeBuildError.ValidationError(ve, ctx) =>
                         ve match {
                             case _: InvalidTransactionSizeException =>
                                 Right(replacement)
@@ -133,4 +134,8 @@ object Tx {
             }
         }
     }
+}
+
+trait HasResolvedUtxos {
+    def resolvedUtxos: ResolvedUtxos
 }

@@ -64,8 +64,8 @@ object VoteTx {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
                             case AwaitingVote(_) => {
-                                val updatedVoteDatum = voteDatum.copy(
-                                  voteStatus = VoteStatus.Voted(
+                            val updatedVoteDatum = voteDatum.copy(
+                                voteStatus = VoteStatus.Voted(
                                     recipe.blockHeader.commitment,
                                     recipe.blockHeader.versionMinor
                                   )
@@ -114,6 +114,9 @@ object VoteTx {
                 .build(
                   recipe.network,
                   List(
+                    // Use collateral to pay fees
+                    Spend(TransactionUnspentOutput(recipe.collateralUtxo.toScalus), PubKeyWitness),
+                    Send(recipe.collateralUtxo._2),
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
                     Spend(

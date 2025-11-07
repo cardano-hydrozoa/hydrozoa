@@ -36,15 +36,15 @@ import scalus.{ledger, prelude, |>}
 // "Empty" values used for building up real values and for testing
 
 val emptyTxBody: TransactionBody = TransactionBody(
-  inputs = TaggedOrderedSet.empty[TransactionInput],
+  inputs = TaggedSortedSet.empty[TransactionInput],
   outputs = IndexedSeq.empty,
-  fee = Coin(0)
+  fee = Coin.zero
 )
 
 val emptyContext: Context =
-    Context(fee = Coin(0L), env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
+    Context(fee = Coin.zero, env = UtxoEnv.default, slotConfig = SlotConfig.Preprod)
 
-val emptyState: State = State(utxo = Map.empty, certState = CertState.empty)
+val emptyState: State = State(utxos = Map.empty, certState = CertState.empty)
 //
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 //// Conversions
@@ -214,7 +214,7 @@ extension (v: v3.Value) {
 /** Create a value with the specified policy id, asset name, and quantity (default 1) */
 def singleton(policyId: PolicyId, assetName: AssetName, quantity: Int = 1): Value = {
     Value(
-      coin = Coin(0L),
+      coin = Coin.zero,
       assets = MultiAsset(assets = SortedMap((policyId, SortedMap((assetName, quantity)))))
     )
 }
@@ -441,12 +441,12 @@ extension [A](result: Result[A])
 
 /** add at most 256 keys */
 def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(_ ++ generateUniqueKeys(numberOfKeys))
+    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet ++ generateUniqueKeys(numberOfKeys)))
 }
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
 def removeDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(_ -- generateUniqueKeys(numberOfKeys))
+    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet -- generateUniqueKeys(numberOfKeys)))
 }
 
 private def generateVKeyWitness(counter: Int): VKeyWitness = {
@@ -486,15 +486,15 @@ def txBodyL: Lens[Transaction, TransactionBody] = {
     Lens(get)(replace)
 }
 
-def txInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+def txInputsL: Lens[Transaction, TaggedSortedSet[TransactionInput]] = {
     txBodyL.refocus(_.inputs)
 }
 
-def txReferenceInputsL: Lens[Transaction, TaggedOrderedSet[TransactionInput]] = {
+def txReferenceInputsL: Lens[Transaction, TaggedSortedSet[TransactionInput]] = {
     txBodyL.refocus(_.referenceInputs)
 }
 
-def txRequiredSignersL: Lens[Transaction, TaggedOrderedSet[AddrKeyHash]] = {
+def txRequiredSignersL: Lens[Transaction, TaggedSortedSet[AddrKeyHash]] = {
     txBodyL.refocus(_.requiredSigners)
 }
 
@@ -508,9 +508,9 @@ def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
     tx |> txRedeemersL.get match {
         case None => tx |> txRedeemersL.replace(Some(KeepRaw(Redeemers(redeemer))))
         case Some(_) =>
-            tx |> (txRedeemersL
+            tx |> txRedeemersL
                 .andThen(some)
-                .andThen(keepRawL[Redeemers]()))
+                .andThen(keepRawL[Redeemers]())
                 .modify(rs => Redeemers.from(rs.toSeq.appended(redeemer)))
     }
 

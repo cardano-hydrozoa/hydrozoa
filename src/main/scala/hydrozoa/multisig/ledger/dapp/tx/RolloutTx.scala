@@ -17,14 +17,7 @@ import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{
-    Coin,
-    Transaction,
-    TransactionHash,
-    TransactionInput,
-    TransactionOutput as TxOutput,
-    Value
-}
+import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{
     ModifyAuxiliaryData,
     ReferenceOutput,
@@ -413,16 +406,16 @@ object RolloutTx {
 
                 } yield res
                 res match {
-                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException)) =>
-                        Left(SomeBuildError.ValidationError(e))
+                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, errorCtx)) =>
+                        Left(SomeBuildError.ValidationError(e, errorCtx))
                             .explainConst("trail to add payout failed")
-                    case Left(SomeBuildError.BalancingError(CantBalance(diff))) =>
+                    case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)
-                    case _ =>
+                    case e =>
                         throw new RuntimeException(
-                          "impossible; " +
-                              "loop only has one possible Lefts"
+                          "should be impossible; " +
+                              s"loop only has two possible Lefts, but got ${e}"
                         )
                 }
             }

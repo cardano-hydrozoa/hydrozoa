@@ -31,7 +31,7 @@ object InitializationTxSeq {
 
         Thus, there is a pseudo-dependency for building the initialization transaction -- we want to know the
         size of the outputs of the fallback tx, but we don't actually need to construct the full fallback transaction.
-        We only need to construct it's transaction outputs.
+        We only need to construct its transaction outputs.
 
         The two options I thought of for doing this was:
 
@@ -43,7 +43,6 @@ object InitializationTxSeq {
          I settled on (2) because it was the quickest to get running, while simplifying the fallback tx builder and
           allowing it to be reused in the settlement tx sequence builder with identical semantics (just pass in the
           treasury).
-
          */
         def build(args: Args): Either[Error, InitializationTxSeq] = {
             val tokenNames = CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
@@ -56,31 +55,10 @@ object InitializationTxSeq {
             // Construct head native script directly from the list of peers
             val hns = HeadMultisigScript(args.peers)
 
-            // singleton beacon token minted by the native script with the TN being the hash of the
-            // seed utxos
-            val headToken: MultiAsset = MultiAsset(
-              SortedMap(
-                hns.script.scriptHash -> SortedMap(headTokenName -> 1L)
-              )
-            )
-
-            val headAddress: ShelleyAddress = hns.mkAddress(args.env.network)
-            // Head output (L1) sits at the head address with the initial deposit from the seed utxo
-            // and beacon, as well as the initial datum.
-            val headValue: Value =
-                Value(coin = args.initialDeposit, assets = headToken)
-
             // ===================================
             // Init Treasury
             // ===================================
             val initTreasuryDatum = TreasuryUtxo.mkInitMultisigTreasuryDatum
-
-            Babbage(
-              address = headAddress,
-              value = headValue,
-              datumOption = Some(Inline(initTreasuryDatum.toData)),
-              scriptRef = None
-            )
 
             // ===================================
             // Vote Utxos

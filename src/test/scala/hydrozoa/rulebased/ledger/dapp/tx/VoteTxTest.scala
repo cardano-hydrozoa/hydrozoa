@@ -4,10 +4,8 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryValidator}
+import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.dapp.utxo.OwnVoteUtxo
@@ -65,7 +63,7 @@ def genVoteUtxo(
           scriptRef = None
         )
     } yield OwnVoteUtxo(
-      AddrKeyHash(???), // FIXME: voteDatum.peer.get.hash),
+      AddrKeyHash(voteDatum.voteStatus.asInstanceOf[AwaitingVote].peer.hash),
       Utxo[L1](UtxoId[L1](txId), Output[L1](voteOutput))
     )
 
@@ -160,7 +158,7 @@ class VoteTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 case Left(e) =>
                     fail(s"Build failed $e")
                 case Right(tx) =>
-                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
+                     //println(HexUtil.encodeHexString(tx.tx.toCbor))
 
                     // Verify VoteTx structure
                     assert(

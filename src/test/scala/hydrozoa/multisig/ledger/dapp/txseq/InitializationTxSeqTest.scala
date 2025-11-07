@@ -393,7 +393,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // TODO: This whole "sign and observe" is duplicated from the settlement tx seq test. We can factor
             // it out into utils
 
-            val initialState: State = State(utxo = iTx.resolvedUtxos.utxos)
+            val initialState: State = State(utxos = iTx.resolvedUtxos.utxos)
 
             val signedTxs: Vector[Transaction] =
                 testPeers.foldLeft(Vector(iTx.tx, fbTx.tx))((txsToSign, peer) =>

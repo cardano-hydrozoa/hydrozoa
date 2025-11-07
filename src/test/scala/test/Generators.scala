@@ -266,8 +266,8 @@ object Generators {
 
                 treasuryMinAda = ensureMinAda(
                   TreasuryUtxo(
-                    headTokenName = headTn,
-                    txId = txId,
+                    treasuryTokenName = headTn,
+                    utxoId = txId,
                     address = scriptAddress,
                     datum = datum,
                     value = Value(Coin(0L)) + treasuryToken
@@ -278,8 +278,8 @@ object Generators {
                 treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
 
             } yield TreasuryUtxo(
-              headTokenName = headTn,
-              txId = txId,
+              treasuryTokenName = headTn,
+              utxoId = txId,
               datum = datum,
               address = scriptAddress,
               value = Value(coin.getOrElse(treasuryAda)) + treasuryToken

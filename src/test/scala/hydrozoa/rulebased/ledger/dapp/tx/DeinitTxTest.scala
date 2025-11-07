@@ -2,14 +2,11 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.*
-import hydrozoa.config.EquityShares
+import hydrozoa.config.{CollectiveContingency, EquityShares, IndividualContingency}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.cip67DisputeTokenPrefix
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    RuleBasedTreasuryScript,
-    RuleBasedTreasuryValidator
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{RuleBasedTreasuryScript, RuleBasedTreasuryValidator}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.ResolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.*
@@ -25,7 +22,7 @@ import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPay
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.SomeBuildError
 import spire.compat.integral
-import spire.math.Rational
+import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
 import test.*
 import test.Generators.Hydrozoa.genPubkeyAddress
@@ -77,16 +74,29 @@ def genEmptyResolvedTreasuryUtxo(
     }
 }
 
+// TODO: move away from rule-based, it's used in both regimes
 /** Generate EquityShares for testing */
 def genEquityShares(peers: NonEmptyList[TestPeer]): Gen[EquityShares] =
     for {
         addresses <- Gen.listOfN(peers.length, genPubkeyAddress(testNetwork))
         shares <- genShares(peers.length)
     } yield {
-        val equityList = addresses.zip(shares).map { case (addr, share) =>
-            (Address[L1](addr), share)
-        }
-        EquityShares.apply(equityList).toOption.get
+        val peerShares = addresses
+            .zip(shares)
+            .zipWithIndex
+            .map { case ((addr, share), index) =>
+                import spire.math.UByte
+                UByte(index) -> (Address[L1](addr), share)
+            }
+            .toMap
+
+        EquityShares
+            .apply(
+              shares = peerShares,
+              collectiveContingency = CollectiveContingency.apply(UByte(peers.size)),
+              individualContingency = IndividualContingency.apply
+            )
+            .getOrElse(throw RuntimeException("error generating shares"))
     }
 
 def genRational: Gen[Rational] =
@@ -111,10 +121,16 @@ def genShares(n: Int): Gen[List[Rational]] =
 
 /** Generate a simplified DeinitTx Recipe for testing */
 def genSimpleDeinitTxRecipe: Gen[Recipe] =
+
     for {
         (hns, headTokenName, peers, peersVks, versionMajor, setupSize, fallbackTxId) <-
             genHeadParams
-        equity <- Gen.choose(0L, 100_000_000L).map(Coin(_))
+        // Min treasury
+        defaultVoteDeposit = Coin(CollectiveContingency.apply(UByte(peers.size)).defaultVoteDeposit.underlying)
+        voteDeposit = Coin(IndividualContingency.apply.voteDeposit.underlying)
+        minTreasury = defaultVoteDeposit + Coin(voteDeposit.value * peers.size)
+
+        equity <- Gen.choose(minTreasury.value, 10000_000_000L).map(Coin(_))
         treasuryUtxo <- genEmptyResolvedTreasuryUtxo(
           fallbackTxId,
           hns.policyId,
@@ -125,14 +141,19 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
         )
         shares <- genEquityShares(peers)
         collateralUtxo <- genCollateralUtxo
-    } yield Recipe(
-      headNativeScript = hns,
-      treasuryUtxo = treasuryUtxo,
-      shares = shares,
-      collateralUtxo = collateralUtxo,
-      env = testTxBuilderEnvironment,
-      validators = testValidators
-    )
+    } yield {
+        Recipe(
+            headNativeScript = hns,
+            treasuryUtxo = treasuryUtxo,
+            defaultVoteDeposit =
+                defaultVoteDeposit,
+            voteDeposit = voteDeposit,
+            shares = shares,
+            collateralUtxo = collateralUtxo,
+            env = testTxBuilderEnvironment,
+            validators = testValidators
+        )
+    }
 
 @nowarn("msg=unused value")
 class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -147,10 +168,10 @@ class DeinitTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     test("DeinitTx builds successfully") {
         forAll(genSimpleDeinitTxRecipe) { recipe =>
-            println(
-              s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._1.size}, shares: ${recipe.shares._1
-                      .map(_._2)}"
-            )
+            // println(
+            //  s"equity: ${recipe.treasuryUtxo.value.coin}, number of shares: ${recipe.shares._2.size}, shares: ${recipe.shares._2
+            //          .map(_._2)}"
+            // )
             DeinitTx.build(recipe) match {
                 case Left(e) =>
                     fail(s"DeinitTx build failed: $e")

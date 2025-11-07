@@ -24,30 +24,30 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
         }
     }
 
-    test("Observe settlement tx seq") {
+    test ("Observe settlement tx seq") {
         val gen = genSettlementTxSeqBuilder()
 
         forAll(gen) { (builder, args, peers) =>
             {
                 builder.build(args) match {
                     case Left(e) => throw RuntimeException(s"Build failed: $e")
-                    case Right(txSeq) =>
+                    case Right(txSeq) => {
                         val unsignedTxsAndUtxos
-                            : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
+                        : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
                             txSeq.settlementTxSeq match {
                                 case NoRollouts(settlementTx) => {
                                     (Vector(settlementTx.tx), settlementTx.resolvedUtxos)
                                 }
                                 case WithRollouts(settlementTx, rolloutTxSeq) =>
                                     (
-                                      Vector(settlementTx.tx)
-                                          .appendedAll(rolloutTxSeq.notLast.map(_.tx))
-                                          .appended(rolloutTxSeq.last.tx),
-                                      settlementTx.resolvedUtxos
+                                        Vector(settlementTx.tx)
+                                            .appendedAll(rolloutTxSeq.notLast.map(_.tx))
+                                            .appended(rolloutTxSeq.last.tx),
+                                        settlementTx.resolvedUtxos
                                     )
                             }
 
-                        val initialState: State = State(utxo = unsignedTxsAndUtxos._2.utxos)
+                        val initialState: State = State(utxos = unsignedTxsAndUtxos._2.utxos)
 
                         val signedTxs: Vector[Transaction] =
                             peers.foldLeft(unsignedTxsAndUtxos._1)((txsToSign, peer) =>
@@ -57,12 +57,13 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                         observeTxChain(signedTxs)(initialState, CardanoMutator, Context()) match {
                             case Left(e) =>
                                 throw new RuntimeException(
-                                  s"\nFailed: ${e._1}. " // +
-//                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
-//                                  s"\n rollout tx Id: ${signedTxs(1).id}"
+                                    s"\nFailed: ${e._1}. " // +
+                                    //                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
+                                    //                                  s"\n rollout tx Id: ${signedTxs(1).id}"
                                 )
                             case Right(v) => ()
                         }
+                    }
                 }
             }
         }

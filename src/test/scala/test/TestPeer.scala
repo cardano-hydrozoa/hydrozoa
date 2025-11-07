@@ -20,7 +20,7 @@ import scalus.cardano.ledger.{
     Hash,
     KeepRaw,
     Sized,
-    TaggedOrderedSet,
+    TaggedSortedSet,
     Transaction as STransaction,
     TransactionBody,
     TransactionInput,
@@ -117,7 +117,7 @@ def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
   * the given key
   */
 def l2EventWithdrawalFromInputsAndPeer(
-    inputs: TaggedOrderedSet[TransactionInput],
+    inputs: TaggedSortedSet[TransactionInput],
     peer: TestPeer
 ): L2EventWithdrawal = {
     val txBody: TransactionBody = TransactionBody(
@@ -142,7 +142,7 @@ def l2EventWithdrawalFromInputsAndPeer(
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
-    inputs: TaggedOrderedSet[TransactionInput],
+    inputs: TaggedSortedSet[TransactionInput],
     utxoSet: Map[TransactionInput, TransactionOutput],
     inPeer: TestPeer,
     outPeer: TestPeer,
