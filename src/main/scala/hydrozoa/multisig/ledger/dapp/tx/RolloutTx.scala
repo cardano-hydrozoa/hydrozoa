@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{
     explainConst
 }
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.prebalancedDiffHandler
 import scala.Function.const
 import scala.annotation.tailrec
