@@ -3,6 +3,8 @@ import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{AssetName, TransactionInput}
 
+// FIXME: This is not actually CIP-67 compliant as is. See:
+// https://github.com/cardano-hydrozoa/hydrozoa/issues/260
 object CIP67 {
     object Tags {
         val head: Long = 4937L // "HYDR" (hydrozoa) on the phone pad

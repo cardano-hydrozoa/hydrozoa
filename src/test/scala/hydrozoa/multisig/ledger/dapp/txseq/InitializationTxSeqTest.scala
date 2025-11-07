@@ -75,7 +75,6 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         validators = testValidators,
         initializationTxChangePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
         tallyFeeAllowance = Coin.ada(2),
-        // FIXME: Unused
         votingDuration = 100
       ),
       peers

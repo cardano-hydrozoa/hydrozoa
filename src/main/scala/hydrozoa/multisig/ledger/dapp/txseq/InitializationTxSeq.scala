@@ -201,7 +201,6 @@ object InitializationTxSeq {
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
-            // FIXME: Unused
             votingDuration: PosixTime
         ) {
 

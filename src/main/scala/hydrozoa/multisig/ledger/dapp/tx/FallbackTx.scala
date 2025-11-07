@@ -28,14 +28,21 @@ final case class FallbackTx(
     treasurySpent: TreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
-    // The rest should have domain-specific types as well
+    // The rest should have domain-specific types as well. See:
+    // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
     treasuryProduced: TransactionUnspentOutput,
     consumedHMRWUtxo : TransactionUnspentOutput,
     producedDefaultVoteUtxo: TransactionUnspentOutput,
     producedPeerVoteUtxos: NonEmptyList[TransactionUnspentOutput],
     producedCollateralUtxos : NonEmptyList[TransactionUnspentOutput],
     override val tx: Transaction
-                           ) extends Tx
+                           ) extends Tx {
+      def producedVoteUtxos : NonEmptyList[TransactionUnspentOutput] =
+        NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
+
+      def producedNonTreasuryUtxos  : NonEmptyList[TransactionUnspentOutput] =
+        producedVoteUtxos ++ producedCollateralUtxos.toList
+}
 
 /*
 Fallback tx spec:
