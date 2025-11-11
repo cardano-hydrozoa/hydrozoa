@@ -2,20 +2,36 @@
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, flake-utils, nixpkgs, ... }@inputs:
+  outputs = { self, flake-utils, nixpkgs, git-hooks, ... }@inputs:
     (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
         jdk = pkgs.openjdk23;
-	# GraalVM is an advanced JDK. We use it for (...) 
-	# https://www.graalvm.org/
+	    # GraalVM is an advanced JDK. We use it for  metals and bloop only.
+	    # https://www.graalvm.org/
         graalvm = pkgs.graalvmPackages.graalvm-ce; 
         metals0 = pkgs.metals.override { jre = graalvm; };
         bloop0 = pkgs.bloop.override { jre = graalvm; };
         sbt0 = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
+        # Define the hooks
+        pre-commit-check = git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = {
+            just-lint-fmt-check = {
+              enable = true;
+              name = "lint fmt check";
+              entry = "${pkgs.just}/bin/just lint-fmt-check";
+              pass_filenames = false;
+            };
+          };
+        };
       in rec {
         devShell = pkgs.mkShell {
           JAVA_HOME = "${graalvm}";
@@ -35,10 +51,11 @@
             scala-cli
             scalafix
             scalafmt
-	    # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
+	        # Visualize programs running on the JVM. May need _JAVA_AWT_WM_NONREPARENTING=1 on wayland:
             #    https://github.com/oracle/visualvm/issues/403		 
             visualvm
           ];
+            inherit (pre-commit-check) shellHook;
         };
       }));
 }
