@@ -18,6 +18,10 @@ import scala.language.postfixOps
 
 import MultisigRegimeManager.Config
 
+// TODO: We decided (2025-11-16) that the joint ledger can kill itself with a suicide note if it fails to
+// reproduce a remote block (signaling consensus failure). We need to implement a supervision routine for that actor
+// that shuts down consensus when this signal is received.
+// TODO: Other actors (probably cardano liason and/or block weaver) may also suicide and trigger a similar panic.
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
 object MultisigRegimeManager {

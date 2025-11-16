@@ -14,55 +14,76 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Transaction, TransactionMetadatumLabel, TransactionOutput}
 import scalus.cardano.txbuilder.SomeBuildError
 
+// TODO: DappLedger should be an actor. See VirtualLedger
 final case class DappLedger(headAddress: ShelleyAddress)(
     private val state: Ref[IO, State]
 ) {
 
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
       * Return the produced deposit utxo and a post-dated refund transaction for it.
+     *
       * @param txSerialized
       *   a serialized deposit transaction
       */
     def registerDeposit(
-        txSerialized: Tx.Serialized
-    ): IO[Either[ErrorAddDeposit, (DepositUtxo, RefundTx.PostDated)]] = {
-        // 1. Deserialize and parse the tx.
-        // 2. Check that the deposit tx belongs to this ledger.
-        // 3. Check that the tx satisfies ledger STS rules (assuming inputs exist).
-        // 4. Append the tx's deposit utxo to the ledger's state.deposits queue.
-        // 5. Return the produced deposit utxo and a post-dated refund transaction for it.
-
-        IO.pure(
-          // Either Monad
-          for {
-              tx <- DepositTx.parse(txSerialized)
-              refundTx: RefundTx.PostDated = ???
-          } yield (tx.depositProduced, refundTx)
-        )
+        txSerialized: Tx.Serialized // change to serialized deposit/refund txseq
+    ):
+    // TODO: The return type should be Either[Error, Unit]. We are checking time bounds
+    // here, deposit maturity and stuff.
+    IO[Unit] = {
+        // 1. Append the tx's deposit utxo + post-dated refund tx 
+        // to the ledger's state.deposits queue. This queue should be
+      
+        IO.pure(???)
     }
 
     /** Construct a settlement transaction, a fallback transaction, a list of rollout transactions,
       * and a list of immediate refund transactions based on the arguments. Remove the
       * absorbed/refunded deposits and update the treasury in the ledger state.
-      * @param depositDecisions
-      *   for each deposit, a decision about whether it should be absorbed in the settlement
-      *   transaction or immediately refunded.
+     * Called when the block weaver sends the single to close the block in leader mode.
+    
+      * @param deposits
+      *   list of deposit utxos that we know currently exist, as passed by the cardano liason
       * @param payouts
       *   a list of payout outputs that should be produced by the settlement and rollout
       *   transactions.
       *
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
+     * 
+     * @return
+     *   Either[Tx Builder Error, or
+     *      - SettlementTxSeq (
       */
     def settleLedger(
-        depositDecisions: List[(DepositUtxo, DepositDecision)],
-        payouts: List[TransactionOutput]
+        deposits: List[(DepositUtxo)], 
+        // TODO: make the above Set of event ids (corresponding to deposits). 
+        // This is what exists on L1
+        // pollResultDeposits : Set[EventId],           
+        payouts: List[TransactionOutput],
+        // blockCreationTime : PosixTime            
     ): IO[
       (
+          // TODO: replace Option with Either to accomodate transaction builder errors
+          // TODO: replace with Either[TxBuilderError, (SettlementTxSeq, List[GenesisObligation])]
           Option[(SettlementTx, FallbackTx, List[RolloutTx], List[GenesisObligation])],
-          List[RefundTx.Immediate]
+          // For the future: we want an immediate refund for deposits that don't exist
+          List[RefundTx.Immediate] // TODO: this will be part of fund14 reliability
       )
     ] =
         for {
+          //////// Deposits
+          // - Keep taking deposits from the queue as long as they are mature
+          // - Filter the depositQueue (from the dapp ledger state)
+          // according to whether or not the IDs are present in the pollResultsDeposits 
+          //   - if it is a member, remove it from poll result set and create a genesis obligation
+          //   - if it is not a member, ignore it. TODO: create a refund immediate
+          //   - in either case, remove _handled_  deposits from the deposits queue
+          //     - We can't remove deposit that were GIVEN to the settlementtxseq builder, but
+          //       were not able to be absorbed because tx size issues. these MUST remain in the
+          //       queue in the appropriate order.
+          //
+          // N.B.: JointLedger calls this as a synchronous request. We are not responsible for
+          // sending it back to the joint ledger.
             _ <- IO.pure(())
         } yield ???
 
@@ -77,9 +98,11 @@ final case class DappLedger(headAddress: ShelleyAddress)(
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       * Immediate refund transactions must be constructed for every deposit in the ledger state.
       */
-    def finalizeLedger(
-        payouts: List[TransactionOutput]
+    def finalizeLedger( 
+        payouts: List[TransactionOutput] // TODO: List[PayoutObligation]
     ): IO[(FinalizationTx, List[RefundTx.Immediate])] =
+       // TODO: IO[Either[TxBuilderError, FinalizationTxSeq]]
+       // TODO (fund14): Refund.Immediate 
         for {
             _ <- IO.pure(())
         } yield ???
@@ -104,6 +127,8 @@ final case class DappLedger(headAddress: ShelleyAddress)(
 object DappLedger {
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
+    // TODO: replace this with a fully parsed InitializationTxSeq
+    // TODO: return type should be Either[Error, DappLedger]. We don't build the InitTx any more
     def create(
         initRecipe: InitializationTx.Recipe
     ): IO[Either[SomeBuildError, (DappLedger, InitializationTx)]] = {
@@ -118,11 +143,15 @@ object DappLedger {
 
     final case class State(
         treasury: TreasuryUtxo,
+        // TODO: Augment this queue with some additional information to 
+        // indicate that we have validated that this transaction has been validated for time                  
         deposits: Queue[DepositUtxo] = Queue()
     ) {
         // Specialized methods for querying and updating State
     }
 
+    // TODO: Remove DepositDecision, because we are the ones deciding now. We are
+    // given the existence proof.
     sealed trait DepositDecision
     case class AbsorbDeposit(genesisObligation: GenesisObligation) extends DepositDecision
     case object RefundDeposit extends DepositDecision

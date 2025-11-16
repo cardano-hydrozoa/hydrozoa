@@ -21,6 +21,9 @@ object HydrozoaGenesisMutator {
     }
 }
 
+// Change: 
+//   - We remove all inputs as usual, but we only add outputs to the UTxO Set if they are L2-bound
+//   - Update return type to return new (newState, listOfPayoutObligations)
 object HydrozoaTransactionMutator extends STSL2.Mutator {
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
         case L2EventTransaction(event) => {
@@ -62,6 +65,7 @@ object HydrozoaTransactionMutator extends STSL2.Mutator {
     }
 }
 
+// TODO: Drop this completely
 object HydrozoaWithdrawalMutator extends STSL2.Mutator {
     override def transit(context: Context, state: State, l2Event: L2Event): Result = l2Event match {
         case L2EventWithdrawal(event) => {

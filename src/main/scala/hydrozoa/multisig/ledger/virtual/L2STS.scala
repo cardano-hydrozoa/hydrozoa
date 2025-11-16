@@ -21,6 +21,12 @@ package hydrozoa.multisig.ledger.virtual
   * The overall principle is simple: `validate` checks a `(context, state, event)` tuple for
   * validity, `transit` takes `(context, state, event)` to a new `state`.
   *
+  * 
+  * TODO: This following section is no longer the approach we are taking. We want to reduce the
+ * Footprint of our code and only inject/project the parts we care about when interacting with the 
+ * scalus ledger rules.
+ * 
+ * /////
   * Where possible, we use the upstream types for representing our own STS. This means that our
   * State, Context, and Transition types are "too big" -- for instance, our State type contains
   * information about the UTxO Map, which the L2 Ledger indeed makes use of, but ALSO contains
@@ -28,7 +34,8 @@ package hydrozoa.multisig.ledger.virtual
   * want to re-use L1 ledger rules directly where possible without having to convert possibly large
   * data structures (such as the entire utxo map) each time; this is a performance vs type-safety
   * trade-off that we felt was worth it.
-  *
+  * /////
+ * 
   * The validation rules for our STSL2 that are native to hydrozoa (i.e., that do not apply to L1)
   * can be found in `L2ConformanceValidator.scala`.
   */
@@ -39,6 +46,7 @@ import scalus.cardano.ledger.*
 ////////////////////////////////////////
 // Layer 2 state transition system
 
+// Remove this whole trait, just rephrase everything in terms of the underlying "Either" monad structure
 sealed trait STSL2 {
     final type Context = scalus.cardano.ledger.rules.Context
     final type State = scalus.cardano.ledger.rules.State
