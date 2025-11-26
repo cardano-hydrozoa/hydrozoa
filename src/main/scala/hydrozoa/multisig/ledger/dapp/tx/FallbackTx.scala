@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Fallback
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
@@ -169,11 +169,9 @@ object FallbackTx {
         val setMetaData = ModifyAuxiliaryData(_ =>
             Some(
               MD.apply(
-                Fallback,
-                disputeTreasuryAddress
-              )
+                Fallback(disputeTreasuryAddress)
             )
-        )
+        ))
 
         val steps = {
             Seq(

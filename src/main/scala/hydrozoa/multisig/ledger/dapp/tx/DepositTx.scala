@@ -4,8 +4,10 @@ import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.Deposit
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
+
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
@@ -15,13 +17,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.txbuilder.{
-    LowLevelTxBuilder,
-    PubKeyWitness,
-    SomeBuildError,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import scalus.cardano.txbuilder.{LowLevelTxBuilder, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -61,10 +57,13 @@ object DepositTx {
             case Success(tx) =>
                 for {
                     // Pull head address from metadata
-                    headAddress <- MD
-                        .parseExpected(tx, MD.L1TxTypes.Deposit)
-                        .left
-                        .map(MetadataParseError.apply)
+                    d <- MD
+                        .parse(tx) match {
+                        case Right(d: Deposit) => Right(d)
+                        case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
+                        case Left(e) => Left(MetadataParseError(e))
+                    }
+                    Deposit(headAddress) = d
                     // Grab the single output at the head address, along with its index/
                     depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex
                         .filter(_._1.value.address == headAddress) match {
@@ -114,7 +113,7 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxiliaryData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxiliaryData(_ => Some(MD(MD.Deposit(recipe.headAddress))))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
                 Spend(

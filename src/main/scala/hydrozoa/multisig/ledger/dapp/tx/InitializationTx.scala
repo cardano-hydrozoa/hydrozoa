@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Initialization, ParseError}
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ToData.toData
@@ -98,8 +98,10 @@ object InitializationTx {
 
         val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
 
-        val addMetadata =
-            ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
+        val modifyAuxiliaryData =
+            ModifyAuxiliaryData(_ =>
+                Some(MD.apply(Initialization(headAddress, recipe.spentUtxos.seedUtxo.input)))
+            )
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -107,7 +109,7 @@ object InitializationTx {
             :+ createTreasury
             :+ Send(hmrwOutput)
             :+ createChangeOutput
-            :+ addMetadata
+            :+ modifyAuxiliaryData
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -131,8 +133,8 @@ object InitializationTx {
 
         } yield InitializationTx(
           treasuryProduced = TreasuryUtxo(
-            treasuryTokenName = headTokenName,
-            utxoId = TransactionInput(
+            headTokenName = headTokenName,
+            txId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
             ),
@@ -175,8 +177,6 @@ object InitializationTx {
         evaluator: PlutusScriptEvaluator
     ) {}
 
-    sealed trait ParseError
-
     final case class ParseConfig(
         initialL2UtxoSet: Map[TransactionInput, TransactionOutput],
         peers: NonEmptyList[VerificationKeyBytes]
@@ -184,10 +184,7 @@ object InitializationTx {
 
     // - Parse: metadata:
     //      seed utxo OutputRef,
-    //      "Initialization",
-    //      treasury output index,
-    //      multisig regime witness output index,
-    //      head address
+    //      "Initialization"
     // - Derive: treasury token name
     // - Parse: check that the head address is what we expected (and derived from a multisig native script)
     // - Check output for head address
@@ -201,7 +198,16 @@ object InitializationTx {
     //   - contains at least total value of initial UTxO set
     def parse(
         expectedConfig: ParseConfig,
-        txSerialized: Array[Byte]
-    ): Either[ParseError, InitializationTx] = ???
+        tx: Transaction
+    ): Either[ParseError, InitializationTx] =
+        for {
+            imd <- MD.parse(tx) match {
+                case Right(md: Initialization) => Right(md)
+                case Right(_) =>
+                    Left(??? : ParseError) // hydrozoa metadata, but not an init transaction
+                case Left(_) => Left(??? : ParseError) // no hydrozoa metadata
+            }
+            Initialization(headAddress, seedInput) = imd
+        } yield ???
 
 }

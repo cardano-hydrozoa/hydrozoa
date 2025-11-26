@@ -15,6 +15,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import test.Generators.Hydrozoa.*
 
 var counter = AtomicLong(0L)
@@ -86,6 +87,16 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="
 
+    test("Roundtrip deposit metadata"){
+        forAll(genScriptAddress()) { addr =>
+           val mbAux = Some(KeepRaw(MD(MD.Deposit(addr))))
+           MD.parse(mbAux) match {
+               case Right(_) => ()
+               case Left(e) => fail(e.getStackTrace.)
+           }
+        }
+    }
+
     test("Build deposit tx") {
         forAll(genDepositRecipe()) { recipe =>
             DepositTx.build(recipe) match {
@@ -93,7 +104,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 case Right(tx) =>
                     DepositTx.parse(tx.tx.toCbor) match {
                         case Left(e) =>
-                            fail("Produced deposit tx cannot be deserialized from CBOR")
+                            fail(s"Produced deposit tx cannot be deserialized from CBOR: ${e.getCause}")
                         case Right(cborParsed) if cborParsed != tx =>
                             // println(ByteString.fromArray(tx.tx.toCbor).toHex)
                             // assert(expected = tx.tx.body.value.outputs(1), obtained = cborParsed.tx.body.value.outputs(1))

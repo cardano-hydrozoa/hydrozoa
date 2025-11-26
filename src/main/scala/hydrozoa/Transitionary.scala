@@ -9,9 +9,11 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
+import io.bullet.borer.{Borer, Cbor, Encoder}
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
+
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
 import scalus.bloxbean.Interop
@@ -542,3 +544,11 @@ def maxNonPlutusTxFee(params: ProtocolParams): Coin = Coin(
   params.txFeeFixed +
       params.maxTxSize * params.txFeePerByte
 )
+
+def encodeByteString[A](a: A)(using Encoder[A]): ByteString =
+    ByteString.fromArray(Cbor.encode(a).toByteArray)
+
+def encodeByteStringEither[A](a: A)(using
+    Encoder[A]
+): Either[Borer.Error[io.bullet.borer.Output], ByteString] =
+    Cbor.encode(a).toByteArrayEither.map(ByteString.fromArray)
