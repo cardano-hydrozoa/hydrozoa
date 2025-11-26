@@ -8,10 +8,12 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
@@ -82,7 +84,11 @@ object Generators {
                 headNativeScriptReferenceInput = multisigWitnessUtxo,
                 tokenNames = tokenNames,
                 env = env,
-                validators = validators
+                validators = validators,
+                disputeResolutionPaymentPart =
+                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(DisputeResolutionScript.getScriptHash))),
+                disputeTreasuryPaymentPart =
+                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(RuleBasedTreasuryScript.getScriptHash)))
               ),
               peers
             )

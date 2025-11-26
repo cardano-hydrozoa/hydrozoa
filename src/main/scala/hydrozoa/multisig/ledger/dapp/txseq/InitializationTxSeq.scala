@@ -147,8 +147,6 @@ object InitializationTxSeq {
                 fallbackTxRecipe = FallbackTx.Recipe(
                   config = initializationTx.resultingConfig,
                   treasuryUtxo = initializationTx.treasuryProduced,
-                  disputeTreasuryPaymentPart = args.disputeTreasuryPaymentPart,
-                  disputeResolutionPaymentPart = args.disputeResolutionPaymentPart,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration
                 )
