@@ -1,6 +1,6 @@
 package hydrozoa.config
 import hydrozoa.AddressL1
-import scalus.cardano.ledger.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Coin
 import spire.compat.numeric
 import spire.math.Number.apply
 import spire.math.{Rational, SafeLong, UByte}

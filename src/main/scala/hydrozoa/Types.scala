@@ -42,7 +42,7 @@ import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, ToData}
 import scalus.cardano.address.{Address as SAddress, ShelleyAddress}
-import scalus.cardano.ledger.*
+import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.ledger.api.v3
@@ -203,8 +203,8 @@ object Utxo:
     extension [L <: AnyLayer](utxo: Utxo[L]) def output: Output[L] = utxo._2
     extension [L <: AnyLayer](utxo: Utxo[L]) def input: UtxoId[L] = utxo._1
     extension [L <: AnyLayer](utxo: Utxo[L])
-        def toScalus: (TransactionInput, TransactionOutput) =
-            (utxo._1.untagged, utxo._2.convert)
+        def toScalus: SUtxo =
+            SUtxo(utxo._1.untagged, utxo._2.convert)
 
 type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 
