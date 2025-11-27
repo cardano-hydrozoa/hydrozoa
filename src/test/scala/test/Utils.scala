@@ -57,12 +57,10 @@ val testValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
-val testTxBuilderEnvironment: Environment = Environment(
+val testTxBuilderEnvironment: Environment = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),
-  evaluator = testEvaluator,
-  network = testNetwork,
-  era = Era.Conway
+  network = testNetwork
 )
 
 // Get the minAda for an Ada only pubkey utxo

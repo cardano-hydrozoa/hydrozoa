@@ -143,7 +143,7 @@ object ResolutionTx {
                   List(
                     // Spend the tallied vote utxo
                     Spend(
-                      TransactionUnspentOutput(talliedVoteUtxo.utxo.toScalus),
+                      talliedVoteUtxo.utxo.toScalus,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         voteRedeemer.toData,
@@ -170,7 +170,7 @@ object ResolutionTx {
                         scriptRef = None
                       )
                     ),
-                    AddCollateral(TransactionUnspentOutput(collateralUtxo.toScalus)),
+                    AddCollateral(collateralUtxo.toScalus),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

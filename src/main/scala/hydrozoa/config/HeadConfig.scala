@@ -2,7 +2,7 @@ package hydrozoa.config
 
 import hydrozoa.*
 import hydrozoa.config.HeadConfigError.{NonUniqueVerificationKey, SharesMustSumToOne}
-import scalus.cardano.ledger.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Coin
 import spire.implicits.*
 import spire.math.{Rational, UByte}
 

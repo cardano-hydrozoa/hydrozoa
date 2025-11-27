@@ -150,6 +150,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
             voteDeposit = voteDeposit,
             shares = shares,
             collateralUtxo = collateralUtxo,
+            evaluator = testEvaluator,
             env = testTxBuilderEnvironment,
             validators = testValidators
         )
