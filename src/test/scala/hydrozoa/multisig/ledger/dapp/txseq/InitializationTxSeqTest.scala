@@ -71,6 +71,7 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         disputeTreasuryPaymentPart = disputeTreasuryPP,
         disputeResolutionPaymentPart = disputeResolutionPP,
         env = testTxBuilderEnvironment,
+        evaluator = testEvaluator,
         validators = testValidators,
         initializationTxChangePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
         tallyFeeAllowance = Coin.ada(2),
@@ -211,6 +212,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val bytes = iTx.tx.toCbor
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
+                given ProtocolVersion = ProtocolVersion.conwayPV
 
                 "Cbor round-tripping failed" |: (iTx.tx == Cbor
                     .decode(bytes)
@@ -368,7 +370,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val bytes = fbTx.tx.toCbor
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
-
+                given ProtocolVersion = ProtocolVersion.conwayPV
+                
                 fbTx.tx == Cbor
                     .decode(bytes)
                     .to[Transaction]

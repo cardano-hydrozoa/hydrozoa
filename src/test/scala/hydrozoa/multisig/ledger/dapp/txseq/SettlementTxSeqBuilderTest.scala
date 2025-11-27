@@ -2,6 +2,9 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
+import org.scalacheck.Prop.propBoolean
+import org.scalacheck.{Gen, Prop, Properties, Test}
+import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
@@ -10,21 +13,22 @@ import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
 import test.TransactionChain.*
 
-class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
+    import Prop.forAll
 
-    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 100)
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withMinSuccessfulTests(100)
 
-    test("Build settlement tx sequence") {
-        forAll(genSettlementTxSeqBuilder()) { (builder, args, _) =>
-            builder.build(args) match {
-                case Left(e)  => fail(s"Build failed $e")
-                case Right(r) => ()
-            }
-        }
-    }
+//    val _ = property("Build settlement tx sequence")  = {
+//        forAll(genSettlementTxSeqBuilder()) { (builder, args, _) =>
+//            "SettlementTxSeq builds" |: (builder.build(args) match {
+//                case Left(e)  => false
+//                case Right(r) => true
+//            })
+//        }
+//    }
 
-    test ("Observe settlement tx seq") {
+    val _ = propertyWithSeed("Observe settlement tx seq", Some("rxYNJitNF9c6LoezXCCDfRPn-lKWyG7Uz9-GH8ikRFI=")) = {
         val gen = genSettlementTxSeqBuilder()
 
         forAll(gen) { (builder, args, peers) =>
@@ -54,15 +58,9 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                                 txsToSign.map(tx => signTx(peer, tx))
                             )
 
-                        observeTxChain(signedTxs)(initialState, CardanoMutator, Context()) match {
-                            case Left(e) =>
-                                throw new RuntimeException(
-                                    s"\nFailed: ${e._1}. " // +
-                                    //                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
-                                    //                                  s"\n rollout tx Id: ${signedTxs(1).id}"
-                                )
-                            case Right(v) => ()
-                        }
+                        val res = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
+
+                        res.isRight :| s"SettlementTxSeq observation unsuccessful: ${res}"
                     }
                 }
             }

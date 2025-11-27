@@ -1,11 +1,6 @@
 package test
 
-import co.nstant.in.cbor.model.{
-    Array as CborArray,
-    ByteString as CborByteString,
-    Map,
-    UnsignedInteger
-}
+import co.nstant.in.cbor.model.{Map, UnsignedInteger, Array as CborArray, ByteString as CborByteString}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
@@ -13,9 +8,10 @@ import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
 import hydrozoa.*
 import io.bullet.borer.Cbor
+
 import scala.language.implicitConversions
 import scalus.builtin.ByteString
-import scalus.cardano.ledger.{OriginalCborByteArray, Transaction, VKeyWitness}
+import scalus.cardano.ledger.{OriginalCborByteArray, ProtocolVersion, Transaction, VKeyWitness}
 
 case class WalletId(name: String)
 
@@ -43,7 +39,7 @@ def addWitness(tx: Transaction, wit: VKeyWitness): Transaction =
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
     val txBytesSigned = txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes
     given OriginalCborByteArray = OriginalCborByteArray(txBytesSigned)
-
+    given ProtocolVersion = ProtocolVersion.conwayPV
     Cbor.decode(txBytesSigned).to[Transaction].value
 
 trait WalletModule:

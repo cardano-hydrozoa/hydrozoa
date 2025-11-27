@@ -134,6 +134,7 @@ object InitializationTxSeq {
               tokenNames = tokenNames,
               hmrwCoin = multisigRegimeWitnessCoin,
               env = args.env,
+              evaluator = args.evaluator,
               validators = args.validators,
               changePP = args.initializationTxChangePP
             )
@@ -173,6 +174,7 @@ object InitializationTxSeq {
             disputeTreasuryPaymentPart: ShelleyPaymentPart,
             disputeResolutionPaymentPart: ShelleyPaymentPart,
             env: Environment,
+            evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,

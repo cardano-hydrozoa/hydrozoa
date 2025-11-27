@@ -42,7 +42,7 @@ object Tx {
                     protocolParams = config.env.protocolParams,
                     changeOutputIdx = 0
                   ).changeOutputDiffHandler,
-                  evaluator = config.env.evaluator,
+                  evaluator = config.evaluator,
                   validators = config.validators
                 )
     }
@@ -94,13 +94,14 @@ object Tx {
         }
 
         final case class Config(
-            headNativeScript: HeadMultisigScript,
-            disputeTreasuryPaymentPart: ShelleyPaymentPart.Script,
-            disputeResolutionPaymentPart: ShelleyPaymentPart.Script,
-            headNativeScriptReferenceInput: TransactionUnspentOutput,
-            tokenNames: TokenNames,
-            env: Environment,
-            validators: Seq[Validator]
+        headNativeScript: HeadMultisigScript,
+        disputeTreasuryPaymentPart: ShelleyPaymentPart.Script,
+        disputeResolutionPaymentPart: ShelleyPaymentPart.Script,
+        headNativeScriptReferenceInput: TransactionUnspentOutput,
+        tokenNames: TokenNames,
+        evaluator : PlutusScriptEvaluator,
+        env: Environment,
+        validators: Seq[Validator]
         ) {
             lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
             lazy val disputeTreasuryAddress: ShelleyAddress = ShelleyAddress(network = env.network,

@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{
 }
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
-import hydrozoa.prebalancedDiffHandler
+import hydrozoa.prebalancedLovelaceDiffHandler
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.builtin.ByteString
@@ -126,8 +126,8 @@ object RolloutTx {
                     finished <- addedRolloutInput
                         .finalizeContext(
                           protocolParams = builder.config.env.protocolParams,
-                          diffHandler = prebalancedDiffHandler,
-                          evaluator = builder.config.env.evaluator,
+                          diffHandler = prebalancedLovelaceDiffHandler,
+                          evaluator = builder.config.evaluator,
                           validators = builder.config.validators
                         )
                         .explain(const("Could not finalize context after spending rollout input"))
@@ -399,8 +399,8 @@ object RolloutTx {
                     addedPlaceholderRolloutInput <- TransactionBuilder.modify(ctx, placeholder)
                     res <- addedPlaceholderRolloutInput.finalizeContext(
                       builder.config.env.protocolParams,
-                      prebalancedDiffHandler,
-                      builder.config.env.evaluator,
+                      prebalancedLovelaceDiffHandler,
+                      builder.config.evaluator,
                       List(TransactionSizeValidator)
                     )
 

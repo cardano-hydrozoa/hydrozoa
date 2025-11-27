@@ -135,7 +135,7 @@ given L2ConformanceValidator[TransactionBody] with
             _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
             _ <- validateEquals("Collateral Return Output")(l1.collateralReturnOutput)(None)
             _ <- validateEquals("Total Collateral")(l1.totalCollateral)(None)
-            _ <- validateEquals("Certificates")(l1.certificates)(TaggedSet.empty)
+            _ <- validateEquals("Certificates")(l1.certificates)(TaggedOrderedStrictSet.empty)
             _ <- validateEquals("Withdrawals")(l1.withdrawals)(None)
             _ <- validateEquals("Fee")(l1.fee)(Coin(0L))
             _ <- validateEquals("Mint")(l1.mint)(None)
