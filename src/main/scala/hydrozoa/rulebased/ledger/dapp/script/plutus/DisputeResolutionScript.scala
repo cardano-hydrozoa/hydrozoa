@@ -241,25 +241,25 @@ object DisputeResolutionValidator extends Validator {
                   VoteMultisigCheck
                 )
 
-                // Temporary workaround
-                import scalus.prelude.List.{Cons, Nil}
-                @tailrec
-                def verifySignatures(a: List[ByteString], b: List[ByteString]): Unit =
-                    a match
-                        case Cons(h1, t1) =>
-                            b match
-                                case Cons(h2, t2) =>
-                                    require(verifyEd25519Signature(h1, msg, h2))
-                                    verifySignatures(t1, t2)
-                                case Nil          => ()
-                        case Nil => ()
+                //// Temporary workaround
+                //import scalus.prelude.List.{Cons, Nil}
+                //@tailrec
+                //def verifySignatures(a: List[ByteString], b: List[ByteString]): Unit =
+                //    a match
+                //        case Cons(h1, t1) =>
+                //            b match
+                //                case Cons(h2, t2) =>
+                //                    require(verifyEd25519Signature(h1, msg, h2))
+                //                    verifySignatures(t1, t2)
+                //                case Nil          => ()
+                //        case Nil => ()
+                //
+                //verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
 
-                verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
-
-                //@annotation.unused
-                //val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
-                //    //require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                //)
+                @annotation.unused
+                val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                    require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
+                )
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
