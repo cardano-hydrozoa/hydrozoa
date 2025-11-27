@@ -250,7 +250,9 @@ object RuleBasedTreasuryValidator extends Validator {
                         .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
                         .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
-                        case List.Cons((tokenName, amount), none) =>
+                        case List.Cons((tokenNameAndAmount), none) =>
+                            val tokenName = tokenNameAndAmount._1
+                            val amount = tokenNameAndAmount._2
                             require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)
                             tokenName
                         case _ => fail(WithdrawBeaconTokenFailure)
@@ -440,12 +442,12 @@ object RuleBasedTreasuryScript {
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    def compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
 
     def compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
 
-    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    val compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {

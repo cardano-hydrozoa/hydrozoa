@@ -209,7 +209,8 @@ object DisputeResolutionValidator extends Validator {
                     .get(headMp)
                     .getOrElse(SortedMap.empty)
                     .toList match
-                    case List.Cons((tokenName, amount), none) =>
+                    case List.Cons(tokenNameAndAmount, none) =>
+                        val tokenName = tokenNameAndAmount._1
                         require(
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
                           VoteTreasuryBeacon
@@ -404,7 +405,9 @@ object DisputeResolutionValidator extends Validator {
                                 .get(contCs)
                                 .getOrElse(SortedMap.empty)
                                 .toList match
-                                case List.Cons((tokenName, amount), none) =>
+                                case List.Cons(tokenNameAndAmount, none) =>
+                                    val tokenName = tokenNameAndAmount._1
+                                    val amount = tokenNameAndAmount._2
                                     tokenName.take(4) == cip67BeaconTokenPrefix
                                     && amount == BigInt(1)
                                     && none.isEmpty
@@ -485,7 +488,9 @@ object DisputeResolutionValidator extends Validator {
                             .get(headMp)
                             .getOrElse(SortedMap.empty)
                             .toList match
-                            case List.Cons((tokenName, amount), none) =>
+                            case List.Cons(tokenNameAndAmount, none) =>
+                                val tokenName = tokenNameAndAmount._1
+                                val amount = tokenNameAndAmount._2
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
@@ -537,7 +542,7 @@ object DisputeResolutionScript {
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    def compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
 
     def compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
@@ -545,7 +550,7 @@ object DisputeResolutionScript {
     //// Hex representations - use the main program methods
     // private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
 
-    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    val compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {

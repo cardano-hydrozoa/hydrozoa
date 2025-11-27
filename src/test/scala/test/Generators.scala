@@ -88,9 +88,9 @@ object Generators {
                 evaluator = evaluator,
                 validators = validators,
                 disputeResolutionPaymentPart =
-                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(DisputeResolutionScript.getScriptHash))),
+                    ShelleyPaymentPart.Script(ScriptHash.fromArray(DisputeResolutionScript.getScriptHash)),
                 disputeTreasuryPaymentPart =
-                    ShelleyPaymentPart.Script(Hash(ByteString.fromArray(RuleBasedTreasuryScript.getScriptHash)))
+                    ShelleyPaymentPart.Script(ScriptHash.fromArray(RuleBasedTreasuryScript.getScriptHash))
               ),
               peers
             )

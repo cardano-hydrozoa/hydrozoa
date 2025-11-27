@@ -2,8 +2,9 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.Transaction
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
@@ -106,10 +107,10 @@ object Tx {
             lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
             lazy val disputeTreasuryAddress: ShelleyAddress = ShelleyAddress(network = env.network,
               payment = disputeTreasuryPaymentPart,
-             delegation = null)
+             delegation = Null)
             lazy val disputeResolutionAddress: ShelleyAddress = ShelleyAddress(network = env.network,
              payment = disputeResolutionPaymentPart,
-              delegation = null)
+              delegation = Null)
         }
 
         object Incremental {
