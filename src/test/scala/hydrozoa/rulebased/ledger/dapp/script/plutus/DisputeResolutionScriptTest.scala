@@ -14,14 +14,14 @@ class DisputeResolutionScriptTest extends AnyFunSuite {
     test("Script compiles, size and hash is still the same") {
 
         assertResult(
-          ScriptHash.fromHex("0545fe43af5d062e5d7e10cee50c2f8453431be14acd3420bee503a2"),
+          ScriptHash.fromHex("95c6ea25f49fc9edf59290c455edb9c8f1c5ef673293eec7c9fa1d63"),
           "Script hash should be stable. In case the script is modified or Scalus is bumped please update the test."
         ) {
             DisputeResolutionScript.compiledScriptHash
         }
 
         assertResult(
-            13675,
+            13669,
           "Script size should be stable. In case the script is modified please update the test."
         ) {
             DisputeResolutionScript.flatEncoded.length
