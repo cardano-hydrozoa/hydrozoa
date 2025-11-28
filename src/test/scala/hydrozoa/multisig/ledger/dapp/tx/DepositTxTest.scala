@@ -92,7 +92,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
            val mbAux = Some(KeepRaw(MD(MD.Deposit(addr))))
            MD.parse(mbAux) match {
                case Right(_) => ()
-               case Left(e) => fail(e.getStackTrace.)
+               case Left(e) => fail(e.toString)
            }
         }
     }
