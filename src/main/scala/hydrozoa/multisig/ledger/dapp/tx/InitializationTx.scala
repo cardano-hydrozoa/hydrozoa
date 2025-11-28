@@ -133,8 +133,8 @@ object InitializationTx {
 
         } yield InitializationTx(
           treasuryProduced = TreasuryUtxo(
-            headTokenName = headTokenName,
-            txId = TransactionInput(
+            treasuryTokenName = headTokenName,
+            utxoId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
             ),
