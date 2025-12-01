@@ -125,7 +125,7 @@ object InitializationTx {
                     recipe.env.protocolParams,
                     2
                   ).changeOutputDiffHandler,
-                  evaluator = recipe.env.evaluator,
+                  evaluator = recipe.evaluator,
                   validators = recipe.validators
                 )
 
@@ -147,6 +147,7 @@ object InitializationTx {
                 TransactionUnspentOutput(TransactionInput(finalized.transaction.id, 1), hmrwOutput),
             tokenNames = tokenNames,
             env = env,
+            evaluator = recipe.evaluator,
             validators = validators
           ),
           resolvedUtxos = finalized.resolvedUtxos
@@ -170,7 +171,8 @@ object InitializationTx {
         hmrwCoin: Coin,
         env: Environment,
         validators: Seq[Validator],
-        changePP: ShelleyPaymentPart
+        changePP: ShelleyPaymentPart,
+        evaluator: PlutusScriptEvaluator
     ) {}
 
     sealed trait ParseError
