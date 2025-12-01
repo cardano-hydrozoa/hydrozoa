@@ -1,19 +1,10 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
-
-import hydrozoa.AddressL1
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
-    Deinit,
-    Resolve,
-    Withdraw
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
-    Resolved,
-    Unresolved
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
@@ -22,7 +13,6 @@ import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
@@ -250,7 +240,7 @@ object RuleBasedTreasuryValidator extends Validator {
                         .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
                         .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
-                        case List.Cons((tokenNameAndAmount), none) =>
+                        case List.Cons(tokenNameAndAmount, none) =>
                             val tokenName = tokenNameAndAmount._1
                             val amount = tokenNameAndAmount._2
                             require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)

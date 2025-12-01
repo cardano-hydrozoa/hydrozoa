@@ -17,7 +17,6 @@ import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
@@ -185,7 +184,7 @@ object DisputeResolutionValidator extends Validator {
                 }
 
                 // Check signature
-                require((tx.signatories.contains(votePeer)), VoteMustBeSignedByPeer)
+                require(tx.signatories.contains(votePeer), VoteMustBeSignedByPeer)
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
@@ -252,15 +251,15 @@ object DisputeResolutionValidator extends Validator {
                                 case Cons(h2, t2) =>
                                     require(verifyEd25519Signature(h1, msg, h2))
                                     verifySignatures(t1, t2)
-                                case Nil          => ()
+                                case Nil => ()
                         case Nil => ()
 
                 verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
 
-                //@annotation.unused
-                //val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                // @annotation.unused
+                // val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
                 //    //require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                //)
+                // )
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
@@ -294,7 +293,7 @@ object DisputeResolutionValidator extends Validator {
                         )
                     case _ => fail(VoteOutputDatumCheck)
                 }
-                
+
                 // All other fields of voteInput and voteOutput must match.
                 require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
@@ -387,16 +386,15 @@ object DisputeResolutionValidator extends Validator {
 
                 // If the voteStatus of either continuingInput or removedInput is NoVote,
                 // all the following must be satisfied
-                if (
-                  (continuingDatum.voteStatus match {
-                      case VoteStatus.AwaitingVote(_) => true
-                      case VoteStatus.Voted(_, _) =>
-                          removedDatum.voteStatus match {
-                              case VoteStatus.AwaitingVote(_) => true
-                              case VoteStatus.Voted(_, _)     => false
-                          }
-                  })
-                ) {
+                if continuingDatum.voteStatus match {
+                        case VoteStatus.AwaitingVote(_) => true
+                        case VoteStatus.Voted(_, _) =>
+                            removedDatum.voteStatus match {
+                                case VoteStatus.AwaitingVote(_) => true
+                                case VoteStatus.Voted(_, _)     => false
+                            }
+                    }
+                then {
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs

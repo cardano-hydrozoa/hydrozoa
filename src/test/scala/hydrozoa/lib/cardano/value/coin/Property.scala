@@ -1,16 +1,15 @@
 package hydrozoa.lib.cardano.value.coin
 
+import cats.implicits.catsSyntaxEither
+import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Gen.Arb.given
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Arbitrary, Gen as Gen0, Prop, Properties}
-import hydrozoa.lib.cardano.value.coin.Coin
-import spire.syntax.all.*
+import scala.util.Try
 import spire.laws.arb.given
 import spire.math.{Rational, SafeLong}
-import spire.syntax.eq.*
-import cats.implicits.catsSyntaxEither
-import hydrozoa.lib.cardano.value.coin.Gen.Arb.given
+import spire.syntax.all.*
 
-import scala.util.Try
 import Arbitrary.arbitrary
 import Prop.forAll
 import Gen.*

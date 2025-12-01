@@ -16,8 +16,8 @@ object CardanoBackend {
 
 trait CardanoBackend extends Actor[IO, Request] {
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction({
+        PartialFunction.fromFunction {
             case x: SubmitL1Effects     => ???
             case x: GetCardanoHeadState => ???
-        })
+        }
 }

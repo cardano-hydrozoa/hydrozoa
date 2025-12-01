@@ -1,17 +1,16 @@
 package hydrozoa.lib.cardano.value.multiasset
 
 import algebra.CommutativeGroup
-import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.ledger.{AssetName, ScriptHash}
 import hydrozoa.lib.cardano.value.coin.Coin
 import hydrozoa.lib.cardano.value.multiasset.MultiAsset
 import hydrozoa.lib.cardano.value.multiasset.Multiset.*
+import org.scalatest.funsuite.AnyFunSuite
+import scala.collection.immutable.SortedMap
+import scalus.cardano.ledger.{AssetName, ScriptHash}
 import spire.algebra.{AdditiveMonoid, Order}
 import spire.laws.GroupLaws
 import spire.math.SafeLong
 import spire.syntax.all.*
-
-import scala.collection.immutable.SortedMap
 
 /** These tests use the org.scalactic.Equals instances when comparing things with `===`. */
 class Unit extends AnyFunSuite {

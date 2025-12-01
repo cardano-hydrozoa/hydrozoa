@@ -114,7 +114,9 @@ object EquityShares:
                 treasuryCoin: Coin
             ): Distribution = {
                 // TODO: check this calculation
-                val equity = (treasuryCoin -~ defaultVoteDeposit -~ (voteDeposit *~ SafeLong(self.peerShares.size))).unsafeToCoin
+                val equity = (treasuryCoin -~ defaultVoteDeposit -~ (voteDeposit *~ SafeLong(
+                  self.peerShares.size
+                ))).unsafeToCoin
                 val payouts = self.peerShares.values.map(v =>
                     v.payoutAddress ->
                         Coin.unsafeApply(

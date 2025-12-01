@@ -9,9 +9,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import scalus.builtin.ByteString
-
 import scala.collection.immutable.SortedMap
+import scalus.builtin.ByteString
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
@@ -102,7 +101,7 @@ object InitializationTx {
         val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
 
         val addMetadata =
-            ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
+            ModifyAuxiliaryData(_ => Some(MD.apply(Initialization, headAddress)))
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -152,10 +151,12 @@ object InitializationTx {
             env = env,
             evaluator = recipe.evaluator,
             validators = validators,
-            disputeResolutionPaymentPart =
-              ShelleyPaymentPart.Script(Hash(ByteString.fromArray(DisputeResolutionScript.getScriptHash))),
-            disputeTreasuryPaymentPart =
-              ShelleyPaymentPart.Script(Hash(ByteString.fromArray(RuleBasedTreasuryScript.getScriptHash)))
+            disputeResolutionPaymentPart = ShelleyPaymentPart.Script(
+              Hash(ByteString.fromArray(DisputeResolutionScript.getScriptHash))
+            ),
+            disputeTreasuryPaymentPart = ShelleyPaymentPart.Script(
+              Hash(ByteString.fromArray(RuleBasedTreasuryScript.getScriptHash))
+            )
           ),
           resolvedUtxos = finalized.resolvedUtxos
         )

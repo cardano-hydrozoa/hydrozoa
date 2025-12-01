@@ -234,7 +234,9 @@ object FinalizationTx {
                 ): Result = PartialResult.WithRollouts(
                   input.transaction.treasurySpent,
                   residualTreasuryProduced,
-                  input.transaction.rolloutProduced.focus(_.utxo.input.transactionId).replace(ctx.transaction.id),
+                  input.transaction.rolloutProduced
+                      .focus(_.utxo.input.transactionId)
+                      .replace(ctx.transaction.id),
                   ctx,
                   input.rolloutTxSeqPartial
                 )

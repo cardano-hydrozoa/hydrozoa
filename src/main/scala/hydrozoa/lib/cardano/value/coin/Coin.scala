@@ -1,13 +1,11 @@
 package hydrozoa.lib.cardano.value.coin
 
 import cats.data.NonEmptyList
-import spire.algebra.*
-import spire.math.{Rational, SafeLong}
-import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, LongAlgebra}
-
+import hydrozoa.lib.cardano.value.coin.RationalExtensions.*
 import scala.annotation.targetName
-
-import RationalExtensions.*
+import spire.algebra.*
+import spire.implicits.{LongAlgebra, additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps}
+import spire.math.{Rational, SafeLong}
 
 type Coin = Coin.Coin
 

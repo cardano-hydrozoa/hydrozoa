@@ -200,15 +200,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                   (multisigRegimeUtxo.output.value.coin >= maxNonPlutusTxFee(env.protocolParams))
             )
 
-            props.append({
+            props.append {
                 val actual = iTx.tx.auxiliaryData.map(_.value)
                 val expected =
                     MD.apply(Initialization, iTx.treasuryProduced.address)
                 s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
-            })
+            }
 
-            props.append({
+            props.append {
                 val bytes = iTx.tx.toCbor
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
@@ -218,7 +218,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     .decode(bytes)
                     .to[Transaction]
                     .value)
-            })
+            }
 
             // ===================================
             // FallbackTx Props
@@ -371,14 +371,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
                 given ProtocolVersion = ProtocolVersion.conwayPV
-                
+
                 fbTx.tx == Cbor
                     .decode(bytes)
                     .to[Transaction]
                     .value
             })
 
-            props.append({
+            props.append {
                 val actual = fbTx.tx.auxiliaryData.map(_.value)
                 val expected =
                     MD.apply(
@@ -387,7 +387,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     )
                 s"Unexpected metadata value for fallback tx. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
-            })
+            }
 
             // ===================================
             // Tx Seq Execution
