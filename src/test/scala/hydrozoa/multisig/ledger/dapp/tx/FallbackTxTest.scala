@@ -1,11 +1,10 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import org.scalacheck.Gen
 import scalus.cardano.ledger.*
 import test.*
-import test.Generators.Hydrozoa.{genScriptAddress, genTreasuryUtxo, genTxBuilderConfigAndPeers}
+import test.Generators.Hydrozoa.{genTreasuryUtxo, genTxBuilderConfigAndPeers}
 
 // NOTE: This generator isn't currently used. It makes more sense to test this transaction
 // as part of its transaction sequence. This generator is provided in case there are bugs

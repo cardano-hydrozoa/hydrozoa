@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.lib.cardano.value.coin.RationalExtensions.*
 import scala.annotation.targetName
 import spire.algebra.*
-import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, LongAlgebra}
+import spire.implicits.{LongAlgebra, additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps}
 import spire.math.{Rational, SafeLong}
 
 type Coin = Coin.Coin

@@ -6,7 +6,7 @@ import scala.annotation.targetName
 import scala.collection.immutable.SortedMap
 import scalus.cardano.ledger.AssetName
 import spire.algebra.*
-import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, IntAlgebra}
+import spire.implicits.{IntAlgebra, additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps}
 import spire.math.{Rational, SafeLong}
 
 given Order[AssetName] = Order.fromLessThan(_.bytes < _.bytes)

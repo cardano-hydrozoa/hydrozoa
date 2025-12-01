@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.{Fallback, Initialization}
-import hydrozoa.multisig.ledger.dapp.tx.{minInitTreasuryAda, Metadata as MD}
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, minInitTreasuryAda}
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
 import io.bullet.borer.Cbor

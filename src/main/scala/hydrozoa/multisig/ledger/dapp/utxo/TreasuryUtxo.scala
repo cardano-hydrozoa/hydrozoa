@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import scalus.*
-import scalus.builtin.Data.{toData, FromData, ToData}
+import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline

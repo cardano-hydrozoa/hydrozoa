@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{explain, BuildErrorOr, HasCtx}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.protocol.types.Block
@@ -14,7 +14,7 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.txbuilder.TransactionBuilder.{unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL, ResolvedUtxos}
+import scalus.cardano.txbuilder.TransactionBuilder.{ResolvedUtxos, unsafeCtxTxOutputsL, unsafeCtxTxReferenceInputsL}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, Send, Spend}
 import scalus.|>
 

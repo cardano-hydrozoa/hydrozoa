@@ -143,7 +143,10 @@ object TransactionChain {
         initialState: State,
         mutator: STS.Mutator = CardanoMutator,
         context: Context = Context()
-    ): Either[(TransactionException, Vector[(State, Transaction)]), Vector[(State, Transaction)]] = {
+    ): Either[
+      (TransactionException, Vector[(State, Transaction)]),
+      Vector[(State, Transaction)]
+    ] = {
         def liftTx(
             tx: Transaction
         ): Kendo[EitherThatOr[TransactionException], (State, Transaction)] =

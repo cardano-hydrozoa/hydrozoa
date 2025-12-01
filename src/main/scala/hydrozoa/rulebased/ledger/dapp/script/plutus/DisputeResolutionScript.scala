@@ -17,13 +17,12 @@ import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
 import scalus.prelude.Option.{None, Some}
-import scalus.prelude.{!==, ===, fail, log, require, List, Option, SortedMap, Validator}
+import scalus.prelude.{!==, ===, List, Option, SortedMap, Validator, fail, log, require}
 import scalus.uplc.DeBruijnedProgram
 
 @Compile

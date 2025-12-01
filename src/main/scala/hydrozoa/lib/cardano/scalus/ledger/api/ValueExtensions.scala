@@ -4,7 +4,7 @@ import scalus.Compile
 import scalus.ledger.api.v1.Value.{-, zero}
 import scalus.ledger.api.v3.{PolicyId, TokenName, Value}
 import scalus.prelude.List.Cons
-import scalus.prelude.{fail, require, List}
+import scalus.prelude.{List, fail, require}
 
 @Compile
 object ValueExtension:

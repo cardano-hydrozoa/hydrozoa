@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
 import com.bloxbean.cardano.client.util.HexUtil
-import com.github.plokhotnyuk.jsoniter_scala.core.{readFromStream, JsonReader, JsonValueCodec, JsonWriter}
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonValueCodec, JsonWriter, readFromStream}
 import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
 import scalus.prelude.List as SList
 import supranational.blst.{P1, P2}

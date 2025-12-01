@@ -30,7 +30,7 @@ import scalus.ledger.api.v1.StakingCredential
 import scalus.ledger.api.v1.StakingCredential.StakingHash
 import scalus.ledger.api.{v1, v3}
 import scalus.prelude.Option as ScalusOption
-import scalus.{|>, ledger, prelude}
+import scalus.{ledger, prelude, |>}
 
 //////////////////////////////////
 // "Empty" values used for building up real values and for testing

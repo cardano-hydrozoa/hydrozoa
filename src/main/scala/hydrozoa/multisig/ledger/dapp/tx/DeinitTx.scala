@@ -4,7 +4,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.config.EquityShares.MultisigRegimeDistribution
 import hydrozoa.lib.cardano.value.coin.Coin
 import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{explain, BuildErrorOr}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
 import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
 import scala.Function.const

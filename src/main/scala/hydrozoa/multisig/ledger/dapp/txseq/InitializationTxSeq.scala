@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
-import hydrozoa.{ensureMinAda, maxNonPlutusTxFee, VerificationKeyBytes}
+import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
