@@ -12,6 +12,13 @@ lint:
 lint-check:
   sbt "scalafixAll --check"
 
-lint-fmt-check:
+nixfmt:
+  nixfmt flake.nix
+
+nixfmt-check:
+  nixfmt flake.nix --check	
+
+precommit:
   just lint-check
   just fmt-check  
+  just nixfmt-check
