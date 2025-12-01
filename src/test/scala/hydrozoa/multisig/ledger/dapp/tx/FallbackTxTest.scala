@@ -1,4 +1,4 @@
-package hydrozoa.multisig.ledger.dapp.txor 
+package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
