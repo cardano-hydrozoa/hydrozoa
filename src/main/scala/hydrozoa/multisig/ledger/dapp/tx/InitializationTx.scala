@@ -8,6 +8,9 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import scalus.builtin.ByteString
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -148,7 +151,11 @@ object InitializationTx {
             tokenNames = tokenNames,
             env = env,
             evaluator = recipe.evaluator,
-            validators = validators
+            validators = validators,
+            disputeResolutionPaymentPart =
+              ShelleyPaymentPart.Script(Hash(ByteString.fromArray(DisputeResolutionScript.getScriptHash))),
+            disputeTreasuryPaymentPart =
+              ShelleyPaymentPart.Script(Hash(ByteString.fromArray(RuleBasedTreasuryScript.getScriptHash)))
           ),
           resolvedUtxos = finalized.resolvedUtxos
         )

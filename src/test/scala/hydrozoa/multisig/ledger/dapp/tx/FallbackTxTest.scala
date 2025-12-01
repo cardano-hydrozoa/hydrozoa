@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import org.scalacheck.Gen
 import scalus.cardano.ledger.*
 import test.*
@@ -14,15 +15,11 @@ val genFallbackTxRecipe: Gen[(FallbackTx.Recipe, NonEmptyList[TestPeer])] =
     for {
         (config, peers) <- genTxBuilderConfigAndPeers()
         treasuryUtxo <- genTreasuryUtxo(config)
-        disputeTreasuryPP <- genScriptAddress(config.env.network).map(_.payment)
-        disputeResolutionPP <- genScriptAddress(config.env.network).map(_.payment)
     } yield (
       FallbackTx.Recipe(
         config = config,
         treasuryUtxo = treasuryUtxo,
         tallyFeeAllowance = Coin(1_000_000L),
-        disputeTreasuryPaymentPart = disputeTreasuryPP,
-        disputeResolutionPaymentPart = disputeResolutionPP,
         votingDuration = 1L
       ),
       peers

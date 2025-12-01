@@ -143,7 +143,7 @@ object TransactionChain {
         initialState: State,
         mutator: STS.Mutator = CardanoMutator,
         context: Context = Context()
-    ): Either[(TransactionException, Seq[(State, Transaction)]), Seq[(State, Transaction)]] = {
+    ): Either[(TransactionException, Vector[(State, Transaction)]), Vector[(State, Transaction)]] = {
         def liftTx(
             tx: Transaction
         ): Kendo[EitherThatOr[TransactionException], (State, Transaction)] =
@@ -156,14 +156,14 @@ object TransactionChain {
             )
         txs match {
             // No Txs ==> No results
-            case Nil => Right(Seq.empty)
+            case Nil => Right(Vector.empty)
             // Head tx: apply it to the initial state
             case headTx +: tailTxs =>
                 for {
                     state2 <- mutator
                         .transit(context, initialState, headTx)
                         .left
-                        .map((_, Seq.empty))
+                        .map((_, Vector.empty))
                     res <- kendoObserve(tailTxs.map(liftTx)).run((state2, headTx))
                 } yield res
 

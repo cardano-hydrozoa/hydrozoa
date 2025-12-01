@@ -97,7 +97,7 @@ object FallbackTx {
         )
 
         def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-          address = recipe.disputeResolutionAddress,
+          address = recipe.config.disputeResolutionAddress,
           value = Value(recipe.tallyFeeAllowance, mkVoteToken(1)),
           datumOption = Some(Inline(datum)),
           scriptRef = None
@@ -159,7 +159,7 @@ object FallbackTx {
 
         val createDisputeTreasury = Send(
           Babbage(
-            address = disputeTreasuryAddress,
+            address = config.disputeTreasuryAddress,
             value = treasuryUtxo.value,
             datumOption = Some(Inline(newTreasuryDatum.toData)),
             scriptRef = None
@@ -170,7 +170,7 @@ object FallbackTx {
             Some(
               MD.apply(
                 Fallback,
-                disputeTreasuryAddress
+                config.disputeTreasuryAddress
               )
             )
         )
@@ -239,25 +239,9 @@ object FallbackTx {
     case class Recipe(
         config: Tx.Builder.Config,
         treasuryUtxo: TreasuryUtxo,
-        // TODO: Make both PaymentParts ShelleyPaymentPart.Script?
-        disputeTreasuryPaymentPart: ShelleyPaymentPart,
-        disputeResolutionPaymentPart: ShelleyPaymentPart,
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
         votingDuration: PosixTime
-    ) {
-
-        val disputeTreasuryAddress = ShelleyAddress(
-          network = config.env.network,
-          payment = disputeTreasuryPaymentPart,
-          delegation = Null
-        )
-
-        val disputeResolutionAddress = ShelleyAddress(
-          network = config.env.network,
-          payment = disputeResolutionPaymentPart,
-          delegation = Null
-        )
-    }
+    )
 }
