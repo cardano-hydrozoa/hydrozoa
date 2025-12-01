@@ -33,7 +33,8 @@
           };
         };
       in rec {
-        devShell = pkgs.mkShell {
+        devShell = 
+		pkgs.mkShell {
           JAVA_HOME = "${graalvm}";
           JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
@@ -55,7 +56,9 @@
             #    https://github.com/oracle/visualvm/issues/403		 
             visualvm
           ];
-            inherit (pre-commit-check) shellHook;
+	  shellHook = ''
+		${pre-commit-check.shellHook}
+ 	  '';	
         };
       }));
 }
