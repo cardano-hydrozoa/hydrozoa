@@ -5,9 +5,11 @@ import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
+
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.*
@@ -29,17 +31,17 @@ final case class FallbackTx(
     // because its a rules-based treasury utxo.
     // The rest should have domain-specific types as well. See:
     // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
-    treasuryProduced: TransactionUnspentOutput,
-    consumedHMRWUtxo: TransactionUnspentOutput,
-    producedDefaultVoteUtxo: TransactionUnspentOutput,
-    producedPeerVoteUtxos: NonEmptyList[TransactionUnspentOutput],
-    producedCollateralUtxos: NonEmptyList[TransactionUnspentOutput],
+    treasuryProduced: Utxo,
+    consumedHMRWUtxo: Utxo,
+    producedDefaultVoteUtxo: Utxo,
+    producedPeerVoteUtxos: NonEmptyList[Utxo],
+    producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction
 ) extends Tx {
-    def producedVoteUtxos: NonEmptyList[TransactionUnspentOutput] =
+    def producedVoteUtxos: NonEmptyList[Utxo] =
         NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
 
-    def producedNonTreasuryUtxos: NonEmptyList[TransactionUnspentOutput] =
+    def producedNonTreasuryUtxos: NonEmptyList[Utxo] =
         producedVoteUtxos ++ producedCollateralUtxos.toList
 }
 
@@ -71,6 +73,21 @@ object FallbackTx {
         //////////////////////////////////////
         // Pre-processing
 
+
+
+        val disputeTreasuryAddress = ShelleyAddress(
+            network = config.env.network,
+            payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
+            delegation = Null
+        )
+
+        val disputeResolutionAddress = ShelleyAddress(
+            network = config.env.network,
+            payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
+            delegation = Null
+        )
+
+
         val multisigDatum: TreasuryUtxo.Datum = treasuryUtxo.datum
 
         val hns = headNativeScript
@@ -97,7 +114,7 @@ object FallbackTx {
         )
 
         def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-          address = recipe.disputeResolutionAddress,
+          address = disputeResolutionAddress,
           value = Value(recipe.tallyFeeAllowance, mkVoteToken(1)),
           datumOption = Some(Inline(datum)),
           scriptRef = None
@@ -203,17 +220,17 @@ object FallbackTx {
               treasurySpent = treasuryUtxo,
               //
               treasuryProduced =
-                  TransactionUnspentOutput(TransactionInput(txId, 0), createDisputeTreasury.output),
+                  Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
               consumedHMRWUtxo = spendHMRW.utxo,
               producedDefaultVoteUtxo =
-                  TransactionUnspentOutput(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
+                  Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
               producedPeerVoteUtxos = createPeerVoteUtxos
                   .map(_.output)
                   .zipWithIndex
                   .map(outputsZipped => {
                       val output = outputsZipped._1
                       val actualIndex = outputsZipped._2 + 2
-                      TransactionUnspentOutput(
+                      Utxo(
                         TransactionInput(txId, actualIndex),
                         output
                       )
@@ -224,7 +241,7 @@ object FallbackTx {
                   .map(outputsZipped => {
                       val output = outputsZipped._1
                       val actualIndex = outputsZipped._2 + 2 + headNativeScript.numSigners
-                      TransactionUnspentOutput(
+                      Utxo(
                         TransactionInput(txId, actualIndex),
                         output
                       )
@@ -237,25 +254,9 @@ object FallbackTx {
     case class Recipe(
         config: Tx.Builder.Config,
         treasuryUtxo: TreasuryUtxo,
-        // TODO: Make both PaymentParts ShelleyPaymentPart.Script?
-        disputeTreasuryPaymentPart: ShelleyPaymentPart,
-        disputeResolutionPaymentPart: ShelleyPaymentPart,
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
         votingDuration: PosixTime
-    ) {
-
-        val disputeTreasuryAddress = ShelleyAddress(
-          network = config.env.network,
-          payment = disputeTreasuryPaymentPart,
-          delegation = Null
-        )
-
-        val disputeResolutionAddress = ShelleyAddress(
-          network = config.env.network,
-          payment = disputeResolutionPaymentPart,
-          delegation = Null
-        )
-    }
+    )
 }

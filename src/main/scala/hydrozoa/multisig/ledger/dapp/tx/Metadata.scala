@@ -2,10 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.encodeByteString
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import io.bullet.borer.Cbor
+import io.bullet.borer
+import io.bullet.borer.derivation.ArrayBasedCodecs.derived
+import io.bullet.borer.{Cbor, Decoder, Encoder}
+import scalus.builtin.ByteString
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AuxiliaryData, KeepRaw, Metadatum, Transaction, TransactionInput, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, KeepRaw, Metadatum, OriginalCborByteArray, Transaction, TransactionInput, Word64, given}
+import scalus.cardano.ledger.ProtocolVersion
 
 import scala.util.Try
 
@@ -17,94 +21,137 @@ import scala.util.Try
  * 2.) To assist indexers in parsing transactions.
  *
  * The main idea is that we want to provide some helpful information in a well-known place so that we don't have to
- * waste as many resources searching through the transaction in order to determine whether its malformed or not.
+ * waste as many resources searching through the transaction in order to determine whether it's malformed or not.
  *
  * The general format of the metadata consists of:
  *
  * - The CIP67 Head Tag (WARNING: this currently isn't compliant with the specification: https://github.com/cardano-hydrozoa/hydrozoa/issues/260)
  * - The name of the transaction type
- * - The head address
- * - A list of transaction-specific datums, cbor-encoded as byte strings
+ * - A cbor-enbcoded payload, represented as a Metadatum.List of Metadatum.Bytes, where each element is at most
+ *   64 bytes long.
  *
  * It should look something like:
  *
  * {
  * $CIP67HeadTag: {
- * $TransactionTypeName: [ $headAddressInCbor, $CBORDatum1, $CBORDatum2, ...]
+ * $TransactionTypeName: [ $cborChunk1, $cborChunk2, $cborChunk3, ...]
  * }
  * }
  */
+// FIXME: This whole thing should be probably be a trait
 object Metadata {
+
+    given Encoder[ShelleyAddress] =
+      summon[Encoder[Address]].asInstanceOf[Encoder[ShelleyAddress]]
+
+    given Decoder[ShelleyAddress] =
+      summon[Decoder[Address]].asInstanceOf[Decoder[ShelleyAddress]]
+    
     sealed trait L1TxTypes {
         val headAddress: ShelleyAddress
     }
 
     case class Deposit(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Deposit] = Encoder.derived
+    given depositDecoder(using OriginalCborByteArray, ProtocolVersion): Decoder[Deposit] =
+      Decoder.derived[Deposit]
 
     case class Fallback(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Fallback] = Encoder.derived
+    given fallbackDecoder(using OriginalCborByteArray): Decoder[Fallback] =
+      Decoder.derived[Fallback]
 
     case class Finalization(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Finalization] = Encoder.derived
+    given finalizationDecoder(using OriginalCborByteArray): Decoder[Finalization] =
+      Decoder.derived[Finalization]
 
     case class Initialization(
         override val headAddress: ShelleyAddress,
+        treasuryOutputIndex : Int,
+        multisigRegimeOutputIndex: Int,
         seedInput: TransactionInput
     ) extends L1TxTypes
+    given Encoder[Initialization] = Encoder.derived
+    given initializationDecoder(using OriginalCborByteArray): Decoder[Initialization] =
+      Decoder.derived[Initialization]
 
     case class RefundPostDated(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[RefundPostDated] = Encoder.derived
+    given refundPostDatedDecoder(using OriginalCborByteArray): Decoder[RefundPostDated] =
+     Decoder.derived[RefundPostDated]
 
     case class RefundImmediate(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[RefundImmediate] = Encoder.derived
+    given refundImmediateDecoder(using OriginalCborByteArray): Decoder[RefundImmediate] =
+      Decoder.derived[RefundImmediate]
 
     case class Rollout(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Rollout] = Encoder.derived
+    given rolloutDecoder(using OriginalCborByteArray): Decoder[Rollout] =
+      Decoder.derived[Rollout]
 
     case class Settlement(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Settlement] = Encoder.derived
+    given settlementDecoder(using OriginalCborByteArray) : Decoder[Settlement] =
+      Decoder.derived[Settlement]
 
-    // TODO: Also include the head instance ID
+    /**
+     * Create the auxiliary data for a specific transaction by cbor-encoding the desired metadata and
+     * chunking it into a list of bytes, where each element is no more that 64 bytes long.
+     * @param txType
+     * @return
+     */
     def apply(txType: L1TxTypes): AuxiliaryData = {
 
+        // The max size of a metadata bytestring is 64 bytes. Thus, we chunk longer byte arrays into a list of
+        // bytestrings
+        def chunker(byteArray : Array[Byte]) : Metadatum.List = {
+            val chunked = byteArray.grouped(64).toIndexedSeq
+            val bytes = chunked.map(ba => Metadatum.Bytes(ByteString.fromArray(ba)))
+            Metadatum.List(bytes)
+        }
+
         // The common structure is a metadata map, labeled by the CIP67 "HEAD" tag, pointing a map with the
-        // transaction name, followed by a list of bytestrings starting with the head address.
-        // Just pass in the extra stuff you want encoded as varargs.
-        def helper(name: String, list: Metadatum.Bytes*): AuxiliaryData =
+        // transaction name, followed by the cbor-encoded metadata chunked into 64 bytes in a list
+        def helper[A](name: String, data: A)(using encoder: Encoder[A]): AuxiliaryData = {
+            val byteArray = Cbor.encode(data).toByteArray
             MD(
               Map(
                 Word64(CIP67.Tags.head) -> Metadatum.Map(
                   entries = Map(
                     Metadatum.Text(name) ->
-                        Metadatum.List(
-                            list.toIndexedSeq
-                                .prepended(
-                                    Metadatum.Bytes(encodeByteString(txType.headAddress.asInstanceOf[Address]))
-                        )
+                      chunker(byteArray)
                   )
                 )
               )
             )
-            )
+        }
 
         txType match {
-            case Deposit(_)      => helper("Deposit")
-            case Fallback(_)     => helper("Fallback")
-            case Finalization(_) => helper("Finalization")
-            case Initialization(_, seedInput) =>
-                helper("Initialization", Metadatum.Bytes(encodeByteString(seedInput)))
-            case RefundPostDated(_) => helper("RefundPostDated")
-            case RefundImmediate(_) => helper("RefundImmediate")
-            case Rollout(_)         => helper("Rollout")
-            case Settlement(_)      => helper("Settlement")
+            case x : Deposit      => helper("Deposit", x)
+            case x : Fallback     => helper("Fallback", x)
+            case x : Finalization => helper("Finalization", x)
+            case x : Initialization => helper("Initialization", x)
+            case x : RefundPostDated => helper("RefundPostDated", x)
+            case x : RefundImmediate => helper("RefundImmediate", x)
+            case x : Rollout         => helper("Rollout", x )
+            case x : Settlement     => helper("Settlement", x)
         }
     }
 
-    def parse(txSerialized: Array[Byte]): Either[ParseError, L1TxTypes] =
+    def parse(txSerialized: Array[Byte])(using protocolVersion: ProtocolVersion): Either[ParseError, L1TxTypes] =
         for {
             tx <- Try(Transaction.fromCbor(txSerialized))
-                .toEither.left.map(CborDecodingError("could not decode serialized tx", _))
+                .toEither.left.map(CborDecodingError(_))
             res <- parse(tx)
         } yield res
 
-    def parse(tx: Transaction): Either[ParseError, L1TxTypes] =
+    def parse(tx: Transaction)(using protocolVersion: ProtocolVersion): Either[ParseError, L1TxTypes] =
         parse(tx.auxiliaryData)
 
-    def parse(mbAuxData: Option[KeepRaw[AuxiliaryData]]): Either[ParseError, L1TxTypes] =
+    def parse(mbAuxData: Option[KeepRaw[AuxiliaryData]])(using protocolVersion: ProtocolVersion): 
+     Either[ParseError, L1TxTypes] =
         for {
             ad <- mbAuxData.toRight(MissingAuxData)
             md: MD <- ad.value match {
@@ -122,7 +169,11 @@ object Metadata {
         } yield res
 
     // This is a private helper for parsing once we've destructured to the "inner" map (the value of the CIP67 key)
-    private def parseMetadataMap(mdMap: Metadatum.Map): Either[ParseError, L1TxTypes] = for {
+    private def parseMetadataMap(mdMap: Metadatum.Map)(using protocolVersion: ProtocolVersion): Either[ParseError, L1TxTypes] =
+      def helper[A](cborData : Array[Byte])(using Decoder[A]) =
+        Try(Cbor.decode(cborData).to[A].value).toEither.left.map(CborDecodingError(_))
+
+      for {
         _ <- if mdMap.entries.size == 1 then Right(())
         else Left(WrongNumberOfTxTypeKeys(mdMap.entries.size))
 
@@ -132,46 +183,33 @@ object Metadata {
             case m => Left(MalformedTxTypeKey(s"Expected a Metadatum.Text, but got a: ${m}"))
         }
 
-        valueList <- mdMap.entries.head._2 match {
+        metadataList <- mdMap.entries.head._2 match {
             case Metadatum.List(l) => Right(l)
-            case _                 => Left(ValueListError) // Not a list of values
+            case _                 => Left(MetadataNotListError) // Not a list of values
         }
 
-        txType <- txTypeKey match {
-            case "Initialization" =>
-                valueList match {
-                    case IndexedSeq(headAddressBS: Metadatum.Bytes, seedInputBS: Metadatum.Bytes) =>
-                        for {
-                            ha <- Try(
-                              Cbor
-                                  .decode(headAddressBS.value.bytes)
-                                  .to[Address]
-                                  .value
-                                  .asInstanceOf[ShelleyAddress]
-                            ).toEither.left
-                                .map(CborDecodingError("could not decode head address for Initialization tx", _))
-                            si <- Try(
-                              Cbor.decode(seedInputBS.value.bytes).to[TransactionInput].value
-                            ).toEither.left.map(CborDecodingError("could not decode seed input for initialization tx", _))
-                        } yield Initialization(ha, si)
+        // Concat the chunked CBOR
+        cborData <- metadataList
+            .foldLeft(Right(Array.empty[Byte]))(
+               (acc : Either[ParseError, Array[Byte]], elem : Metadatum) =>
+                elem match {
+                     case x: Metadatum.Bytes => acc.map(_.appendedAll(x.value.bytes))
+                     case _ => Left(MetadataNotBytesError)
+                  }
+            )
 
-                }
-            case "Deposit" =>
-                valueList match {
-                    case IndexedSeq(headAddressBS: Metadatum.Bytes) =>
-                        for {
-                            ha <- Try(
-                                Cbor
-                                    .decode(headAddressBS.value.bytes)
-                                    .to[Address]
-                                    .value
-                                    .asInstanceOf[ShelleyAddress])
-                                .toEither
-                                .left
-                                .map(CborDecodingError("could not decode head address for deposit tx", _))
-                        } yield Deposit(ha)
-                }
-            case s => Left(MalformedTxTypeKey(s"TxTypeKey did not match the expected transaction names. Got: $s"))
+        given OriginalCborByteArray = OriginalCborByteArray(cborData)
+
+        txType <- txTypeKey match {
+          case "Deposit" => helper[Deposit](cborData)
+          case "Fallback" => helper[Fallback](cborData)
+          case "Finalization" => helper[Finalization](cborData)
+          case "Initialization" => helper[Initialization](cborData)
+          case "RefundPostDated" => helper[RefundPostDated](cborData)
+          case "RefundImmediate" => helper[RefundImmediate](cborData)
+          case "Rollout" => helper[Rollout](cborData)
+          case "Settlement" => helper[Settlement](cborData)
+          case s => Left(MalformedTxTypeKey(s"TxTypeKey did not match the expected transaction names. Got: $s"))
         }
 
     } yield txType
@@ -189,6 +227,7 @@ object Metadata {
     case class UnexpectedTxType(actual: Metadata.L1TxTypes, expected: String)
         extends ParseError
 
-    case class CborDecodingError(msg: String, wrapped: Throwable) extends ParseError
-    case object ValueListError extends ParseError
+    case class CborDecodingError(wrapped: Throwable) extends ParseError
+    case object MetadataNotListError extends ParseError
+    case object MetadataNotBytesError extends ParseError
 }

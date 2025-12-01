@@ -21,8 +21,6 @@ val genFallbackTxRecipe: Gen[(FallbackTx.Recipe, NonEmptyList[TestPeer])] =
         config = config,
         treasuryUtxo = treasuryUtxo,
         tallyFeeAllowance = Coin(1_000_000L),
-        disputeTreasuryPaymentPart = disputeTreasuryPP,
-        disputeResolutionPaymentPart = disputeResolutionPP,
         votingDuration = 1L
       ),
       peers

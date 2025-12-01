@@ -5,17 +5,18 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
-import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Tx, minInitTreasuryAda, Metadata as MD}
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
-import scala.collection.immutable.SortedMap
-import scala.collection.mutable
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -27,6 +28,9 @@ import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TransactionChain.observeTxChain
+
+import scala.collection.immutable.SortedMap
+import scala.collection.mutable
 
 // TODO: make the spentUtxos contain arbitrary assets, not just ada.
 val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
@@ -41,10 +45,10 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
             minInitTreasuryAda
                 + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
           )
-        ).map(x => TransactionUnspentOutput(x._1, x._2))
+        ).map(x => Utxo(x._1, x._2))
         otherSpentUtxos <- Gen
             .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
-            .map(_.map(x => TransactionUnspentOutput(x._1, x._2)))
+            .map(_.map(x => Utxo(x._1, x._2)))
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
 
@@ -59,17 +63,12 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
                   - minPubkeyAda().value
             )
             .map(Coin(_))
-
-        disputeTreasuryPP <- genScriptAddress(testTxBuilderEnvironment.network).map(_.payment)
-        disputeResolutionPP <- genScriptAddress(testTxBuilderEnvironment.network).map(_.payment)
-
+        
     } yield (
       InitializationTxSeq.Builder.Args(
         spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
         initialDeposit = initialDeposit,
         peers = peers.map(_.wallet.exportVerificationKeyBytes),
-        disputeTreasuryPaymentPart = disputeTreasuryPP,
-        disputeResolutionPaymentPart = disputeResolutionPP,
         env = testTxBuilderEnvironment,
         evaluator = testEvaluator,
         validators = testValidators,
@@ -86,6 +85,24 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
         p.withMinSuccessfulTests(10_000)
     }
 
+    given ProtocolVersion = ProtocolVersion.conwayPV
+
+
+    // NOTE (Peter, 2025-11-28): These properties primarily test the built transaction with coherence against
+    // the "semantic" InitializationTx value produced.
+    //
+    // This is an important property: the actual cardano transaction that gets submitted must correspond to
+    // the semantic tx we deal with internally. However, it is not the only property: we should also be checking
+    // that the semantic transaction reflects what we expect, i.e., we should perform "black-box testing" to
+    // ensure that the multisig regime utxo is actually carrying the correct script, with the correct value, and
+    // sitting at the correct address.
+    //
+    // I do some of this during the parsing. But in general, it's a tedious process to ensure that
+    //     intention <=> cardano transaction <=> semantic transaction
+    // are all coherent in every possible way.
+    //
+    // All this to say: this test should not be considered exhaustive at this time. It's just here to give us
+    // a reasonable level of confidence that this won't fall over the first time we run it.
     val _ = property("Initialization Tx Seq Happy Path") = forAll(genArgs) { (args, testPeers) =>
         {
             // Collect all the props in a mutable buffer, and then combine them at the end
@@ -104,15 +121,27 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val fbTxBody = fbTx.tx.body.value
 
             val multisigTreasuryUtxo = iTx.treasuryProduced
-            val multisigRegimeUtxo = iTx.resultingConfig.headNativeScriptReferenceInput
-            val headTokenName = CIP67.TokenNames(spentUtxos.seedUtxo.input).headTokenName
-            val mulitsigRegimeTokenName =
+            val multisigRegimeUtxo = iTx.multisigRegimeWitness
+            val expectedHeadTokenName = CIP67.TokenNames(spentUtxos.seedUtxo.input).headTokenName
+            val expectedMulitsigRegimeTokenName =
                 CIP67.TokenNames(spentUtxos.seedUtxo.input).multisigRegimeTokenName
             val expectedHeadNativeScript =
                 HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
-            val config = iTx.resultingConfig
+            val config = Tx.Builder.Config(
+                headNativeScript = expectedHeadNativeScript,
+                headNativeScriptReferenceInput = multisigRegimeUtxo,
+                tokenNames = iTx.tokenNames,
+                env = testTxBuilderEnvironment,
+                evaluator = testEvaluator,
+                validators = testValidators
+            )
             val hns = config.headNativeScript
+            val disputeResolutionAddress = ShelleyAddress(
+                network = config.env.network,
+                payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
+                delegation = Null
+            )
 
             import config.tokenNames.*
 
@@ -138,7 +167,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       MultiAsset(
                         SortedMap(
                           expectedHeadNativeScript.policyId ->
-                              SortedMap(headTokenName -> 1L, mulitsigRegimeTokenName -> 1L)
+                              SortedMap(expectedHeadTokenName -> 1L, expectedMulitsigRegimeTokenName -> 1L)
                         )
                       )
                     )
@@ -153,6 +182,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             )
 
             props.append(
+                "initialization tx treasury output is out index 0" |:
+                    expectedTreasuryIndex == 0
+            )
+
+            props.append(
               "initialization tx id coherent with produced treasury output" |:
                   (iTx.tx.id == iTx.treasuryProduced.asUtxo.input.transactionId)
             )
@@ -162,7 +196,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                   (iTx.treasuryProduced.asUtxo.output.value.assets ==
                       MultiAsset(
                         SortedMap(
-                          expectedHeadNativeScript.policyId -> SortedMap(headTokenName -> 1L)
+                            expectedHeadNativeScript.policyId -> SortedMap(expectedHeadTokenName -> 1L)
                         )
                       ))
             )
@@ -175,7 +209,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             props.append(
               "initialization tx contains MR output at correct index" |:
                   (iTxOutputs(multisigRegimeUtxo.input.index) ==
-                      multisigRegimeUtxo.output)
+                      multisigRegimeUtxo.output) && multisigRegimeUtxo.input.index == 1
             )
 
             props.append(
@@ -189,7 +223,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                   MultiAsset(
                     SortedMap(
                       expectedHeadNativeScript.policyId -> SortedMap(
-                        mulitsigRegimeTokenName -> 1L
+                          expectedMulitsigRegimeTokenName -> 1L
                       )
                     )
                   )
@@ -203,11 +237,20 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             props.append({
                 val actual = iTx.tx.auxiliaryData.map(_.value)
                 val expected =
-                    MD.apply(Initialization(iTx.treasuryProduced.address, args.spentUtxos.seedUtxo.input))
+                    MD.apply(Initialization(
+                        headAddress = iTx.treasuryProduced.address,
+                        treasuryOutputIndex = 0,
+                        multisigRegimeOutputIndex = 1,
+                        seedInput = args.spentUtxos.seedUtxo.input))
                 s"Unexpected metadata value. Actual: $actual, expected: $expected" |: actual
                     .contains(expected)
             })
 
+            // ============
+            // Parsing
+            // ============
+
+            // Cbor
             props.append({
                 val bytes = iTx.tx.toCbor
 
@@ -218,6 +261,70 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     .decode(bytes)
                     .to[Transaction]
                     .value)
+            })
+
+            // Metadata
+            props.append({
+                val expectedMetadata =
+                    Right(MD.Initialization(
+                        headAddress = expectedHeadNativeScript.mkAddress(args.env.network),
+                        seedInput = args.spentUtxos.seedUtxo.input,
+                        treasuryOutputIndex = 0, multisigRegimeOutputIndex = 1))
+
+
+                "Metadata parsing failed" |: (MD.parse(iTx.tx.auxiliaryData) == expectedMetadata)
+            })
+
+            // Semantic parsing
+            props.append({
+                val expectedTx: InitializationTx = InitializationTx(
+                    treasuryProduced = TreasuryUtxo(
+                        treasuryTokenName = expectedHeadTokenName,
+                        utxoId = TransactionInput(iTx.tx.id, 0),
+                        address = expectedHeadNativeScript.mkAddress(env.network),
+                        datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+                        value = Value(initialDeposit, MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L))))
+                    ),
+
+                    //                    resultingConfig = Tx.Builder.Config(
+                    //                        headNativeScript = expectedHeadNativeScript,
+                    //                        headNativeScriptReferenceInput = Utxo(TransactionInput(iTx.tx.id, 1),
+                    //                            Babbage(
+                    //                                expectedHeadNativeScript.mkAddress(env.network),
+                    //                                Value(
+                    //                                    // NOTE: The coin calculation here is self-referential; we're testing its value against itself
+                    //                                    // rather than calculating black-box.
+                    //                                    coin = iTx.tx.body.value.outputs(1).value.value.coin,
+                    //                                    assets = MultiAsset(assets = SortedMap(expectedHeadNativeScript.policyId
+                    //                                        -> SortedMap(multisigRegimeTokenName -> 1L)))),
+                    //                                None,
+                    //                                Some(ScriptRef(expectedHeadNativeScript.script))
+                    //                            ))
+                    multisigRegimeWitness = Utxo(TransactionInput(iTx.tx.id, 1), TransactionOutput(
+                        expectedHeadNativeScript.mkAddress(testNetwork),
+                        value = multisigRegimeUtxo.output.value,
+                        datumOption = None,
+                        scriptRef = Some(ScriptRef(expectedHeadNativeScript.script))
+                    )),
+                    tokenNames = CIP67.TokenNames(spentUtxos.seedUtxo.input),
+
+                    // NOTE: resolved utxos are also self-referential
+                    resolvedUtxos = iTx.resolvedUtxos,
+                    // NOTE: Tx is also self-referential
+                    tx = iTx.tx
+
+                )
+
+                def mockResolver(inputs: Seq[TransactionInput]) = iTx.resolvedUtxos
+
+                val parseResult = InitializationTx.parse(peerKeys = peers,
+                    expectedNetwork = Testnet,
+                    tx = iTx.tx,
+                    resolver = mockResolver)
+
+                ("Semantic transaction parsed from generic transaction in unexpected way." +
+                    s"\n\n Expected parse result = ${Right(expectedTx)} \n\n, actual parse result = ${parseResult}" |:
+                    parseResult == Right(expectedTx))
             })
 
             // ===================================
@@ -245,7 +352,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     MultiAsset(
                       SortedMap(
                         hns.policyId -> SortedMap(
-                          mulitsigRegimeTokenName -> -1L,
+                            expectedMulitsigRegimeTokenName -> -1L,
                           voteTokenName -> (peers.length.toLong + 1L)
                         )
                       )
@@ -272,6 +379,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             )
 
             props.append("default vote utxo with min ada and vote token created" |: {
+ 
+
                 val defaultVoteUtxo = TransactionUnspentOutput(
                   TransactionInput(transactionId = fbTx.tx.id, index = 1),
                   Babbage(
@@ -406,6 +515,24 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val observationRes = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
 
             props.append("Sequence Observation successful" |: observationRes.isRight)
+
+            // Semantic parsing of entire sequence
+            props.append({
+                val txSeq = (iTx.tx, fbTx.tx)
+
+                def mockResolver(inputs: Seq[TransactionInput]) = iTx.resolvedUtxos
+
+                val parseRes = InitializationTxSeq.parse(txSeq, expectedNetwork = Testnet, peerKeys = peers,
+                    expectedTallyFeeAllowance = args.tallyFeeAllowance,
+                    expectedVotingDuration = args.votingDuration,
+                    env = args.env,
+                    evaluator = args.evaluator,
+                    validators = args.validators,
+                    resolver = mockResolver)
+
+                s"InitializationTxSeq should parse successfully $parseRes" |: parseRes.isRight
+            }
+            )
 
             props.fold(Prop(true))(_ && _)
         }

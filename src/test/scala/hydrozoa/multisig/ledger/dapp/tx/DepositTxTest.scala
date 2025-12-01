@@ -85,6 +85,8 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
         PropertyCheckConfiguration(minSuccessful = 100)
 
+    given pv : ProtocolVersion =  ProtocolVersion.conwayPV
+    
     // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="
 
     test("Roundtrip deposit metadata"){
