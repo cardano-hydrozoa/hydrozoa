@@ -73,21 +73,6 @@ object FallbackTx {
         //////////////////////////////////////
         // Pre-processing
 
-
-
-        val disputeTreasuryAddress = ShelleyAddress(
-            network = config.env.network,
-            payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
-            delegation = Null
-        )
-
-        val disputeResolutionAddress = ShelleyAddress(
-            network = config.env.network,
-            payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
-            delegation = Null
-        )
-
-
         val multisigDatum: TreasuryUtxo.Datum = treasuryUtxo.datum
 
         val hns = headNativeScript
@@ -114,7 +99,7 @@ object FallbackTx {
         )
 
         def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-          address = disputeResolutionAddress,
+          address = DisputeResolutionScript.address(network),
           value = Value(recipe.tallyFeeAllowance, mkVoteToken(1)),
           datumOption = Some(Inline(datum)),
           scriptRef = None
@@ -176,7 +161,7 @@ object FallbackTx {
 
         val createDisputeTreasury = Send(
           Babbage(
-            address = disputeTreasuryAddress,
+            address = RuleBasedTreasuryScript.address(network),
             value = treasuryUtxo.value,
             datumOption = Some(Inline(newTreasuryDatum.toData)),
             scriptRef = None
@@ -186,7 +171,7 @@ object FallbackTx {
         val setMetaData = ModifyAuxiliaryData(_ =>
             Some(
               MD.apply(
-                Fallback(disputeTreasuryAddress)
+                Fallback(RuleBasedTreasuryScript.address(network))
             )
         ))
 

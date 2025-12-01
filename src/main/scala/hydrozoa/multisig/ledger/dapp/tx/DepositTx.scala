@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.given 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
@@ -52,7 +53,6 @@ object DepositTx {
       */
     def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
-        given ProtocolVersion = ProtocolVersion.conwayPV
         Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
                 for {

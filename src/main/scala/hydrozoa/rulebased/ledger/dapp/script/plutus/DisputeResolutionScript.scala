@@ -11,13 +11,14 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
+
 import scala.annotation.tailrec
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
-import scalus.cardano.address.Network
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
@@ -523,29 +524,29 @@ object DisputeResolutionValidator extends Validator {
 object DisputeResolutionScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
     // Using def instead of lazy val to avoid stack overflow during tests
-    private def compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
+    private val compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
-    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
-    private def compiledPlutusV3Program = compiledUplc.plutusV3
+    private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    private val compiledPlutusV3Program = compiledUplc.plutusV3
 
     // Native Scalus PlutusScript - no Bloxbean dependency needed
-    private def compiledDeBruijnedProgram: DeBruijnedProgram =
+    private val compiledDeBruijnedProgram: DeBruijnedProgram =
         compiledPlutusV3Program.deBruijnedProgram
 
     // Various encoding formats available natively in Scalus
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-    def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+    val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    val compiledCbor = compiledDeBruijnedProgram.cborEncoded
 
-    def compiledPlutusV3Script =
+    val compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
 
     //// Hex representations - use the main program methods
     // private def compiledDoubleCborHex: String = compiledDeBruijnedProgram.doubleCborHex
 
-    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    val compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {
@@ -556,9 +557,14 @@ object DisputeResolutionScript {
     // def getScriptHex: String = compiledDoubleCborHex
 
     // For compatibility with code that expects script hash as byte array
-    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
+    val getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
-    def address(n: Network): AddressL1 = ???
+    def address(n: Network): ShelleyAddress = ShelleyAddress(
+        network = n,
+        payment = ShelleyPaymentPart.Script(this.compiledScriptHash),
+        delegation = ShelleyDelegationPart.Null
+    )
+
 }
 
 //// TODO: utxoActive

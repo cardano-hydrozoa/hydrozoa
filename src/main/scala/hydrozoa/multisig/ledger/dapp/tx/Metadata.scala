@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.encodeByteString
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import io.bullet.borer
 import io.bullet.borer.derivation.ArrayBasedCodecs.derived

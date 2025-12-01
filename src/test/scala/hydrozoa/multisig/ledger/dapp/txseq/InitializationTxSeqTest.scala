@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
+import hydrozoa.given
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
@@ -63,7 +64,7 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
                   - minPubkeyAda().value
             )
             .map(Coin(_))
-        
+
     } yield (
       InitializationTxSeq.Builder.Args(
         spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
@@ -84,9 +85,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p.withMinSuccessfulTests(10_000)
     }
-
-    given ProtocolVersion = ProtocolVersion.conwayPV
-
 
     // NOTE (Peter, 2025-11-28): These properties primarily test the built transaction with coherence against
     // the "semantic" InitializationTx value produced.
@@ -255,7 +253,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val bytes = iTx.tx.toCbor
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
-                given ProtocolVersion = ProtocolVersion.conwayPV
 
                 "Cbor round-tripping failed" |: (iTx.tx == Cbor
                     .decode(bytes)
@@ -285,21 +282,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                         datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
                         value = Value(initialDeposit, MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L))))
                     ),
-
-                    //                    resultingConfig = Tx.Builder.Config(
-                    //                        headNativeScript = expectedHeadNativeScript,
-                    //                        headNativeScriptReferenceInput = Utxo(TransactionInput(iTx.tx.id, 1),
-                    //                            Babbage(
-                    //                                expectedHeadNativeScript.mkAddress(env.network),
-                    //                                Value(
-                    //                                    // NOTE: The coin calculation here is self-referential; we're testing its value against itself
-                    //                                    // rather than calculating black-box.
-                    //                                    coin = iTx.tx.body.value.outputs(1).value.value.coin,
-                    //                                    assets = MultiAsset(assets = SortedMap(expectedHeadNativeScript.policyId
-                    //                                        -> SortedMap(multisigRegimeTokenName -> 1L)))),
-                    //                                None,
-                    //                                Some(ScriptRef(expectedHeadNativeScript.script))
-                    //                            ))
                     multisigRegimeWitness = Utxo(TransactionInput(iTx.tx.id, 1), TransactionOutput(
                         expectedHeadNativeScript.mkAddress(testNetwork),
                         value = multisigRegimeUtxo.output.value,
@@ -379,7 +361,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             )
 
             props.append("default vote utxo with min ada and vote token created" |: {
- 
+
 
                 val defaultVoteUtxo = TransactionUnspentOutput(
                   TransactionInput(transactionId = fbTx.tx.id, index = 1),
@@ -479,7 +461,6 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val bytes = fbTx.tx.toCbor
 
                 given OriginalCborByteArray = OriginalCborByteArray(bytes)
-                given ProtocolVersion = ProtocolVersion.conwayPV
                 
                 fbTx.tx == Cbor
                     .decode(bytes)

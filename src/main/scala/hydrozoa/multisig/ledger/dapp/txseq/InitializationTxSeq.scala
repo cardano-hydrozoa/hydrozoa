@@ -3,17 +3,16 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as MD, *}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
-import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee}
+import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
+import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
-import scalus.cardano.address.{ShelleyPaymentPart, *}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -27,7 +26,6 @@ import scala.collection.immutable.SortedMap
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
-    given ProtocolVersion = ProtocolVersion.conwayPV
 
     sealed trait ParseError
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
@@ -94,6 +92,7 @@ object InitializationTxSeq {
                 Right(()) else Left(FallbackTxMismatch(
                 expected = expectedFallbackTx,
                 actual = transactionSequence._2))
+
         } yield InitializationTxSeq(initializationTx = iTx, fallbackTx = expectedFallbackTx)
     }
 
@@ -267,6 +266,6 @@ object InitializationTxSeq {
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
-        ) 
+                             )
     }
 }

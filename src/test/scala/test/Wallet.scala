@@ -1,5 +1,6 @@
 package test
 
+import hydrozoa.given 
 import co.nstant.in.cbor.model.{Map, UnsignedInteger, Array as CborArray, ByteString as CborByteString}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
@@ -39,7 +40,6 @@ def addWitness(tx: Transaction, wit: VKeyWitness): Transaction =
     val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
     val txBytesSigned = txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes
     given OriginalCborByteArray = OriginalCborByteArray(txBytesSigned)
-    given ProtocolVersion = ProtocolVersion.conwayPV
     Cbor.decode(txBytesSigned).to[Transaction].value
 
 trait WalletModule:

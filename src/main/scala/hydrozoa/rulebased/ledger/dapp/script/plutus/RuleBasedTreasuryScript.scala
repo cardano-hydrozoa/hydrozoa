@@ -5,15 +5,8 @@ import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
-    Deinit,
-    Resolve,
-    Withdraw
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
-    Resolved,
-    Unresolved
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
@@ -22,7 +15,8 @@ import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
-import scalus.cardano.address.Network
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
@@ -425,27 +419,27 @@ object RuleBasedTreasuryValidator extends Validator {
 object RuleBasedTreasuryScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
     // Using def instead of lazy val to avoid stack overflow during tests
-    private def compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
+    private val compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
-    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
 
-    private def compiledPlutusV3Program = compiledUplc.plutusV3
+    private val compiledPlutusV3Program = compiledUplc.plutusV3
 
     // Native Scalus PlutusScript - no Bloxbean dependency needed
-    private def compiledDeBruijnedProgram: DeBruijnedProgram =
+    private val compiledDeBruijnedProgram: DeBruijnedProgram =
         compiledPlutusV3Program.deBruijnedProgram
 
     // Various encoding formats available natively in Scalus
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-    def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+    val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    val compiledCbor = compiledDeBruijnedProgram.cborEncoded
 
-    def compiledPlutusV3Script =
+    val compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
 
-    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    val compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {
@@ -456,7 +450,12 @@ object RuleBasedTreasuryScript {
     // def getScriptHex: String = compiledDoubleCborHex
 
     // For compatibility with code that expects script hash as byte array
-    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
+    val getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
-    def address(n: Network): AddressL1 = ???
+    def address(n: Network): ShelleyAddress =
+        ShelleyAddress(
+            network = n,
+            payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
+            delegation = Null
+        )
 }
