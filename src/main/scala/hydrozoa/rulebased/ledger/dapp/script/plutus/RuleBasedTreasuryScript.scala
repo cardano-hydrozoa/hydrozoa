@@ -243,7 +243,9 @@ object RuleBasedTreasuryValidator extends Validator {
                         .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
                         .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
-                        case List.Cons((tokenName, amount), none) =>
+                        case List.Cons((tokenNameAndAmount), none) =>
+                            val tokenName = tokenNameAndAmount._1
+                            val amount = tokenNameAndAmount._2
                             require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)
                             tokenName
                         case _ => fail(WithdrawBeaconTokenFailure)
@@ -417,28 +419,27 @@ object RuleBasedTreasuryValidator extends Validator {
 
 object RuleBasedTreasuryScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    // Using def instead of lazy val to avoid stack overflow during tests
-    private def compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
+    private val compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
-    private def compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
+    private val compiledUplc = compiledSir.toUplcOptimized(generateErrorTraces = true)
 
-    private def compiledPlutusV3Program = compiledUplc.plutusV3
+    private val compiledPlutusV3Program = compiledUplc.plutusV3
 
     // Native Scalus PlutusScript - no Bloxbean dependency needed
-    private def compiledDeBruijnedProgram: DeBruijnedProgram =
+    private val compiledDeBruijnedProgram: DeBruijnedProgram =
         compiledPlutusV3Program.deBruijnedProgram
 
     // Various encoding formats available natively in Scalus
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
-    def flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
+    val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    def compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    val compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
 
-    def compiledPlutusV3Script =
+    val compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
 
-    def compiledScriptHash = compiledPlutusV3Script.scriptHash
+    val compiledScriptHash = compiledPlutusV3Script.scriptHash
 
     // Generate .plutus file if needed
     def writePlutusFile(path: String): Unit = {
@@ -449,7 +450,5 @@ object RuleBasedTreasuryScript {
     // def getScriptHex: String = compiledDoubleCborHex
 
     // For compatibility with code that expects script hash as byte array
-    def getScriptHash: Array[Byte] = compiledScriptHash.bytes
-
-    def address(n: Network): AddressL1 = ???
+    val getScriptHash: Array[Byte] = compiledScriptHash.bytes
 }
