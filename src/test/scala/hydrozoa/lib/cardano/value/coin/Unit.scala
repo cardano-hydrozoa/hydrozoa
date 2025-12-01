@@ -1,12 +1,11 @@
 package hydrozoa.lib.cardano.value.coin
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.value.coin.Coin
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import hydrozoa.lib.cardano.value.coin.Coin
-import spire.math.{Rational, SafeLong}
-
 import scala.util.Try
+import spire.math.{Rational, SafeLong}
 
 /** These tests use the org.scalactic.Equals instances when comparing things with `===`. */
 class Unit extends AnyFunSuite, Matchers {

@@ -5,15 +5,8 @@ import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.ledger.api.ValueExtension.*
-import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{
-    Deinit,
-    Resolve,
-    Withdraw
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
-    Resolved,
-    Unresolved
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Resolve, Withdraw}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}

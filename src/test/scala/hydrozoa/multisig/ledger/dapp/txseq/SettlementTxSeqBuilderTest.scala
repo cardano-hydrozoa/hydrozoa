@@ -3,10 +3,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Gen, Prop, Properties, Test}
-import org.scalacheck.rng.Seed
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import org.scalacheck.{Prop, Properties, Test}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
 import scalus.cardano.txbuilder.TransactionBuilder
@@ -28,7 +25,10 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 //        }
 //    }
 
-    val _ = propertyWithSeed("Observe settlement tx seq", Some("rxYNJitNF9c6LoezXCCDfRPn-lKWyG7Uz9-GH8ikRFI=")) = {
+    val _ = propertyWithSeed(
+      "Observe settlement tx seq",
+      Some("rxYNJitNF9c6LoezXCCDfRPn-lKWyG7Uz9-GH8ikRFI=")
+    ) = {
         val gen = genSettlementTxSeqBuilder()
 
         forAll(gen) { (builder, args, peers) =>
@@ -37,17 +37,17 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                     case Left(e) => throw RuntimeException(s"Build failed: $e")
                     case Right(txSeq) => {
                         val unsignedTxsAndUtxos
-                        : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
+                            : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
                             txSeq.settlementTxSeq match {
                                 case NoRollouts(settlementTx) => {
                                     (Vector(settlementTx.tx), settlementTx.resolvedUtxos)
                                 }
                                 case WithRollouts(settlementTx, rolloutTxSeq) =>
                                     (
-                                        Vector(settlementTx.tx)
-                                            .appendedAll(rolloutTxSeq.notLast.map(_.tx))
-                                            .appended(rolloutTxSeq.last.tx),
-                                        settlementTx.resolvedUtxos
+                                      Vector(settlementTx.tx)
+                                          .appendedAll(rolloutTxSeq.notLast.map(_.tx))
+                                          .appended(rolloutTxSeq.last.tx),
+                                      settlementTx.resolvedUtxos
                                     )
                             }
 

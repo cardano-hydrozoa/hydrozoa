@@ -162,9 +162,9 @@ object FinalizationTxSeq {
                                         case tx: FinalizationTx.WithRollouts =>
                                             FinalizationTxSeq
                                                 .WithDeinitAndRollouts(
-                                                    tx,
-                                                    deinitTx,
-                                                    rolloutTxSeq
+                                                  tx,
+                                                  deinitTx,
+                                                  rolloutTxSeq
                                                 )
                                         case tx: FinalizationTx.WithRolloutsMerged =>
                                             FinalizationTxSeq.WithRollouts(tx, rolloutTxSeq)

@@ -13,7 +13,6 @@ import scalus.cardano.ledger.Coin
 import spire.math.{Rational, UByte}
 import spire.syntax.literals.r
 
-
 //@nowarn("msg=unused value")
 //class HeadConfigTest extends AnyFunSuite with ScalaCheckPropertyChecks:
 //

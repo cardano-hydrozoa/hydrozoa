@@ -88,7 +88,7 @@ object KzgCommitment {
             .foldLeft(SList.single(one.dup())): (acc, term) =>
                 // We need to clone the whole `acc` since `mul` mutates it
                 // and the final adding gets mutated `shiftedPoly`
-                val shiftedPoly: SList[Scalar] = SList.Cons((zero.dup()), acc.map(_.dup))
+                val shiftedPoly: SList[Scalar] = SList.Cons(zero.dup(), acc.map(_.dup))
                 val multipliedPoly = acc.map(s => s.mul(term)).appended(zero.dup())
                 SList.map2(shiftedPoly, multipliedPoly)((l, r) => l.add(r))
 

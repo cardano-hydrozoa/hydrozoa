@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{explainConst, BuildErrorOr, HasCtx}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
@@ -11,13 +11,7 @@ import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{
-    Sized,
-    Transaction,
-    TransactionInput,
-    TransactionOutput as TxOutput,
-    Value
-}
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos

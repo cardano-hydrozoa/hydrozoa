@@ -4,13 +4,11 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.EquityShares
 import hydrozoa.config.EquityShares.RuleBasedRegimeDistribution.*
+import hydrozoa.lib.cardano.value.coin.Coin as NewCoin
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{
-    Resolved,
-    Unresolved
-}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString.hex
@@ -18,7 +16,6 @@ import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import hydrozoa.lib.cardano.value.coin.Coin as NewCoin
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined

@@ -3,12 +3,11 @@ package hydrozoa.multisig.consensus
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.consensus.CardanoLiaison.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
-
-import CardanoLiaison.{Config, ConnectionsPending}
 
 /** Cardano actor:
   *
@@ -47,14 +46,14 @@ trait CardanoLiaison(config: Config, connections: ConnectionsPending) extends Ac
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap({
+            subscribers.get.flatMap {
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
                     Error(
                       "Impossible: Cardano event actor is receiving before its preStart provided subscribers."
                     ).raiseError
-            })
+            }
         )
 
     private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =

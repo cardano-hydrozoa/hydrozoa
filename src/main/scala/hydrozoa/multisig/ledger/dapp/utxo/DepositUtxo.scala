@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.utxo
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import scala.util.{Failure, Success, Try}
 import scalus.*
-import scalus.builtin.Data.{FromData, ToData, fromData, toData}
+import scalus.builtin.Data.{fromData, toData, FromData, ToData}
 import scalus.builtin.{Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*

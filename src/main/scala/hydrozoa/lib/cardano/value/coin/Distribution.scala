@@ -1,8 +1,8 @@
 package hydrozoa.lib.cardano.value.coin
 
 import cats.data.NonEmptyList
-import spire.math.{Rational, SafeLong}
 import spire.implicits.toRational
+import spire.math.{Rational, SafeLong}
 
 object Distribution {
 

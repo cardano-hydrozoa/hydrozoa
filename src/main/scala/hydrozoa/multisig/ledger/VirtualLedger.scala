@@ -23,11 +23,11 @@ private def fromScalusState(sstate: ScalusState): State =
 trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction({
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case ApplyInternalTx(tx, d)   => applyInternalTx(tx) >>= (res => d.complete(res))
         case ApplyWithdrawalTx(tx, d) => applyWithdrawalTx(tx) >>= (res => d.complete(res))
         case ApplyGenesis(go)         => applyGenesisTx(go)
-    })
+    }
 
     private def applyInternalTx(
         txSerialized: Tx.Serialized

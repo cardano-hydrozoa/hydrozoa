@@ -99,7 +99,7 @@ object InitializationTx {
         val createChangeOutput = Send(Babbage(changeAddress, Value.zero, None, None))
 
         val addMetadata =
-            ModifyAuxiliaryData(_ => Some((MD.apply(Initialization, headAddress))))
+            ModifyAuxiliaryData(_ => Some(MD.apply(Initialization, headAddress)))
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
