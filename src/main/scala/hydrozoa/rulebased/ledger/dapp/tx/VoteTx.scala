@@ -3,11 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
-    DisputeRedeemer,
-    OnchainBlockHeader,
-    VoteRedeemer
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
@@ -64,8 +60,8 @@ object VoteTx {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
                             case AwaitingVote(_) => {
-                            val updatedVoteDatum = voteDatum.copy(
-                                voteStatus = VoteStatus.Voted(
+                                val updatedVoteDatum = voteDatum.copy(
+                                  voteStatus = VoteStatus.Voted(
                                     recipe.blockHeader.commitment,
                                     recipe.blockHeader.versionMinor
                                   )

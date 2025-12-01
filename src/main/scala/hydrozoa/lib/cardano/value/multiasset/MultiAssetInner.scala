@@ -1,15 +1,13 @@
 package hydrozoa.lib.cardano.value.multiasset
 
-import scalus.cardano.ledger.AssetName
 import hydrozoa.lib.cardano.value.coin.Coin
-import spire.algebra.*
-import spire.math.{Rational, SafeLong}
-import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, IntAlgebra}
-
+import hydrozoa.lib.cardano.value.multiasset.Multiset.*
 import scala.annotation.targetName
-import Multiset.*
-
 import scala.collection.immutable.SortedMap
+import scalus.cardano.ledger.AssetName
+import spire.algebra.*
+import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, IntAlgebra}
+import spire.math.{Rational, SafeLong}
 
 given Order[AssetName] = Order.fromLessThan(_.bytes < _.bytes)
 

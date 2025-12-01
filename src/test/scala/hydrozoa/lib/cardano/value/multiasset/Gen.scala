@@ -1,15 +1,14 @@
 package hydrozoa.lib.cardano.value.multiasset
 
+import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Gen.Arb.given
+import hydrozoa.lib.cardano.value.multiasset.MultiAsset
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen as Gen0}
-import scalus.cardano.ledger.ArbitraryInstances.{given_Arbitrary_AssetName, given_Arbitrary_Hash}
-import hydrozoa.lib.cardano.value.coin.Coin
-import hydrozoa.lib.cardano.value.multiasset.MultiAsset
-import scalus.cardano.ledger.{AssetName, PolicyId}
-import hydrozoa.lib.cardano.value.coin.Gen.Arb.given
-
 import scala.collection.immutable
 import scala.collection.immutable.SortedMap
+import scalus.cardano.ledger.ArbitraryInstances.{given_Arbitrary_AssetName, given_Arbitrary_Hash}
+import scalus.cardano.ledger.{AssetName, PolicyId}
 
 object Gen {
     def genConfigurableMultiAssetFractional(

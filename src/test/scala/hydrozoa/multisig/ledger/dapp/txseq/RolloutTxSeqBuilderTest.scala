@@ -26,11 +26,11 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
                 .map(NonEmptyVector.fromVectorUnsafe)
         } yield (RolloutTxSeq.Builder(config), payouts)
 
-    test("Build partial rollout seq")({
+    test("Build partial rollout seq") {
         forAll(genBuilder)((builder, payouts) => assert(builder.buildPartial(payouts).isRight))
-    })
+    }
 
-    test("Finish partial result rollout seq")({
+    test("Finish partial result rollout seq") {
         forAll(genBuilder)((builder, payouts) =>
             val res = for {
                 pr <- builder.buildPartial(payouts)
@@ -48,5 +48,5 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
                 case _       => ()
             }
         )
-    })
+    }
 }

@@ -1,15 +1,13 @@
 package hydrozoa.lib.cardano.value.multiasset
 
 import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.multiasset.Multiset.*
+import scala.annotation.targetName
+import scala.collection.immutable.SortedMap
 import scalus.cardano.ledger.{AssetName, PolicyId}
 import spire.algebra.*
-import spire.math.{Rational, SafeLong}
 import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps, DoubleAlgebra}
-
-import scala.annotation.targetName
-import Multiset.*
-
-import scala.collection.immutable.SortedMap
+import spire.math.{Rational, SafeLong}
 
 // ===================================
 // MultiAsset
@@ -21,8 +19,6 @@ given policyOrder: Order[PolicyId] = Order.fromLessThan(_ < _)
 
 object MultiAsset {
     import Inner.AlgebraFull as vAlgebra
-
-
 
     opaque type MultiAsset = Multiset[PolicyId, Inner, vAlgebra.type, Order[PolicyId]]
 
@@ -210,7 +206,6 @@ private object MultiAssetVariant {
         @targetName("apply_sortedMap_inner")
         def apply(s: SortedMap[PolicyId, Inner.Unbounded]): Unbounded =
             Multiset(s)
-
 
         @targetName("apply_sortedMap_sortedMap")
         def apply(s: SortedMap[PolicyId, SortedMap[AssetName, Coin.Unbounded]]): Unbounded =

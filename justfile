@@ -10,4 +10,8 @@ lint:
   sbt scalafixAll
 
 lint-check:
-  sbt scalafixAll --check
+  sbt "scalafixAll --check"
+
+lint-fmt-check:
+  just lint-check
+  just fmt-check  

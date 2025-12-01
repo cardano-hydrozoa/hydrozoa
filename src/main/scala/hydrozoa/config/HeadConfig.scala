@@ -6,7 +6,6 @@ import hydrozoa.lib.cardano.value.coin.Coin
 import spire.implicits.*
 import spire.math.{Rational, UByte}
 
-
 // ===================================
 // Raw config
 // ===================================

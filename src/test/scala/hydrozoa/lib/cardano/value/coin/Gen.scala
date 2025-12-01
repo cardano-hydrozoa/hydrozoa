@@ -1,8 +1,8 @@
 package hydrozoa.lib.cardano.value.coin
 
 import cats.data.NonEmptyList
-import org.scalacheck.{Arbitrary, Gen as Gen0}
 import hydrozoa.lib.cardano.value.coin.Coin
+import org.scalacheck.{Arbitrary, Gen as Gen0}
 import spire.laws.arb.given
 import spire.laws.gen
 import spire.math.{Rational, SafeLong}

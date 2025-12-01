@@ -126,7 +126,9 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
         (hns, headTokenName, peers, peersVks, versionMajor, setupSize, fallbackTxId) <-
             genHeadParams
         // Min treasury
-        defaultVoteDeposit = Coin(CollectiveContingency.apply(UByte(peers.size)).defaultVoteDeposit.underlying)
+        defaultVoteDeposit = Coin(
+          CollectiveContingency.apply(UByte(peers.size)).defaultVoteDeposit.underlying
+        )
         voteDeposit = Coin(IndividualContingency.apply.voteDeposit.underlying)
         minTreasury = defaultVoteDeposit + Coin(voteDeposit.value * peers.size)
 
@@ -143,16 +145,15 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
         collateralUtxo <- genCollateralUtxo
     } yield {
         Recipe(
-            headNativeScript = hns,
-            treasuryUtxo = treasuryUtxo,
-            defaultVoteDeposit =
-                defaultVoteDeposit,
-            voteDeposit = voteDeposit,
-            shares = shares,
-            collateralUtxo = collateralUtxo,
-            evaluator = testEvaluator,
-            env = testTxBuilderEnvironment,
-            validators = testValidators
+          headNativeScript = hns,
+          treasuryUtxo = treasuryUtxo,
+          defaultVoteDeposit = defaultVoteDeposit,
+          voteDeposit = voteDeposit,
+          shares = shares,
+          collateralUtxo = collateralUtxo,
+          evaluator = testEvaluator,
+          env = testTxBuilderEnvironment,
+          validators = testValidators
         )
     }
 

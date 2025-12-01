@@ -1,14 +1,15 @@
 package hydrozoa.lib.cardano.value.multiasset
 
+import cats.implicits.catsSyntaxEither
+import hydrozoa.lib.cardano.value.coin.Gen.genNonZeroSafeLong
+import hydrozoa.lib.cardano.value.multiasset.MultiAsset
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Arbitrary, Prop, Properties}
-import hydrozoa.lib.cardano.value.multiasset.MultiAsset
 import spire.syntax.all.*
+
 import Arbitrary.arbitrary
 import Gen.Arb.given
-import hydrozoa.lib.cardano.value.coin.Gen.genNonZeroSafeLong
 import Prop.forAll
-import cats.implicits.catsSyntaxEither
 
 /** These tests primarily test functions that mix underlying representations. Functions that test
   * within a single representation are test withing in the Laws module.

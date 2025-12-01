@@ -2,12 +2,10 @@ package hydrozoa.lib.cardano.value
 
 import hydrozoa.lib.cardano.value.coin.Coin
 import hydrozoa.lib.cardano.value.multiasset.MultiAsset
-import spire.algebra.*
-import spire.math.{Rational, SafeLong}
-import spire.implicits.{additiveGroupOps, additiveSemigroupOps, rms, seqOps, toRational, vectorSpaceOps}
-import spire.implicits.{orderOps, partialOrderOps}
-
 import scala.annotation.targetName
+import spire.algebra.*
+import spire.implicits.{additiveGroupOps, additiveSemigroupOps, orderOps, partialOrderOps, rms, seqOps, toRational, vectorSpaceOps}
+import spire.math.{Rational, SafeLong}
 
 case class Value(lovelace: Coin, assets: MultiAsset = MultiAsset.zero) {
     import Value.{Fractional, Unbounded}

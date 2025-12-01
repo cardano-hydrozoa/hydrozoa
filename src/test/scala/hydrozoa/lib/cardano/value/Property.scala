@@ -1,7 +1,7 @@
 package hydrozoa.lib.cardano.value
 
-import org.scalacheck.Test.Parameters
 import org.scalacheck.Properties
+import org.scalacheck.Test.Parameters
 //import org.scalacheck.{Arbitrary, Prop, Properties, Gen as Gen0}
 //import spire.laws.arb.given
 //import spire.math.{Rational, SafeLong}

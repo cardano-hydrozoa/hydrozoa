@@ -2,12 +2,11 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
-
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
@@ -94,12 +93,12 @@ object Tx {
         }
 
         final case class Config(
-                                   headNativeScript: HeadMultisigScript,
-                                   headNativeScriptReferenceInput: TransactionUnspentOutput,
-                                   tokenNames: TokenNames,
-                                   env: Environment,
-                                   evaluator : PlutusScriptEvaluator,
-                                   validators: Seq[Validator]
+            headNativeScript: HeadMultisigScript,
+            headNativeScriptReferenceInput: TransactionUnspentOutput,
+            tokenNames: TokenNames,
+            env: Environment,
+            evaluator: PlutusScriptEvaluator,
+            validators: Seq[Validator]
         ) {
             lazy val headAddress: ShelleyAddress = headNativeScript.mkAddress(env.network)
         }
