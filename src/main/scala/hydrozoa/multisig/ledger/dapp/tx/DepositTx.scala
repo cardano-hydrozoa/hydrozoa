@@ -1,14 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.given 
 import cats.data.NonEmptyList
+import hydrozoa.given
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Deposit
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
-
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
@@ -16,9 +15,9 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.txbuilder.{LowLevelTxBuilder, PubKeyWitness, SomeBuildError, TransactionBuilder, TransactionUnspentOutput}
 
 // TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
 // TODO: List out exactly the invariants we expect.
@@ -61,7 +60,7 @@ object DepositTx {
                         .parse(tx) match {
                         case Right(d: Deposit) => Right(d)
                         case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
-                        case Left(e) => Left(MetadataParseError(e))
+                        case Left(e)  => Left(MetadataParseError(e))
                     }
                     Deposit(headAddress) = d
                     // Grab the single output at the head address, along with its index/

@@ -3,14 +3,13 @@ package hydrozoa.multisig.consensus
 import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.consensus.PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, Peer}
+import hydrozoa.multisig.protocol.types.*
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
-
-import PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 
 /** Communication actor is connected to its counterpart at another peer:
   *
@@ -66,7 +65,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         } yield ()
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(req =>
-        subscribers.get.flatMap({
+        subscribers.get.flatMap {
             case Some(subs) =>
                 this.receiveTotal(req, subs)
             case _ =>
@@ -75,7 +74,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     "Impossible: Comm actor is receiving before its preStart provided subscribers."
                   )
                 )
-        })
+        }
     )
 
     private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =
@@ -237,9 +236,8 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 nEvents <- this.nEvent.get
 
                 _ <-
-                    if (
-                      nAck < batchReq.ackNum || nBlock < batchReq.blockNum || nEvents < batchReq.eventNum
-                    ) {
+                    if nAck < batchReq.ackNum || nBlock < batchReq.blockNum || nEvents < batchReq.eventNum
+                    then {
                         IO.raiseError(OutOfBoundsGetMsgBatch)
                     } else {
                         IO.pure(())

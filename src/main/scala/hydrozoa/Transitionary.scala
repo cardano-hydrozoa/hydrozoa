@@ -9,11 +9,9 @@ import com.bloxbean.cardano.client.backend.api.BackendService
 import com.bloxbean.cardano.client.plutus.spec.PlutusData
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.{Address, *}
-import io.bullet.borer.{Borer, Cbor, Encoder}
 import monocle.Monocle.some
 import monocle.syntax.all.*
 import monocle.{Focus, Lens}
-
 import scala.collection.immutable.SortedMap
 import scala.language.implicitConversions
 import scalus.bloxbean.Interop
@@ -296,7 +294,7 @@ def bloxToScalusUtxoQuery(
         .toEither match {
         case Left(err) => Left("[bloxToScalusUtxoQuery]: Querying failed: " ++ err)
         case Right(utxo) =>
-            Right({
+            Right {
                 val outAddress = Address.unsafeFromBech32(utxo.getAddress)
                 val outVal: Value = utxo.toValue.toLedgerValue
                 val outDat = scala
@@ -313,7 +311,7 @@ def bloxToScalusUtxoQuery(
                   value = outVal,
                   datumOption = outDat
                 )
-            })
+            }
     }
 }
 //
@@ -443,12 +441,14 @@ extension [A](result: Result[A])
 
 /** add at most 256 keys */
 def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet ++ generateUniqueKeys(numberOfKeys)))
+    tx.focus(_.witnessSet.vkeyWitnesses)
+        .modify(x => TaggedSortedSet(x.toSet ++ generateUniqueKeys(numberOfKeys)))
 }
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
 def removeDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet -- generateUniqueKeys(numberOfKeys)))
+    tx.focus(_.witnessSet.vkeyWitnesses)
+        .modify(x => TaggedSortedSet(x.toSet -- generateUniqueKeys(numberOfKeys)))
 }
 
 private def generateVKeyWitness(counter: Int): VKeyWitness = {

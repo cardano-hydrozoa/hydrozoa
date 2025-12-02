@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.Rollout
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
@@ -13,7 +12,7 @@ import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, Value, TransactionOutput as TxOutput}
+import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
@@ -322,9 +321,7 @@ object RolloutTx {
                 List(stepRolloutMetadata(config), stepReferenceHNS(config))
 
             private def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.Rollout(headAddress = config.headAddress)))
-                )
+                ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
             private def stepReferenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
@@ -392,7 +389,12 @@ object RolloutTx {
 
                 } yield res
                 res match {
-                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, errorCtx)) =>
+                    case Left(
+                          SomeBuildError.ValidationError(
+                            e: InvalidTransactionSizeException,
+                            errorCtx
+                          )
+                        ) =>
                         Left(SomeBuildError.ValidationError(e, errorCtx))
                             .explainConst("trail to add payout failed")
                     case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>

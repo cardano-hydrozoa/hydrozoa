@@ -3,12 +3,11 @@ package hydrozoa.multisig.consensus
 import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.multisig.consensus.BlockProducer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockProducer.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{AckBlock, Block, Peer}
-
-import BlockProducer.{Config, ConnectionsPending}
 
 /** Block actor:
   *
@@ -59,14 +58,14 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap({
+            subscribers.get.flatMap {
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
                     Error(
                       "Impossible: Block actor is receiving before its preStart provided subscribers."
                     ).raiseError
-            })
+            }
         )
 
     private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =

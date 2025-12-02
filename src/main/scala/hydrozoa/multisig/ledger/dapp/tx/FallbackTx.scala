@@ -9,7 +9,6 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, Ru
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
-
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.*
@@ -172,8 +171,9 @@ object FallbackTx {
             Some(
               MD.apply(
                 Fallback(RuleBasedTreasuryScript.address(network))
+              )
             )
-        ))
+        )
 
         val steps = {
             Seq(
@@ -204,8 +204,7 @@ object FallbackTx {
             FallbackTx(
               treasurySpent = treasuryUtxo,
               //
-              treasuryProduced =
-                  Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
+              treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
               consumedHMRWUtxo = spendHMRW.utxo,
               producedDefaultVoteUtxo =
                   Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),

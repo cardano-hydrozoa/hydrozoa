@@ -1,9 +1,8 @@
 package hydrozoa.lib.cardano.value.multiasset
 
 import cats.implicits.catsKernelOrderingForOrder
-import spire.algebra.*
-
 import scala.collection.immutable.SortedMap
+import spire.algebra.*
 
 private object Multiset {
 

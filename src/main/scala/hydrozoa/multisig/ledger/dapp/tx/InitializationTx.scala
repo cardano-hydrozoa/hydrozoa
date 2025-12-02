@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.config.HeadConfig
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -9,6 +8,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.{Utxo as _, *}
+import scala.collection.immutable.SortedMap
+import scala.util.Try
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -22,9 +23,6 @@ import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
-
-import scala.collection.immutable.SortedMap
-import scala.util.Try
 
 final case class InitializationTx(
     treasuryProduced: TreasuryUtxo,
@@ -105,11 +103,16 @@ object InitializationTx {
 
         val modifyAuxiliaryData =
             ModifyAuxiliaryData(_ =>
-              Some(MD.apply(
-                Initialization(headAddress = headAddress,
-                  treasuryOutputIndex = 0,
-                  multisigRegimeOutputIndex = 1,
-                  seedInput = recipe.spentUtxos.seedUtxo.input)))
+                Some(
+                  MD.apply(
+                    Initialization(
+                      headAddress = headAddress,
+                      treasuryOutputIndex = 0,
+                      multisigRegimeOutputIndex = 1,
+                      seedInput = recipe.spentUtxos.seedUtxo.input
+                    )
+                  )
+                )
             )
 
         val steps = spendAllUtxos
@@ -158,178 +161,251 @@ object InitializationTx {
         )
     }
 
-  // TODO: use validation monad instead of Either?
-  def parse(
-             peerKeys : NonEmptyList[VerificationKeyBytes],
-             expectedNetwork: Network,
-             tx: Transaction,
-             resolver: Seq[TransactionInput] => ResolvedUtxos
-           )(using protocolVersion: ProtocolVersion): Either[ParseError, InitializationTx] =
-    for {
-      // ===================================
-      // Metadata parsing
-      // ===================================
-      imd <- MD.parse(tx) match {
-        case Right(md: Initialization) => Right(md)
-        case Right(md) =>
-          Left(MetadataParseError(MD.UnexpectedTxType(actual = md, expected = "Initialization")))
-        case Left(e) => Left(
-          MetadataParseError(MD.MalformedTxTypeKey("Could not find the expected TxTypeKey for Initialization" +
-            s" transaction. Got: $e")))
-      }
+    // TODO: use validation monad instead of Either?
+    def parse(
+        peerKeys: NonEmptyList[VerificationKeyBytes],
+        expectedNetwork: Network,
+        tx: Transaction,
+        resolver: Seq[TransactionInput] => ResolvedUtxos
+    )(using protocolVersion: ProtocolVersion): Either[ParseError, InitializationTx] =
+        for {
+            // ===================================
+            // Metadata parsing
+            // ===================================
+            imd <- MD.parse(tx) match {
+                case Right(md: Initialization) => Right(md)
+                case Right(md) =>
+                    Left(
+                      MetadataParseError(
+                        MD.UnexpectedTxType(actual = md, expected = "Initialization")
+                      )
+                    )
+                case Left(e) =>
+                    Left(
+                      MetadataParseError(
+                        MD.MalformedTxTypeKey(
+                          "Could not find the expected TxTypeKey for Initialization" +
+                              s" transaction. Got: $e"
+                        )
+                      )
+                    )
+            }
 
-      // ===================================
-      // Data Extraction
-      // ===================================
+            // ===================================
+            // Data Extraction
+            // ===================================
 
-      derivedTokenNames = CIP67.TokenNames(imd.seedInput)
+            derivedTokenNames = CIP67.TokenNames(imd.seedInput)
 
-      expectedHNS = HeadMultisigScript(peerKeys)
+            expectedHNS = HeadMultisigScript(peerKeys)
 
-      expectedHeadAddress = expectedHNS.mkAddress(expectedNetwork)
+            expectedHeadAddress = expectedHNS.mkAddress(expectedNetwork)
 
-      actualOutputs = tx.body.value.outputs.map(_.value)
+            actualOutputs = tx.body.value.outputs.map(_.value)
 
-      actualTreasuryOutput = actualOutputs(imd.treasuryOutputIndex)
-      actualMultisigRegimeOutput = actualOutputs(imd.multisigRegimeOutputIndex)
+            actualTreasuryOutput = actualOutputs(imd.treasuryOutputIndex)
+            actualMultisigRegimeOutput = actualOutputs(imd.multisigRegimeOutputIndex)
 
-      // ===================================
-      // Validation
-      // ===================================
+            // ===================================
+            // Validation
+            // ===================================
 
-      ////
-      // Head address is coherent
-      _ <- if expectedHeadAddress == imd.headAddress
-      then Right(())
-      else Left(InvalidTransactionError("Invalid head address"))
+            ////
+            // Head address is coherent
+            _ <-
+                if expectedHeadAddress == imd.headAddress
+                then Right(())
+                else Left(InvalidTransactionError("Invalid head address"))
 
-      // Seed input is coherent
-      _ <- if tx.body.value.inputs.toSeq.contains(imd.seedInput)
-      then Right(())
-      else Left(InvalidTransactionError("Seed input missing"))
+            // Seed input is coherent
+            _ <-
+                if tx.body.value.inputs.toSeq.contains(imd.seedInput)
+                then Right(())
+                else Left(InvalidTransactionError("Seed input missing"))
 
-      /////
-      // Treasury is coherent: address matches, contains head token, datum is initial treasury datum,
-      // no reference script
+            /////
+            // Treasury is coherent: address matches, contains head token, datum is initial treasury datum,
+            // no reference script
 
-      // address
-      _ <- if actualTreasuryOutput.address == expectedHeadAddress
-      then Right(())
-      else Left(InvalidTransactionError("Unexpected treasury address"))
-      // value
-      treasuryOutputInner <- actualTreasuryOutput.value.assets.assets.get(expectedHNS.policyId)
-        .toRight(InvalidTransactionError("Head Native Script policy ID not found in treasury output value"))
-      _ <- treasuryOutputInner.get(derivedTokenNames.headTokenName) match {
-        case None => Left(InvalidTransactionError(
-          "No tokens matching the head token asset name found in treasury output"))
-        case Some(1L) => Right(())
-        case Some(wrongCount) => Left(InvalidTransactionError("Multiple tokens matching the head token asset" +
-          " name found in the treasury ouptu"))
-      }
-      // datum
-      encodedTreasuryDatum <- actualTreasuryOutput.datumOption match {
-        case None => Left(InvalidTransactionError("treasury output datum missing"))
-        case Some(Inline(i)) => Right(i)
-        case Some(_) => Left(InvalidTransactionError("treasury output datum not inline"))
-      }
-      decodedTreasuryDatum <- Try(Data.fromData[TreasuryUtxo.Datum](encodedTreasuryDatum)).toEither.left
-        .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
-      _ <- if decodedTreasuryDatum == TreasuryUtxo.mkInitMultisigTreasuryDatum then Right(()) else
-        Left(InvalidTransactionError("actual treasury datum does not match the expected initial " +
-          "treasury datum"))
+            // address
+            _ <-
+                if actualTreasuryOutput.address == expectedHeadAddress
+                then Right(())
+                else Left(InvalidTransactionError("Unexpected treasury address"))
+            // value
+            treasuryOutputInner <- actualTreasuryOutput.value.assets.assets
+                .get(expectedHNS.policyId)
+                .toRight(
+                  InvalidTransactionError(
+                    "Head Native Script policy ID not found in treasury output value"
+                  )
+                )
+            _ <- treasuryOutputInner.get(derivedTokenNames.headTokenName) match {
+                case None =>
+                    Left(
+                      InvalidTransactionError(
+                        "No tokens matching the head token asset name found in treasury output"
+                      )
+                    )
+                case Some(1L) => Right(())
+                case Some(wrongCount) =>
+                    Left(
+                      InvalidTransactionError(
+                        "Multiple tokens matching the head token asset" +
+                            " name found in the treasury ouptu"
+                      )
+                    )
+            }
+            // datum
+            encodedTreasuryDatum <- actualTreasuryOutput.datumOption match {
+                case None => Left(InvalidTransactionError("treasury output datum missing"))
+                case Some(Inline(i)) => Right(i)
+                case Some(_) => Left(InvalidTransactionError("treasury output datum not inline"))
+            }
+            decodedTreasuryDatum <- Try(
+              Data.fromData[TreasuryUtxo.Datum](encodedTreasuryDatum)
+            ).toEither.left
+                .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
+            _ <-
+                if decodedTreasuryDatum == TreasuryUtxo.mkInitMultisigTreasuryDatum then Right(())
+                else
+                    Left(
+                      InvalidTransactionError(
+                        "actual treasury datum does not match the expected initial " +
+                            "treasury datum"
+                      )
+                    )
 
-      // script
-      _ <- if actualTreasuryOutput.scriptRef.isEmpty then Right(())
-      else Left(InvalidTransactionError("treasury output has reference script, but shouldn't"))
+            // script
+            _ <-
+                if actualTreasuryOutput.scriptRef.isEmpty then Right(())
+                else
+                    Left(
+                      InvalidTransactionError("treasury output has reference script, but shouldn't")
+                    )
 
-      //////
-      // Multisig regime is coherent: expected address, contains only MR token and ADA, datum is None, HNS in
-      // reference script
+            //////
+            // Multisig regime is coherent: expected address, contains only MR token and ADA, datum is None, HNS in
+            // reference script
 
-      // address
-      _ <- if actualMultisigRegimeOutput.address == expectedHeadAddress
-      then Right(())
-      else Left(InvalidTransactionError("Multisig regime output has the wrong address"))
+            // address
+            _ <-
+                if actualMultisigRegimeOutput.address == expectedHeadAddress
+                then Right(())
+                else Left(InvalidTransactionError("Multisig regime output has the wrong address"))
 
-      // value
-      mrValueOuter <- actualMultisigRegimeOutput.value.assets.assets
-        .get(expectedHNS.policyId).toRight(InvalidTransactionError("value of the multisig regime output" +
-          "does not contain the head native script policyId"))
-      _ <- mrValueOuter.get(derivedTokenNames.multisigRegimeTokenName) match {
-        case None => Left(InvalidTransactionError("No tokens found matching the multisig regime token name"))
-        case Some(1L) => Right(())
-        case Some(_) => Left(InvalidTransactionError("Multiple tokens found matching the" +
-          " multisig regime token name"))
-      }
+            // value
+            mrValueOuter <- actualMultisigRegimeOutput.value.assets.assets
+                .get(expectedHNS.policyId)
+                .toRight(
+                  InvalidTransactionError(
+                    "value of the multisig regime output" +
+                        "does not contain the head native script policyId"
+                  )
+                )
+            _ <- mrValueOuter.get(derivedTokenNames.multisigRegimeTokenName) match {
+                case None =>
+                    Left(
+                      InvalidTransactionError(
+                        "No tokens found matching the multisig regime token name"
+                      )
+                    )
+                case Some(1L) => Right(())
+                case Some(_) =>
+                    Left(
+                      InvalidTransactionError(
+                        "Multiple tokens found matching the" +
+                            " multisig regime token name"
+                      )
+                    )
+            }
 
-      // datum
-      _ <- if actualMultisigRegimeOutput.datumOption.isEmpty then Right(()) else Left(
-        InvalidTransactionError("multisig witness utxo has a non-empty datum")
-      )
+            // datum
+            _ <-
+                if actualMultisigRegimeOutput.datumOption.isEmpty then Right(())
+                else
+                    Left(
+                      InvalidTransactionError("multisig witness utxo has a non-empty datum")
+                    )
 
-      // script
-      _ <- if actualMultisigRegimeOutput.scriptRef.contains(ScriptRef.apply(expectedHNS.script))
-      then Right(())
-      else Left(InvalidTransactionError("Multisig regime witness UTxO does not contain the expected head" +
-        "native script"))
+            // script
+            _ <-
+                if actualMultisigRegimeOutput.scriptRef.contains(
+                      ScriptRef.apply(expectedHNS.script)
+                    )
+                then Right(())
+                else
+                    Left(
+                      InvalidTransactionError(
+                        "Multisig regime witness UTxO does not contain the expected head" +
+                            "native script"
+                      )
+                    )
 
-      //////
-      // Check mint coherence: only a single head token and MR token should be minted
-      mintOuter <- tx.body.value.mint.toRight(InvalidTransactionError("Mints are empty"))
-      mintInner <- mintOuter.assets.get(expectedHNS.policyId).toRight(InvalidTransactionError(
-        "Mints don't contain the HNS policy id"))
-      _ <- mintInner.get(derivedTokenNames.headTokenName) match {
-        case None => Left(InvalidTransactionError("head token not minted"))
-        case Some(1L) => Right(())
-        case Some(wrongNumber) => Left(InvalidTransactionError("multiple head tokens minted"))
-      }
-      _ <- mintInner.get(derivedTokenNames.multisigRegimeTokenName) match {
-        case None => Left(InvalidTransactionError("MR token not minted"))
-        case Some(1L) => Right(())
-        case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
-      }
+            //////
+            // Check mint coherence: only a single head token and MR token should be minted
+            mintOuter <- tx.body.value.mint.toRight(InvalidTransactionError("Mints are empty"))
+            mintInner <- mintOuter.assets
+                .get(expectedHNS.policyId)
+                .toRight(InvalidTransactionError("Mints don't contain the HNS policy id"))
+            _ <- mintInner.get(derivedTokenNames.headTokenName) match {
+                case None     => Left(InvalidTransactionError("head token not minted"))
+                case Some(1L) => Right(())
+                case Some(wrongNumber) =>
+                    Left(InvalidTransactionError("multiple head tokens minted"))
+            }
+            _ <- mintInner.get(derivedTokenNames.multisigRegimeTokenName) match {
+                case None              => Left(InvalidTransactionError("MR token not minted"))
+                case Some(1L)          => Right(())
+                case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
+            }
 
+            treasury = TreasuryUtxo(
+              treasuryTokenName = derivedTokenNames.headTokenName,
+              utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
+              address = expectedHeadAddress,
+              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+              value = actualTreasuryOutput.value
+            )
 
-      treasury = TreasuryUtxo(treasuryTokenName = derivedTokenNames.headTokenName,
-        utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
-        address = expectedHeadAddress,
-        datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
-        value = actualTreasuryOutput.value)
+            multisigRegimeWitness = Utxo(
+              TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+              actualMultisigRegimeOutput
+            )
 
-      multisigRegimeWitness = Utxo(TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
-        actualMultisigRegimeOutput)
+        } yield InitializationTx(
+          treasuryProduced = treasury,
+          multisigRegimeWitness = multisigRegimeWitness,
+          tokenNames = derivedTokenNames,
+          resolvedUtxos =
+              resolver(tx.body.value.inputs.toSeq ++ tx.body.value.referenceInputs.toSeq),
+          tx = tx
+        )
 
-    } yield InitializationTx(treasuryProduced = treasury,
-      multisigRegimeWitness = multisigRegimeWitness,
-      tokenNames = derivedTokenNames,
-      resolvedUtxos =
-        resolver(tx.body.value.inputs.toSeq ++ tx.body.value.referenceInputs.toSeq),
-      tx = tx)
+    sealed trait ParseError
 
-  sealed trait ParseError
+    case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
 
-  case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
+    case class InvalidTransactionError(msg: String) extends ParseError
 
-  case class InvalidTransactionError(msg: String) extends ParseError
+    final case class Recipe(
+        spentUtxos: SpentUtxos,
+        headNativeScript: HeadMultisigScript,
+        initialDeposit: Coin,
+        tokenNames: TokenNames,
+        // The amount of coin to cover the minAda for the vote UTxOs and collateral
+        // utxos in the fallback transaction (inclusive of the max fallback tx fee)
+        hmrwCoin: Coin,
+        env: Environment,
+        validators: Seq[Validator],
+        changePP: ShelleyPaymentPart,
+        evaluator: PlutusScriptEvaluator
+    ) {}
 
-  final case class Recipe(
-                           spentUtxos: SpentUtxos,
-                           headNativeScript: HeadMultisigScript,
-                           initialDeposit: Coin,
-                           tokenNames: TokenNames,
-                           // The amount of coin to cover the minAda for the vote UTxOs and collateral
-                           // utxos in the fallback transaction (inclusive of the max fallback tx fee)
-                           hmrwCoin: Coin,
-                           env: Environment,
-                           validators: Seq[Validator],
-                           changePP: ShelleyPaymentPart,
-                           evaluator: PlutusScriptEvaluator
-                         ) {}
-
-  final case class SpentUtxos(
-                               seedUtxo: Utxo,
-                               fundingUtxos: List[Utxo]
-                             ) {
-    def all: NonEmptyList[Utxo] = NonEmptyList(seedUtxo, fundingUtxos)
-  }
+    final case class SpentUtxos(
+        seedUtxo: Utxo,
+        fundingUtxos: List[Utxo]
+    ) {
+        def all: NonEmptyList[Utxo] = NonEmptyList(seedUtxo, fundingUtxos)
+    }
 }

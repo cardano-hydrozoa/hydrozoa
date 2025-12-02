@@ -6,6 +6,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
+import hydrozoa.multisig.MultisigRegimeManager.Config
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol
@@ -15,8 +16,6 @@ import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
-
-import MultisigRegimeManager.Config
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
@@ -151,7 +150,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
         } yield ()
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction({
+        PartialFunction.fromFunction {
             case TerminatedChild(childType, _) =>
                 childType match {
                     case Actors.BlockProducer =>
@@ -171,6 +170,6 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                         IO.println("Terminated persistence")
                 }
             // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
-        })
+        }
 
 }

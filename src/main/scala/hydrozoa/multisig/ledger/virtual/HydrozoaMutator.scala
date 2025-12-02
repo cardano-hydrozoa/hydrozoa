@@ -26,7 +26,7 @@ object HydrozoaTransactionMutator extends STSL2.Mutator {
         case L2EventTransaction(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                (v.validate(context, state, event))
+                v.validate(context, state, event)
             for
                 _ <- L2ConformanceValidator.validate(context, state, l2Event)
                 // Upstream validators (applied alphabetically for ease of comparison in a file browser
@@ -52,10 +52,9 @@ object HydrozoaTransactionMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- (
-                  RemoveInputsFromUtxoMutator.transit(context, state, event)
-                )
-                state <- (AddOutputsToUtxoMutator.transit(context, state, event))
+                state <-
+                    RemoveInputsFromUtxoMutator.transit(context, state, event)
+                state <- AddOutputsToUtxoMutator.transit(context, state, event)
             yield state
         }
         case _ => Right(state)
@@ -67,7 +66,7 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
         case L2EventWithdrawal(event) => {
             // A helper for mapping the error type and applying arguments
             def helper(v: Validator): Either[Error, Unit] =
-                (v.validate(context, state, event))
+                v.validate(context, state, event)
 
             for
                 // L2 Native validators
@@ -103,9 +102,8 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
                 _ <- helper(WrongNetworkInTxBodyValidator)
                  */
                 // Upstream mutators
-                state <- (
-                  RemoveInputsFromUtxoMutator.transit(context, state, event)
-                )
+                state <-
+                    RemoveInputsFromUtxoMutator.transit(context, state, event)
             yield state
         }
         case _ => Right(state)
@@ -115,7 +113,7 @@ object HydrozoaWithdrawalMutator extends STSL2.Mutator {
 //////////////////
 // Helper
 
-private def mapLeft[A, B, C](f: A => C)(e: Either[A, B]): (Either[C, B]) = e match {
+private def mapLeft[A, B, C](f: A => C)(e: Either[A, B]): Either[C, B] = e match {
     case Left(a)  => Left(f(a))
     case Right(b) => Right(b)
 }

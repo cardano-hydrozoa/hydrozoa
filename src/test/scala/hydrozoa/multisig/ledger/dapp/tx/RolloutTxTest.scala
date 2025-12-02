@@ -19,11 +19,12 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
             config <- genTxConfig()
             genPayouts = genPayoutObligationL1(config.env.network)
             // We want to test small, medium, and large, so we do it with frequency
-            payouts <- GenOther.nonEmptyVectorOfN(200, genPayouts)
-            //                Gen.frequency(
-            //                (1, GenOther.nonEmptyVectorOf(genPayouts)),
-            //                (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size*3+1, genPayouts))),
-            //                (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size*6+1, genPayouts))))
+            payouts <-
+                Gen.frequency(
+                  (1, GenOther.nonEmptyVectorOf(genPayouts)),
+                  (7, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 3 + 1, genPayouts))),
+                  (2, Gen.sized(size => GenOther.nonEmptyVectorOfN(size * 6 + 1, genPayouts)))
+                )
         } yield (
           RolloutTx.Builder.Last(config),
           RolloutTx.Builder.Args.Last(payouts)
@@ -72,7 +73,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
         }
     }
 
-    test("Complete Last Partial Result")({
+    test("Complete Last Partial Result") {
         forAll(genLastBuilder)((builder, args) => {
             val res = for {
                 pr <- builder.partialResult(args)
@@ -84,7 +85,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
             } yield res
             assert(res.isRight)
         })
-    })
+    }
 
     // ===================================
     // Not Last

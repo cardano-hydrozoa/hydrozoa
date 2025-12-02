@@ -4,14 +4,13 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.multisig.consensus.TransactionSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, Peer}
 import scala.collection.immutable.Queue
-
-import TransactionSequencer.{Config, ConnectionsPending}
 
 /** Transaction sequencer receives local submissions of new ledger events and emits them
   * sequentially into the consensus system.
@@ -52,14 +51,14 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap({
+            subscribers.get.flatMap {
                 case Some(subs) =>
                     this.receiveTotal(req, subs)
                 case _ =>
                     Error(
                       "Impossible: Ledger event actor is receiving before its preStart provided subscribers."
                     ).raiseError
-            })
+            }
         )
 
     private def receiveTotal(req: Request, subs: Subscribers): IO[Unit] =

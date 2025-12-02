@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
@@ -15,7 +16,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.prelude.Option as SOption
 import test.*
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import test.Generators.Hydrozoa.*
 
 var counter = AtomicLong(0L)
@@ -28,7 +28,7 @@ def genDepositRecipe(
         depositor <- genTestPeer
         headAddress <- genScriptAddress()
         genData = Gen.frequency(
-          (99, genByteStringData.map(data => SOption.Some((data)))),
+          (99, genByteStringData.map(data => SOption.Some(data))),
           (1, SOption.None)
         )
         depositData <- genData
@@ -39,7 +39,7 @@ def genDepositRecipe(
         refundAddr <- genPubkeyAddress()
 
         depositDatum = DepositUtxo.Datum(
-          address = (LedgerToPlutusTranslation.getAddress(l2Addr).credential),
+          address = LedgerToPlutusTranslation.getAddress(l2Addr).credential,
           datum = depositData,
           deadline = deadline,
           refundAddress = LedgerToPlutusTranslation.getAddress(refundAddr),
@@ -85,17 +85,17 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
         PropertyCheckConfiguration(minSuccessful = 100)
 
-    given pv : ProtocolVersion =  ProtocolVersion.conwayPV
-    
+    given pv: ProtocolVersion = ProtocolVersion.conwayPV
+
     // override def scalaCheckInitialSeed = "SfYvj1tuRnXN2LkzQzKEbLA6LEPVYNSFj2985MfH0ZO="
 
-    test("Roundtrip deposit metadata"){
+    test("Roundtrip deposit metadata") {
         forAll(genScriptAddress()) { addr =>
-           val mbAux = Some(KeepRaw(MD(MD.Deposit(addr))))
-           MD.parse(mbAux) match {
-               case Right(_) => ()
-               case Left(e) => fail(e.toString)
-           }
+            val mbAux = Some(KeepRaw(MD(MD.Deposit(addr))))
+            MD.parse(mbAux) match {
+                case Right(_) => ()
+                case Left(e)  => fail(e.toString)
+            }
         }
     }
 
@@ -106,7 +106,9 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 case Right(tx) =>
                     DepositTx.parse(tx.tx.toCbor) match {
                         case Left(e) =>
-                            fail(s"Produced deposit tx cannot be deserialized from CBOR: ${e.getCause}")
+                            fail(
+                              s"Produced deposit tx cannot be deserialized from CBOR: ${e.getCause}"
+                            )
                         case Right(cborParsed) if cborParsed != tx =>
                             // println(ByteString.fromArray(tx.tx.toCbor).toHex)
                             // assert(expected = tx.tx.body.value.outputs(1), obtained = cborParsed.tx.body.value.outputs(1))

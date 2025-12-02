@@ -29,9 +29,9 @@ trait Persistence extends Actor[IO, Request] {
     private val confirmedBlock = Ref.unsafe[IO, Option[Block.Number]](None)
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction({
+        PartialFunction.fromFunction {
             case x: PersistRequest =>
-                x.handleRequest({ case PersistRequest(data, dResp) =>
+                x.handleRequest { case PersistRequest(data, dResp) =>
                     for {
                         _ <- data match {
                             case x: NewLedgerEvent =>
@@ -50,7 +50,7 @@ trait Persistence extends Actor[IO, Request] {
                         }
                     } yield PutSucceeded
 
-                })
+                }
             case x: PutL1Effects        => x.handleRequest(_ => IO.pure(PutSucceeded))
             case x: PutCardanoHeadState => x.handleRequest(_ => IO.pure(PutSucceeded))
             case x: GetBlockData        => x.handleRequest(_ => IO.pure(GetBlockDataResp()))
@@ -58,5 +58,5 @@ trait Persistence extends Actor[IO, Request] {
                 x.handleRequest(_ => IO.pure(GetConfirmedLocalEventsResp()))
             case x: GetConfirmedL1Effects =>
                 x.handleRequest(_ => IO.pure(GetConfirmedL1EffectsResp()))
-        })
+        }
 }

@@ -248,13 +248,13 @@ object Generators {
                 txId <- arbitrary[TransactionInput]
                 headTn <- genHeadTokenName
 
-                scriptAddress = headAddress.getOrElse({
+                scriptAddress = headAddress.getOrElse {
                     ShelleyAddress(
                       network,
                       ShelleyPaymentPart.Script(genScriptHash.sample.get),
                       Null
                     )
-                })
+                }
                 datum <- genTreasuryDatum
 
                 treasuryToken: Value = Value(

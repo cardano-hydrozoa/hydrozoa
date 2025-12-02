@@ -2,17 +2,19 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
-import hydrozoa.multisig.ledger.dapp.tx.{SettlementTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
+import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError
+import scalus.ledger.api.v3.PosixTime
 
 enum SettlementTxSeq {
     def settlementTx: SettlementTx
 
     case NoRollouts(
-        override val settlementTx: SettlementTx.NoRollouts
+        override val settlementTx: SettlementTx.NoRollouts,
     )
 
     case WithRollouts(
@@ -30,12 +32,29 @@ object SettlementTxSeq {
         def build(args: Args): Either[Builder.Error, Builder.Result] = {
             NonEmptyVector.fromVector(args.payoutObligationsRemaining) match {
                 case None =>
-                    SettlementTx.Builder
-                        .NoPayouts(config)
-                        .build(args.toArgsNoPayouts)
-                        .left
-                        .map(Builder.Error.SettlementError(_))
-                        .map(Result.fromNoPayouts)
+                    for {
+                        settlementTx <- SettlementTx.Builder
+                            .NoPayouts(config)
+                            .build(args.toArgsNoPayouts)
+                            .left
+                            .map(Builder.Error.SettlementError(_))
+
+                        ftxRecipe = FallbackTx.Recipe(
+                          config = config,
+                          treasuryUtxo = settlementTx.transaction.treasuryProduced,
+                          tallyFeeAllowance = args.tallyFeeAllowance,
+                          votingDuration = args.votingDuration
+                        )
+                        fallbackTx <- FallbackTx
+                            .build(ftxRecipe)
+                            .left
+                            .map(Builder.Error.FallbackError(_))
+                    } yield Builder.Result(
+                      settlementTxSeq = SettlementTxSeq.NoRollouts(settlementTx.transaction),
+                      fallbackTx = fallbackTx,
+                      depositsSpent = settlementTx.depositsSpent,
+                      depositsToSpend = settlementTx.depositsToSpend
+                    )
                 case Some(nePayouts) =>
                     for {
                         rolloutTxSeqPartial <- RolloutTxSeq
@@ -63,8 +82,19 @@ object SettlementTxSeq {
                                         .map(Error.RolloutSeqError(_))
                                         .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
+                        ftxRecipe = FallbackTx.Recipe(
+                          config = config,
+                          treasuryUtxo = settlementTxRes.transaction.treasuryProduced,
+                          tallyFeeAllowance = args.tallyFeeAllowance,
+                          votingDuration = args.votingDuration
+                        )
+                        fallbackTx <- FallbackTx
+                            .build(ftxRecipe)
+                            .left
+                            .map(Builder.Error.FallbackError(_))
                     } yield Result(
                       settlementTxSeq = settlementTxSeq,
+                      fallbackTx = fallbackTx,
                       depositsSpent = settlementTxRes.depositsSpent,
                       depositsToSpend = settlementTxRes.depositsToSpend
                     )
@@ -78,28 +108,22 @@ object SettlementTxSeq {
         enum Error:
             case SettlementError(e: (SomeBuildError, String))
             case RolloutSeqError(e: (SomeBuildError, String))
+            case FallbackError(e: SomeBuildError)
 
         final case class Result(
             settlementTxSeq: SettlementTxSeq,
+            fallbackTx: FallbackTx,
             override val depositsSpent: Vector[DepositUtxo],
             override val depositsToSpend: Vector[DepositUtxo]
         ) extends DepositUtxo.Many.Spent.Partition
-
-        object Result {
-            def fromNoPayouts(res: tx.SettlementTx.Builder.Result.NoPayouts): Result = {
-                Result(
-                  SettlementTxSeq.NoRollouts(res.transaction),
-                  depositsSpent = res.depositsSpent,
-                  depositsToSpend = res.depositsToSpend
-                )
-            }
-        }
 
         final case class Args(
             override val majorVersionProduced: Block.Version.Major,
             override val treasuryToSpend: TreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1]
+            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            tallyFeeAllowance: Coin,
+            votingDuration: PosixTime
         ) extends SingleArgs,
               Payout.Obligation.L1.Many.Remaining {
             def toArgsNoPayouts: SingleArgs.NoPayouts =

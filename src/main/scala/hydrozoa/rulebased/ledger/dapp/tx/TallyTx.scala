@@ -3,11 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
-    DisputeRedeemer,
-    TallyRedeemer,
-    maxVote
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.*
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
 import scala.util.{Failure, Success, Try}
@@ -20,19 +16,8 @@ import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
-import scalus.cardano.txbuilder.TransactionBuilderStep.{
-    AddCollateral,
-    ReferenceOutput,
-    Send,
-    Spend,
-    ValidityEndSlot
-}
-import scalus.cardano.txbuilder.{
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class TallyTx(
     continuingVoteUtxo: TallyVoteUtxo,

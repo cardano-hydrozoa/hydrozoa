@@ -11,7 +11,6 @@ import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteState
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
-
 import scala.annotation.tailrec
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
@@ -186,7 +185,7 @@ object DisputeResolutionValidator extends Validator {
                 }
 
                 // Check signature
-                require((tx.signatories.contains(votePeer)), VoteMustBeSignedByPeer)
+                require(tx.signatories.contains(votePeer), VoteMustBeSignedByPeer)
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
@@ -210,7 +209,8 @@ object DisputeResolutionValidator extends Validator {
                     .get(headMp)
                     .getOrElse(SortedMap.empty)
                     .toList match
-                    case List.Cons((tokenName, amount), none) =>
+                    case List.Cons(tokenNameAndAmount, none) =>
+                        val tokenName = tokenNameAndAmount._1
                         require(
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
                           VoteTreasuryBeacon
@@ -252,15 +252,15 @@ object DisputeResolutionValidator extends Validator {
                                 case Cons(h2, t2) =>
                                     require(verifyEd25519Signature(h1, msg, h2))
                                     verifySignatures(t1, t2)
-                                case Nil          => ()
+                                case Nil => ()
                         case Nil => ()
 
                 verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
 
-                //@annotation.unused
-                //val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
+                // @annotation.unused
+                // val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
                 //    //require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                //)
+                // )
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
@@ -294,7 +294,7 @@ object DisputeResolutionValidator extends Validator {
                         )
                     case _ => fail(VoteOutputDatumCheck)
                 }
-                
+
                 // All other fields of voteInput and voteOutput must match.
                 require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
@@ -387,16 +387,15 @@ object DisputeResolutionValidator extends Validator {
 
                 // If the voteStatus of either continuingInput or removedInput is NoVote,
                 // all the following must be satisfied
-                if (
-                  (continuingDatum.voteStatus match {
-                      case VoteStatus.AwaitingVote(_) => true
-                      case VoteStatus.Voted(_, _) =>
-                          removedDatum.voteStatus match {
-                              case VoteStatus.AwaitingVote(_) => true
-                              case VoteStatus.Voted(_, _)     => false
-                          }
-                  })
-                ) {
+                if continuingDatum.voteStatus match {
+                        case VoteStatus.AwaitingVote(_) => true
+                        case VoteStatus.Voted(_, _) =>
+                            removedDatum.voteStatus match {
+                                case VoteStatus.AwaitingVote(_) => true
+                                case VoteStatus.Voted(_, _)     => false
+                            }
+                    }
+                then {
                     // Let treasury be a reference input holding the head beacon token of headMp
                     // and CIP-67 prefix 4937
                     val treasuryReference = tx.referenceInputs
@@ -405,7 +404,9 @@ object DisputeResolutionValidator extends Validator {
                                 .get(contCs)
                                 .getOrElse(SortedMap.empty)
                                 .toList match
-                                case List.Cons((tokenName, amount), none) =>
+                                case List.Cons(tokenNameAndAmount, none) =>
+                                    val tokenName = tokenNameAndAmount._1
+                                    val amount = tokenNameAndAmount._2
                                     tokenName.take(4) == cip67BeaconTokenPrefix
                                     && amount == BigInt(1)
                                     && none.isEmpty
@@ -486,7 +487,9 @@ object DisputeResolutionValidator extends Validator {
                             .get(headMp)
                             .getOrElse(SortedMap.empty)
                             .toList match
-                            case List.Cons((tokenName, amount), none) =>
+                            case List.Cons(tokenNameAndAmount, none) =>
+                                val tokenName = tokenNameAndAmount._1
+                                val amount = tokenNameAndAmount._2
                                 tokenName.take(4) == cip67BeaconTokenPrefix
                                 && amount == BigInt(1)
                                 && none.isEmpty
@@ -523,7 +526,6 @@ object DisputeResolutionValidator extends Validator {
 
 object DisputeResolutionScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    // Using def instead of lazy val to avoid stack overflow during tests
     private val compiledSir = Compiler.compile(DisputeResolutionValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
@@ -538,7 +540,7 @@ object DisputeResolutionScript {
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    val compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    val compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
 
     val compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(DisputeResolutionScript.compiledCbor))
@@ -560,9 +562,9 @@ object DisputeResolutionScript {
     val getScriptHash: Array[Byte] = compiledScriptHash.bytes
 
     def address(n: Network): ShelleyAddress = ShelleyAddress(
-        network = n,
-        payment = ShelleyPaymentPart.Script(this.compiledScriptHash),
-        delegation = ShelleyDelegationPart.Null
+      network = n,
+      payment = ShelleyPaymentPart.Script(this.compiledScriptHash),
+      delegation = ShelleyDelegationPart.Null
     )
 
 }

@@ -6,7 +6,6 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.RefundPostDated
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-
 import scala.language.implicitConversions
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
@@ -84,10 +83,11 @@ object RefundTx {
                 Some(
                   MD(
                     RefundPostDated(
-                    recipe.headScript.mkAddress(recipe.network)
+                      recipe.headScript.mkAddress(recipe.network)
+                    )
                   )
                 )
-            ))
+            )
 
             val steps = List(spendDeposit, createRefund, setValidity, modifyAuxiliaryData)
 

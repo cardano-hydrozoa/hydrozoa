@@ -15,19 +15,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{
-    Coin,
-    Hash,
-    KeepRaw,
-    Sized,
-    TaggedSortedSet,
-    Transaction as STransaction,
-    TransactionBody,
-    TransactionInput,
-    TransactionOutput,
-    TransactionWitnessSet,
-    Value
-}
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
@@ -126,14 +114,13 @@ def l2EventWithdrawalFromInputsAndPeer(
       fee = Coin(0L)
     )
 
-    val txUnsigned: STransaction = (
-      STransaction(
-        body = KeepRaw(txBody),
-        witnessSet = TransactionWitnessSet.empty,
-        isValid = true,
-        auxiliaryData = None
-      )
-    )
+    val txUnsigned: STransaction =
+        STransaction(
+          body = KeepRaw(txBody),
+          witnessSet = TransactionWitnessSet.empty,
+          isValid = true,
+          auxiliaryData = None
+        )
 
     // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
     // Its probably possible to extract the key and use the crypto primitives from scalus directly

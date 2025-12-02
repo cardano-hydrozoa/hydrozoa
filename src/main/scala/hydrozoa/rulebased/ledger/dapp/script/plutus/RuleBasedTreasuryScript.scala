@@ -1,6 +1,4 @@
 package hydrozoa.rulebased.ledger.dapp.script.plutus
-
-import hydrozoa.AddressL1
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.ledger.api.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.ledger.api.TxOutExtension.inlineDatumOfType
@@ -244,7 +242,9 @@ object RuleBasedTreasuryValidator extends Validator {
                         .getOrFail(WithdrawBeaconTokenFailure)
                         .toList
                         .filter((tn, _) => tn.take(4) == cip67BeaconTokenPrefix) match
-                        case List.Cons((tokenName, amount), none) =>
+                        case List.Cons(tokenNameAndAmount, none) =>
+                            val tokenName = tokenNameAndAmount._1
+                            val amount = tokenNameAndAmount._2
                             require(none.isEmpty && amount == BigInt(1), WithdrawBeaconTokenFailure)
                             tokenName
                         case _ => fail(WithdrawBeaconTokenFailure)
@@ -418,7 +418,6 @@ object RuleBasedTreasuryValidator extends Validator {
 
 object RuleBasedTreasuryScript {
     // Compile the validator to Scalus Intermediate Representation (SIR)
-    // Using def instead of lazy val to avoid stack overflow during tests
     private val compiledSir = Compiler.compile(RuleBasedTreasuryValidator.validate)
 
     // Convert to optimized UPLC with error traces for PlutusV3
@@ -434,7 +433,7 @@ object RuleBasedTreasuryScript {
     // private def cborEncoded: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
     val flatEncoded: Array[Byte] = compiledDeBruijnedProgram.flatEncoded
 
-    val compiledCbor = compiledDeBruijnedProgram.cborEncoded
+    val compiledCbor: Array[Byte] = compiledDeBruijnedProgram.cborEncoded
 
     val compiledPlutusV3Script =
         Script.PlutusV3(ByteString.fromArray(RuleBasedTreasuryScript.compiledCbor))
@@ -454,8 +453,8 @@ object RuleBasedTreasuryScript {
 
     def address(n: Network): ShelleyAddress =
         ShelleyAddress(
-            network = n,
-            payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
-            delegation = Null
+          network = n,
+          payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
+          delegation = Null
         )
 }

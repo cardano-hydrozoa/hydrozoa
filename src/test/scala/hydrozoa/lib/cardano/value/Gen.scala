@@ -1,10 +1,10 @@
 package hydrozoa.lib.cardano.value
 
-import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.Arbitrary
-import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
 import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
 import hydrozoa.lib.cardano.value.multiasset.MultiAsset
+import org.scalacheck.Arbitrary
+import org.scalacheck.Arbitrary.arbitrary
 
 import coin.Gen.Arb.given
 import multiasset.Gen.Arb.given

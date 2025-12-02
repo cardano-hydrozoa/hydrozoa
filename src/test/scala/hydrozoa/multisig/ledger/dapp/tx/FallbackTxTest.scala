@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import org.scalacheck.Gen
 import scalus.cardano.ledger.*
 import test.*
-import test.Generators.Hydrozoa.{genScriptAddress, genTreasuryUtxo, genTxBuilderConfigAndPeers}
+import test.Generators.Hydrozoa.{genTreasuryUtxo, genTxBuilderConfigAndPeers}
 
 // NOTE: This generator isn't currently used. It makes more sense to test this transaction
 // as part of its transaction sequence. This generator is provided in case there are bugs
@@ -14,8 +14,6 @@ val genFallbackTxRecipe: Gen[(FallbackTx.Recipe, NonEmptyList[TestPeer])] =
     for {
         (config, peers) <- genTxBuilderConfigAndPeers()
         treasuryUtxo <- genTreasuryUtxo(config)
-        disputeTreasuryPP <- genScriptAddress(config.env.network).map(_.payment)
-        disputeResolutionPP <- genScriptAddress(config.env.network).map(_.payment)
     } yield (
       FallbackTx.Recipe(
         config = config,
