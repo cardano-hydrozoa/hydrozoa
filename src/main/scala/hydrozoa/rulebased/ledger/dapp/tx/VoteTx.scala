@@ -3,11 +3,7 @@ package hydrozoa.rulebased.ledger.dapp.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
-import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{
-    DisputeRedeemer,
-    OnchainBlockHeader,
-    VoteRedeemer
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
@@ -18,7 +14,7 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
@@ -64,8 +60,8 @@ object VoteTx {
                     case Success(voteDatum) =>
                         voteDatum.voteStatus match {
                             case AwaitingVote(_) => {
-                            val updatedVoteDatum = voteDatum.copy(
-                                voteStatus = VoteStatus.Voted(
+                                val updatedVoteDatum = voteDatum.copy(
+                                  voteStatus = VoteStatus.Voted(
                                     recipe.blockHeader.commitment,
                                     recipe.blockHeader.versionMinor
                                   )
@@ -115,7 +111,7 @@ object VoteTx {
                   recipe.network,
                   List(
                     // Use collateral to pay fees
-                    Spend(TransactionUnspentOutput(recipe.collateralUtxo.toScalus), PubKeyWitness),
+                    Spend(recipe.collateralUtxo.toScalus, PubKeyWitness),
                     Send(recipe.collateralUtxo._2),
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
@@ -141,8 +137,8 @@ object VoteTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(TransactionUnspentOutput(recipe.treasuryUtxo.toUtxo)),
-                    AddCollateral(TransactionUnspentOutput(recipe.collateralUtxo.toScalus)),
+                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.toUtxo)),
+                    AddCollateral(recipe.collateralUtxo.toScalus),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )

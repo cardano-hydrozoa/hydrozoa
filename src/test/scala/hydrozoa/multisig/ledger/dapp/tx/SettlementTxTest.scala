@@ -112,7 +112,9 @@ def genSettlementTxSeqBuilder(
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
-        treasuryToSpend = utxo
+        treasuryToSpend = utxo,
+        tallyFeeAllowance = Coin.ada(2),
+        votingDuration = 100
       ),
       peers
     )

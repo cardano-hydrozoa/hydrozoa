@@ -1,6 +1,6 @@
 package hydrozoa.config
 import hydrozoa.AddressL1
-import scalus.cardano.ledger.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Coin
 import spire.compat.numeric
 import spire.math.Number.apply
 import spire.math.{Rational, SafeLong, UByte}
@@ -114,7 +114,9 @@ object EquityShares:
                 treasuryCoin: Coin
             ): Distribution = {
                 // TODO: check this calculation
-                val equity = (treasuryCoin -~ defaultVoteDeposit -~ (voteDeposit *~ SafeLong(self.peerShares.size))).unsafeToCoin
+                val equity = (treasuryCoin -~ defaultVoteDeposit -~ (voteDeposit *~ SafeLong(
+                  self.peerShares.size
+                ))).unsafeToCoin
                 val payouts = self.peerShares.values.map(v =>
                     v.payoutAddress ->
                         Coin.unsafeApply(

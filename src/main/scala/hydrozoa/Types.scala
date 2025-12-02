@@ -42,9 +42,9 @@ import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, ToData}
 import scalus.cardano.address.{Address as SAddress, ShelleyAddress}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.ledger.api.v3
 import scalus.ledger.api.v3.PubKeyHash
 
@@ -91,7 +91,7 @@ object Ed25519Signature:
     opaque type Ed25519Signature = IArray[Byte]
     def apply(signature: IArray[Byte]): Ed25519Signature = signature
     given Conversion[Ed25519Signature, IArray[Byte]] = identity
-    given Conversion[Ed25519Signature, Array[Byte]] = (sig => IArray.genericWrapArray(sig).toArray)
+    given Conversion[Ed25519Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
     extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
 
 type Ed25519Signature = Ed25519Signature.Ed25519Signature
@@ -203,8 +203,8 @@ object Utxo:
     extension [L <: AnyLayer](utxo: Utxo[L]) def output: Output[L] = utxo._2
     extension [L <: AnyLayer](utxo: Utxo[L]) def input: UtxoId[L] = utxo._1
     extension [L <: AnyLayer](utxo: Utxo[L])
-        def toScalus: (TransactionInput, TransactionOutput) =
-            (utxo._1.untagged, utxo._2.convert)
+        def toScalus: SUtxo =
+            SUtxo(utxo._1.untagged, utxo._2.convert)
 
 type Utxo[L <: AnyLayer] = Utxo.Utxo[L]
 

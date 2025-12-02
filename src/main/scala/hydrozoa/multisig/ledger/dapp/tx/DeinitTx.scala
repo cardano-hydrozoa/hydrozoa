@@ -2,12 +2,12 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.config.EquityShares
 import hydrozoa.config.EquityShares.MultisigRegimeDistribution
+import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
 import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
 import scala.Function.const
-import scalus.cardano.ledger.value.coin.Coin
-import scalus.cardano.ledger.value.coin.Coin.Unbounded
 import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -68,7 +68,7 @@ object DeinitTx:
                 .finalizeContext(
                   config.env.protocolParams,
                   SharePayoutsDiffHandler.handler(residualTreasuryToSpend, equityShares),
-                  config.env.evaluator,
+                  config.evaluator,
                   config.validators
                 )
                 .explain(const("Could not balance deinit transaction"))
@@ -141,11 +141,11 @@ object DeinitTx:
             residualTreasuryToSpend: ResidualTreasuryUtxo,
             equityShares: EquityShares
         ): DiffHandler = (
-            diff: Long,
+            diff: Value,
             tx: Transaction
         ) => {
 
-            if diff == 0 then Right(tx)
+            if diff == Value.zero then Right(tx)
             else
                 val distribute = MultisigRegimeDistribution.distribute(equityShares)
 
@@ -169,7 +169,9 @@ object DeinitTx:
                     distribution = distribute(equity)
 
                     outputs = distribution.payouts
-                        .map(p => Sized(TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying))))
+                        .map(p =>
+                            Sized(TransactionOutput.apply(p._1, Value.lovelace(p._2.underlying)))
+                        )
                         .toList
 
                 } yield {

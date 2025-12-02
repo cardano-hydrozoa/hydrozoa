@@ -21,21 +21,18 @@ package hydrozoa.multisig.ledger.virtual
   * The overall principle is simple: `validate` checks a `(context, state, event)` tuple for
   * validity, `transit` takes `(context, state, event)` to a new `state`.
   *
-  * 
   * TODO: This following section is no longer the approach we are taking. We want to reduce the
- * Footprint of our code and only inject/project the parts we care about when interacting with the 
- * scalus ledger rules.
- * 
- * /////
-  * Where possible, we use the upstream types for representing our own STS. This means that our
-  * State, Context, and Transition types are "too big" -- for instance, our State type contains
+  * Footprint of our code and only inject/project the parts we care about when interacting with the
+  * scalus ledger rules.
+  *
+  * ///// Where possible, we use the upstream types for representing our own STS. This means that
+  * our State, Context, and Transition types are "too big" -- for instance, our State type contains
   * information about the UTxO Map, which the L2 Ledger indeed makes use of, but ALSO contains
   * information about Certificate state, which the L2 Ledger does not support. We do this because we
   * want to re-use L1 ledger rules directly where possible without having to convert possibly large
   * data structures (such as the entire utxo map) each time; this is a performance vs type-safety
-  * trade-off that we felt was worth it.
-  * /////
- * 
+  * trade-off that we felt was worth it. /////
+  *
   * The validation rules for our STSL2 that are native to hydrozoa (i.e., that do not apply to L1)
   * can be found in `L2ConformanceValidator.scala`.
   */

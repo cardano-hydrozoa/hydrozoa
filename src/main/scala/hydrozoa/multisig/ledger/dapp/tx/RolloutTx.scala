@@ -2,15 +2,10 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{
-    BuildErrorOr,
-    explain,
-    explainAppendConst,
-    explainConst
-}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
-import hydrozoa.prebalancedDiffHandler
+import hydrozoa.prebalancedLovelaceDiffHandler
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.builtin.ByteString
@@ -18,19 +13,9 @@ import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeExceptio
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
-import scalus.cardano.txbuilder.TransactionBuilderStep.{
-    ModifyAuxiliaryData,
-    ReferenceOutput,
-    Send,
-    Spend
-}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{
-    SomeBuildError,
-    TransactionBuilder,
-    TransactionBuilderStep,
-    TransactionUnspentOutput
-}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
 
 enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
 
@@ -126,8 +111,8 @@ object RolloutTx {
                     finished <- addedRolloutInput
                         .finalizeContext(
                           protocolParams = builder.config.env.protocolParams,
-                          diffHandler = prebalancedDiffHandler,
-                          evaluator = builder.config.env.evaluator,
+                          diffHandler = prebalancedLovelaceDiffHandler,
+                          evaluator = builder.config.evaluator,
                           validators = builder.config.validators
                         )
                         .explain(const("Could not finalize context after spending rollout input"))
@@ -336,9 +321,7 @@ object RolloutTx {
                 List(stepRolloutMetadata(config), stepReferenceHNS(config))
 
             private def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.L1TxTypes.Rollout, headAddress = config.headAddress))
-                )
+                ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
             private def stepReferenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
@@ -399,14 +382,19 @@ object RolloutTx {
                     addedPlaceholderRolloutInput <- TransactionBuilder.modify(ctx, placeholder)
                     res <- addedPlaceholderRolloutInput.finalizeContext(
                       builder.config.env.protocolParams,
-                      prebalancedDiffHandler,
-                      builder.config.env.evaluator,
+                      prebalancedLovelaceDiffHandler,
+                      builder.config.evaluator,
                       List(TransactionSizeValidator)
                     )
 
                 } yield res
                 res match {
-                    case Left(SomeBuildError.ValidationError(e: InvalidTransactionSizeException, errorCtx)) =>
+                    case Left(
+                          SomeBuildError.ValidationError(
+                            e: InvalidTransactionSizeException,
+                            errorCtx
+                          )
+                        ) =>
                         Left(SomeBuildError.ValidationError(e, errorCtx))
                             .explainConst("trail to add payout failed")
                     case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>

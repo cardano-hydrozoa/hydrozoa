@@ -1,0 +1,115 @@
+package hydrozoa.lib.cardano.value.multiasset
+
+import hydrozoa.lib.cardano.value.coin.Coin
+import hydrozoa.lib.cardano.value.coin.Gen.Arb.given
+import hydrozoa.lib.cardano.value.multiasset.MultiAsset
+import org.scalacheck.Arbitrary.arbitrary
+import org.scalacheck.{Arbitrary, Gen as Gen0}
+import scala.collection.immutable
+import scala.collection.immutable.SortedMap
+import scalus.cardano.ledger.ArbitraryInstances.{given_Arbitrary_AssetName, given_Arbitrary_Hash}
+import scalus.cardano.ledger.{AssetName, PolicyId}
+
+object Gen {
+    def genConfigurableMultiAssetFractional(
+        minPolicies: Int = 1,
+        maxPolicies: Int = 8,
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset.Fractional] = {
+        val innerArb = Arbitrary(genConfigurableInnerFractional(minAssets, maxAssets))
+        genConfigurableMultiAssetPolymorphic(minPolicies, maxPolicies)(using innerArb)
+            .map(MultiAsset.Fractional.apply)
+    }
+
+    def genConfigurableMultiAssetUnbounded(
+        minPolicies: Int = 1,
+        maxPolicies: Int = 8,
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset.Unbounded] = {
+        val innerArb = Arbitrary(genConfigurableInnerUnbounded(minAssets, maxAssets))
+        genConfigurableMultiAssetPolymorphic(minPolicies, maxPolicies)(using innerArb)
+            .map(MultiAsset.Unbounded.apply)
+    }
+
+    def genConfigurableMultiAsset(
+        minPolicies: Int = 1,
+        maxPolicies: Int = 8,
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset] = {
+        val innerArb = Arbitrary(genConfigurableInner(minAssets, maxAssets))
+        genConfigurableMultiAssetPolymorphic(minPolicies, maxPolicies)(using innerArb)
+            .map(MultiAsset.apply)
+    }
+
+    def genConfigurableInnerFractional(
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset.Inner.Fractional] =
+        genInnerPolymorphic[Coin.Fractional](minAssets, maxAssets)
+            .map(MultiAsset.Inner.Fractional.apply)
+
+    def genConfigurableInnerUnbounded(
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset.Inner.Unbounded] =
+        genInnerPolymorphic[Coin.Unbounded](minAssets, maxAssets)
+            .map(MultiAsset.Inner.Unbounded.apply)
+
+    def genConfigurableInner(
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    ): Gen0[MultiAsset.Inner] =
+        genInnerPolymorphic[Coin](minAssets, maxAssets)
+            .map(MultiAsset.Inner.apply)
+
+    private def genConfigurableMultiAssetPolymorphic[I](
+        minPolicies: Int = 1,
+        maxPolicies: Int = 8
+    )(using innerArb: Arbitrary[I]): Gen0[SortedMap[PolicyId, I]] = for {
+        policies <- Gen0.choose(minPolicies, maxPolicies)
+        list <- Gen0.containerOfN[List, (PolicyId, I)](
+          policies,
+          for {
+              policy <- arbitrary[PolicyId]
+              inner <- innerArb.arbitrary
+          } yield policy -> inner
+        )
+    } yield list.to(SortedMap)
+
+    private def genInnerPolymorphic[C](
+        minAssets: Int = 1,
+        maxAssets: Int = 8
+    )(using coinArb: Arbitrary[C]): Gen0[SortedMap[AssetName, C]] = for {
+        assets <- Gen0.choose(minAssets, maxAssets)
+        list <- Gen0.containerOfN[List, (AssetName, C)](
+          assets,
+          for {
+              assetName <- arbitrary[AssetName]
+              coin <- coinArb.arbitrary
+          } yield assetName -> coin
+        )
+    } yield list.to(SortedMap)
+
+    object Arb {
+        implicit val multiAssetArb: Arbitrary[MultiAsset] =
+            Arbitrary(genConfigurableMultiAsset())
+
+        implicit val multiAssetUnboundedArb: Arbitrary[MultiAsset.Unbounded] =
+            Arbitrary(genConfigurableMultiAssetUnbounded())
+
+        implicit val multiAssetFractionalArb: Arbitrary[MultiAsset.Fractional] =
+            Arbitrary(genConfigurableMultiAssetFractional())
+
+        implicit val multiAssetInnerArb: Arbitrary[MultiAsset.Inner] =
+            Arbitrary(genConfigurableInner())
+
+        implicit val multiAssetInnerUnboundedArb: Arbitrary[MultiAsset.Inner.Unbounded] =
+            Arbitrary(genConfigurableInnerUnbounded())
+
+        implicit val multiAssetInnerFractionalArb: Arbitrary[MultiAsset.Inner.Fractional] =
+            Arbitrary(genConfigurableInnerFractional())
+    }
+}

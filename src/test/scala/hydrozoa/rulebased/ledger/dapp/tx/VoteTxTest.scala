@@ -16,9 +16,9 @@ import scala.annotation.nowarn
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.ledger.api.v3.TokenName
 import test.*
 
@@ -158,7 +158,7 @@ class VoteTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 case Left(e) =>
                     fail(s"Build failed $e")
                 case Right(tx) =>
-                     //println(HexUtil.encodeHexString(tx.tx.toCbor))
+                    // println(HexUtil.encodeHexString(tx.tx.toCbor))
 
                     // Verify VoteTx structure
                     assert(

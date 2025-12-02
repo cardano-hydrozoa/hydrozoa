@@ -294,7 +294,7 @@ def bloxToScalusUtxoQuery(
         .toEither match {
         case Left(err) => Left("[bloxToScalusUtxoQuery]: Querying failed: " ++ err)
         case Right(utxo) =>
-            Right({
+            Right {
                 val outAddress = Address.unsafeFromBech32(utxo.getAddress)
                 val outVal: Value = utxo.toValue.toLedgerValue
                 val outDat = scala
@@ -311,7 +311,7 @@ def bloxToScalusUtxoQuery(
                   value = outVal,
                   datumOption = outDat
                 )
-            })
+            }
     }
 }
 //
@@ -441,12 +441,14 @@ extension [A](result: Result[A])
 
 /** add at most 256 keys */
 def addDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet ++ generateUniqueKeys(numberOfKeys)))
+    tx.focus(_.witnessSet.vkeyWitnesses)
+        .modify(x => TaggedSortedSet(x.toSet ++ generateUniqueKeys(numberOfKeys)))
 }
 
 /** remove at most 256 keys, must be used in conjunction with addDummyVKeys */
 def removeDummySignatures(numberOfKeys: Int, tx: Transaction): Transaction = {
-    tx.focus(_.witnessSet.vkeyWitnesses).modify(x => TaggedSortedSet(x.toSet -- generateUniqueKeys(numberOfKeys)))
+    tx.focus(_.witnessSet.vkeyWitnesses)
+        .modify(x => TaggedSortedSet(x.toSet -- generateUniqueKeys(numberOfKeys)))
 }
 
 private def generateVKeyWitness(counter: Int): VKeyWitness = {
@@ -525,15 +527,15 @@ def addRedeemer(tx: Transaction, redeemer: Redeemer): Transaction = {
   *     would need to be
   *   - Getting out the balance as seen by the diff handler
   */
-def reportDiffHandler: DiffHandler = (diff, _) => Left(CantBalance(diff))
+def reportLovelaceDiffHandler: DiffHandler = (diff, _) => Left(CantBalance(diff.coin.value))
 
 /** A diff handler for [[LowLevelTxBalancer]] that only succeeds if the transaction is pre-balanced,
   * otherwise returning a Left(CantBalance(diff)).
   *
   * @return
   */
-def prebalancedDiffHandler: DiffHandler =
-    (diff, tx) => if diff == 0 then Right(tx) else Left(CantBalance(diff))
+def prebalancedLovelaceDiffHandler: DiffHandler =
+    (diff, tx) => if diff.coin.value == 0 then Right(tx) else Left(CantBalance(diff.coin.value))
 
 /** Lovelace per tx byte (a): 44 Lovelace per tx (b): 155381 Max tx bytes: 16 * 1024 = 16384
   * Therefore, max non-Plutus tx fee: 16 * 1024 * 44 + 155381 = 720896 + 155381 = 876277

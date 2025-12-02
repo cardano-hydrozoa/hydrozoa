@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explai
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.protocol.types.Block
-import hydrozoa.prebalancedDiffHandler
+import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
 import monocle.Monocle.refocus
 import scala.Function.const
@@ -152,7 +152,7 @@ object FinalizationTx {
                     .finalizeContext(
                       config.env.protocolParams,
                       diffHandler,
-                      config.env.evaluator,
+                      config.evaluator,
                       config.validators
                     )
                     .explain(const("Could not finalize context for finalization partial result"))
@@ -234,7 +234,9 @@ object FinalizationTx {
                 ): Result = PartialResult.WithRollouts(
                   input.transaction.treasurySpent,
                   residualTreasuryProduced,
-                  input.transaction.rolloutProduced.focus(_.utxo.input.transactionId).replace(ctx.transaction.id),
+                  input.transaction.rolloutProduced
+                      .focus(_.utxo.input.transactionId)
+                      .replace(ctx.transaction.id),
                   ctx,
                   input.rolloutTxSeqPartial
                 )
@@ -311,8 +313,8 @@ object FinalizationTx {
                     res <- ctx
                         .finalizeContext(
                           config.env.protocolParams,
-                          prebalancedDiffHandler,
-                          config.env.evaluator,
+                          prebalancedLovelaceDiffHandler,
+                          config.evaluator,
                           config.validators
                         )
                 } yield res

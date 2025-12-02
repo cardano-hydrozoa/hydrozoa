@@ -2,48 +2,60 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import org.scalacheck.Prop.propBoolean
+import org.scalacheck.{Prop, Properties, Test}
+import scala.collection.mutable
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
 import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
 import test.TransactionChain.*
 
-class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
+object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
+    import Prop.forAll
 
-    implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
-        PropertyCheckConfiguration(minSuccessful = 100)
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withMinSuccessfulTests(100)
 
-    test("Build settlement tx sequence") {
-        forAll(genSettlementTxSeqBuilder()) { (builder, args, _) =>
-            builder.build(args) match {
-                case Left(e)  => fail(s"Build failed $e")
-                case Right(r) => ()
-            }
-        }
-    }
+//    val _ = propertyWithSeed("Build settlement tx sequence", None) = {
+//        forAll(genSettlementTxSeqBuilder()) { (builder, args, _) =>
+//            "SettlementTxSeq builds" |: (builder.build(args) match {
+//                case Left(e) => false
+//                case Right(r) => true
+//            })
+//        }
+//    }
 
-    test ("Observe settlement tx seq") {
+    val _ = propertyWithSeed(
+      "Observe settlement tx seq",
+      None
+    ) = {
         val gen = genSettlementTxSeqBuilder()
+        val props = mutable.Buffer.empty[Prop]
 
         forAll(gen) { (builder, args, peers) =>
             {
+
                 builder.build(args) match {
                     case Left(e) => throw RuntimeException(s"Build failed: $e")
                     case Right(txSeq) => {
                         val unsignedTxsAndUtxos
-                        : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
+                            : (Vector[Transaction], TransactionBuilder.ResolvedUtxos) =
                             txSeq.settlementTxSeq match {
                                 case NoRollouts(settlementTx) => {
-                                    (Vector(settlementTx.tx), settlementTx.resolvedUtxos)
+                                    (
+                                      Vector(settlementTx.tx, txSeq.fallbackTx.tx),
+                                      settlementTx.resolvedUtxos
+                                    )
                                 }
                                 case WithRollouts(settlementTx, rolloutTxSeq) =>
                                     (
-                                        Vector(settlementTx.tx)
-                                            .appendedAll(rolloutTxSeq.notLast.map(_.tx))
-                                            .appended(rolloutTxSeq.last.tx),
-                                        settlementTx.resolvedUtxos
+                                      Vector(settlementTx.tx)
+                                          .appendedAll(rolloutTxSeq.notLast.map(_.tx))
+                                          .appended(rolloutTxSeq.last.tx)
+                                          .appended(txSeq.fallbackTx.tx),
+                                      settlementTx.resolvedUtxos
                                     )
                             }
 
@@ -54,15 +66,46 @@ class SettlementTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChec
                                 txsToSign.map(tx => signTx(peer, tx))
                             )
 
-                        observeTxChain(signedTxs)(initialState, CardanoMutator, Context()) match {
-                            case Left(e) =>
-                                throw new RuntimeException(
-                                    s"\nFailed: ${e._1}. " // +
-                                    //                                  s"\n SettlementTxId: ${signedTxs.head.id}" +
-                                    //                                  s"\n rollout tx Id: ${signedTxs(1).id}"
-                                )
-                            case Right(v) => ()
-                        }
+                        val res = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
+
+                        props.append(
+                          s"SettlementTxSeq observation should be successful: ${res}" |: res.isRight
+                        )
+
+                        // Inspecting the final two states of the chain
+                        val afterFallback: State = res.get.last._1
+                        val beforeFallback: State = res.get.init.last._1 // second-to-last state
+
+                        props.append(
+                          "numPeers + 1 Utxos should appear at the dispute resolution address after the fallback" |: {
+                              // Gets the number of utxos at the dispute resolution script hash
+                              val helper: State => Int = s =>
+                                  s.utxos.values
+                                      .map(
+                                        _.address.scriptHashOption
+                                            .contains(DisputeResolutionScript.compiledScriptHash)
+                                      )
+                                      .count(identity)
+                              helper(beforeFallback) == 0 && helper(
+                                afterFallback
+                              ) == peers.length + 1
+                          }
+                        )
+
+                        props.append(
+                          "One utxo should appear at the rules based treasury script address after the fallback" |: {
+                              val helper: State => Int = s =>
+                                  s.utxos.values
+                                      .map(
+                                        _.address.scriptHashOption
+                                            .contains(RuleBasedTreasuryScript.compiledScriptHash)
+                                      )
+                                      .count(identity)
+                              helper(beforeFallback) == 0 && helper(afterFallback) == 1
+                          }
+                        )
+
+                        props.fold(Prop(true))(_ && _)
                     }
                 }
             }

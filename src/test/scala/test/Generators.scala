@@ -64,6 +64,7 @@ object Generators {
           */
         def genTxBuilderConfigAndPeers(
             env: Environment = testTxBuilderEnvironment,
+            evaluator: PlutusScriptEvaluator = testEvaluator,
             validators: Seq[Validator] = testValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
@@ -82,6 +83,7 @@ object Generators {
                 headNativeScriptReferenceInput = multisigWitnessUtxo,
                 tokenNames = tokenNames,
                 env = env,
+                evaluator = evaluator,
                 validators = validators
               ),
               peers
@@ -89,8 +91,9 @@ object Generators {
 
         def genTxConfig(
             env: Environment = testTxBuilderEnvironment,
+            evaluator: PlutusScriptEvaluator = testEvaluator,
             validators: Seq[Validator] = testValidators
-        ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, validators).map(_._1)
+        ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)
 
         val genHeadTokenName: Gen[AssetName] =
             for {
@@ -245,13 +248,13 @@ object Generators {
                 txId <- arbitrary[TransactionInput]
                 headTn <- genHeadTokenName
 
-                scriptAddress = headAddress.getOrElse({
+                scriptAddress = headAddress.getOrElse {
                     ShelleyAddress(
                       network,
                       ShelleyPaymentPart.Script(genScriptHash.sample.get),
                       Null
                     )
-                })
+                }
                 datum <- genTreasuryDatum
 
                 treasuryToken: Value = Value(

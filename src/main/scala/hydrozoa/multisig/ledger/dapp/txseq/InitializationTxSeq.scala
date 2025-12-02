@@ -3,11 +3,12 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
-import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee}
+import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
@@ -18,34 +19,123 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
 
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
 object InitializationTxSeq {
+
+    sealed trait ParseError
+    case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
+    case class FallbackTxBuildError(wrapped: SomeBuildError) extends ParseError
+    case class FallbackTxMismatch(expected: FallbackTx, actual: Transaction) extends ParseError
+
+    /** Given two transaction that should form a valid Initialization-Fallback Transaction Sequence,
+      * we:
+      *   - Parse the first transaction as an initialization transaction
+      *   - Use the result to build a fallback transaction
+      *   - Compare the second transaction given to the constructed fallback transaction. If they
+      *     don't match exactly, we error.
+      *
+      * Note that the parsing of the initialization transaction isn't currently guaranteed to be
+      * secure. We are parsing primarily to ensure that the given transaction won't result in a head
+      * that will immediately crash.
+      *
+      * @param transactionSequence
+      * @param expectedNetwork
+      * @param peerKeys
+      * @param expectedTallyFeeAllowance
+      * @param expectedVotingDuration
+      * @param env
+      * @param evaluator
+      * @param validators
+      * @param resolver
+      * @return
+      */
+    def parse(
+        transactionSequence: (Transaction, Transaction),
+        expectedNetwork: Network,
+        peerKeys: NonEmptyList[VerificationKeyBytes],
+        expectedTallyFeeAllowance: Coin,
+        expectedVotingDuration: PosixTime,
+        env: Environment,
+        evaluator: PlutusScriptEvaluator,
+        validators: Seq[Validator],
+        resolver: Seq[TransactionInput] => ResolvedUtxos
+    ): Either[ParseError, InitializationTxSeq] = {
+
+        val initializationTx = transactionSequence._1
+
+        for {
+            iTx <- InitializationTx
+                .parse(
+                  peerKeys,
+                  expectedNetwork = expectedNetwork,
+                  tx = initializationTx,
+                  resolver = resolver
+                )
+                .left
+                .map(InitializationTxParseError(_))
+
+            config = Tx.Builder.Config(
+              headNativeScript = HeadMultisigScript(peerKeys),
+              headNativeScriptReferenceInput = iTx.multisigRegimeWitness,
+              tokenNames = iTx.tokenNames,
+              env = env,
+              evaluator = evaluator,
+              validators = validators
+            )
+            ftxRecipe = FallbackTx.Recipe(
+              config = config,
+              treasuryUtxo = iTx.treasuryProduced,
+              tallyFeeAllowance = expectedTallyFeeAllowance,
+              votingDuration = expectedVotingDuration
+            )
+            expectedFallbackTx <- FallbackTx.build(ftxRecipe).left.map(FallbackTxBuildError(_))
+            _ <-
+                if expectedFallbackTx.tx == transactionSequence._2 then Right(())
+                else
+                    Left(
+                      FallbackTxMismatch(
+                        expected = expectedFallbackTx,
+                        actual = transactionSequence._2
+                      )
+                    )
+
+        } yield InitializationTxSeq(initializationTx = iTx, fallbackTx = expectedFallbackTx)
+    }
+
+    /* OUTLINE:
+         The HMRW utxo is of a fixed size -- it has no datum and a fixed amount of tokens.
+         However, those tokens depend on the size of the vote utxos and collateral utxos that are in the fallback
+         transaction.
+
+         Thus, there is a pseudo-dependency for building the initialization transaction -- we want to know the
+         size of the outputs of the fallback tx, but we don't actually need to construct the full fallback transaction.
+         We only need to construct its transaction outputs.
+
+         The two options I thought of for doing this was:
+
+         - (1) Make a fallback "partial result" that returns the ada amount needed for the HRMW utxo and a callback to
+           finish the transaction.
+         - (2) Duplicate a little bit of work and construct the utxos in this builder as well as in the fallback tx
+           builder.
+
+          I settled on (2) because it was the quickest to get running, while simplifying the fallback tx builder and
+           allowing it to be reused in the settlement tx sequence builder with identical semantics (just pass in the
+           treasury).
+     */
     object Builder {
-        /* OUTLINE:
-        The HMRW utxo is of a fixed size -- it has no datum and a fixed amount of tokens.
-        However, those tokens depend on the size of the vote utxos and collateral utxos that are in the fallback
-        transaction.
 
-        Thus, there is a pseudo-dependency for building the initialization transaction -- we want to know the
-        size of the outputs of the fallback tx, but we don't actually need to construct the full fallback transaction.
-        We only need to construct its transaction outputs.
-
-        The two options I thought of for doing this was:
-
-        - (1) Make a fallback "partial result" that returns the ada amount needed for the HRMW utxo and a callback to
-          finish the transaction.
-        - (2) Duplicate a little bit of work and construct the utxos in this builder as well as in the fallback tx
-          builder.
-
-         I settled on (2) because it was the quickest to get running, while simplifying the fallback tx builder and
-          allowing it to be reused in the settlement tx sequence builder with identical semantics (just pass in the
-          treasury).
-         */
         def build(args: Args): Either[Error, InitializationTxSeq] = {
             val tokenNames = CIP67.TokenNames(args.spentUtxos.seedUtxo.input)
+            val disputeResolutionAddress = ShelleyAddress(
+              network = args.env.network,
+              payment = ShelleyPaymentPart.Script(DisputeResolutionScript.compiledScriptHash),
+              delegation = Null
+            )
+
             import tokenNames.*
 
             // ===================================
@@ -73,7 +163,7 @@ object InitializationTxSeq {
             )
 
             def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-              address = args.disputeResolutionAddress,
+              address = disputeResolutionAddress,
               value = Value(args.tallyFeeAllowance, mkVoteToken(1)),
               datumOption = Some(Inline(datum)),
               scriptRef = None
@@ -134,6 +224,7 @@ object InitializationTxSeq {
               tokenNames = tokenNames,
               hmrwCoin = multisigRegimeWitnessCoin,
               env = args.env,
+              evaluator = args.evaluator,
               validators = args.validators,
               changePP = args.initializationTxChangePP
             )
@@ -144,11 +235,18 @@ object InitializationTxSeq {
                     .left
                     .map(Error.InitializationTxError(_))
 
+                config = Tx.Builder.Config(
+                  headNativeScript = hns,
+                  headNativeScriptReferenceInput = initializationTx.multisigRegimeWitness,
+                  tokenNames = initializationTx.tokenNames,
+                  env = args.env,
+                  evaluator = args.evaluator,
+                  validators = args.validators
+                )
+
                 fallbackTxRecipe = FallbackTx.Recipe(
-                  config = initializationTx.resultingConfig,
+                  config = config,
                   treasuryUtxo = initializationTx.treasuryProduced,
-                  disputeTreasuryPaymentPart = args.disputeTreasuryPaymentPart,
-                  disputeResolutionPaymentPart = args.disputeResolutionPaymentPart,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration
                 )
@@ -172,26 +270,12 @@ object InitializationTxSeq {
             spentUtxos: InitializationTx.SpentUtxos,
             initialDeposit: Coin,
             peers: NonEmptyList[VerificationKeyBytes],
-            disputeTreasuryPaymentPart: ShelleyPaymentPart,
-            disputeResolutionPaymentPart: ShelleyPaymentPart,
             env: Environment,
+            evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
-        ) {
-
-            val disputeTreasuryAddress = ShelleyAddress(
-              network = env.network,
-              payment = disputeTreasuryPaymentPart,
-              delegation = Null
-            )
-
-            val disputeResolutionAddress = ShelleyAddress(
-              network = env.network,
-              payment = disputeResolutionPaymentPart,
-              delegation = Null
-            )
-        }
+        )
     }
 }

@@ -4,15 +4,8 @@ import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{
-    DisputeResolutionScript,
-    RuleBasedTreasuryScript
-}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{
-    ResolvedDatum,
-    RuleBasedTreasuryDatum,
-    UnresolvedDatum
-}
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{ResolvedDatum, RuleBasedTreasuryDatum, UnresolvedDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{RuleBasedTreasuryUtxo, TallyVoteUtxo}
 import scala.util.{Failure, Success, Try}
@@ -26,12 +19,7 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import scalus.cardano.txbuilder.{
-    SomeBuildError,
-    ThreeArgumentPlutusScriptWitness,
-    TransactionBuilder,
-    TransactionUnspentOutput
-}
+import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,
@@ -143,7 +131,7 @@ object ResolutionTx {
                   List(
                     // Spend the tallied vote utxo
                     Spend(
-                      TransactionUnspentOutput(talliedVoteUtxo.utxo.toScalus),
+                      talliedVoteUtxo.utxo.toScalus,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(DisputeResolutionScript.compiledPlutusV3Script),
                         voteRedeemer.toData,
@@ -170,7 +158,7 @@ object ResolutionTx {
                         scriptRef = None
                       )
                     ),
-                    AddCollateral(TransactionUnspentOutput(collateralUtxo.toScalus)),
+                    AddCollateral(collateralUtxo.toScalus),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )
                 )
