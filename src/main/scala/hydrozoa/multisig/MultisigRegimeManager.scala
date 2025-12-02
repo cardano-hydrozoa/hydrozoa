@@ -8,6 +8,7 @@ import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.multisig.MultisigRegimeManager.Config
 import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
@@ -24,7 +25,9 @@ object MultisigRegimeManager {
         peerId: Peer.Number,
         peers: List[Peer.Number],
         cardanoBackend: CardanoBackend.Ref,
-        persistence: Persistence.Ref
+        persistence: Persistence.Ref,
+        initializationTx: InitializationTx,
+        fallbackTx: FallbackTx
     )
 
     def apply(config: Config): IO[MultisigRegimeManager] =
@@ -107,7 +110,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                   CardanoLiaison(
                     Config(
                       persistence = config.persistence,
-                      cardanoBackend = config.cardanoBackend
+                      cardanoBackend = config.cardanoBackend,
+                      initializationTx = config.initializationTx,
+                      fallbackTx = config.fallbackTx
                     ),
                     ConnectionsPending(
                     )

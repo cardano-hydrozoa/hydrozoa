@@ -2,6 +2,8 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx}
+import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
 import scala.concurrent.duration.FiniteDuration
@@ -23,11 +25,14 @@ object ConsensusProtocol {
             NewLedgerEvent | Block | AckBlock
     }
 
+    /** TODO: I would like to have it in the CardanoLiason.scala not here.
+      */
     object CardanoLiaison {
         type CardanoLiaisonRef = Ref
         type Ref = ActorRef[IO, Request]
+        // TODO: we don't need ConfirmBlock here I think?
         type Request =
-            ConfirmBlock
+            ConfirmBlock | MajorBlockL1Effects | FinalBlockL1Effects
     }
 
     object PeerLiaison {
@@ -97,6 +102,28 @@ object ConsensusProtocol {
     object ConfirmBlock {
         type Subscriber = ActorRef[IO, ConfirmBlock]
     }
+
+    /** TODO: this is a message that the cardano liaison expects to see once a major block gets
+      * confirmed.
+      */
+    final case class MajorBlockL1Effects(
+        id: Block.Number,
+        // Settlement tx + optional rollouts (with all signatures, the idea is to put signatures right into `Transaction`s)
+        settlementTxSeq: SettlementTxSeq,
+        // Fallback tx (with all signatures, the idea is to put signatures right into `Transaction`s)
+        fallbackTx: FallbackTx
+    )
+
+    /** TODO: this is a message that the cardano liaison expects to see once a final block gets
+      * confirmed.
+      */
+    final case class FinalBlockL1Effects(
+        id: Block.Number,
+        // Finalization tx + optional rollouts
+        finalizationTxSeq: FinalizationTxSeq,
+        // Deinit tx
+        deinitTx: DeinitTx
+    )
 
     /** Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
       * or block acknowledgements originating from the remote peer.
