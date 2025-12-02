@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
+import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -21,12 +22,13 @@ trait L2ConformanceValidator[L1]:
     //   making `for`/`yield` easier with Either, and 2.) this is what the upstream uses.
     def l2Validate(l1: L1): Either[String, Unit]
 
-object L2ConformanceValidator extends STSL2.Validator {
-    override def validate(context: Context, state: State, event: Event): Result = event match {
-        case L2EventTransaction(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-        case L2EventWithdrawal(tx)   => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-        case L2EventGenesis(_, _, _) => Right(()) // Correct by construction
-    }
+object L2ConformanceValidator {
+    def validate(context: Config, state: State, event: L2Event): Either[String, Unit] =
+        event match {
+            case L2EventTransaction(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+            case L2EventWithdrawal(tx)   => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+            case L2EventGenesis(_, _, _) => Right(()) // Correct by construction
+        }
 }
 
 ///////////////
