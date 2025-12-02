@@ -1,9 +1,11 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.given
 import hydrozoa.multisig.ledger.DappLedger
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.Deposit
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scala.util.{Failure, Success}
@@ -50,15 +52,17 @@ object DepositTx {
       */
     def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
-        given ProtocolVersion = ProtocolVersion.conwayPV
         Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
                 for {
                     // Pull head address from metadata
-                    headAddress <- MD
-                        .parseExpected(tx, MD.L1TxTypes.Deposit)
-                        .left
-                        .map(MetadataParseError.apply)
+                    d <- MD
+                        .parse(tx) match {
+                        case Right(d: Deposit) => Right(d)
+                        case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
+                        case Left(e)  => Left(MetadataParseError(e))
+                    }
+                    Deposit(headAddress) = d
                     // Grab the single output at the head address, along with its index/
                     depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex
                         .filter(_._1.value.address == headAddress) match {
@@ -108,7 +112,7 @@ object DepositTx {
               scriptRef = None
             )
           ),
-          ModifyAuxiliaryData(_ => Option(MD(MD.L1TxTypes.Deposit, recipe.headAddress)))
+          ModifyAuxiliaryData(_ => Some(MD(MD.Deposit(recipe.headAddress))))
         ) ++ recipe.utxosFunding.toList.toSet
             .map(utxo =>
                 Spend(

@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger
 import cats.effect.*
 import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.given
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
@@ -33,7 +34,6 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorApplyInternalTx, Unit]] =
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        given ProtocolVersion = ProtocolVersion.conwayPV
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
         // is currently run as a ledger validation rule, but could also be run during parsing.
@@ -59,7 +59,6 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]] =
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        given ProtocolVersion = ProtocolVersion.conwayPV
         Cbor.decode(txSerialized).to[Transaction].valueTry match {
             case Failure(e) => IO.pure(Left(CborParseError(e)))
             case Success(tx) =>

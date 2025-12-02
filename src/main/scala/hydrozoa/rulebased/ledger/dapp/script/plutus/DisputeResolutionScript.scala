@@ -17,6 +17,7 @@ import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.IntervalBoundType.Finite
 import scalus.ledger.api.v1.Value.+
@@ -559,6 +560,12 @@ object DisputeResolutionScript {
 
     // For compatibility with code that expects script hash as byte array
     val getScriptHash: Array[Byte] = compiledScriptHash.bytes
+
+    def address(n: Network): ShelleyAddress = ShelleyAddress(
+      network = n,
+      payment = ShelleyPaymentPart.Script(this.compiledScriptHash),
+      delegation = ShelleyDelegationPart.Null
+    )
 
 }
 

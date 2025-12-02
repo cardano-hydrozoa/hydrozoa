@@ -8,7 +8,6 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
-import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
@@ -85,13 +84,7 @@ object Generators {
                 tokenNames = tokenNames,
                 env = env,
                 evaluator = evaluator,
-                validators = validators,
-                disputeResolutionPaymentPart = ShelleyPaymentPart.Script(
-                  ScriptHash.fromArray(DisputeResolutionScript.getScriptHash)
-                ),
-                disputeTreasuryPaymentPart = ShelleyPaymentPart.Script(
-                  ScriptHash.fromArray(RuleBasedTreasuryScript.getScriptHash)
-                )
+                validators = validators
               ),
               peers
             )
