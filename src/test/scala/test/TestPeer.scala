@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
-import hydrozoa.multisig.ledger.virtual.{L2EventTransaction, L2EventWithdrawal}
+import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -107,7 +107,7 @@ def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
 def l2EventWithdrawalFromInputsAndPeer(
     inputs: TaggedSortedSet[TransactionInput],
     peer: TestPeer
-): L2EventWithdrawal = {
+): L2EventTransaction = {
     val txBody: TransactionBody = TransactionBody(
       inputs = inputs,
       outputs = IndexedSeq.empty,
@@ -124,7 +124,7 @@ def l2EventWithdrawalFromInputsAndPeer(
 
     // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
     // Its probably possible to extract the key and use the crypto primitives from scalus directly
-    L2EventWithdrawal(signTx(peer, txUnsigned))
+    L2EventTransaction(signTx(peer, txUnsigned))
 }
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */

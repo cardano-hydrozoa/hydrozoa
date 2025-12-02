@@ -19,11 +19,12 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case ApplyInternalTx(tx, d)   => applyInternalTx(tx) >>= (res => d.complete(res))
-        case ApplyWithdrawalTx(tx, d) => applyWithdrawalTx(tx) >>= (res => d.complete(res))
-        case ApplyGenesis(go)         => applyGenesisTx(go)
+        case ApplyInternalTx(tx, d) => applyInternalTx(tx) >>= (res => d.complete(res))
+        case ApplyGenesis(go)       => applyGenesisTx(go)
     }
 
+    // TODO: We want to collapse "InternalTx" and "WithdrawalTx" into a single tx type
+    // where the L1-bound and L2-bound utxos are distinguihed in the metadata
     private def applyInternalTx(
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorApplyInternalTx, Unit]] =
@@ -44,36 +45,7 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
                         case Left(e)  => IO.pure(Left(TransactionInvalidError(e)))
                         case Right(v) => state.set(v).map(Right(_))
                     }
-
                 } yield res
-        }
-
-    private def applyWithdrawalTx(
-        txSerialized: Tx.Serialized
-    ): IO[Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]] =
-        given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
-        Cbor.decode(txSerialized).to[Transaction].valueTry match {
-            case Failure(e) => IO.pure(Left(CborParseError(e)))
-            case Success(tx) =>
-                for {
-                    s <- state.get
-                    res: Either[ErrorApplyInternalTx, Unit] <- HydrozoaWithdrawalMutator.transit(
-                      context = config,
-                      state = s,
-                      l2Event = L2EventTransaction(tx)
-                    ) match {
-                        case Left(e)  => IO.pure(Left(TransactionInvalidError(e)))
-                        case Right(v) => state.set(v).map(Right(_))
-                    }
-
-                } yield Right(
-                  tx.body.value.inputs.toSeq.foldLeft(List.empty)((acc, ti) =>
-                      // N.B.: s.activeUtxos(ti) is technically partial, but this SHOULD be caught
-                      // at the hydrozoa withdrawal mutator. If this branch is run, it should
-                      // mean that all the transaction inputs existed in the active utxo set.
-                      acc.appended(s.activeUtxos(ti))
-                  )
-                )
         }
 
     private def applyGenesisTx(tx: L2EventGenesis): IO[Unit] =
@@ -139,7 +111,7 @@ object VirtualLedger {
 
     ///////////////////////////////////////////
     // Requests
-    type Request = ApplyInternalTx | ApplyWithdrawalTx | ApplyGenesis
+    type Request = ApplyInternalTx | ApplyGenesis
 
     // Internal Tx
     final case class ApplyInternalTx(
@@ -152,24 +124,6 @@ object VirtualLedger {
         def apply(tx: Tx.Serialized): IO[ApplyInternalTx] = for {
             deferredResponse <- Deferred[IO, Either[ErrorApplyInternalTx, Unit]]
         } yield ApplyInternalTx(tx, deferredResponse)
-    }
-
-    // Withdrawal Tx
-    final case class ApplyWithdrawalTx(
-        tx: Tx.Serialized,
-        override val dResponse: Deferred[
-          IO,
-          Either[ErrorApplyWithdrawalTx, List[TransactionOutput]]
-        ]
-    ) extends SyncRequest[IO, ErrorApplyWithdrawalTx, List[TransactionOutput]]
-
-    object ApplyWithdrawalTx {
-
-        def apply(tx: Tx.Serialized): IO[ApplyWithdrawalTx] = for {
-            deferredResponse <- Deferred[IO, Either[ErrorApplyWithdrawalTx, List[
-              TransactionOutput
-            ]]]
-        } yield ApplyWithdrawalTx(tx, deferredResponse)
     }
 
     // Genesis Tx
@@ -213,6 +167,7 @@ object VirtualLedger {
 
     object State:
         def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
+        val empty: State = State(activeUtxos = Map.empty)
 
     sealed trait Tx {
         val tx: Transaction
@@ -224,18 +179,14 @@ object VirtualLedger {
 
     sealed trait ErrorApplyInternalTx extends Throwable
 
-    sealed trait ErrorApplyWithdrawalTx extends Throwable
-
     sealed trait ErrorApplyGenesisTx extends Throwable
 
     final case class CborParseError(e: Throwable)
         extends Throwable,
           ErrorApplyInternalTx,
-          ErrorApplyWithdrawalTx,
           ErrorApplyGenesisTx
     final case class TransactionInvalidError(e: String | TransactionException)
         extends Throwable,
           ErrorApplyInternalTx,
-          ErrorApplyWithdrawalTx,
           ErrorApplyGenesisTx
 }
