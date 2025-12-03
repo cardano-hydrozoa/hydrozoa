@@ -512,7 +512,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             val observationRes = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
 
-            props.append("Sequence Observation successful" |: observationRes.isRight)
+            props.append(
+              s"Expected successful sequence observation, but got ${observationRes}"
+                  |: observationRes.isRight
+            )
 
             // Semantic parsing of entire sequence
             props.append {

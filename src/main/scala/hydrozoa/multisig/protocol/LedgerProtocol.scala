@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import scala.concurrent.duration.FiniteDuration
 
+// TODO: This needs to reconcile with the "VirtualLedger".
 object LedgerProtocol {
     type LedgerEvent = VirtualTransaction | RegisterDeposit
 
