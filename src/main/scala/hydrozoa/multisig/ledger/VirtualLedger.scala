@@ -15,8 +15,6 @@ import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 
-// TODO: We want to collapse "InternalTx" and "WithdrawalTx" into a single tx type
-// where the L1-bound and L2-bound utxos are distinguihed in the metadata
 trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
@@ -78,8 +76,6 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
                 )
         }
 
-    // TODO: We apply genesis obligations. These aren't "transactions"; this function
-    // needs a name change.
     private def applyGenesisTx(tx: L2EventGenesis): IO[Unit] =
         state.get >>= (s => state.set(HydrozoaGenesisMutator.addGenesisUtxosToState(g = tx._1, s)))
 
