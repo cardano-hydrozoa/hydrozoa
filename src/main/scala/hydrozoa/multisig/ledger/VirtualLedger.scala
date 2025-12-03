@@ -3,12 +3,12 @@ package hydrozoa.multisig.ledger
 import cats.effect.*
 import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.given
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
 import scala.util.{Failure, Success}
 import scalus.cardano.address.Network
@@ -158,6 +158,8 @@ object VirtualLedger {
           protocolParams = l1Context.env.params,
           network = l1Context.env.network
         )
+
+        val empty: Config = Config.fromL1Context(emptyContext)
 
     final case class State(
         activeUtxos: Map[TransactionInput, TransactionOutput]
