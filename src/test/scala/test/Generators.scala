@@ -1,13 +1,16 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
+import hydrozoa.multisig.ledger.VirtualLedger
+import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.virtual.L2EventTransaction
+import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
@@ -21,12 +24,14 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{*, given}
+import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
 import scalus.prelude.Option as SOption
+import scalus.|>
 
 /** This module contains shared generators and arbitrary instances that may be shared among multiple
   * tests. We separate them into "Hydrozoa" and "Other" objects for ease of upstreaming.
@@ -289,13 +294,130 @@ object Generators {
             )
 
         /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(config: Config): Gen[TreasuryUtxo] =
+        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[TreasuryUtxo] =
             genTreasuryUtxo(
               network = config.env.network,
               params = config.env.protocolParams,
               headAddress = Some(config.headAddress),
               coin = None
             )
+
+        /** Given a set of inputs event, construct a withdrawal event attempting to withdraw all
+          * inputs with the given key to a single output
+          */
+        def genL2WithdrawalFromUtxosAndPeer(
+            inputUtxos: Utxos,
+            peer: TestPeer
+        ): Gen[L2EventTransaction] =
+            for {
+                addr <- genShelleyAddress
+
+                inputValue: Value = inputUtxos.values.foldLeft(Value.zero)((acc, output) => {
+                    acc + output.value
+                })
+
+                output = Babbage(addr, inputValue, None, None)
+
+                txBody: TransactionBody = TransactionBody(
+                  inputs = TaggedSortedSet.from(inputUtxos.keySet),
+                  outputs = IndexedSeq(Sized(output)),
+                  fee = Coin(0L)
+                )
+
+                txUnsigned: Transaction =
+                    Transaction(
+                      body = KeepRaw(txBody),
+                      witnessSet = TransactionWitnessSet.empty,
+                      isValid = true,
+                      auxiliaryData = Some(
+                        KeepRaw(
+                          Metadata(
+                            Map(
+                              Word64(CIP67.Tags.head)
+                                  -> Metadatum.List(IndexedSeq(Metadatum.Int(1)))
+                            )
+                          )
+                        )
+                      )
+                    )
+
+            } yield L2EventTransaction(signTx(peer, txUnsigned))
+
+        /** Generate an "attack" that, given a context, state, and L2EventTransaction, returns a
+          * tuple containing:
+          *   - a mutated L2EventTransaction in such a way that a given ledger rule will be
+          *     violated.
+          *   - the expected error to be raised from the L2 ledger STS when the mutated transaction
+          *     is applied.
+          *
+          * Note that, at this time, only one such attack can be applied at time; applying multiple
+          * attacks and observing the exception would require using `Validation` rather than
+          * `Either`, and probably some threading through of the various mutations to determine the
+          * actual context of the errors raised.
+          */
+        def genL2EventTransactionAttack: Gen[
+          (VirtualLedger.Config, State, L2EventTransaction) => (
+              L2EventTransaction,
+              (String | TransactionException)
+          )
+        ] = {
+
+            // Violates "AllInputsMustBeInUtxoValidator" ledger rule
+            def inputsNotInUtxoAttack: (VirtualLedger.Config, State, L2EventTransaction) => (
+                L2EventTransaction,
+                (String | TransactionException)
+            ) =
+                (context, state, transaction) => {
+                    // Generate a random TxId that is _not_ present in the state
+                    val bogusInputId: TransactionHash = Hash(
+                      genByteStringOfN(32)
+                          .suchThat(txId =>
+                              !state.activeUtxos.toSeq
+                                  .map(_._1.transactionId.bytes)
+                                  .contains(txId.bytes)
+                          )
+                          .sample
+                          .get
+                    )
+
+                    val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
+
+                    val newTx: L2EventTransaction = {
+                        val underlyingOriginal = transaction.transaction
+                        val underlyingModified = underlyingOriginal
+                            |>
+                                // First focus on the inputs of the transaction
+                                Focus[Transaction](_.body)
+                                    .andThen(KeepRaw.lens[TransactionBody]())
+                                    .refocus(_.inputs)
+                                    // then modify those inputs: the goal is to replace the txId of one input with
+                                    // our bogusInputId
+                                    .modify(x =>
+                                        TaggedSortedSet.from(
+                                          // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
+                                          // so we convert to and from List
+                                          x.toSet.toList
+                                              // Focus on the first element of the list, and...
+                                              .focus(_.index(0))
+                                              // replace its transactionId with our bogus txId
+                                              .replace(bogusTxIn)
+                                        )
+                                    )
+
+                        L2EventTransaction(underlyingModified)
+                    }
+
+                    val expectedException = new TransactionException.BadAllInputsUTxOException(
+                      transactionId = newTx.getEventId,
+                      missingInputs = Set(bogusTxIn),
+                      missingCollateralInputs = Set.empty,
+                      missingReferenceInputs = Set.empty
+                    )
+                    (newTx, expectedException)
+                }
+
+            Gen.oneOf(Seq(inputsNotInUtxoAttack))
+        }
 
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a

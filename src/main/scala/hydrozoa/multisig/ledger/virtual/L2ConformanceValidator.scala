@@ -13,6 +13,18 @@ import scalus.cardano.ledger.rules.UtxoEnv
 // L2 Conformance: ensuring that L2 transactions and withdrawals (represented by L1 `Transaction`s) and genesis events
 // conform to Hydrozoa's L2 restrictions (no collateral, no certs, etc.)
 
+// Note (Peter, 2025-12-02):
+// With respect to the L2 Ledger, we had _initially_ decided that we wanted to make it as close to the upstream as
+// possible. This meant that there were some unused fields in State/Context and that they types were "too big"
+//
+//Then in Berlin, we decided we want to shrink them down to just the parts we actually use, and provide
+// projection/injection functions to/from the scalus types.
+//
+//With respect to L2 _transactions_, we have the same issue -- the type is "too big", because theres a whole bunch of
+// fields that we dont use (related to governance, minting, etc.). The L2ConformanceValidator basically validates all
+// of this. We could _hypothetically_ use a stricter L2 transaction type and provided projection/injection, but
+// we'd still need something like this validator to _parse_ into the stricter tx type -- and we'd need to
+// convert back-and-forth to the L1 tx type to make use of the cardano ledger rules anyways.
 trait L2ConformanceValidator[L1]:
     // Notes (Peter, 2025-07-21):
     // - We're using string errors for now. We should change this.
@@ -26,7 +38,6 @@ object L2ConformanceValidator {
     def validate(context: Config, state: State, event: L2Event): Either[String, Unit] =
         event match {
             case L2EventTransaction(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-            case L2EventWithdrawal(tx)   => given_L2ConformanceValidator_Transaction.l2Validate(tx)
             case L2EventGenesis(_, _, _) => Right(()) // Correct by construction
         }
 }
@@ -131,10 +142,12 @@ given L2ConformanceValidator[TransactionBody] with
       */
     def l2Validate(
         l1: TransactionBody
-    ): Either[String, Unit] =
+    ): Either[String, Unit] = {
         for
             // Validate prohibited fields from L1 transaction
-            _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(Set.empty)
+            _ <- validateEquals("Collateral Inputs")(l1.collateralInputs)(
+              TaggedSortedSet.empty[TransactionInput]
+            )
             _ <- validateEquals("Collateral Return Output")(l1.collateralReturnOutput)(None)
             _ <- validateEquals("Total Collateral")(l1.totalCollateral)(None)
             _ <- validateEquals("Certificates")(l1.certificates)(TaggedOrderedStrictSet.empty)
@@ -142,7 +155,9 @@ given L2ConformanceValidator[TransactionBody] with
             _ <- validateEquals("Fee")(l1.fee)(Coin(0L))
             _ <- validateEquals("Mint")(l1.mint)(None)
             _ <- validateEquals("Voting Procedures")(l1.votingProcedures)(None)
-            _ <- validateEquals("Proposal Procedures")(l1.proposalProcedures)(Set.empty)
+            _ <- validateEquals("Proposal Procedures")(l1.proposalProcedures)(
+              TaggedOrderedSet.empty
+            )
             _ <- validateEquals("Current Treasury Value")(l1.currentTreasuryValue)(None)
             _ <- validateEquals("Donation")(l1.donation)(None)
             // Validate nested fields from L1 transaction type
@@ -152,6 +167,7 @@ given L2ConformanceValidator[TransactionBody] with
                 else given_L2ConformanceValidator_TransactionOutput.l2Validate(sto.value)
             })
         yield ()
+    }
 
 given L2ConformanceValidator[TransactionWitnessSet] with
     /** Bootstrap witnesses, and plutus scripts < V3 are not allowed */
@@ -161,8 +177,12 @@ given L2ConformanceValidator[TransactionWitnessSet] with
         for
             // Validate empty fields
             _ <- validateEquals("Bootstrap Witnesses")(l1.bootstrapWitnesses)(Set.empty)
-            _ <- validateEquals("Plutus V1 Scripts")(l1.plutusV1Scripts)(Set.empty)
-            _ <- validateEquals("Plutus V2 Scripts")(l1.plutusV2Scripts)(Set.empty)
+            _ <- validateEquals("Plutus V1 Scripts")(l1.plutusV1Scripts)(
+              TaggedSortedStrictMap.empty[ScriptHash, Script.PlutusV1]
+            )
+            _ <- validateEquals("Plutus V2 Scripts")(l1.plutusV2Scripts)(
+              TaggedSortedStrictMap.empty[ScriptHash, Script.PlutusV2]
+            )
             // Validate present fields
             _ <- validateIfPresent(l1.redeemers.map(_.value))
         yield ()

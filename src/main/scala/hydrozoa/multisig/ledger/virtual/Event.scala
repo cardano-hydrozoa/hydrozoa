@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
+import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -23,9 +24,6 @@ final case class L2EventTransaction(transaction: Transaction) extends L2Event {
     val getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
-final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
-    val getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
-}
 
 object L2EventGenesis:
     enum L2EventGenesisError:
@@ -36,43 +34,40 @@ object L2EventGenesis:
       * corresponding L2 outputs. The TxId of a Genesis Event comes from sorting the TxIds of the
       * absorbed UTxOs, encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
       */
-    def apply(
-        utxosL1: Seq[DepositUtxo]
-    ): Either[L2EventGenesisError, L2EventGenesis] = {
-
-        for {
-            _ <- if utxosL1.nonEmpty then Right(()) else Left(L2EventGenesisError.EmptyInputs)
-
-            hash: SHash[Blake2b_256, HashPurpose.TransactionHash] = SHash(
-              blake2b_256(
-                ByteString.fromArray(
-                  // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
-                  // yet
-                  utxosL1
-                      .map(depositUtxo => {
-                          val ti = depositUtxo._1
-                          ti.transactionId.toHex ++ ti.index.toString
-                      })
-                      .sorted
-                      .flatMap(ti => Cbor.encode(ti).toByteArray)
-                      .toArray
-                )
-              )
+    def fromDepositUtxos(
+        utxosL1: NonEmptyList[DepositUtxo]
+    ): L2EventGenesis = {
+        val hash: SHash[Blake2b_256, HashPurpose.TransactionHash] = SHash(
+          blake2b_256(
+            ByteString.fromArray(
+              // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
+              // yet
+              utxosL1
+                  .map(depositUtxo => {
+                      val ti = depositUtxo._1
+                      ti.transactionId.toHex ++ ti.index.toString
+                  })
+                  .sorted
+                  .toList
+                  .flatMap(ti => Cbor.encode(ti).toByteArray)
+                  .toArray
             )
+          )
+        )
 
-            // Maybe use validation monad instead? This will only report the first error
-            l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
-                createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
-            )
+        // Maybe use validation monad instead? This will only report the first error
+        val l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
+            createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
+        )
 
-            volume = Coin(utxosL1.map(dutxo => dutxo._4.value).sum)
-        } yield L2EventGenesis(l2Obligations, hash, volume)
+        val volume = Coin(utxosL1.toList.map(dutxo => dutxo._4.value).sum)
+        L2EventGenesis(l2Obligations, hash, volume)
     }
 
-final case class L2EventGenesis(
-    private val genesisObligations: Seq[GenesisObligation],
-    private val eventId: SHash[Blake2b_256, HashPurpose.TransactionHash],
-    private val volume: Coin
+final case class L2EventGenesis private (
+    val genesisObligations: NonEmptyList[GenesisObligation],
+    val eventId: SHash[Blake2b_256, HashPurpose.TransactionHash],
+    val volume: Coin
 ) extends L2Event {
     override def getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = this.eventId
 }
@@ -82,13 +77,11 @@ sealed trait L2EventLabel derives CanEqual
 
 case object L2EventGenesisLabel extends L2EventLabel derives CanEqual
 case object L2EventTransactionLabel extends L2EventLabel derives CanEqual
-case object L2EventWithdrawalLabel extends L2EventLabel derives CanEqual
 
 def l2EventLabel(e: L2Event): L2EventLabel =
     e match
         case _: L2EventGenesis     => L2EventGenesisLabel
         case _: L2EventTransaction => L2EventTransactionLabel
-        case _: L2EventWithdrawal  => L2EventWithdrawalLabel
 
 /** A genesis obligation is the boundary between the L1 and L2 ledgers. It contains the well-formed
   * fields of L2-conformant UTxOs.

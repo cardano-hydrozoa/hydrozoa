@@ -2,10 +2,10 @@ package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
 import hydrozoa.multisig.ledger.DappLedger.ErrorAddDeposit
-import hydrozoa.multisig.ledger.VirtualLedger.{ErrorApplyInternalTx, ErrorApplyWithdrawalTx}
+import hydrozoa.multisig.ledger.VirtualLedger.ErrorApplyInternalTx
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.tx.{InternalTx, WithdrawalTx}
+import hydrozoa.multisig.ledger.virtual.tx.InternalTx
 import scalus.cardano.ledger.*
 
 final case class JointLedger()(
@@ -17,9 +17,6 @@ final case class JointLedger()(
         ???
 
     def applyInternalTxL2(tx: InternalTx): IO[Either[ErrorApplyInternalTx, Unit]] =
-        ???
-
-    def applyWithdrawalTxL2(tx: WithdrawalTx): IO[Either[ErrorApplyWithdrawalTx, Unit]] =
         ???
 
     // TODO: more methods related to block completion
