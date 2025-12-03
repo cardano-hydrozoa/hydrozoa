@@ -23,8 +23,6 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
         case ApplyGenesis(go)       => applyGenesisTx(go)
     }
 
-    // TODO: We want to collapse "InternalTx" and "WithdrawalTx" into a single tx type
-    // where the L1-bound and L2-bound utxos are distinguihed in the metadata
     private def applyInternalTx(
         txSerialized: Tx.Serialized
     ): IO[Either[ErrorApplyInternalTx, Unit]] =

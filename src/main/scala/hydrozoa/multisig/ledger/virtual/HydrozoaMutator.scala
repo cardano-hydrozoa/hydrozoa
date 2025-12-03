@@ -27,9 +27,6 @@ object HydrozoaGenesisMutator {
     }
 }
 
-// Change:
-//   - We remove all inputs as usual, but we only add outputs to the UTxO Set if they are L2-bound
-//   - Update return type to return new (newState, listOfPayoutObligations)
 object HydrozoaTransactionMutator {
     def transit(
         context: Config,
