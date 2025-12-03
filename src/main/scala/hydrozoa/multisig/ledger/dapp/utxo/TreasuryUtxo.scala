@@ -1,12 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.multisig.protocol.types.Block
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
 
 // TODO: Make opaque
 final case class TreasuryUtxo(
@@ -16,8 +16,8 @@ final case class TreasuryUtxo(
     datum: TreasuryUtxo.Datum,
     value: Value
 ) {
-    val asUtxo: TransactionUnspentOutput =
-        TransactionUnspentOutput(
+    val asUtxo: Utxo =
+        Utxo(
           utxoId,
           TransactionOutput.apply(
             address = address,
@@ -53,7 +53,7 @@ object TreasuryUtxo {
 
     final case class Datum(
         commit: KzgCommit,
-        versionMajor: VersionMajor,
+        versionMajor: BigInt,
         paramsHash: H32
     ) derives FromData,
           ToData
@@ -64,19 +64,17 @@ object TreasuryUtxo {
 
     private type KzgCommit = ByteString
 
-    private type VersionMajor = BigInt
-
     // TODO: implement hashing for params
     // TODO: implement root hash
     def mkInitMultisigTreasuryDatum: Datum =
-        mkMultisigTreasuryDatum(0, ByteString.empty)
+        mkMultisigTreasuryDatum(Block.Version.Major(0), ByteString.empty)
 
     // TODO: implement hashing for params
     // TODO: implement root hash
-    def mkMultisigTreasuryDatum(major: Int, _params: H32): Datum =
+    def mkMultisigTreasuryDatum(major: Block.Version.Major, _params: H32): Datum =
         Datum(
           ByteString.empty,
-          BigInt(major),
+          BigInt(major.toInt),
           ByteString.empty
         )
 

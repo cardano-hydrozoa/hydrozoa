@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.ledger.DappLedger.ErrorAddDeposit
+import hydrozoa.multisig.ledger.DappLedger.*
 import hydrozoa.multisig.ledger.VirtualLedger.ErrorApplyInternalTx
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -13,7 +13,7 @@ final case class JointLedger()(
     private val virtualLedger: VirtualLedger,
     private val blockWithdrawnUtxos: Ref[IO, List[TransactionOutput]]
 ) {
-    def registerDepositL1(tx: DepositTx): IO[Either[ErrorAddDeposit, DepositUtxo]] =
+    def registerDepositL1(tx: DepositTx): IO[Either[ParseDepositError, DepositUtxo]] =
         ???
 
     def applyInternalTxL2(tx: InternalTx): IO[Either[ErrorApplyInternalTx, Unit]] =
