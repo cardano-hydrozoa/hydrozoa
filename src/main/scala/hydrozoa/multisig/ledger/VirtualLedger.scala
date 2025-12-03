@@ -9,17 +9,11 @@ import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.{emptyContext, emptyState}
 import io.bullet.borer.Cbor
 import scala.util.{Failure, Success}
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.State as ScalusState
-
-private def toScalusState(state: State): ScalusState =
-    emptyState.copy(utxos = state.activeUtxos)
-
-private def fromScalusState(sstate: ScalusState): State =
-    State(sstate.utxos)
+import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 
 // TODO: We want to collapse "InternalTx" and "WithdrawalTx" into a single tx type
 // where the L1-bound and L2-bound utxos are distinguihed in the metadata
@@ -44,14 +38,13 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
             case Success(tx) =>
                 for {
                     s <- state.get
-                    scalusState = toScalusState(s)
-                    res: Either[ErrorApplyInternalTx, Unit] <- HydrozoaTransactionMutator(
-                      context = emptyContext,
-                      state = scalusState,
-                      event = L2EventTransaction(tx)
+                    res: Either[ErrorApplyInternalTx, Unit] <- HydrozoaTransactionMutator.transit(
+                      context = config,
+                      state = s,
+                      l2Event = L2EventTransaction(tx)
                     ) match {
                         case Left(e)  => IO.pure(Left(TransactionInvalidError(e)))
-                        case Right(v) => state.set(fromScalusState(v)).map(Right(_))
+                        case Right(v) => state.set(v).map(Right(_))
                     }
 
                 } yield res
@@ -66,14 +59,13 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
             case Success(tx) =>
                 for {
                     s <- state.get
-                    scalusState = toScalusState(s)
-                    res: Either[ErrorApplyInternalTx, Unit] <- HydrozoaWithdrawalMutator(
-                      context = emptyContext,
-                      state = scalusState,
-                      event = L2EventTransaction(tx)
+                    res: Either[ErrorApplyInternalTx, Unit] <- HydrozoaWithdrawalMutator.transit(
+                      context = config,
+                      state = s,
+                      l2Event = L2EventTransaction(tx)
                     ) match {
                         case Left(e)  => IO.pure(Left(TransactionInvalidError(e)))
-                        case Right(v) => state.set(fromScalusState(v)).map(Right(_))
+                        case Right(v) => state.set(v).map(Right(_))
                     }
 
                 } yield Right(
@@ -190,12 +182,41 @@ object VirtualLedger {
     //////////////////////////////////////////////
     // Other Types
     final case class Config(
-        protocolParams: Unit
-    )
+        slotConfig: SlotConfig = SlotConfig.Mainnet,
+        slot: SlotNo,
+        protocolParams: ProtocolParams,
+        network: Network
+    ) {
+
+        /** Turn into an L1 context with zero fee and an empty CertState
+          *
+          * @return
+          */
+        def toL1Context: Context = Context(
+          fee = Coin(0),
+          env = UtxoEnv(slot, protocolParams, CertState.empty, network),
+          slotConfig = slotConfig
+        )
+    }
+
+    object Config:
+        /** Project an L1 context into an L2 context
+          */
+        def fromL1Context(l1Context: Context): Config = Config(
+          slotConfig = l1Context.slotConfig,
+          slot = l1Context.env.slot,
+          protocolParams = l1Context.env.params,
+          network = l1Context.env.network
+        )
 
     final case class State(
         activeUtxos: Map[TransactionInput, TransactionOutput]
-    )
+    ) {
+        def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
+    }
+
+    object State:
+        def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
 
     sealed trait Tx {
         val tx: Transaction
