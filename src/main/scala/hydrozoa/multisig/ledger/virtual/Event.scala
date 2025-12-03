@@ -18,11 +18,14 @@ import scalus.prelude.Option as SOption
 
 // A sum type for ledger events
 sealed trait L2Event:
-    def getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash]
+    def getEventId: TransactionHash
 
 final case class L2EventTransaction(transaction: Transaction) extends L2Event {
-    val getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
+    val getEventId: TransactionHash = transaction.id
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
+}
+final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
+    val getEventId: TransactionHash = transaction.id
 }
 
 object L2EventGenesis:
@@ -69,7 +72,7 @@ final case class L2EventGenesis private (
     val eventId: SHash[Blake2b_256, HashPurpose.TransactionHash],
     val volume: Coin
 ) extends L2Event {
-    override def getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = this.eventId
+    override def getEventId: TransactionHash = this.eventId
 }
 
 /** Tags used in blocks */
