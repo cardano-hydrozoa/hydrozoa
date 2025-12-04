@@ -112,7 +112,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       persistence = config.persistence,
                       cardanoBackend = config.cardanoBackend,
                       initializationTx = config.initializationTx,
-                      fallbackTx = config.fallbackTx
+                      initializationFallbackTx = config.fallbackTx
                     ),
                     ConnectionsPending(
                     )

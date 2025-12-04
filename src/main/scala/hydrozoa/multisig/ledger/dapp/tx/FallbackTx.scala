@@ -24,6 +24,7 @@ import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
+    validityStartSlot: Slot,
     treasurySpent: TreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
@@ -202,6 +203,8 @@ object FallbackTx {
         } yield {
             val txId = finalized.transaction.id
             FallbackTx(
+              // FIXME:
+              validityStartSlot = Slot(0),
               treasurySpent = treasuryUtxo,
               //
               treasuryProduced =
