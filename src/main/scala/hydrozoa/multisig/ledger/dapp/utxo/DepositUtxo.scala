@@ -1,33 +1,30 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.multisig.ledger.dapp.contingency.Refund
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.builtin.{Data, FromData, ToData}
+import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.api.v1.PosixTime
-import scalus.ledger.api.v3.{Address, Credential}
-import scalus.prelude.Option as ScalusOption
 
 final case class DepositUtxo(
-    private val l1Input: TransactionInput,
-    private val l1OutputAddress: ShelleyAddress,
-    private val l1OutputDatum: DepositUtxo.Datum,
-    private val l1OutputValue: Coin,
-    private val l1RefScript: Option[Script.Native | Script.PlutusV3]
+    l1Input: TransactionInput,
+    l1OutputAddress: ShelleyAddress,
+    l1OutputDatum: DepositUtxo.Datum,
+    l1OutputValue: Coin
 ) {
-    def toUtxo: (TransactionInput, TransactionOutput) =
-        (
+    def toUtxo: Utxo =
+        Utxo(
           l1Input,
           TransactionOutput.apply(
             address = l1OutputAddress,
             value = Value(l1OutputValue),
             datumOption = Some(Inline(toData(l1OutputDatum))),
-            scriptRef = l1RefScript.map(ScriptRef(_))
+            scriptRef = None
           )
         )
 
@@ -74,7 +71,7 @@ object DepositUtxo {
         case InvalidDatumContent(e: Throwable)
         case InvalidDatumType
         case InvalidValue
-        case InvalidRefScript
+        case RefScriptNotAllowed
 
     def fromUtxo(
         utxo: (TransactionInput, TransactionOutput)
@@ -101,31 +98,28 @@ object DepositUtxo {
                 else Left(InvalidValue)
 
             refScript: Option[Script.Native | Script.PlutusV3] <- babbage.scriptRef match {
-                case None => Right(None)
-                case Some(ScriptRef(s)) =>
-                    s match {
-                        case n: Script.Native    => Right(Some(n))
-                        case v3: Script.PlutusV3 => Right(Some(v3))
-                        case _                   => Left(InvalidRefScript)
-                    }
+                case None               => Right(None)
+                case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
             }
 
         } yield DepositUtxo(
           l1Input = utxo._1,
           l1OutputAddress = addr,
           l1OutputDatum = datum,
-          l1OutputValue = value,
-          l1RefScript = refScript
+          l1OutputValue = value
         )
 
-    /** This is all placeholder stuff: */
-
+    /** A deposit utxo's datum contains:
+      * @param l2OutputsHash
+      *   a Blake2b-256 hash of a CBOR-serialized list of outputs that should be created in the L2
+      *   ledger when this deposit is absorbed into the head's treasury.
+      * @param refundInstructions
+      *   instructions for when and how the deposit should be refunded if it is not absorbed into
+      *   the head's treasury.
+      */
     case class Datum(
-        address: Credential,
-        datum: ScalusOption[Data],
-        deadline: PosixTime,
-        refundAddress: Address,
-        refundDatum: ScalusOption[Data]
+        l2OutputsHash: ByteString,
+        refundInstructions: Refund.Instructions
     ) derives FromData,
           ToData
 }

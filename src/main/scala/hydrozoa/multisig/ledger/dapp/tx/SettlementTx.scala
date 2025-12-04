@@ -12,7 +12,7 @@ import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -246,7 +246,7 @@ object SettlementTx {
                 deposit: DepositUtxo
             ): BuildErrorOr[TransactionBuilder.Context] =
                 val depositStep = Spend(
-                  TransactionUnspentOutput(deposit.toUtxo),
+                  deposit.toUtxo,
                   NativeScriptWitness(
                     NativeScriptAttached,
                     config.headNativeScript.requiredSigners
@@ -478,7 +478,7 @@ object SettlementTx {
                 val rolloutOutput = outputsTail.head.value
 
                 RolloutUtxo(
-                  TransactionUnspentOutput(
+                  Utxo(
                     TransactionInput(transactionId = tx.id, index = 1),
                     rolloutOutput
                   )

@@ -2,9 +2,8 @@ package hydrozoa.multisig.ledger.joint.obligation
 
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.petri.boundary.Boundary
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
-
 import scala.annotation.targetName
+import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 
 object Genesis {
 

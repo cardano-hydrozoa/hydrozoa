@@ -35,8 +35,7 @@ object Boundary {
 
         def attach(detached: DetachedType, id: Id): S
 
-        extension (detached: DetachedType)
-            def place: Place = detached
+        extension (detached: DetachedType) def place: Place = detached
     }
 
     /** A boundary side (either source or target) that masks its source/target ID. It behaves

@@ -2,16 +2,26 @@ package hydrozoa.multisig.ledger.dapp.contingency
 
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.petri.boundary.Boundary
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
-import scalus.ledger.api.v3.PosixTime
-
 import scala.annotation.targetName
+import scalus.builtin.{Data, FromData, ToData}
+import scalus.cardano.ledger.TransactionInput
+import scalus.ledger.api.v3.{Address, PosixTime}
+import scalus.prelude.Option as ScalusOption
 
 object Refund {
-    final case class Instructions (
-        refundStartTime: PosixTime,
-        refundUtxo: TransactionOutput.Babbage
-    )
+    final case class Instructions(
+        override val address: Address,
+        override val datum: ScalusOption[Data],
+        override val startTime: PosixTime,
+    ) extends Instructions.Fields derives FromData, ToData
+
+    object Instructions {
+        trait Fields {
+            def address: Address
+            def datum: ScalusOption[Data]
+            def startTime: PosixTime
+        }
+    }
 
     /** A refund contingency created to ensure that an L1 deposit's funds don't get stranded.
       */
@@ -66,8 +76,7 @@ object Refund {
 
         type Masked = Masked.MaskedType
 
-        object Masked
-            extends Boundary.Masked[Contingency, TransactionInput, Refund.Instructions] {
+        object Masked extends Boundary.Masked[Contingency, TransactionInput, Refund.Instructions] {
             override def apply(contingency: Contingency): Refund.Contingency.Masked =
                 super.apply(contingency)
 

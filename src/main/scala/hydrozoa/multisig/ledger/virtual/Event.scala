@@ -12,7 +12,6 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Hash as SHash, *}
-import scalus.ledger.api.v3
 import scalus.prelude.Option as SOption
 
 // A sum type for ledger events
@@ -60,10 +59,13 @@ object L2EventGenesis:
               )
             )
 
+            // TODO: Derive a deposit tx's genesis obligations from the l2 outputs list provided offchain
+            //  and hashed in the deposit utxo's datum. Each deposit utxo can generate multiple genesis obligations.
             // Maybe use validation monad instead? This will only report the first error
-            l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
-                createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
-            )
+//            l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
+//                createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
+//            )
+            l2Obligations = ???
 
             volume = Coin(utxosL1.map(dutxo => dutxo._4.value).sum)
         } yield L2EventGenesis(l2Obligations, hash, volume)
@@ -117,24 +119,26 @@ case class GenesisObligation(
         )
 }
 
+// TODO: Derive a deposit tx's genesis obligations from the l2 outputs list provided offchain
+//  and hashed in the deposit utxo's datum.
 // This is a private constructor because we cannot create a genesis obligation in
 // isolation -- we must construct batches in order to know the correct index
 // and tx hash
-private def createObligation(
-    utxo: DepositUtxo,
-    index: Int,
-    txId: TransactionHash
-): GenesisObligation = {
-    val datum = utxo._3
-    GenesisObligation(
-      input = TransactionInput(txId, index),
-      l2OutputPaymentAddress = v3
-          .Address(credential = datum.address, stakingCredential = SOption.None)
-          .toScalusLedger(utxo._2.network)
-          .payment,
-      l2OutputNetwork = utxo._2.network,
-      l2OutputDatum = datum.datum,
-      l2OutputValue = utxo._4,
-      l2OutputRefScript = utxo._5
-    )
-}
+//private def createObligation(
+//    utxo: DepositUtxo,
+//    index: Int,
+//    txId: TransactionHash
+//): GenesisObligation = {
+//    val datum = utxo._3
+//    GenesisObligation(
+//      input = TransactionInput(txId, index),
+//      l2OutputPaymentAddress = v3
+//          .Address(credential = datum.address, stakingCredential = SOption.None)
+//          .toScalusLedger(utxo._2.network)
+//          .payment,
+//      l2OutputNetwork = utxo._2.network,
+//      l2OutputDatum = datum.datum,
+//      l2OutputValue = utxo._4,
+//      l2OutputRefScript = utxo._5
+//    )
+//}

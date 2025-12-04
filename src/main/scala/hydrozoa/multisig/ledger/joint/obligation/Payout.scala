@@ -2,9 +2,8 @@ package hydrozoa.multisig.ledger.joint.obligation
 
 import cats.data.NonEmptyVector
 import hydrozoa.lib.cardano.petri.boundary.Boundary
-import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
-
 import scala.annotation.targetName
+import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 
 object Payout {
 
@@ -67,9 +66,9 @@ object Payout {
                 super.apply(obligation)
 
             extension (masked: Masked)
-                /** Record that the payout obligation has been discharged by an L1 transaction that produced
-                 * a corresponding payout utxo.
-                 */
+                /** Record that the payout obligation has been discharged by an L1 transaction that
+                  * produced a corresponding payout utxo.
+                  */
                 def discharge(l1UtxoId: TransactionInput): Obligation.Discharged =
                     masked.unmask.discharge(l1UtxoId)
 

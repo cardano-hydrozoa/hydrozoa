@@ -41,7 +41,6 @@ object RefundTx {
     object PostDated {
         case class Recipe(
             depositTx: DepositTx,
-            txIx: Int,
             network: Network,
             protocolParams: ProtocolParams,
             evaluator: PlutusScriptEvaluator,
@@ -56,19 +55,20 @@ object RefundTx {
 
             val deposit = recipe.depositTx.depositProduced
             // NB: Fee is paid from deposit itself
-            val depositDatum = deposit._3
+            val depositDatum = deposit.l1OutputDatum
             val refundOutput: TransactionOutput =
                 TransactionOutput(
-                  address = depositDatum.refundAddress.toScalusLedger(network = recipe.network),
-                  value = Value(deposit._4),
-                  datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
+                  address = depositDatum.refundInstructions.address
+                      .toScalusLedger(network = recipe.network),
+                  value = Value(deposit.l1OutputValue),
+                  datumOption = depositDatum.refundInstructions.datum.asScala.map(Inline(_))
                 )
 
             /////////////////////////////////////////////////////////////////////
             // Step definitions
 
             val spendDeposit = Spend(
-              utxo = TransactionUnspentOutput(recipe.depositTx.depositProduced.toUtxo),
+              utxo = recipe.depositTx.depositProduced.toUtxo,
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
                 additionalSigners = recipe.headScript.requiredSigners

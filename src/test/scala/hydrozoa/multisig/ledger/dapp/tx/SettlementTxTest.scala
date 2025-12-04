@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.contingency.Refund
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.joint.obligation.old.Payout
@@ -30,14 +31,20 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
         refundAddress <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_)
         )
-        refundDatum <- genByteStringData
+        genData = Gen.frequency(
+          (99, genByteStringData.map(data => SOption.Some(data))),
+          (1, SOption.None)
+        )
+        refundDatum <- genData
 
     } yield DepositUtxo.Datum(
-      address = address,
-      datum = SOption.Some(datum),
-      deadline = deadline,
-      refundAddress = refundAddress,
-      refundDatum = SOption.Some(refundDatum)
+      // TODO: Provide an actual hash of a list of outputs
+      l2OutputsHash = ???,
+      refundInstructions = Refund.Instructions(
+        address = refundAddress,
+        datum = refundDatum,
+        startTime = deadline
+      )
     )
 }
 
@@ -67,8 +74,7 @@ def genDepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
-      l1OutputValue = depositAmount,
-      l1RefScript = None
+      l1OutputValue = depositAmount
     )
 
 def genSettlementTxSeqBuilder(
