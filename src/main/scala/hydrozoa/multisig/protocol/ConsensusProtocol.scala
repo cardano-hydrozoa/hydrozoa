@@ -2,7 +2,7 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx}
+import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
@@ -25,14 +25,14 @@ object ConsensusProtocol {
             NewLedgerEvent | Block | AckBlock
     }
 
-    /** TODO: I would like to have it in the CardanoLiason.scala not here.
+    /** TODO: I would like to have it in the CardanoLiaison.scala and not here.
       */
     object CardanoLiaison {
         type CardanoLiaisonRef = Ref
         type Ref = ActorRef[IO, Request]
-        // TODO: we don't need ConfirmBlock here I think?
-        type Request =
-            ConfirmBlock | MajorBlockL1Effects | FinalBlockL1Effects
+
+        import hydrozoa.multisig.consensus.CardanoLiaison as ThatCardanoLiaison
+        type Request = ConfirmMajorBlock | ConfirmFinalBlock | ThatCardanoLiaison.Timeout.type
     }
 
     object PeerLiaison {
@@ -95,35 +95,42 @@ object ConsensusProtocol {
     }
 
     /** L2 block confirmations (local-only signal) */
-    final case class ConfirmBlock(
-        id: Block.Number
-    )
+    sealed trait ConfirmBlock {
+        def id: Block.Number
+    }
 
     object ConfirmBlock {
         type Subscriber = ActorRef[IO, ConfirmBlock]
     }
 
-    /** TODO: this is a message that the cardano liaison expects to see once a major block gets
-      * confirmed.
-      */
-    final case class MajorBlockL1Effects(
-        id: Block.Number,
-        // Settlement tx + optional rollouts (with all signatures, the idea is to put signatures right into `Transaction`s)
+    final case class ConfirmMinorBlock(
+        override val id: Block.Number
+        // TODO: add block signatures
+    ) extends ConfirmBlock
+
+    object ConfirmMajorFinalBlock {
+        type Subscriber = ActorRef[IO, ConfirmMajorBlock | ConfirmFinalBlock]
+    }
+
+    final case class ConfirmMajorBlock(
+        override val id: Block.Number,
+        // The settlement tx + optional rollouts
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
         settlementTxSeq: SettlementTxSeq,
-        // Fallback tx (with all signatures, the idea is to put signatures right into `Transaction`s)
+        // The fallback tx
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
         fallbackTx: FallbackTx
-    )
+    ) extends ConfirmBlock
 
     /** TODO: this is a message that the cardano liaison expects to see once a final block gets
       * confirmed.
       */
-    final case class FinalBlockL1Effects(
-        id: Block.Number,
-        // Finalization tx + optional rollouts
+    final case class ConfirmFinalBlock(
+        override val id: Block.Number,
+        // The finalization tx + optional rollout txs
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
         finalizationTxSeq: FinalizationTxSeq,
-        // Deinit tx
-        deinitTx: DeinitTx
-    )
+    ) extends ConfirmBlock
 
     /** Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
       * or block acknowledgements originating from the remote peer.
