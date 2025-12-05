@@ -25,10 +25,16 @@ object CardanoBackendProtocol {
         /** Get the head's current utxo state in Cardano. */
         // TODO: make object?
         final case class GetCardanoHeadState(
-        ) extends SyncRequest[IO, CardanoBackendError.type, GetCardanoHeadStateResp] {
-            override def dResponse
-                : Deferred[IO, Either[CardanoBackendError.type, GetCardanoHeadStateResp]] = ???
-        }
+            override val dResponse: Deferred[
+              IO,
+              Either[CardanoBackendError.type, GetCardanoHeadStateResp]
+            ]
+        ) extends SyncRequest[IO, CardanoBackendError.type, GetCardanoHeadStateResp]
+
+        object GetCardanoHeadState:
+            def apply(): IO[GetCardanoHeadState] = for {
+                dResponse <- Deferred[IO, Either[CardanoBackendError.type, GetCardanoHeadStateResp]]
+            } yield GetCardanoHeadState(dResponse)
 
         /** The head's current utxo state in Cardano, provided in response to
           * [[GetCardanoHeadState]]. Contains the list of all utxos found at the head multisig
@@ -42,11 +48,15 @@ object CardanoBackendProtocol {
         /** Get the information about a particular transaction.
           */
         final case class GetTxInfo(
-            txHash: TransactionHash
-        ) extends SyncRequest[IO, CardanoBackendError.type, GetTxInfoResp] {
-            override def dResponse: Deferred[IO, Either[CardanoBackendError.type, GetTxInfoResp]] =
-                ???
-        }
+            txHash: TransactionHash,
+            override val dResponse: Deferred[IO, Either[CardanoBackendError.type, GetTxInfoResp]]
+        ) extends SyncRequest[IO, CardanoBackendError.type, GetTxInfoResp]
+
+        object GetTxInfo:
+            def apply(txHash: TransactionHash): IO[GetTxInfo] =
+                for {
+                    dResponse <- Deferred[IO, Either[CardanoBackendError.type, GetTxInfoResp]]
+                } yield GetTxInfo(txHash, dResponse)
 
         /** Response to [[GetTxInfo]].
           */

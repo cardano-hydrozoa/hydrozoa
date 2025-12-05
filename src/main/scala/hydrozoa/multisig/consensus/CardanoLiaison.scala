@@ -229,7 +229,8 @@ trait CardanoLiaison(config: Config, _connections: ConnectionsPending) extends A
     private def runEffects: IO[Unit] = for {
 
         // 1. Get the L1 state, i.e. the list of utxo ids + the current slot
-        resp <- config.cardanoBackend ?: GetCardanoHeadState()
+        getCardanoHeadState <- GetCardanoHeadState()
+        resp <- config.cardanoBackend ?: getCardanoHeadState
 
         l1State <- resp match {
             // TODO: better error
@@ -263,7 +264,8 @@ trait CardanoLiaison(config: Config, _connections: ConnectionsPending) extends A
                     case TargetState.Finalized(finalizationTxHash) =>
                         for {
                             // TODO: better error
-                            txResp <- config.cardanoBackend ?: GetTxInfo(finalizationTxHash)
+                            getTxInfo <- GetTxInfo(finalizationTxHash)
+                            txResp <- config.cardanoBackend ?: getTxInfo
                             mbInitAction <- txResp match {
                                 case Left(_) => IO.raiseError(Errors.CardanoBackendError())
                                 case Right(txInfo) =>
