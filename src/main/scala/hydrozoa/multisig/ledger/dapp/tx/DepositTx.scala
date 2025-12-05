@@ -140,8 +140,7 @@ object DepositTx {
             l1Input = TransactionInput(finalized.transaction.id, 0),
             l1OutputAddress = recipe.headAddress,
             l1OutputDatum = recipe.datum,
-            l1OutputValue = depositValue.coin,
-            l1RefScript = None
+            l1OutputValue = depositValue.coin
           ),
           tx = finalized.transaction
         )

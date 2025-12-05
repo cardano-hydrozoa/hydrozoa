@@ -39,11 +39,13 @@ def genDepositRecipe(
         refundAddr <- genPubkeyAddress()
 
         depositDatum = DepositUtxo.Datum(
-          address = LedgerToPlutusTranslation.getAddress(l2Addr).credential,
-          datum = depositData,
-          deadline = deadline,
-          refundAddress = LedgerToPlutusTranslation.getAddress(refundAddr),
-          refundDatum = refundData
+          // TODO: Provide an actual hash of a list of outputs
+          l2OutputsHash = ???,
+          refundInstructions = DepositUtxo.Refund.Instructions(
+            address = LedgerToPlutusTranslation.getAddress(refundAddr),
+            datum = refundData,
+            startTime = deadline
+          )
         )
 
         txId <- arbitrary[TransactionInput]
