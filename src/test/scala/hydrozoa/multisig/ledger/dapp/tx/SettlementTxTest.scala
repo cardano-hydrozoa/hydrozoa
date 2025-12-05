@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.contingency.Refund
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.joint.obligation.old.Payout
@@ -40,7 +39,7 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     } yield DepositUtxo.Datum(
       // TODO: Provide an actual hash of a list of outputs
       l2OutputsHash = ???,
-      refundInstructions = Refund.Instructions(
+      refundInstructions = DepositUtxo.Refund.Instructions(
         address = refundAddress,
         datum = refundDatum,
         startTime = deadline

@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.contingency.Refund
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
@@ -42,7 +41,7 @@ def genDepositRecipe(
         depositDatum = DepositUtxo.Datum(
           // TODO: Provide an actual hash of a list of outputs
           l2OutputsHash = ???,
-          refundInstructions = Refund.Instructions(
+          refundInstructions = DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = refundData,
             startTime = deadline

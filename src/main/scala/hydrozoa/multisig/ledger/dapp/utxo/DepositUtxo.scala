@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
-import hydrozoa.multisig.ledger.dapp.contingency.Refund
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import scala.util.{Failure, Success, Try}
 import scalus.*
@@ -10,6 +9,8 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.ledger.api.v3.{Address, PosixTime}
+import scalus.prelude.Option as ScalusOption
 
 final case class DepositUtxo(
     l1Input: TransactionInput,
@@ -31,6 +32,42 @@ final case class DepositUtxo(
 }
 
 object DepositUtxo {
+
+    /** A deposit utxo's datum contains:
+      *
+      * @param l2OutputsHash
+      *   a Blake2b-256 hash of a CBOR-serialized list of outputs that should be created in the L2
+      *   ledger when this deposit is absorbed into the head's treasury.
+      * @param refundInstructions
+      *   instructions for when and how the deposit should be refunded if it is not absorbed into
+      *   the head's treasury.
+      */
+    case class Datum(
+        l2OutputsHash: ByteString,
+        refundInstructions: Refund.Instructions
+    ) derives FromData,
+          ToData
+
+    object Refund {
+
+        /** A deposit's refund instructions specify:
+          *
+          * @param address
+          *   the address to which the deposit's funds should be refunded.
+          * @param datum
+          *   the datum that should be attached to the refund utxo.
+          * @param startTime
+          *   starting at this time, the head must refund the deposit's funds and must not attempt
+          *   to absorb them into the head's treasury. -
+          */
+        final case class Instructions(
+            address: Address,
+            datum: ScalusOption[Data],
+            startTime: PosixTime,
+        ) derives FromData,
+              ToData
+    }
+
     trait Spent {
         def depositSpent: DepositUtxo
     }
@@ -108,18 +145,4 @@ object DepositUtxo {
           l1OutputDatum = datum,
           l1OutputValue = value
         )
-
-    /** A deposit utxo's datum contains:
-      * @param l2OutputsHash
-      *   a Blake2b-256 hash of a CBOR-serialized list of outputs that should be created in the L2
-      *   ledger when this deposit is absorbed into the head's treasury.
-      * @param refundInstructions
-      *   instructions for when and how the deposit should be refunded if it is not absorbed into
-      *   the head's treasury.
-      */
-    case class Datum(
-        l2OutputsHash: ByteString,
-        refundInstructions: Refund.Instructions
-    ) derives FromData,
-          ToData
 }

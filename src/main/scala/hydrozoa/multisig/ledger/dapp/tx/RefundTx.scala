@@ -1,27 +1,18 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.*
-import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.RefundPostDated
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import scala.language.implicitConversions
-import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.SomeBuildError.*
-import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
 }
 
 object RefundTx {
+
     final case class Immediate(
         override val depositSpent: DepositUtxo,
         override val tx: Transaction
@@ -34,84 +25,98 @@ object RefundTx {
     ) extends Tx,
           RefundTx
 
-    object Immediate {
-        def build(): Immediate = ???
+    object Builder {
+        trait PartialResult[T <: RefundTx]
+            extends Tx.Builder.HasCtx,
+              State.Fields.HasInputRequired {
+            def complete(depositSpent: DepositUtxo): BuildErrorOr[T] = ???
+        }
+
+        object State {
+            object Fields {
+                sealed trait HasInputRequired {
+                    def inputValueNeeded: Value
+                }
+            }
+        }
+    }
+
+    trait Builder[T <: RefundTx] extends Tx.Builder {
+        def refundInstructions: DepositUtxo.Refund.Instructions
+
+        final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = ???
     }
 
     object PostDated {
         case class Recipe(
             depositTx: DepositTx,
-            network: Network,
-            protocolParams: ProtocolParams,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator],
-            headScript: HeadMultisigScript,
             validityStartSlot: Slot
         )
 
-        def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
-            /////////////////////////////////////////////////////////////////////
-            // Data extraction
-
-            val deposit = recipe.depositTx.depositProduced
-            // NB: Fee is paid from deposit itself
-            val depositDatum = deposit.l1OutputDatum
-            val refundOutput: TransactionOutput =
-                TransactionOutput(
-                  address = depositDatum.refundInstructions.address
-                      .toScalusLedger(network = recipe.network),
-                  value = Value(deposit.l1OutputValue),
-                  datumOption = depositDatum.refundInstructions.datum.asScala.map(Inline(_))
-                )
-
-            /////////////////////////////////////////////////////////////////////
-            // Step definitions
-
-            val spendDeposit = Spend(
-              utxo = recipe.depositTx.depositProduced.toUtxo,
-              witness = NativeScriptWitness(
-                scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners = recipe.headScript.requiredSigners
-              )
-            )
-
-            val createRefund: Send = Send(refundOutput)
-
-            val setValidity = ValidityStartSlot(recipe.validityStartSlot.slot)
-
-            val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(
-                  MD(
-                    RefundPostDated(
-                      recipe.headScript.mkAddress(recipe.network)
-                    )
-                  )
-                )
-            )
-
-            val steps = List(spendDeposit, createRefund, setValidity, modifyAuxiliaryData)
-
-            //////////////////////////////////////////////////////////////////////
-            // Build and finalize
-
-            for {
-                unbalanced <- TransactionBuilder
-                    .build(recipe.network, steps)
-                finalized <- unbalanced
-                    .finalizeContext(
-                      recipe.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        recipe.protocolParams,
-                        0
-                      ).changeOutputDiffHandler,
-                      evaluator = recipe.evaluator,
-                      validators = recipe.validators
-                    )
-            } yield PostDated(
-              depositSpent = recipe.depositTx.depositProduced,
-              tx = finalized.transaction
-            )
-        }
+//        def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
+//            /////////////////////////////////////////////////////////////////////
+//            // Data extraction
+//
+//            val deposit = recipe.depositTx.depositProduced
+//            // NB: Fee is paid from deposit itself
+//            val depositDatum = deposit.l1OutputDatum
+//            val refundOutput: TransactionOutput =
+//                TransactionOutput(
+//                  address = depositDatum.refundInstructions.address
+//                      .toScalusLedger(network = recipe.network),
+//                  value = Value(deposit.l1OutputValue),
+//                  datumOption = depositDatum.refundInstructions.datum.asScala.map(Inline(_))
+//                )
+//
+//            /////////////////////////////////////////////////////////////////////
+//            // Step definitions
+//
+//            val spendDeposit = Spend(
+//              utxo = recipe.depositTx.depositProduced.toUtxo,
+//              witness = NativeScriptWitness(
+//                scriptSource = NativeScriptValue(recipe.headScript.script),
+//                additionalSigners = recipe.headScript.requiredSigners
+//              )
+//            )
+//
+//            val createRefund: Send = Send(refundOutput)
+//
+//            val setValidity = ValidityStartSlot(recipe.validityStartSlot.slot)
+//
+//            val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
+//                Some(
+//                  MD(
+//                    RefundPostDated(
+//                      recipe.headScript.mkAddress(recipe.network)
+//                    )
+//                  )
+//                )
+//            )
+//
+//            val steps = List(spendDeposit, createRefund, setValidity, modifyAuxiliaryData)
+//
+//            //////////////////////////////////////////////////////////////////////
+//            // Build and finalize
+//
+//            for {
+//                unbalanced <- TransactionBuilder
+//                    .build(recipe.network, steps)
+//                finalized <- unbalanced
+//                    .finalizeContext(
+//                      recipe.protocolParams,
+//                      diffHandler = new ChangeOutputDiffHandler(
+//                        recipe.protocolParams,
+//                        0
+//                      ).changeOutputDiffHandler,
+//                      evaluator = recipe.evaluator,
+//                      validators = recipe.validators
+//                    )
+//            } yield PostDated(
+//              refundContingency = ???,
+//              depositSpent = recipe.depositTx.depositProduced,
+//              tx = finalized.transaction
+//            )
+//        }
 
     }
 }
