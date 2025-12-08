@@ -77,7 +77,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             peers = peers.map(_.wallet.exportVerificationKeyBytes),
             env = testTxBuilderEnvironment,
             evaluator = testEvaluator,
-            validators = testValidators,
+            validators = nonSigningValidators,
             initializationTxChangePP =
                 Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
             tallyFeeAllowance = Coin.ada(2),
@@ -132,7 +132,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
               tokenNames = iTx.tokenNames,
               env = testTxBuilderEnvironment,
               evaluator = testEvaluator,
-              validators = testValidators
+              validators = nonSigningValidators
             )
             val hns = config.headNativeScript
             val disputeResolutionAddress = ShelleyAddress(

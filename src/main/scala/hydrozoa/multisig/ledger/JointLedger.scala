@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
 import hydrozoa.multisig.ledger.DappLedger.*
+import hydrozoa.multisig.ledger.DappLedger.Errors.ParseDepositError
 import hydrozoa.multisig.ledger.VirtualLedger.ErrorApplyInternalTx
 import hydrozoa.multisig.ledger.dapp.tx.DepositTx
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo

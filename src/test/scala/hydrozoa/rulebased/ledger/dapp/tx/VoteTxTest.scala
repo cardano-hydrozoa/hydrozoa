@@ -137,7 +137,7 @@ def genVoteTxRecipe(
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = testValidators
+      validators = nonSigningValidators
     )
 
 @nowarn("msg=unused value")
