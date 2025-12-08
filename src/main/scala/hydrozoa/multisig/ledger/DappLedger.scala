@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger
 
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State, Tx}
+import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
@@ -139,10 +139,6 @@ object DappLedger {
                         .fold(false)(_ == ledger.headAddress)
                 case _ => false
             }
-    }
-
-    object Tx {
-        type Serialized = Array[Byte]
     }
 
     // We can add some more error types to this ad-hoc union:

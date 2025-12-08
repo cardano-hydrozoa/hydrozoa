@@ -23,7 +23,7 @@ var counter = AtomicLong(0L)
 def genDepositRecipe(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params
-): Gen[DepositTx.Recipe] =
+): Gen[DepositTx.Builder] =
     for {
         depositor <- genTestPeer
         headAddress <- genScriptAddress()
@@ -68,16 +68,18 @@ def genDepositRecipe(
                 sumUtxoValues(utxos.toList).coin > minPubkeyAda() + depositAmount + estimatedFee
             )
 
-    } yield DepositTx.Recipe(
-      depositAmount = depositAmount,
-      datum = depositDatum,
-      headAddress = headAddress,
+        config: Tx.Builder.Config = ???
+
+        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated] = ???
+
+        virtualOutputs = ???
+
+    } yield DepositTx.Builder(
+      config = config,
+      partialRefundTx = partialRefundTx,
       utxosFunding = fundingUtxos,
+      virtualOutputs = virtualOutputs,
       changeAddress = depositor.address(testNetwork),
-      network = testNetwork,
-      protocolParams = testProtocolParams,
-      evaluator = testEvaluator,
-      validators = testValidators
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -100,19 +102,19 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     }
 
     test("Build deposit tx") {
-        forAll(genDepositRecipe()) { recipe =>
-            DepositTx.build(recipe) match {
+        forAll(genDepositRecipe()) { depositTxBuilder =>
+            depositTxBuilder.build match {
                 case Left(e) => fail(s"Build failed $e")
-                case Right(tx) =>
-                    DepositTx.parse(tx.tx.toCbor) match {
+                case Right(DepositTx.Builder.Result(depositTx, refundTx)) =>
+                    DepositTx.parse(depositTx.tx.toCbor) match {
                         case Left(e) =>
                             fail(
                               s"Produced deposit tx cannot be deserialized from CBOR: ${e.getCause}"
                             )
-                        case Right(cborParsed) if cborParsed != tx =>
+                        case Right(cborParsed) if cborParsed != depositTx =>
                             // println(ByteString.fromArray(tx.tx.toCbor).toHex)
                             // assert(expected = tx.tx.body.value.outputs(1), obtained = cborParsed.tx.body.value.outputs(1))
-                            assertResult(tx)(cborParsed)
+                            assertResult(depositTx)(cborParsed)
                         case _ => ()
                     }
             }

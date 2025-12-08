@@ -212,7 +212,7 @@ object Generators {
 
             /** `None` for no datum; `Some(gen)` to generate an optional datum */
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
-        ): Gen[(TransactionInput, Babbage)] =
+        ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
                 value <- genAdaOnlyValue
@@ -224,18 +224,17 @@ object Generators {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
                 }
-            } yield (
-              txId,
-              ensureMinAda(
-                Babbage(
-                  address = peer.address(network),
-                  value = Value(coin),
-                  datumOption = datum,
-                  scriptRef = None
-                ),
-                params
-              ).asInstanceOf[Babbage]
-            ).focus(_._2.value).modify(_ + value)
+
+                txOutput: TransactionOutput.Babbage = ensureMinAda(
+                  Babbage(
+                    address = peer.address(network),
+                    value = Value(coin),
+                    datumOption = datum,
+                    scriptRef = None
+                  ),
+                  params
+                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
+            } yield Utxo(txId, txOutput)
 
         /** Generate a treasury utxo with at least minAda */
         def genTreasuryUtxo(

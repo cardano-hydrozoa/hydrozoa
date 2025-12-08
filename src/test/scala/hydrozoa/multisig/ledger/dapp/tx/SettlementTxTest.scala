@@ -65,7 +65,7 @@ def genDepositUtxo(
 
         depositMinAda = ensureMinAda(mockUtxo, params).value.coin
 
-        depositAmount <- arbitrary[Coin].map(_ + depositMinAda)
+        depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
 
     } yield DepositUtxo(
       l1Input = txId,

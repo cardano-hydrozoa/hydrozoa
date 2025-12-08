@@ -26,6 +26,7 @@ final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
     val getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
 }
 
+// TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
 object L2EventGenesis:
     enum L2EventGenesisError:
         case EmptyInputs
@@ -65,10 +66,9 @@ object L2EventGenesis:
 //            l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
 //                createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
 //            )
-            l2Obligations = ???
 
-            volume = Coin(utxosL1.map(dutxo => dutxo._4.value).sum)
-        } yield L2EventGenesis(l2Obligations, hash, volume)
+            volume = Coin(utxosL1.map(dutxo => ???).sum)
+        } yield L2EventGenesis(???, hash, volume)
     }
 
 final case class L2EventGenesis(

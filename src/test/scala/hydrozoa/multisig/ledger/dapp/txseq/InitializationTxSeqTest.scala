@@ -58,7 +58,7 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         initialDeposit <- Gen
             .choose(
               minInitTreasuryAda.value,
-              sumUtxoValues(spentUtxos.toList.map(_.toTuple)).coin.value
+              sumUtxoValues(spentUtxos.toList).coin.value
                   - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
                   - minPubkeyAda().value
             )

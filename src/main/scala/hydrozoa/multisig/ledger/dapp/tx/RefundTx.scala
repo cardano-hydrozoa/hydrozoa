@@ -20,6 +20,7 @@ import scalus.ledger.api.v3.PosixTime
 
 sealed trait RefundTx {
     def depositSpent: DepositUtxo
+    def refundInstructions: DepositUtxo.Refund.Instructions
 }
 
 // TODO: There's a lot of noise here due to the Immediate/PostDated distinction, whereas the only difference between
@@ -27,12 +28,14 @@ sealed trait RefundTx {
 object RefundTx {
     final case class Immediate(
         override val depositSpent: DepositUtxo,
+        override val refundInstructions: DepositUtxo.Refund.Instructions,
         override val tx: Transaction
     ) extends Tx,
           RefundTx
 
     final case class PostDated(
         override val depositSpent: DepositUtxo,
+        override val refundInstructions: DepositUtxo.Refund.Instructions,
         override val tx: Transaction
     ) extends Tx,
           RefundTx
@@ -50,9 +53,10 @@ object RefundTx {
 
             override def postProcess(
                 ctx: TransactionBuilder.Context,
-                depositUtxo: DepositUtxo
+                depositUtxo: DepositUtxo,
+                refundInstructions: DepositUtxo.Refund.Instructions
             ): RefundTx.Immediate =
-                RefundTx.Immediate(depositSpent = depositUtxo, tx = ctx.transaction)
+                RefundTx.Immediate(depositUtxo, refundInstructions, ctx.transaction)
         }
 
         final case class PostDated(
@@ -67,9 +71,10 @@ object RefundTx {
 
             override def postProcess(
                 ctx: TransactionBuilder.Context,
-                depositUtxo: DepositUtxo
+                depositUtxo: DepositUtxo,
+                refundInstructions: DepositUtxo.Refund.Instructions
             ): RefundTx.PostDated =
-                RefundTx.PostDated(depositSpent = depositUtxo, tx = ctx.transaction)
+                RefundTx.PostDated(depositUtxo, refundInstructions, ctx.transaction)
         }
 
         final case class PartialResult[T <: RefundTx](
@@ -82,7 +87,7 @@ object RefundTx {
                 addedDepositSpent <- TransactionBuilder
                     .modify(ctx, List(Spend(depositSpent.toUtxo)))
                     .explainConst("adding real spend deposit failed.")
-            } yield builder.postProcess(addedDepositSpent, depositSpent)
+            } yield builder.postProcess(addedDepositSpent, depositSpent, builder.refundInstructions)
         }
 
         object State {
@@ -103,7 +108,11 @@ object RefundTx {
         def mValidityStartSlot: Option[PosixTime]
         def stepRefundMetadata: ModifyAuxiliaryData
 
-        def postProcess(ctx: TransactionBuilder.Context, depositUtxo: DepositUtxo): T
+        def postProcess(
+            ctx: TransactionBuilder.Context,
+            depositUtxo: DepositUtxo,
+            refundInstructions: DepositUtxo.Refund.Instructions
+        ): T
 
         final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)

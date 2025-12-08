@@ -16,14 +16,14 @@ final case class DepositUtxo(
     l1Input: TransactionInput,
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
-    l1OutputValue: Coin
+    l1OutputValue: Value
 ) {
     def toUtxo: Utxo =
         Utxo(
           l1Input,
           TransactionOutput.apply(
             address = l1OutputAddress,
-            value = Value(l1OutputValue),
+            value = l1OutputValue,
             datumOption = Some(Inline(toData(l1OutputDatum))),
             scriptRef = None
           )
@@ -122,9 +122,6 @@ object DepositUtxo {
                     }
                 case _ => Left(InvalidDatumType)
             }
-            value <-
-                if babbage.value.assets == MultiAsset.empty then Right(babbage.value.coin)
-                else Left(InvalidValue)
 
             refScript: Option[Script.Native | Script.PlutusV3] <- babbage.scriptRef match {
                 case None               => Right(None)
@@ -135,6 +132,6 @@ object DepositUtxo {
           l1Input = utxo._1,
           l1OutputAddress = addr,
           l1OutputDatum = datum,
-          l1OutputValue = value
+          l1OutputValue = babbage.value
         )
 }
