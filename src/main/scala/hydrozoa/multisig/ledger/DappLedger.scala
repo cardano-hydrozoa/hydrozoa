@@ -18,7 +18,6 @@ import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.txbuilder.SomeBuildError
 import scalus.ledger.api.v3.PosixTime
 
 // stub type
@@ -97,6 +96,7 @@ trait DappLedger(
         import args.*
         def isMature(depositTx: DepositUtxo): Boolean = ???
 
+        // Get this from hydrozoa.multisig.protocol.types
         def getEventId(depositUtxo: DepositUtxo): EventId = ???
 
         import cats.data.EitherT.right
@@ -225,19 +225,10 @@ object DappLedger {
     // TODO: We actually want to pass a pre-formed Initialization Tx into the dapp ledger to create it.
     // Or perhaps just the treasury UTxO? Either way, we still need a builder config.
     def create(
-        initRecipe: InitializationTx.Recipe,
+        initTx: InitializationTx,
         config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-    ): IO[Either[SomeBuildError, (DappLedger, InitializationTx)]] = {
-        InitializationTx.build(initRecipe) match {
-            case Left(e) => IO.pure(Left(e))
-            case Right(tx) =>
-                for {
-                    state <- Ref[IO].of(State(treasury = tx.treasuryProduced))
-                } yield Right(
-                  (new DappLedger(initialTreasuryUtxo = tx.treasuryProduced, config) {}, tx)
-                )
-        }
-    }
+    ): DappLedger =
+        new DappLedger(initialTreasuryUtxo = initTx.treasuryProduced, config) {}
 
     sealed trait Request
 
@@ -260,6 +251,7 @@ object DappLedger {
             }
     }
 
+    // TODO: Add "EventID" field
     final case class RegisterDeposit(serializedDeposit: Array[Byte], serializedRefund: Array[Byte])
         extends Request
 
@@ -281,6 +273,7 @@ object DappLedger {
 
     final case class State(
         treasury: TreasuryUtxo,
+        // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
         deposits: Queue[(DepositUtxo, RefundTx.PostDated)] = Queue()
     ) {
         def appendToQueue(t: (DepositUtxo, RefundTx.PostDated)): State =
