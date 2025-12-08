@@ -396,7 +396,7 @@ object RolloutTx {
                           )
                         ) =>
                         Left(SomeBuildError.ValidationError(e, errorCtx))
-                            .explainConst("trail to add payout failed")
+                            .explainConst("trial to add payout failed")
                     case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)

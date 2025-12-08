@@ -37,9 +37,7 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
         refundDatum <- genData
 
     } yield DepositUtxo.Datum(
-      // TODO: Provide an actual hash of a list of outputs
-      l2OutputsHash = ???,
-      refundInstructions = DepositUtxo.Refund.Instructions(
+      DepositUtxo.Refund.Instructions(
         address = refundAddress,
         datum = refundDatum,
         startTime = deadline

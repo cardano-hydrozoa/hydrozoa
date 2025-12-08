@@ -4,7 +4,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
-import scalus.builtin.{ByteString, Data, FromData, ToData}
+import scalus.builtin.{Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -34,19 +34,11 @@ final case class DepositUtxo(
 object DepositUtxo {
 
     /** A deposit utxo's datum contains:
-      *
-      * @param l2OutputsHash
-      *   a Blake2b-256 hash of a CBOR-serialized list of outputs that should be created in the L2
-      *   ledger when this deposit is absorbed into the head's treasury.
       * @param refundInstructions
       *   instructions for when and how the deposit should be refunded if it is not absorbed into
       *   the head's treasury.
       */
-    case class Datum(
-        l2OutputsHash: ByteString,
-        refundInstructions: Refund.Instructions
-    ) derives FromData,
-          ToData
+    final case class Datum(refundInstructions: Refund.Instructions) derives FromData, ToData
 
     object Refund {
 
