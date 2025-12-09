@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import scala.util.{Failure, Success, Try}
 import scalus.*
@@ -16,7 +17,8 @@ final case class DepositUtxo(
     l1Input: TransactionInput,
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
-    l1OutputValue: Value
+    l1OutputValue: Value,
+    virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -103,7 +105,8 @@ object DepositUtxo {
         case RefScriptNotAllowed
 
     def fromUtxo(
-        utxo: (TransactionInput, TransactionOutput)
+        utxo: (TransactionInput, TransactionOutput),
+        virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -132,6 +135,7 @@ object DepositUtxo {
           l1Input = utxo._1,
           l1OutputAddress = addr,
           l1OutputDatum = datum,
-          l1OutputValue = babbage.value
+          l1OutputValue = babbage.value,
+          virtualOutputs = virtualOutputs
         )
 }

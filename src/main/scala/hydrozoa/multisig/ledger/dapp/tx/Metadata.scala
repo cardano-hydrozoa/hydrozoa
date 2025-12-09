@@ -8,7 +8,7 @@ import scala.util.Try
 import scalus.builtin.ByteString
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AuxiliaryData, KeepRaw, Metadatum, OriginalCborByteArray, ProtocolVersion, Transaction, TransactionInput, Word64}
+import scalus.cardano.ledger.{AuxiliaryData, Hash32, KeepRaw, Metadatum, OriginalCborByteArray, ProtocolVersion, Transaction, TransactionInput, Word64}
 
 /** The metadata associated with hydrozoa L1 transactions serves two purposes:
   *
@@ -45,7 +45,11 @@ object Metadata {
         val headAddress: ShelleyAddress
     }
 
-    case class Deposit(override val headAddress: ShelleyAddress) extends L1TxTypes
+    case class Deposit(
+        override val headAddress: ShelleyAddress,
+        depositUtxoIx: Int,
+        virtualOutputsHash: Hash32
+    ) extends L1TxTypes
     given Encoder[Deposit] = Encoder.derived
     given depositDecoder(using OriginalCborByteArray, ProtocolVersion): Decoder[Deposit] =
         Decoder.derived[Deposit]

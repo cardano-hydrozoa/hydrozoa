@@ -71,7 +71,8 @@ def genDepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
-      l1OutputValue = depositAmount
+      l1OutputValue = depositAmount,
+      virtualOutputs = ???
     )
 
 def genSettlementTxSeqBuilder(

@@ -2,15 +2,18 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import io.bullet.borer.Encoder
 import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.cardano.ledger.TransactionOutput.given
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
+import scalus.serialization.cbor.Cbor
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
@@ -22,11 +25,20 @@ object DepositTx {
     sealed trait ParseError extends Throwable
 
     object Builder {
+        type Error = SomeBuildError | Error.InsufficientFundingForVirtualOutputs
+
+        object Error {
+            final case class InsufficientFundingForVirtualOutputs(diff: Value) extends Throwable
+        }
+
         final case class Result(
             depositTx: DepositTx,
             refundTx: RefundTx.PostDated
         )
     }
+
+    private given Encoder[TransactionOutput.Babbage] =
+        summon[Encoder[TransactionOutput]].asInstanceOf[Encoder[TransactionOutput.Babbage]]
 
     final case class Builder(
         override val config: Tx.Builder.Config,
@@ -35,19 +47,41 @@ object DepositTx {
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
         changeAddress: ShelleyAddress
     ) extends Tx.Builder {
-        def build: BuildErrorOr[Builder.Result] = {
+        def build: Either[(Builder.Error, String), Builder.Result] = {
             import partialRefundTx.builder.refundInstructions
 
-            // TODO: Add the `virtualOutputs` hash to the deposit tx metadata.
+            val depositValue = partialRefundTx.inputValueNeeded
+
+            val virtualOutputsList = virtualOutputs.toList
+
+            val virtualValue = Value.combine(virtualOutputsList.map(_.value))
+
+            val virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsList)
+
+            val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
+              platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
+            )
+
             val stepRefundMetadata =
-                ModifyAuxiliaryData(_ => Some(MD(MD.Deposit(headAddress = config.headAddress))))
+                ModifyAuxiliaryData(_ =>
+                    Some(
+                      MD(
+                        MD.Deposit(
+                          headAddress = config.headAddress,
+                          depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
+                          virtualOutputsHash = virtualOutputsHash
+                        )
+                      )
+                    )
+                )
 
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
             val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
+
             val rawDepositProduced = TransactionOutput.Babbage(
               address = config.headAddress,
-              value = partialRefundTx.inputValueNeeded,
+              value = depositValue,
               datumOption = Some(DatumOption.Inline(toData(depositDatum))),
               scriptRef = None
             )
@@ -64,6 +98,15 @@ object DepositTx {
             )
 
             for {
+                _ <- Either
+                    .cond(
+                      (depositValue.coin >= virtualValue.coin) && (depositValue.assets == virtualValue.assets),
+                      (),
+                      Builder.Error
+                          .InsufficientFundingForVirtualOutputs(depositValue - virtualValue)
+                    )
+                    .explainConst("insufficient funding in deposit utxo for virtual outputs")
+
                 ctx <- TransactionBuilder
                     .build(
                       config.env.network,
@@ -89,7 +132,8 @@ object DepositTx {
                   TransactionInput(tx.id, 0),
                   config.headAddress,
                   depositDatum,
-                  rawDepositProduced.value
+                  rawDepositProduced.value,
+                  virtualOutputs
                 )
 
                 depositTx = DepositTx(depositProduced, tx)

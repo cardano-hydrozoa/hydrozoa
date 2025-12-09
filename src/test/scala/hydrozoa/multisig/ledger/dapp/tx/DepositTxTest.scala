@@ -93,7 +93,8 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     test("Roundtrip deposit metadata") {
         forAll(genScriptAddress()) { addr =>
-            val mbAux = Some(KeepRaw(MD(MD.Deposit(addr))))
+            val mbAux =
+                Some(KeepRaw(MD(MD.Deposit(addr, depositUtxoIx = 0, virtualOutputsHash = ???))))
             MD.parse(mbAux) match {
                 case Right(_) => ()
                 case Left(e)  => fail(e.toString)
