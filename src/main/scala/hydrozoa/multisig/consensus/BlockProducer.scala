@@ -37,7 +37,8 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
     private final case class Subscribers(
         ackBlock: List[AckBlock.Subscriber],
         newBlock: List[Block.Subscriber],
-        confirmBlock: List[ConfirmBlock.Subscriber]
+        confirmBlock: List[ConfirmBlock.Subscriber],
+        confirmMajorFinalBlock: ConfirmMajorFinalBlock.Subscriber
     )
 
     override def preStart: IO[Unit] =
@@ -50,7 +51,8 @@ trait BlockProducer(config: Config, connections: ConnectionsPending) extends Act
                 Subscribers(
                   ackBlock = peerLiaisons,
                   newBlock = peerLiaisons,
-                  confirmBlock = List(cardanoLiaison, transactionSequencer)
+                  confirmBlock = List(transactionSequencer),
+                  confirmMajorFinalBlock = cardanoLiaison
                 )
               )
             )

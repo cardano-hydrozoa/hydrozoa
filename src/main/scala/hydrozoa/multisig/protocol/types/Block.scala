@@ -250,6 +250,7 @@ object Block {
         }
 
         extension (self: Number) def increment: Number = Number(self + 1)
+        extension (self: Number) def decrement: Number = Number(self - 1)
     }
 
     object Version {
