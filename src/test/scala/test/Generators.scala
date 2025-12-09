@@ -124,6 +124,9 @@ object Generators {
         def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
             genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
 
+        def genKnownCoinPayoutObligationL1(network: Network, coin: Coin): Gen[Payout.Obligation.L1] =
+            genKnownCoinPayoutObligationL2(network, coin).map(Payout.Obligation.L1(_))
+
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
 
@@ -188,11 +191,16 @@ object Generators {
 
         def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
             for {
+                coin <- arbitrary[Coin]
+                res <- genKnownCoinPayoutObligationL2(network, coin)    
+            } yield res
+
+        def genKnownCoinPayoutObligationL2(network: Network, coin: Coin): Gen[Payout.Obligation.L2] =
+            for {
                 l2Input <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
                 address = address0.copy(network = network)
-                coin <- arbitrary[Coin]
                 datum <- arbitrary[ByteString]
                 output = Babbage(
                   address = address,

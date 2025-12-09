@@ -15,7 +15,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
         PropertyCheckConfiguration(minSuccessful = 100)
 
     test("Build finalization tx sequence") {
-        forAll(genFinalizationTxSeqBuilder()) { (builder, args, _) =>
+        forAll(genStandaloneFinalizationTxSeqBuilder()) { (builder, args, _) =>
             builder.build(args) match {
                 case Left(e)  => fail(s"Build failed $e")
                 case Right(r) => ()
@@ -24,7 +24,7 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
     }
 
     ignore("Observe finalization tx seq") {
-        val gen = genFinalizationTxSeqBuilder()
+        val gen = genStandaloneFinalizationTxSeqBuilder()
 
         forAll(gen) { (builder, args, peers) =>
             {

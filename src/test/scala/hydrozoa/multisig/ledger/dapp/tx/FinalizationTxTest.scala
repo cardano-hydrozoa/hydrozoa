@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
@@ -19,6 +19,8 @@ import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
+
+import scala.jdk.CollectionConverters._
 
 val genMultisigRegimeTokenName: Gen[AssetName] =
     for {
@@ -67,7 +69,7 @@ def genMultisigRegimeUtxo(
       script = script
     )
 
-def genFinalizationTxSeqBuilder(
+def genStandaloneFinalizationTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork
@@ -75,10 +77,10 @@ def genFinalizationTxSeqBuilder(
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
         Gen.frequency(
-          (1, Gen.const(Vector.empty)),
-          (2, Other.vectorOfN(size, gen)),
-          (5, Other.vectorOfN(size * 5, gen)),
-          (1, Other.vectorOfN(1, gen))
+            (1, Gen.const(Vector.empty)),
+            (2, Other.vectorOfN(size, gen)),
+            (5, Other.vectorOfN(size * 5, gen)),
+            (1, Other.vectorOfN(1, gen))
         ).map(_.take(1000))
     )
 
@@ -94,27 +96,73 @@ def genFinalizationTxSeqBuilder(
         headAddress = config.headNativeScript.mkAddress(network)
 
         treasuryUtxo <- genTreasuryUtxo(
-          headAddress = Some(headAddress),
-          network = network,
-          coin = Some(payoutAda + Coin(1_000_000_000L))
+            headAddress = Some(headAddress),
+            network = network,
+            coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
         shares <- genEquityShares(peers)
 
     } yield (
-      FinalizationTxSeq.Builder(config = config),
-      FinalizationTxSeq.Builder.Args(
-        majorVersionProduced = HBlock.Version.Major(majorVersion),
-        treasuryToSpend = treasuryUtxo,
-        payoutObligationsRemaining = payouts,
-        multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
-          config.tokenNames.multisigRegimeTokenName,
-          config.headNativeScriptReferenceInput.input,
-          config.headNativeScriptReferenceInput.output,
-          config.headNativeScript
+        FinalizationTxSeq.Builder(config = config),
+        FinalizationTxSeq.Builder.Args(
+            majorVersionProduced = HBlock.Version.Major(majorVersion),
+            treasuryToSpend = treasuryUtxo,
+            payoutObligationsRemaining = payouts,
+            multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
+                config.tokenNames.multisigRegimeTokenName,
+                config.headNativeScriptReferenceInput.input,
+                config.headNativeScriptReferenceInput.output,
+                config.headNativeScript
+            ),
+            equityShares = shares
         ),
-        equityShares = shares
-      ),
-      peers
+        peers
+    )
+}
+
+def genFinalizationTxSeqBuilder(
+    treasuryToSpend: TreasuryUtxo,
+    majorVersion: Int,
+    config: Tx.Builder.Config,
+    peers: NonEmptyList[TestPeer],
+    estimatedFeesAndEquity: Coin = Coin(20_000_000L),
+    params: ProtocolParams = blockfrost544Params,
+    network: Network = testNetwork
+): Gen[(FinalizationTxSeq.Builder, FinalizationTxSeq.Builder.Args)] = {
+
+    val payoutsTotal = treasuryToSpend.value.coin.value - estimatedFeesAndEquity.value
+
+    for {
+
+        coins <- Gen.tailRecM[List[Long], List[Long]](List.empty){
+            tails =>
+                val residual = payoutsTotal - tails.sum
+                if residual < 15_000_000
+                then Gen.const(Right(residual :: tails))
+                else
+                    for
+                        next <- Gen.choose(5_000_000L, residual)
+                    yield Left(next :: tails)
+        }
+
+        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligationL1(network, Coin(l))))
+
+        shares <- genEquityShares(peers)
+
+    } yield (
+        FinalizationTxSeq.Builder(config = config),
+        FinalizationTxSeq.Builder.Args(
+            majorVersionProduced = HBlock.Version.Major(majorVersion),
+            treasuryToSpend = treasuryToSpend,
+            payoutObligationsRemaining = payouts.asScala.toVector,
+            multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
+                config.tokenNames.multisigRegimeTokenName,
+                config.headNativeScriptReferenceInput.input,
+                config.headNativeScriptReferenceInput.output,
+                config.headNativeScript
+            ),
+            equityShares = shares
+        )
     )
 }
