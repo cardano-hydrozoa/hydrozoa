@@ -63,7 +63,7 @@ object DappLedgerTest extends Properties("DappLedger") {
             numOfSettlements <- choose(10, 25)
 
             settlementTxSeqs <- tailRecM(
-              (initialTreasuryToSpend, List.empty : List[SettlementTxSeq.Builder.Result], 1)
+              (initialTreasuryToSpend, List.empty: List[SettlementTxSeq.Builder.Result], 1)
             ) { case (treasuryToSpend, acc, settlementNum) =>
                 if settlementNum >= numOfSettlements
                 then Gen.const(Right(acc.reverse))
@@ -76,16 +76,24 @@ object DappLedgerTest extends Properties("DappLedger") {
                           config
                         )
                         (builder, args) = settlementBuilderAndArgs
-                        seq = builder.build(args).getOrElse(???)
+                        seq = builder.build(args) match {
+                            case Left(err) => throw RuntimeException(err.toString)
+                            case Right(seq) => seq
+                        }
                         nextTreasuryToSpend = seq.settlementTxSeq.settlementTx.treasuryProduced
                     } yield Left((nextTreasuryToSpend, seq :: acc, settlementNum + 1))
             }
 
             // Finalization seq
-            lastSettlementTreasury = settlementTxSeqs.last.settlementTxSeq.settlementTx.treasuryProduced
+            lastSettlementTreasury =
+                settlementTxSeqs.last.settlementTxSeq.settlementTx.treasuryProduced
 
-            finalizationTxSeqBuilderAndArgs
-                <- genFinalizationTxSeqBuilder(lastSettlementTreasury, numOfSettlements + 1, config, peers)
+            finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(
+              lastSettlementTreasury,
+              numOfSettlements + 1,
+              config,
+              peers
+            )
             (builder, fArgs) = finalizationTxSeqBuilderAndArgs
             finalizationTxSeq = builder.build(fArgs)
 
@@ -119,11 +127,15 @@ object DappLedgerTest extends Properties("DappLedger") {
             case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
                 println(s"finalization tx: ${finalizationTx.tx.id}")
                 println(s"deinit tx: ${deinitTx.tx.id}")
-            case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) => ???
-                println(s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}")
-            case FinalizationTxSeq.WithDeinitAndRollouts(finalizationTx, deinitTx, rolloutTxSeq) => ???
+            case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
+                println(
+                  s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
+                )
+            case FinalizationTxSeq.WithDeinitAndRollouts(finalizationTx, deinitTx, rolloutTxSeq) =>
                 println(s"finalization tx: ${finalizationTx.tx.id}")
-                println(s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}")
+                println(
+                  s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
+                )
                 println(s"deinit tx: ${deinitTx.tx.id}")
         }
         // FIXME

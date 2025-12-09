@@ -124,7 +124,10 @@ object Generators {
         def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
             genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
 
-        def genKnownCoinPayoutObligationL1(network: Network, coin: Coin): Gen[Payout.Obligation.L1] =
+        def genKnownCoinPayoutObligationL1(
+            network: Network,
+            coin: Coin
+        ): Gen[Payout.Obligation.L1] =
             genKnownCoinPayoutObligationL2(network, coin).map(Payout.Obligation.L1(_))
 
         val genAddrKeyHash: Gen[AddrKeyHash] =
@@ -192,10 +195,13 @@ object Generators {
         def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
             for {
                 coin <- arbitrary[Coin]
-                res <- genKnownCoinPayoutObligationL2(network, coin)    
+                res <- genKnownCoinPayoutObligationL2(network, coin)
             } yield res
 
-        def genKnownCoinPayoutObligationL2(network: Network, coin: Coin): Gen[Payout.Obligation.L2] =
+        def genKnownCoinPayoutObligationL2(
+            network: Network,
+            coin: Coin
+        ): Gen[Payout.Obligation.L2] =
             for {
                 l2Input <- arbitrary[TransactionInput]
 
