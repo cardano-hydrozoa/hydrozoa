@@ -1,24 +1,37 @@
 #!/usr/bin/env just --justfile
 
+# This justfile is configured to send notifications when commands complete.
+# To enable this, add a `./.just/notify` file.
+
 fmt:
-  sbt scalafmtAll
+  - sbt scalafmtAll
+  just notify "fmt"
 
 fmt-check:
-  sbt scalafmtCheck
+  - sbt scalafmtCheck
+  just notify "fmt-check"
 
 lint:
-  sbt scalafixAll
+  - sbt scalafixAll
+  just notify "lint"
 
 lint-check:
-  sbt "scalafixAll --check"
+  - sbt "scalafixAll --check"
+  just notify "lint-check"
 
 nixfmt:
-  nixfmt flake.nix
+  - nixfmt flake.nix
+  just notify "nixfmt"
 
 nixfmt-check:
-  nixfmt flake.nix --check	
+  - nixfmt flake.nix --check	
+  just notify "nixfmt-check"
 
-precommit:
-  just lint-check
-  just fmt-check  
-  just nixfmt-check
+[parallel]
+precommit: lint-check fmt-check nixfmt-check
+  just notify "precommit"
+
+notify name:
+  if [ -f .just/notify ]; \
+  then notify-send -i "{{justfile_dir()}}/.just/notify-icon.jpg" -a "Hydrozoa Justfile" "{{name}} finished"; \
+  fi

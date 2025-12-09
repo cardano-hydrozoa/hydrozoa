@@ -77,7 +77,7 @@ def genDepositRecipe(
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = testValidators
+      validators = nonSigningValidators
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {

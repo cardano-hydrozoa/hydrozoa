@@ -50,6 +50,10 @@ object RefundTx {
             validityStartSlot: Slot
         )
 
+        type ParseError = String
+
+        def parse(serialized: Array[Byte]): Either[ParseError, RefundTx.PostDated] = ???
+
         def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
             /////////////////////////////////////////////////////////////////////
             // Data extraction
