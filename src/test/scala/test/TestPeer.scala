@@ -6,16 +6,20 @@ import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
 import hydrozoa.*
-import hydrozoa.multisig.ledger.virtual.{L2EventTransaction, L2EventWithdrawal}
+import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
+import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.ArbitraryInstances.*
+import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value}
+import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Metadatum, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Word64}
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
@@ -37,7 +41,7 @@ enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
 
     def walletId: WalletId = TestPeer.mkWalletId(this)
 
-    def address(network: Network): ShelleyAddress = TestPeer.address(this, network)
+    def address(network: Network = Testnet): ShelleyAddress = TestPeer.address(this, network)
 
 object TestPeer:
     private val mnemonic: String =
@@ -101,39 +105,13 @@ def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
     val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
     addWitness(txUnsigned, keyWitness)
 
-/** Given a set of inputs event, construct a withdrawal event attempting to withdraw all inputs with
-  * the given key
-  */
-def l2EventWithdrawalFromInputsAndPeer(
-    inputs: TaggedSortedSet[TransactionInput],
-    peer: TestPeer
-): L2EventWithdrawal = {
-    val txBody: TransactionBody = TransactionBody(
-      inputs = inputs,
-      outputs = IndexedSeq.empty,
-      fee = Coin(0L)
-    )
-
-    val txUnsigned: STransaction =
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = true,
-          auxiliaryData = None
-        )
-
-    // N.B.: round-tripping through bloxbean because this is the only way I know how to sign right now
-    // Its probably possible to extract the key and use the crypto primitives from scalus directly
-    L2EventWithdrawal(signTx(peer, txUnsigned))
-}
-
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(
     inputs: TaggedSortedSet[TransactionInput],
     utxoSet: Map[TransactionInput, TransactionOutput],
     inPeer: TestPeer,
     outPeer: TestPeer,
-    network: Network
+    network: Network = Testnet
 ): L2EventTransaction = {
 
     val totalVal: Value = inputs.toSeq.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
@@ -156,7 +134,16 @@ def l2EventTransactionFromInputsAndPeer(
           body = KeepRaw(txBody),
           witnessSet = TransactionWitnessSet.empty,
           isValid = false,
-          auxiliaryData = None
+          auxiliaryData = Some(
+            KeepRaw(
+              Metadata(
+                Map(
+                  Word64(CIP67.Tags.head) ->
+                      Metadatum.List(IndexedSeq(Metadatum.Int(2)))
+                )
+              )
+            )
+          )
         )
 
     L2EventTransaction(signTx(inPeer, txUnsigned))
