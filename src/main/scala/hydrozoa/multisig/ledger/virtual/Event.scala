@@ -4,8 +4,10 @@ import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import scalus.builtin.Data
+import io.bullet.borer.Cbor
+import scalus.builtin.Builtins.blake2b_256
 import scalus.builtin.Data.toData
+import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
@@ -16,35 +18,42 @@ import scalus.prelude.Option as SOption
 
 // A sum type for ledger events
 sealed trait L2Event:
-    def getEventId: TransactionHash
+    def getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash]
 
 final case class L2EventTransaction(transaction: Transaction) extends L2Event {
-    val getEventId: TransactionHash = transaction.id
+    val getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = transaction.id
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
-final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
-    val getEventId: TransactionHash = transaction.id
-}
 
-// TODO: Rename to L2Genesis
 object L2EventGenesis:
     enum L2EventGenesisError:
         case EmptyInputs
 
     /** Smart constructor for L2EventGenesis, ensuring that the event contains at least one valid
       * Genesis Utxo. A genesis event absorbs a number of transaction inputs from L1 and produces
-      * corresponding L2 outputs. The TxId of a Genesis Event comes from a hash of the block number
-      * and token name of the head
+      * corresponding L2 outputs. The TxId of a Genesis Event comes from sorting the TxIds of the
+      * absorbed UTxOs, encoding them to Cbor, concatenating, and taking the blake2b_256 hash.
       */
     def fromDepositUtxos(
-        utxosL1: NonEmptyList[DepositUtxo],
-        // blockMajorVersion : Block.Version.Major,
-        // treasuryTokenName : TokenName
+        utxosL1: NonEmptyList[DepositUtxo]
     ): L2EventGenesis = {
-        val hash: SHash[Blake2b_256, HashPurpose.TransactionHash] = ???
-        /*
-        hash(treasuryTokenNAme ++ blockMajorVersion.toString)
-         */
+        val hash: SHash[Blake2b_256, HashPurpose.TransactionHash] = SHash(
+          blake2b_256(
+            ByteString.fromArray(
+              // I know this is an insane way to do it, but transaction input apparently doesn't have an ordering instance
+              // yet
+              utxosL1
+                  .map(depositUtxo => {
+                      val ti = depositUtxo._1
+                      ti.transactionId.toHex ++ ti.index.toString
+                  })
+                  .sorted
+                  .toList
+                  .flatMap(ti => Cbor.encode(ti).toByteArray)
+                  .toArray
+            )
+          )
+        )
 
         // Maybe use validation monad instead? This will only report the first error
         val l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
@@ -56,12 +65,11 @@ object L2EventGenesis:
     }
 
 final case class L2EventGenesis private (
-    genesisObligations: NonEmptyList[GenesisObligation],
-    eventId: SHash[Blake2b_256, HashPurpose.TransactionHash],
-    volume: Coin
+    val genesisObligations: NonEmptyList[GenesisObligation],
+    val eventId: SHash[Blake2b_256, HashPurpose.TransactionHash],
+    val volume: Coin
 ) extends L2Event {
-    // TODO: This is not an "EventId" anymore, this is just the "genesis Id" -- its the transaction hash
-    override def getEventId: TransactionHash = this.eventId
+    override def getEventId: SHash[Blake2b_256, HashPurpose.TransactionHash] = this.eventId
 }
 
 /** Tags used in blocks */

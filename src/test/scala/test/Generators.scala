@@ -70,7 +70,7 @@ object Generators {
         def genTxBuilderConfigAndPeers(
             env: Environment = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
+            validators: Seq[Validator] = testValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
                 peers <- genTestPeers
@@ -97,7 +97,7 @@ object Generators {
         def genTxConfig(
             env: Environment = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
+            validators: Seq[Validator] = testValidators
         ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)
 
         val genHeadTokenName: Gen[AssetName] =

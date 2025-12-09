@@ -164,7 +164,7 @@ def genTallyTxRecipe(
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = nonSigningValidators
+      validators = testValidators
     )
 
 @nowarn("msg=unused value")

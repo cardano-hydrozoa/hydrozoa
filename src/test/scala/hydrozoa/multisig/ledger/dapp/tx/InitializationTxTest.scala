@@ -96,6 +96,6 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
       hmrwCoin = hmrwCoin,
       env = testTxBuilderEnvironment,
       evaluator = testEvaluator,
-      validators = nonSigningValidators,
+      validators = testValidators,
       changePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte)))
     )

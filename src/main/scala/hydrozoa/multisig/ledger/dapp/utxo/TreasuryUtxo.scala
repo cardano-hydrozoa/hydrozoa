@@ -1,12 +1,12 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
-import hydrozoa.multisig.protocol.types.Block
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.txbuilder.TransactionUnspentOutput
 
 // TODO: Make opaque
 final case class TreasuryUtxo(
@@ -16,8 +16,8 @@ final case class TreasuryUtxo(
     datum: TreasuryUtxo.Datum,
     value: Value
 ) {
-    val asUtxo: Utxo =
-        Utxo(
+    val asUtxo: TransactionUnspentOutput =
+        TransactionUnspentOutput(
           utxoId,
           TransactionOutput.apply(
             address = address,
@@ -53,7 +53,7 @@ object TreasuryUtxo {
 
     final case class Datum(
         commit: KzgCommit,
-        versionMajor: BigInt,
+        versionMajor: VersionMajor,
         paramsHash: H32
     ) derives FromData,
           ToData
@@ -64,17 +64,19 @@ object TreasuryUtxo {
 
     private type KzgCommit = ByteString
 
-    // TODO: implement hashing for params
-    // TODO: implement root hash
-    def mkInitMultisigTreasuryDatum: Datum =
-        mkMultisigTreasuryDatum(Block.Version.Major(0), ByteString.empty)
+    private type VersionMajor = BigInt
 
     // TODO: implement hashing for params
     // TODO: implement root hash
-    def mkMultisigTreasuryDatum(major: Block.Version.Major, _params: H32): Datum =
+    def mkInitMultisigTreasuryDatum: Datum =
+        mkMultisigTreasuryDatum(0, ByteString.empty)
+
+    // TODO: implement hashing for params
+    // TODO: implement root hash
+    def mkMultisigTreasuryDatum(major: Int, _params: H32): Datum =
         Datum(
           ByteString.empty,
-          BigInt(major.toInt),
+          BigInt(major),
           ByteString.empty
         )
 
