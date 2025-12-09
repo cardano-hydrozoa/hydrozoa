@@ -321,9 +321,7 @@ object RolloutTx {
                 List(stepRolloutMetadata(config), stepReferenceHNS(config))
 
             private def stepRolloutMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
-                ModifyAuxiliaryData(_ =>
-                    Some(MD(MD.L1TxTypes.Rollout, headAddress = config.headAddress))
-                )
+                ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
             private def stepReferenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)

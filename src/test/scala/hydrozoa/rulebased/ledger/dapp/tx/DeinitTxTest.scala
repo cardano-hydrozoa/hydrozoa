@@ -153,7 +153,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
           collateralUtxo = collateralUtxo,
           evaluator = testEvaluator,
           env = testTxBuilderEnvironment,
-          validators = testValidators
+          validators = nonSigningValidators
         )
     }
 

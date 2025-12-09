@@ -3,8 +3,9 @@ package hydrozoa.multisig.ledger.dapp.tx
 import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.L1TxTypes.Fallback
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
@@ -30,17 +31,17 @@ final case class FallbackTx(
     // because its a rules-based treasury utxo.
     // The rest should have domain-specific types as well. See:
     // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
-    treasuryProduced: TransactionUnspentOutput,
-    consumedHMRWUtxo: TransactionUnspentOutput,
-    producedDefaultVoteUtxo: TransactionUnspentOutput,
-    producedPeerVoteUtxos: NonEmptyList[TransactionUnspentOutput],
-    producedCollateralUtxos: NonEmptyList[TransactionUnspentOutput],
+    treasuryProduced: Utxo,
+    consumedHMRWUtxo: Utxo,
+    producedDefaultVoteUtxo: Utxo,
+    producedPeerVoteUtxos: NonEmptyList[Utxo],
+    producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction
 ) extends Tx {
-    def producedVoteUtxos: NonEmptyList[TransactionUnspentOutput] =
+    def producedVoteUtxos: NonEmptyList[Utxo] =
         NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
 
-    def producedNonTreasuryUtxos: NonEmptyList[TransactionUnspentOutput] =
+    def producedNonTreasuryUtxos: NonEmptyList[Utxo] =
         producedVoteUtxos ++ producedCollateralUtxos.toList
 }
 
@@ -82,7 +83,7 @@ object FallbackTx {
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
           deadlineVoting = recipe.votingDuration,
-          versionMajor = multisigDatum.versionMajor,
+          versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // KZG setup I think?
           setup = SList.empty
@@ -98,7 +99,7 @@ object FallbackTx {
         )
 
         def mkVoteUtxo(datum: Data): TransactionOutput = Babbage(
-          address = recipe.config.disputeResolutionAddress,
+          address = DisputeResolutionScript.address(network),
           value = Value(recipe.tallyFeeAllowance, mkVoteToken(1)),
           datumOption = Some(Inline(datum)),
           scriptRef = None
@@ -160,7 +161,7 @@ object FallbackTx {
 
         val createDisputeTreasury = Send(
           Babbage(
-            address = config.disputeTreasuryAddress,
+            address = RuleBasedTreasuryScript.address(network),
             value = treasuryUtxo.value,
             datumOption = Some(Inline(newTreasuryDatum.toData)),
             scriptRef = None
@@ -170,8 +171,7 @@ object FallbackTx {
         val setMetaData = ModifyAuxiliaryData(_ =>
             Some(
               MD.apply(
-                Fallback,
-                config.disputeTreasuryAddress
+                Fallback(RuleBasedTreasuryScript.address(network))
               )
             )
         )
@@ -207,18 +207,17 @@ object FallbackTx {
               validityStartSlot = Slot(0),
               treasurySpent = treasuryUtxo,
               //
-              treasuryProduced =
-                  TransactionUnspentOutput(TransactionInput(txId, 0), createDisputeTreasury.output),
+              treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
               consumedHMRWUtxo = spendHMRW.utxo,
               producedDefaultVoteUtxo =
-                  TransactionUnspentOutput(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
+                  Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
               producedPeerVoteUtxos = createPeerVoteUtxos
                   .map(_.output)
                   .zipWithIndex
                   .map(outputsZipped => {
                       val output = outputsZipped._1
                       val actualIndex = outputsZipped._2 + 2
-                      TransactionUnspentOutput(
+                      Utxo(
                         TransactionInput(txId, actualIndex),
                         output
                       )
@@ -229,7 +228,7 @@ object FallbackTx {
                   .map(outputsZipped => {
                       val output = outputsZipped._1
                       val actualIndex = outputsZipped._2 + 2 + headNativeScript.numSigners
-                      TransactionUnspentOutput(
+                      Utxo(
                         TransactionInput(txId, actualIndex),
                         output
                       )

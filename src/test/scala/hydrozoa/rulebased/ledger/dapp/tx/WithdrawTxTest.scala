@@ -160,7 +160,7 @@ def genWithdrawTxRecipe: Gen[WithdrawTx.Recipe] =
       network = testNetwork,
       protocolParams = testProtocolParams,
       evaluator = testEvaluator,
-      validators = testValidators.filterNot(_ == FeesOkValidator)
+      validators = nonSigningValidators.filterNot(_ == FeesOkValidator)
     )
 
 @nowarn("msg=unused value")

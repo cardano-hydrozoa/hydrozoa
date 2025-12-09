@@ -4,6 +4,7 @@ import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.Metadata.RefundPostDated
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import scala.language.implicitConversions
 import scalus.cardano.address.Network
@@ -49,6 +50,10 @@ object RefundTx {
             validityStartSlot: Slot
         )
 
+        type ParseError = String
+
+        def parse(serialized: Array[Byte]): Either[ParseError, RefundTx.PostDated] = ???
+
         def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
             /////////////////////////////////////////////////////////////////////
             // Data extraction
@@ -81,8 +86,9 @@ object RefundTx {
             val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
                 Some(
                   MD(
-                    MD.L1TxTypes.RefundPostDated,
-                    recipe.headScript.mkAddress(recipe.network)
+                    RefundPostDated(
+                      recipe.headScript.mkAddress(recipe.network)
+                    )
                   )
                 )
             )

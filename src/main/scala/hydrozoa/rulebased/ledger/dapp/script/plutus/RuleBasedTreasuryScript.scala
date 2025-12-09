@@ -13,6 +13,8 @@ import scalus.builtin.*
 import scalus.builtin.Builtins.*
 import scalus.builtin.ByteString.hex
 import scalus.builtin.ToData.toData
+import scalus.cardano.address.ShelleyDelegationPart.Null
+import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
 import scalus.ledger.api.v1.Value.+
 import scalus.ledger.api.v3.*
@@ -448,4 +450,11 @@ object RuleBasedTreasuryScript {
 
     // For compatibility with code that expects script hash as byte array
     val getScriptHash: Array[Byte] = compiledScriptHash.bytes
+
+    def address(n: Network): ShelleyAddress =
+        ShelleyAddress(
+          network = n,
+          payment = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash),
+          delegation = Null
+        )
 }
