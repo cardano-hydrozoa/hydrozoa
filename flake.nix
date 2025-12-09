@@ -1,7 +1,7 @@
 {
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     git-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -12,7 +12,7 @@
     (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        jdk = pkgs.openjdk23;
+        jdk = pkgs.openjdk25;
         # GraalVM is an advanced JDK. We use it for  metals and bloop only.
         # https://www.graalvm.org/
         graalvm = pkgs.graalvmPackages.graalvm-ce;

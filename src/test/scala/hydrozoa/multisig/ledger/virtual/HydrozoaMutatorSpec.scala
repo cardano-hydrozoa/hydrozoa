@@ -8,6 +8,7 @@ import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test as ScalaCheckTest}
 import scalus.builtin.ByteString
 import scalus.cardano.address.Network.Testnet
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
@@ -38,7 +39,7 @@ def depositDatumFromPeer(peer: TestPeer): DepositUtxo.Datum = {
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
   * event
   */
-def genDepositFromPeer(peer: TestPeer): Gen[DepositUtxo] =
+def genDepositFromPeer(peer: TestPeer, address: Option[ShelleyAddress] = None): Gen[DepositUtxo] =
     for
         txId: TransactionHash <- genByteStringOfN(32).map(
           Hash.apply[Blake2b_256, HashPurpose.TransactionHash](_)
