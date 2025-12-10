@@ -10,6 +10,7 @@ import scala.reflect.ClassTag
 Notes (Peter, 2025-12-09):
 
 1.) Should any/all of these fields be marked `final`?
+  - A: probably
 
 2.) When I was first trying to use this class, I was switching from a regular Request to this SyncRequest trait.
 I wasn't using "handleRequest" and was instead manually extracting the dResponse, which I forgot to `_.complete`.
@@ -38,7 +39,7 @@ for {
 
 ?
 
-4.) What are the trade-offs of doing this in `EitherT` vs in IO with a throwable?
+4.) What are the trade-offs of doing this in `EitherT` vs in F with a throwable?
  */
 
 /** A type-safe trait to handle synchronous requests between actors. We use this instead of
@@ -77,7 +78,7 @@ trait SyncRequest[F[+_], E <: Throwable, Response](implicit
       * @param f
       * @return
       */
-    def handleRequest(f: this.type => F[Response]): F[Unit] =
+    final def handleRequest(f: this.type => F[Response]): F[Unit] =
         for {
             eResult <- f(this).attemptNarrow
             _ <- dResponse.complete(eResult)
@@ -90,7 +91,7 @@ trait SyncRequest[F[+_], E <: Throwable, Response](implicit
       * @param actorRef
       * @return
       */
-    def ?:(actorRef: ActorRef[F, this.type]): F[Either[E, Response]] =
+    final def ?:(actorRef: ActorRef[F, this.type]): F[Either[E, Response]] =
         for {
             _ <- actorRef ! this
             eResponse <- this.dResponse.get

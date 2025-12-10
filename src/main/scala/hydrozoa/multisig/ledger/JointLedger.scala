@@ -24,6 +24,7 @@ import scala.concurrent.duration.{FiniteDuration, SECONDS}
 import scalus.cardano.ledger.{AssetName, Coin}
 import scalus.ledger.api.v3.PosixTime
 
+// Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
     ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
     transactionsValid: List[LedgerEvent.Id],
@@ -49,13 +50,19 @@ final case class JointLedger(
     private val dappLedger: ActorRef[IO, DappLedger.Requests.Request],
     private val virtualLedger: ActorRef[IO, VirtualLedger.Request],
     private val peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
+    // private val cardanoLiason
+    // private val blockSigner
     private val state: Ref[IO, State],
+
+    //// Static config fields
     private val tallyFeeAllowance: Coin,
     private val equityShares: EquityShares,
     private val multisigRegimeUtxo: MultisigRegimeUtxo,
     private val votingDuration: PosixTime,
     private val treasuryTokenName: AssetName
 ) extends Actor[IO, Requests.Request] {
+
+    // TODO: Refactor to use "become" and use different receive functions
 
     /** Get _only_ a [[Producing]] State or throw an exception QUESTION: What type of exception
       * should this be?
@@ -151,11 +158,13 @@ final case class JointLedger(
     private def applyInternalTxL2(
         args: ApplyInternalTxL2
     ): IO[Either[ErrorApplyInternalTx, Unit]] = {
+
         import args.*
-        def appendTransactionsValid(
-            oldState: Producing,
-            eventId: LedgerEvent.Id,
-            payouts: Vector[Payout.Obligation.L1]
+
+        def appendTransactionValid(
+           oldState: Producing,
+           eventId: LedgerEvent.Id,
+           payoutObligations: Vector[Payout.Obligation.L1]
         ): IO[Unit] =
             val newState = oldState
                 .focus(_.nextBlockData.transactionsValid)
@@ -163,10 +172,10 @@ final case class JointLedger(
                 .focus(_.nextBlockData.ledgerEventsRequired)
                 .modify(m => m.updated(id.peerNum, id.eventNum))
                 .focus(_.nextBlockData.blockWithdrawnUtxos)
-                .modify(v => v ++ payouts)
+                .modify(v => v ++ payoutObligations)
             state.set(newState)
 
-        def appendTransactionsInvalid(oldState: Producing, eventId: LedgerEvent.Id): IO[Unit] =
+        def appendTransactionInvalid(oldState: Producing, eventId: LedgerEvent.Id): IO[Unit] =
             val newState = oldState
                 .focus(_.nextBlockData.transactionsInvalid)
                 .modify(_.appended(id))
@@ -179,11 +188,12 @@ final case class JointLedger(
             res <- EitherT.right(virtualLedger ?: req)
             p <- EitherT.right(unsafeGetProducing)
             newState = res match {
-                case Left(_)        => appendTransactionsInvalid(p, id)
-                case Right(payouts) => appendTransactionsValid(p, id, payouts)
+                case Left(_)        => appendTransactionInvalid(p, id)
+                case Right(payoutObligations) => appendTransactionValid(p, id, payoutObligations)
             }
             _ <- EitherT.right(state.set(p))
         } yield ()
+
         eitherT.value
     }
 
@@ -197,8 +207,8 @@ final case class JointLedger(
             d <- unsafeGetDone
             _ <- state.set(
               Producing(
-                d.producedBlock,
-                blockCreationTime,
+                previousBlock = d.producedBlock,
+                startTime = blockCreationTime,
                 TransientFields(
                   ledgerEventsRequired = d.producedBlock match {
                       case i: Initial   => Map.empty
@@ -243,6 +253,7 @@ final case class JointLedger(
             )
 
             for {
+                // TODO: Change this to GetKZGCommit
                 gsReq <- VirtualLedger.GetState()
                 gsRes <- virtualLedger ?: gsReq
 
@@ -250,7 +261,7 @@ final case class JointLedger(
                   throw new RuntimeException("error getting state from virtual ledger")
                 )
 
-                kzgCommit = KzgCommitment.hashToScalar(vrState.activeUtxos)
+                kzgCommit = KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(vrState.activeUtxos))
 
                 // FIXME: unsafe cast
                 nextBlock: Block.Minor = p.previousBlock
@@ -259,7 +270,7 @@ final case class JointLedger(
                       // FIXME: Conflicting types
                       newTime = FiniteDuration(p.startTime.toLong, SECONDS),
                       // FIXME: Conflicting types
-                      newCommitment = KzgCommitment.calculateCommitment(kzgCommit)
+                      newCommitment = kzgCommit
                     )
                     .asInstanceOf[Block.Minor]
             } yield
@@ -332,8 +343,6 @@ final case class JointLedger(
                 case Right(r) => r
             }
 
-            // This is applying the effect to the L2 ledger before we actually spend the deposits on L1.
-            // I think there could be a race here?
             augmentedBlock <- settleLedgerRes match {
                 case r: SettleLedger.ResultWithoutSettlement => augmentBlockMinor(producing, r)
                 case r: SettleLedger.ResultWithSettlement =>
@@ -355,8 +364,6 @@ final case class JointLedger(
     // If the produced block is NOT equal to a passed reference block, then:
     //   - Consensus is broken
     //   - Send a panic to the multisig regime manager in a suicide note
-
-    // TODO: call settle ledger
     def completeBlockFinal(args: CompleteBlockFinal): IO[Unit] = {
         import args.*
         for {
@@ -441,9 +448,9 @@ final case class JointLedger(
             case None => state.set(Done(actualBlock))
         }
 
-    // Sends a panic to the multisig regime manager, indicating that the node can proceed any more
-    // FIXME: implement
-    private def panic(msg: String): IO[Unit] = IO.pure(())
+    // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
+    // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
+    private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 }
 
 /** ==Hydrozoa's joint ledger on Cardano in the multisig regime==
@@ -463,11 +470,15 @@ object JointLedger {
 
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
 
+        // FIXME: Make this take a pollResults: Utxos of all utxos present at the treasury address
         case class StartBlock(blockCreationTime: PosixTime)
 
         case class CompleteBlockRegular(
+            // TODO: remove this field, it is now in start block
             pollResults: Set[LedgerEvent.Id],
-            referenceBlock: Option[Block]
+            referenceBlock: Option[Block],
+            // Make this block Major in order to circumvent a fallback tx becoming valid
+            // forceMajor : Boolean
         )
 
         case class CompleteBlockFinal(referenceBlock: Option[Block])
