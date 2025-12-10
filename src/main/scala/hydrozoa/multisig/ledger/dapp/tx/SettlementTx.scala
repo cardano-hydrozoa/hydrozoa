@@ -154,6 +154,8 @@ object SettlementTx {
             final case class NoPayouts(
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: TreasuryUtxo,
+                // FIXME (Peter, 2025-12-10): there's an issue here -- if there's no payouts and this vector is empty,
+                // what is this supposed to do?
                 override val depositsToSpend: Vector[DepositUtxo]
             ) extends Args
 

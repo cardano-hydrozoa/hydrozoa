@@ -96,13 +96,12 @@ object DappLedgerTest extends Properties("DappLedger") {
                 )
 
                 depositTx <- EitherT.fromEither(DepositTx.build(depositRecipe).leftMap(_.toString))
-
                 signedTx = signTx(peer, depositTx.tx)
-
                 serializedDeposit = signedTx.toCbor
+                req <- EitherT.right(RegisterDeposit(serializedDeposit, LedgerEvent.Id(0, 1)))
 
                 _ <- EitherT.right(
-                  dappLedger ! RegisterDeposit(serializedDeposit, LedgerEvent.Id(0, 1))
+                  dappLedger ! req
                 )
 
                 stateReq <- right(GetState()).leftMap(_.toString)

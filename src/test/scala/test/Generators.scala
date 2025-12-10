@@ -408,7 +408,7 @@ object Generators {
                     }
 
                     val expectedException = new TransactionException.BadAllInputsUTxOException(
-                      transactionId = newTx.getEventId,
+                      transactionId = newTx.transaction.id,
                       missingInputs = Set(bogusTxIn),
                       missingCollateralInputs = Set.empty,
                       missingReferenceInputs = Set.empty
