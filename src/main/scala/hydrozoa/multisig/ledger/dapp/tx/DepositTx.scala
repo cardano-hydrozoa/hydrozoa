@@ -4,7 +4,8 @@ import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import io.bullet.borer.Encoder
+import io.bullet.borer.{Cbor, Encoder}
+import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
@@ -13,7 +14,6 @@ import scalus.cardano.ledger.TransactionOutput.given
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
-import scalus.serialization.cbor.Cbor
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
@@ -53,7 +53,7 @@ object DepositTx {
 
             val virtualValue = Value.combine(virtualOutputsList.map(_.value))
 
-            val virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsList)
+            val virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsList).toByteArray
 
             val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
               platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
@@ -140,9 +140,76 @@ object DepositTx {
         }
     }
 
-    // TODO: Restore
     sealed trait ParseError extends Throwable
 
-    // TODO: Restore
-    def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = ???
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
+
+    case class HashMismatchVirtualOutputs(
+        virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
+        hash: Hash32
+    ) extends ParseError
+
+    case class MissingDepositOutputAtIndex(e: Int) extends ParseError
+
+    case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError) extends ParseError
+
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+
+    /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
+      * address (given in the transaction metadata) with an Inline datum that parses correctly.
+      */
+    def parse(
+        txBytes: Tx.Serialized,
+        env: Environment,
+        virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
+    ): Either[ParseError, DepositTx] = {
+        given ProtocolVersion = env.protocolParams.protocolVersion
+        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+
+        val virtualOutputsList = virtualOutputs.toList
+
+        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            case Success(tx) =>
+                for {
+                    // Pull head address from metadata
+                    d <- MD
+                        .parse(tx) match {
+                        case Right(d: Metadata.Deposit) => Right(d)
+                        case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
+                        case Left(e)  => Left(MetadataParseError(e))
+                    }
+                    Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
+
+                    // Compare hash with virtual outputs
+                    virtualOutputsCbor: Array[Byte] = Cbor.encode(virtualOutputsList).toByteArray
+                    calculatedVirtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
+                      platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
+                    )
+                    _ <- Either.cond(
+                      virtualOutputsHash == calculatedVirtualOutputsHash,
+                      (),
+                      HashMismatchVirtualOutputs(virtualOutputs, virtualOutputsHash)
+                    )
+
+                    // Grab the deposit output at the index specified in the metadata
+                    depositOutput <- tx.body.value.outputs
+                        .lift(depositUtxoIx)
+                        .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
+
+                    // Check that the output is babbage, extract and parse its inline datum
+                    dutxo <- DepositUtxo
+                        .fromUtxo(
+                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          virtualOutputs
+                        )
+                        .left
+                        .map(DepositUtxoError(_))
+                } yield DepositTx(
+                  dutxo,
+                  tx
+                )
+            case Failure(e) => Left(TxCborDeserializationFailed(e))
+        }
+
+    }
 }

@@ -105,7 +105,7 @@ object DepositUtxo {
         case RefScriptNotAllowed
 
     def fromUtxo(
-        utxo: (TransactionInput, TransactionOutput),
+        utxo: Utxo,
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {

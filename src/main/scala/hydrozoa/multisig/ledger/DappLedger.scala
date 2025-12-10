@@ -35,7 +35,7 @@ final case class DappLedger(headAddress: ShelleyAddress)(
         IO.pure(
           // Either Monad
           for {
-              tx <- DepositTx.parse(txSerialized)
+              tx: DepositTx <- Right(???) // DepositTx.parse(txSerialized)
               refundTx: RefundTx.PostDated = ???
           } yield (tx.depositProduced, refundTx)
         )

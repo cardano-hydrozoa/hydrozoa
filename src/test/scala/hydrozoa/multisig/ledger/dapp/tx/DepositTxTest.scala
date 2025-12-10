@@ -107,7 +107,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
             depositTxBuilder.build match {
                 case Left(e) => fail(s"Build failed $e")
                 case Right(DepositTx.Builder.Result(depositTx, refundTx)) =>
-                    DepositTx.parse(depositTx.tx.toCbor) match {
+                    DepositTx.parse(depositTx.tx.toCbor, ???, ???) match {
                         case Left(e) =>
                             fail(
                               s"Produced deposit tx cannot be deserialized from CBOR: ${e.getCause}"
