@@ -25,7 +25,7 @@ import scalus.cardano.ledger.{AuxiliaryData, Hash32, KeepRaw, Metadatum, Origina
   *   - The CIP67 Head Tag (WARNING: this currently isn't compliant with the specification:
   *     https://github.com/cardano-hydrozoa/hydrozoa/issues/260)
   *   - The name of the transaction type
-  *   - A cbor-enbcoded payload, represented as a Metadatum.List of Metadatum.Bytes, where each
+  *   - A cbor-encoded payload, represented as a Metadatum.List of Metadatum.Bytes, where each
   *     element is at most 64 bytes long.
   *
   * It should look something like:
@@ -74,15 +74,10 @@ object Metadata {
     given initializationDecoder(using OriginalCborByteArray): Decoder[Initialization] =
         Decoder.derived[Initialization]
 
-    case class RefundPostDated(override val headAddress: ShelleyAddress) extends L1TxTypes
-    given Encoder[RefundPostDated] = Encoder.derived
-    given refundPostDatedDecoder(using OriginalCborByteArray): Decoder[RefundPostDated] =
-        Decoder.derived[RefundPostDated]
-
-    case class RefundImmediate(override val headAddress: ShelleyAddress) extends L1TxTypes
-    given Encoder[RefundImmediate] = Encoder.derived
-    given refundImmediateDecoder(using OriginalCborByteArray): Decoder[RefundImmediate] =
-        Decoder.derived[RefundImmediate]
+    case class Refund(override val headAddress: ShelleyAddress) extends L1TxTypes
+    given Encoder[Refund] = Encoder.derived
+    given refundDecoder(using OriginalCborByteArray): Decoder[Refund] =
+        Decoder.derived[Refund]
 
     case class Rollout(override val headAddress: ShelleyAddress) extends L1TxTypes
     given Encoder[Rollout] = Encoder.derived
@@ -126,14 +121,13 @@ object Metadata {
         }
 
         txType match {
-            case x: Deposit         => helper("Deposit", x)
-            case x: Fallback        => helper("Fallback", x)
-            case x: Finalization    => helper("Finalization", x)
-            case x: Initialization  => helper("Initialization", x)
-            case x: RefundPostDated => helper("RefundPostDated", x)
-            case x: RefundImmediate => helper("RefundImmediate", x)
-            case x: Rollout         => helper("Rollout", x)
-            case x: Settlement      => helper("Settlement", x)
+            case x: Deposit        => helper("Deposit", x)
+            case x: Fallback       => helper("Fallback", x)
+            case x: Finalization   => helper("Finalization", x)
+            case x: Initialization => helper("Initialization", x)
+            case x: Refund         => helper("Refund", x)
+            case x: Rollout        => helper("Rollout", x)
+            case x: Settlement     => helper("Settlement", x)
         }
     }
 
@@ -205,14 +199,13 @@ object Metadata {
             given OriginalCborByteArray = OriginalCborByteArray(cborData)
 
             txType <- txTypeKey match {
-                case "Deposit"         => helper[Deposit](cborData)
-                case "Fallback"        => helper[Fallback](cborData)
-                case "Finalization"    => helper[Finalization](cborData)
-                case "Initialization"  => helper[Initialization](cborData)
-                case "RefundPostDated" => helper[RefundPostDated](cborData)
-                case "RefundImmediate" => helper[RefundImmediate](cborData)
-                case "Rollout"         => helper[Rollout](cborData)
-                case "Settlement"      => helper[Settlement](cborData)
+                case "Deposit"        => helper[Deposit](cborData)
+                case "Fallback"       => helper[Fallback](cborData)
+                case "Finalization"   => helper[Finalization](cborData)
+                case "Initialization" => helper[Initialization](cborData)
+                case "Refund"         => helper[Refund](cborData)
+                case "Rollout"        => helper[Rollout](cborData)
+                case "Settlement"     => helper[Settlement](cborData)
                 case s =>
                     Left(
                       MalformedTxTypeKey(

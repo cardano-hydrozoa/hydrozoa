@@ -21,9 +21,6 @@ final case class DepositTx(
 ) extends Tx
 
 object DepositTx {
-    // TODO: Restore
-    sealed trait ParseError extends Throwable
-
     object Builder {
         type Error = SomeBuildError | Error.InsufficientFundingForVirtualOutputs
 
@@ -42,7 +39,7 @@ object DepositTx {
 
     final case class Builder(
         override val config: Tx.Builder.Config,
-        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
+        partialRefundTx: RefundTx.Builder.PartialResult.PostDated,
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
         changeAddress: ShelleyAddress
@@ -142,6 +139,9 @@ object DepositTx {
             } yield Builder.Result(depositTx, refundTx)
         }
     }
+
+    // TODO: Restore
+    sealed trait ParseError extends Throwable
 
     // TODO: Restore
     def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = ???

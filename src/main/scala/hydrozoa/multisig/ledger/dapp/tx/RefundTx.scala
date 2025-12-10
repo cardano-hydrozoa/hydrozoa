@@ -15,30 +15,14 @@ import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
 import scalus.ledger.api.v3.PosixTime
 
-sealed trait RefundTx {
-    def depositSpent: DepositUtxo
-    def refundInstructions: DepositUtxo.Refund.Instructions
-}
+sealed trait RefundTx extends Tx
 
-// TODO: There's a lot of noise here due to the Immediate/PostDated distinction, whereas the only difference between
-//   them is that RefundTx.Immediate doesn't use the Refund.Instructions.startTime as its validity start time.
 object RefundTx {
-    final case class Immediate(
-        override val depositSpent: DepositUtxo,
-        override val refundInstructions: DepositUtxo.Refund.Instructions,
-        override val tx: Transaction
-    ) extends Tx,
-          RefundTx
-
-    final case class PostDated(
-        override val depositSpent: DepositUtxo,
-        override val refundInstructions: DepositUtxo.Refund.Instructions,
-        override val tx: Transaction
-    ) extends Tx,
-          RefundTx
+    final case class Immediate(override val tx: Transaction) extends RefundTx
+    final case class PostDated(override val tx: Transaction, startTime: PosixTime) extends RefundTx
 
     object Builder {
         final case class Immediate(
@@ -47,16 +31,17 @@ object RefundTx {
             override val refundValue: Value
         ) extends Builder[RefundTx.Immediate] {
             override val mValidityStartSlot: None.type = None
-            override val stepRefundMetadata = ModifyAuxiliaryData(_ =>
-                Some(MD(MD.RefundImmediate(headAddress = config.headAddress)))
-            )
+            override val stepRefundMetadata =
+                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
-            override def postProcess(
+            override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
-                depositUtxo: DepositUtxo,
-                refundInstructions: DepositUtxo.Refund.Instructions
-            ): RefundTx.Immediate =
-                RefundTx.Immediate(depositUtxo, refundInstructions, ctx.transaction)
+                valueNeeded: Value
+            ): PartialResult.Immediate =
+                PartialResult.Immediate(this, ctx, valueNeeded)
+
+            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
+                RefundTx.Immediate(ctx.transaction)
         }
 
         final case class PostDated(
@@ -65,29 +50,39 @@ object RefundTx {
             override val refundValue: Value
         ) extends Builder[RefundTx.PostDated] {
             override val mValidityStartSlot: Some[PosixTime] = Some(refundInstructions.startTime)
-            override val stepRefundMetadata = ModifyAuxiliaryData(_ =>
-                Some(MD(MD.RefundPostDated(headAddress = config.headAddress)))
-            )
+            override val stepRefundMetadata =
+                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
-            override def postProcess(
+            override def mkPartialResult(
                 ctx: TransactionBuilder.Context,
-                depositUtxo: DepositUtxo,
-                refundInstructions: DepositUtxo.Refund.Instructions
-            ): RefundTx.PostDated =
-                RefundTx.PostDated(depositUtxo, refundInstructions, ctx.transaction)
+                valueNeeded: Value
+            ): PartialResult.PostDated =
+                PartialResult.PostDated(this, ctx, valueNeeded)
+
+            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
+                RefundTx.PostDated(ctx.transaction, refundInstructions.startTime)
         }
 
-        final case class PartialResult[T <: RefundTx](
-            builder: Builder[T],
-            override val ctx: TransactionBuilder.Context,
-            override val inputValueNeeded: Value
-        ) extends Tx.Builder.HasCtx,
-              State.Fields.HasInputRequired {
-            def complete(depositSpent: DepositUtxo): BuildErrorOr[T] = for {
+        enum PartialResult[T <: RefundTx] extends Tx.Builder.HasCtx, State.Fields.HasInputRequired {
+            def builder: Builder[T]
+
+            case Immediate(
+                builder: Builder[RefundTx.Immediate],
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value
+            ) extends PartialResult[RefundTx.Immediate]
+
+            case PostDated(
+                builder: Builder[RefundTx.PostDated],
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value
+            ) extends PartialResult[RefundTx.PostDated]
+
+            final def complete(depositSpent: DepositUtxo): BuildErrorOr[T] = for {
                 addedDepositSpent <- TransactionBuilder
                     .modify(ctx, List(Spend(depositSpent.toUtxo)))
                     .explainConst("adding real spend deposit failed.")
-            } yield builder.postProcess(addedDepositSpent, depositSpent, builder.refundInstructions)
+            } yield builder.postProcess(addedDepositSpent)
         }
 
         object State {
@@ -108,11 +103,11 @@ object RefundTx {
         def mValidityStartSlot: Option[PosixTime]
         def stepRefundMetadata: ModifyAuxiliaryData
 
-        def postProcess(
+        def mkPartialResult(
             ctx: TransactionBuilder.Context,
-            depositUtxo: DepositUtxo,
-            refundInstructions: DepositUtxo.Refund.Instructions
-        ): T
+            valueNeededWithFee: Value
+        ): Builder.PartialResult[T]
+        def postProcess(ctx: TransactionBuilder.Context): T
 
         final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)
@@ -140,7 +135,7 @@ object RefundTx {
                 valueNeeded = Placeholder.inputValueNeeded(ctx)
 
                 valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
-            } yield Builder.PartialResult[T](this, ctx, valueNeededWithFee)
+            } yield mkPartialResult(ctx, valueNeededWithFee)
         }
 
         // TODO: This is very similar to the trialFinishLoop in RolloutTx. Factor out a common lib function?
@@ -209,10 +204,39 @@ object RefundTx {
         }
     }
 
-    object PostDated {
-        case class Recipe(
-            depositTx: DepositTx,
-            validityStartSlot: Slot
-        )
+    sealed trait ParseError extends Throwable
+
+    case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
+
+    def parse(
+        tx: Transaction,
+        env: Environment
+    ): Either[ParseError, RefundTx] = {
+        given ProtocolVersion = env.protocolParams.protocolVersion
+        for {
+            imd <- MD.parse(tx) match {
+                case Right(md: Metadata.Refund) => Right(md)
+                case Right(md) =>
+                    Left(
+                      MetadataParseError(
+                        MD.UnexpectedTxType(actual = md, expected = "Refund")
+                      )
+                    )
+                case Left(e) =>
+                    Left(
+                      MetadataParseError(
+                        MD.MalformedTxTypeKey(
+                          "Could not find the expected TxTypeKey for Refund" +
+                              s" transaction. Got: $e"
+                        )
+                      )
+                    )
+            }
+
+            refundTx = tx.body.value.validityStartSlot match {
+                case None            => RefundTx.Immediate(tx)
+                case Some(startSlot) => RefundTx.PostDated(tx, env.slotConfig.slotToTime(startSlot))
+            }
+        } yield refundTx
     }
 }

@@ -70,7 +70,7 @@ def genDepositRecipe(
 
         config: Tx.Builder.Config = ???
 
-        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated] = ???
+        partialRefundTx: RefundTx.Builder.PartialResult.PostDated = ???
 
         virtualOutputs = ???
 
