@@ -4,12 +4,15 @@ import cats.data.EitherT
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.DappLedger.Requests.{RegisterDeposit, SettleLedger}
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.{ApplyInternalTxL2, CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.VirtualLedger.{ApplyInternalTx, ErrorApplyInternalTx}
-import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
+import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
+import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.ConsensusProtocol
@@ -48,6 +51,8 @@ final case class JointLedger(
     private val peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
     private val state: Ref[IO, State],
     private val tallyFeeAllowance: Coin,
+    private val equityShares: EquityShares,
+    private val multisigRegimeUtxo: MultisigRegimeUtxo,
     private val votingDuration: PosixTime,
     private val treasuryTokenName: AssetName
 ) extends Actor[IO, Requests.Request] {
@@ -184,7 +189,6 @@ final case class JointLedger(
 
     /** Moves the state of the JointLedger from "Done" to "Producing", setting the time and
       * ledgerEventsRequired appropriately, while initializing all other fields.
-      * @param blockCreationTime
       * @return
       */
     private def startBlock(args: StartBlock): IO[Unit] = {
@@ -219,7 +223,6 @@ final case class JointLedger(
     }
 
     /** Complete a Minor or Major block If
-      * @param args
       * @return
       */
     private def completeBlockRegular(args: CompleteBlockRegular): IO[Unit] = {
@@ -359,29 +362,63 @@ final case class JointLedger(
         for {
             p <- unsafeGetProducing
 
-            finalBlock = ???
-//                import p.nextBlockData.*
-//                val finalBlockBody: Block.Body.Final = Block.Body.Final(
-//                    ledgerEventsRequired = ledgerEventsRequired,
-//                    transactionsValid = transactionsValid,
-//                    transactionsInvalid = transactionsInvalid,
-//                    depositsRejected = depositsRejected,
-//                    depositsRefunded = depositsRefunded ++ depositsRegistered ++ depositsAbsorbed
-//                )
-//
-//                p.previousBlock.nextBlock(
-//                    newBody = finalBlockBody,
-//                    newTime = FiniteDuration(p.startTime.toInt, TimeUnit.SECONDS),
-//                    newCommitment = ???
-//                )
+            finalizeLedgerReq <- DappLedger.Requests.FinalizeLedger(
+              p.nextBlockData.blockWithdrawnUtxos,
+              multisigRegimeUtxoToSpend = multisigRegimeUtxo,
+              equityShares = equityShares
+            )
 
-            _ <- checkReferenceBlock(referenceBlock, finalBlock)
+            finalizeLedgerRes <- (dappLedger ?: finalizeLedgerReq).map {
+                case Left(e)  => throw new RuntimeException("Could not finalize ledger")
+                case Right(r) => r
+            }
+
+            augmentedBlock: AugmentedBlock.Final = {
+                import p.nextBlockData.*
+                val nextBlockBody: Block.Body.Final = Block.Body.Final(
+                  ledgerEventsRequired = ledgerEventsRequired,
+                  transactionsValid = transactionsValid,
+                  transactionsInvalid = transactionsInvalid,
+                  depositsRejected = depositsRejected ++ depositsRegistered,
+                  depositsRefunded = List.empty // FIXME: currently not handling refunds
+                )
+
+                // FIXME: unsafe cast
+                val nextBlock: Block.Final = p.previousBlock
+                    .nextBlock(
+                      nextBlockBody,
+                      FiniteDuration(p.startTime.toLong, TimeUnit.SECONDS),
+                      IArray.empty[Byte]
+                    )
+                    .asInstanceOf[Block.Final]
+
+                val blockEffects: BlockEffects.Final = {
+                    import FinalizationTxSeq.*
+                    val rollouts: List[RolloutTx] = finalizeLedgerRes match {
+                        case _: Monolithic => List.empty
+                        case _: WithDeinit => List.empty
+                        case x: FinalizationTxSeq.WithRollouts =>
+                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                        case x: WithDeinitAndRollouts =>
+                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                    }
+                    BlockEffects.Final(
+                      nextBlock.id,
+                      finalizeLedgerRes.finalizationTx,
+                      rollouts = rollouts,
+                      immediateRefunds = List.empty
+                    )
+                }
+
+                AugmentedBlock.Final(nextBlock, blockEffects)
+            }
+
+            _ <- checkReferenceBlock(referenceBlock, augmentedBlock.block)
+            _ <- sendAugmentedBlock(augmentedBlock)
 
         } yield ()
     }
 
-    // TODO: more methods related to block completion
-    // def: "augmented block" == "block plus all of its l1 effects (settlementTxSeq, etc.)"
     // when a block is finished, we:
     //   - send Aug block to block signer along with the L1 effects settlementTxSeq, etc. for signing locally
     //     (signatures subsequently passed to peer liason for circulation and block weaver and to the )
@@ -392,16 +429,21 @@ final case class JointLedger(
             // _ <- blockSigner ! augmentedBlock
             _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.block))
             // _ <- cardanoLiason ! augementedBlock._2
-        } yield ???
+        } yield ()
 
     private def checkReferenceBlock(expectedBlock: Option[Block], actualBlock: Block): IO[Unit] =
         expectedBlock match {
             case Some(refBlock) if refBlock == actualBlock => state.set(Done(actualBlock))
             case Some(_) =>
-                ??? // Consensus is broken, suicide and send a panic to the multisig regime manager
+                panic(
+                  "Reference block didn't match actual block; consensus is broken."
+                ) >> context.self.stop
             case None => state.set(Done(actualBlock))
         }
 
+    // Sends a panic to the multisig regime manager, indicating that the node can proceed any more
+    // FIXME: implement
+    private def panic(msg: String): IO[Unit] = IO.pure(())
 }
 
 /** ==Hydrozoa's joint ledger on Cardano in the multisig regime==

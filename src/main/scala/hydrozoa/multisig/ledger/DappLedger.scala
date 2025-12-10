@@ -36,7 +36,7 @@ trait DappLedger(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case d: RegisterDeposit => d.handleRequest(registerDeposit)
         case s: SettleLedger    => s.handleRequest(settleLedger)
-        case f: FinalizeLedger  => finalizeLedger(f)
+        case f: FinalizeLedger  => f.handleRequest(finalizeLedger)
         // FIXME: this can't actually throw an error, not really. But using ?: makes it seem like it can
         case g: GetState => g.handleRequest(_ => state.get)
     }
@@ -205,9 +205,9 @@ trait DappLedger(
       * Immediate refund transactions must be constructed for every deposit in the ledger state.
       */
     // TODO (fund14): add Refund.Immediates to the return type
-    def finalizeLedger(
+    private def finalizeLedger(
         args: FinalizeLedger
-    ): IO[Either[FinalizationTxSeq.Builder.Error, FinalizationTxSeq]] = {
+    ): IO[FinalizationTxSeq] = {
         import args.*
         val eitherT: EitherT[IO, FinalizationTxSeq.Builder.Error, FinalizationTxSeq] =
             for {
@@ -222,7 +222,10 @@ trait DappLedger(
                 )
                 ftxSeq <- EitherT.fromEither[IO](FinalizationTxSeq.Builder(config).build(args))
             } yield ftxSeq
-        eitherT.value
+        eitherT.value.map {
+            case Left(e)  => throw FinalizationTxSeqBuilderError(e)
+            case Right(r) => r
+        }
     }
 }
 
@@ -333,11 +336,30 @@ object DappLedger {
             ) extends Result
         }
 
-        final case class FinalizeLedger(
+        final case class FinalizeLedger private (
             payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
-        )
+            override val dResponse: Deferred[
+              IO,
+              Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+            ]
+        ) extends SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizationTxSeq]
+
+        object FinalizeLedger {
+            def apply(
+                payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+                multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
+                equityShares: EquityShares
+            ): IO[FinalizeLedger] = for {
+                deferred <- Deferred[IO, Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]]
+            } yield FinalizeLedger(
+              payoutObligationsRemaining,
+              multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
+              equityShares = equityShares,
+              dResponse = deferred
+            )
+        }
 
         final case class GetState(
             override val dResponse: Deferred[IO, Either[Errors.GetStateError.type, State]]
@@ -383,6 +405,9 @@ object DappLedger {
         final case class InvalidTimeBound(msg: String) extends DappLedgerError
 
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
+            extends DappLedgerError
+
+        final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Builder.Error)
             extends DappLedgerError
 
         case object GetStateError extends DappLedgerError
