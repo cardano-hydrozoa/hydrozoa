@@ -13,6 +13,8 @@ import scalus.|>
 import supranational.blst.{P1, Scalar}
 
 object KzgCommitment {
+    
+    def empty : KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
 
     type KzgCommitment = IArray[Byte]
 

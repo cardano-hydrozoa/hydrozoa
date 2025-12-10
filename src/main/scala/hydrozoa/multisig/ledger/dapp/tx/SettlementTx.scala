@@ -4,15 +4,17 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
+import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
+
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Value}
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, Utxo, Value, TransactionOutput as TxOutput}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -138,7 +140,7 @@ object SettlementTx {
             ) extends WithPayouts
         }
 
-        trait Args
+        trait Args(val kzgCommitment: KzgCommitment)
             extends Block.Version.Major.Produced,
               TreasuryUtxo.ToSpend,
               DepositUtxo.Many.ToSpend {
@@ -152,19 +154,22 @@ object SettlementTx {
 
         object Args {
             final case class NoPayouts(
+                override val kzgCommitment: KzgCommitment,               
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: TreasuryUtxo,
                 // FIXME (Peter, 2025-12-10): there's an issue here -- if there's no payouts and this vector is empty,
                 // what is this supposed to do?
                 override val depositsToSpend: Vector[DepositUtxo]
-            ) extends Args
+            ) extends Args(kzgCommitment)
 
             final case class WithPayouts(
+                override val kzgCommitment: KzgCommitment,
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: TreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
-            ) extends Args
+            ) extends Args(kzgCommitment)
+
         }
 
         final case class State[T <: SettlementTx](
@@ -281,33 +286,33 @@ object SettlementTx {
                   sendTreasury(args)
                 )
 
-            def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
+            private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
                 ModifyAuxiliaryData(_ => Some(MD(Settlement(headAddress = config.headAddress))))
 
-            def referenceHNS(config: Tx.Builder.Config) =
+            private def referenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
 
-            def consumeTreasury(config: Tx.Builder.Config, treasuryToSpend: TreasuryUtxo): Spend =
+            private def consumeTreasury(config: Tx.Builder.Config, treasuryToSpend: TreasuryUtxo): Spend =
                 Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
 
-            def sendTreasury(args: Args): Send =
+            private def sendTreasury(args: Args): Send =
                 Send(treasuryOutput(args))
 
-            def treasuryOutput(args: Args): TxOutput.Babbage = {
+            private def treasuryOutput(args: Args): TxOutput.Babbage = {
                 TxOutput.Babbage(
                   address = args.treasuryToSpend.address,
                   value = treasuryOutputValue(args.treasuryToSpend, args.mbRolloutValue),
                   datumOption = Some(
-                    Inline(BasePessimistic.treasuryOutputDatum(args.majorVersionProduced).toData)
+                    Inline(TreasuryUtxo.Datum(
+                      ByteString.fromArray(IArray.genericWrapArray(args.kzgCommitment).toArray), 
+                      args.majorVersionProduced, 
+                      ByteString.empty).toData)
                   ),
                   scriptRef = None
                 )
             }
 
-            def treasuryOutputDatum(majorVersion: Block.Version.Major): TreasuryUtxo.Datum =
-                mkMultisigTreasuryDatum(majorVersion, ByteString.empty)
-
-            def treasuryOutputValue(
+            private def treasuryOutputValue(
                 treasurySpent: TreasuryUtxo,
                 mbRolloutValue: Option[Value]
             ): Value =
@@ -335,7 +340,7 @@ object SettlementTx {
                 } yield newCtx
             }
 
-            def rolloutOutput(
+            private def rolloutOutput(
                 treasuryToSpend: TreasuryUtxo,
                 firstRolloutTxInputValue: Value
             ): TxOutput.Babbage =
@@ -480,7 +485,7 @@ object SettlementTx {
                 val rolloutOutput = outputsTail.head.value
 
                 RolloutUtxo(
-                  TransactionUnspentOutput(
+                 Utxo(
                     TransactionInput(transactionId = tx.id, index = 1),
                     rolloutOutput
                   )
@@ -555,7 +560,7 @@ object SettlementTx {
                 } yield (finishedState, mergeResult)
         }
 
-        object PostProcess {
+        private object PostProcess {
 
             /** Given the transaction context of a [[Builder]] that has finished building, apply
               * post-processing to get the [[TreasuryUtxo]] produced by the [[SettlementTx]].
@@ -578,13 +583,9 @@ object SettlementTx {
                 val outputs = tx.body.value.outputs
 
                 assert(outputs.nonEmpty)
-                val treasuryOutput = outputs.head.value
-
-                treasurySpent.copy(
-                  utxoId = TransactionInput(transactionId = tx.id, index = 0),
-                  datum = BasePessimistic.treasuryOutputDatum(majorVersion),
-                  value = treasuryOutput.value
-                )
+                // TODO: Throw other assertion errors in `.fromUtxo` and instead of `.get`?
+                TreasuryUtxo.fromUtxo(
+                  Utxo(TransactionInput(tx.id, 0), outputs.head.value)).get
             }
         }
     }

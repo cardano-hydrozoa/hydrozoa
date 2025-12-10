@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
 import scalus.cardano.txbuilder.SomeBuildError
@@ -185,16 +186,18 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
+           override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: Block.Version.Major,
             override val treasuryToSpend: TreasuryUtxo,
             override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares
-        ) extends SingleArgs,
+        ) extends SingleArgs(kzgCommitment),
               Payout.Obligation.L1.Many.Remaining {
 
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
+                  kzgCommitment = kzgCommitment,  
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend
@@ -203,6 +206,7 @@ object FinalizationTxSeq {
             def toArgsWithPayouts(
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
+                kzgCommitment = kzgCommitment,
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
