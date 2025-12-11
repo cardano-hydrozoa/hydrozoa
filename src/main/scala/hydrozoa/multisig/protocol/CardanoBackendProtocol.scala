@@ -1,7 +1,7 @@
 package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
-import com.suprnation.actor.ReplyingActorRef
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.actor.SyncRequest
 import scalus.cardano.ledger.{Slot, Transaction, TransactionHash}
@@ -9,7 +9,7 @@ import scalus.cardano.ledger.{Slot, Transaction, TransactionHash}
 object CardanoBackendProtocol {
     object CardanoBackend {
         type CardanoBackendRef = Ref
-        type Ref = ReplyingActorRef[IO, Request, Response]
+        type Ref = ActorRef[IO, Request]
 
         type Request = SubmitL1Effects | GetCardanoHeadState | GetTxInfo
 

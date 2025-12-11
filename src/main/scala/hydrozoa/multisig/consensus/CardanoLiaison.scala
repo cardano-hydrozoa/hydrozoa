@@ -4,14 +4,13 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.UtxoIdL1
-import hydrozoa.multisig.consensus.CardanoLiaison.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.CardanoLiaison.Config
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, SubmitL1Effects}
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.DurationInt
@@ -45,19 +44,19 @@ object CardanoLiaison {
 
     final case class Config(
         cardanoBackend: CardanoBackend.Ref,
-        persistence: Persistence.Ref,
+        // persistence: Persistence.Ref,
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx
     )
 
     final case class ConnectionsPending()
 
-    def apply(config: Config, connections: ConnectionsPending): IO[CardanoLiaison] = {
-        IO(new CardanoLiaison(config, connections) {})
+    def apply(config: Config): IO[CardanoLiaison] = {
+        IO(new CardanoLiaison(config) {})
     }
 }
 
-trait CardanoLiaison(config: Config, _connections: ConnectionsPending) extends Actor[IO, Request] {
+trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State.initialState)
 
@@ -274,10 +273,12 @@ trait CardanoLiaison(config: Config, _connections: ConnectionsPending) extends A
                         } yield mbInitAction
                 }
             }
-        // 4. Submit flattened txs for actions it there are some
-        _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-          config.cardanoBackend ! SubmitL1Effects(actionsToSubmit.flatMap(actionTxs).toList)
-        )
+
+        // FIXME: revert back
+        //// 4. Submit flattened txs for actions it there are some
+        // _ <- IO.whenA(actionsToSubmit.nonEmpty)(
+        //  config.cardanoBackend ! SubmitL1Effects(actionsToSubmit.flatMap(actionTxs).toList)
+        // )
 
     } yield ()
 

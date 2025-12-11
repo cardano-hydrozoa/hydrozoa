@@ -105,17 +105,17 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             localPeerLiaisons = localPeerLiaisonsPendingRemoteActors.map(_._1)
 
             cardanoLiaison <- {
-                import CardanoLiaison.{Config, ConnectionsPending}
+                import CardanoLiaison.Config
                 context.actorOf(
                   CardanoLiaison(
                     Config(
-                      persistence = config.persistence,
+                      // persistence = config.persistence,
                       cardanoBackend = config.cardanoBackend,
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx
                     ),
-                    ConnectionsPending(
-                    )
+                    // ConnectionsPending(
+                    // )
                   )
                 )
             }
