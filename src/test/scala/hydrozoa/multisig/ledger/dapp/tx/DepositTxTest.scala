@@ -9,7 +9,6 @@ import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.builtin.Data.toData
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
@@ -79,12 +78,16 @@ def genDepositRecipe(
                 ).coin > minPubkeyAda() + depositAmount.coin + estimatedFee
             )
 
-        config: Tx.Builder.Config <- genTxConfig(testEnvironment, testEvaluator, testValidators)
+        config: Tx.Builder.Config <- genTxConfig(
+          testEnvironment,
+          testEvaluator,
+          nonSigningValidators
+        )
 
         refundAddr <- genPubkeyAddress()
 
         partialRefundTx = RefundTx.Builder.PartialResult.PostDated(
-          ctx = TransactionBuilder.Context.empty(Testnet),
+          ctx = TransactionBuilder.Context.empty(testNetwork),
           inputValueNeeded = depositAmount,
           refundInstructions = DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),

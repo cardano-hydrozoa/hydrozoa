@@ -1,7 +1,5 @@
 package hydrozoa.multisig.ledger
 
-import cats.effect.{IO, Ref}
-import hydrozoa.multisig.ledger.DappLedger.{DepositDecision, ErrorAddDeposit, State}
 import cats.data.{EitherT, NonEmptyList}
 import cats.effect.IO.realTime
 import cats.effect.{Deferred, IO, Ref}
@@ -9,14 +7,14 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.ledger.DappLedger.*
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
+import hydrozoa.multisig.ledger.DappLedger.{State, *}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
 import scala.collection.immutable.Queue
@@ -24,6 +22,7 @@ import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.AuxiliaryData.Metadata
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v3.PosixTime
 
 trait DappLedger(
@@ -49,10 +48,10 @@ trait DappLedger(
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
       * Return the produced deposit utxo and a post-dated refund transaction for it.
       */
-    private def registerDeposit(depositSeq: RegisterDeposit): IO[Either[DappLedgerError, Unit]] = {
+    private def registerDeposit(args: RegisterDeposit): IO[Either[DappLedgerError, Unit]] = {
         val eitherTxs: Either[DappLedgerError, DepositTx] = for {
             depositTx <- DepositTx
-                .parse(depositSeq.serializedDeposit)
+                .parse(args.serializedDeposit, config, args.virtualOutputs)
                 .left
                 .map(ParseDepositError(_))
             //            refundTx: RefundTx.PostDated <- RefundTx.PostDated
@@ -67,7 +66,7 @@ trait DappLedger(
                 for {
                     _ <- validateTimeBounds(x)
                     _ <- state
-                        .update(s => s.appendToQueue((depositSeq._2, x.depositProduced)))
+                        .update(s => s.appendToQueue((args.eventId, x.depositProduced)))
                         .map(Right(_))
                 } yield Right(())
         }
@@ -81,7 +80,9 @@ trait DappLedger(
         for {
             currentTime <- realTime
             _ <-
-                if tx.depositProduced.datum.deadline < BigInt(currentTime.toSeconds)
+                if tx.depositProduced.datum.refundInstructions.startTime >= BigInt(
+                      currentTime.toSeconds
+                    )
                 then IO.pure(Left(InvalidTimeBound("deposit deadline exceeded")))
                 else IO.pure(Right(()))
         } yield Right(())
@@ -236,7 +237,11 @@ object DappLedger {
     object Requests {
         type Request = RegisterDeposit | SettleLedger | FinalizeLedger | GetState
 
-        final case class RegisterDeposit(serializedDeposit: Array[Byte], eventId: LedgerEvent.Id)
+        final case class RegisterDeposit(
+            serializedDeposit: Array[Byte],
+            virtualOutputs: NonEmptyList[Babbage],
+            eventId: LedgerEvent.Id
+        )
 
         final case class SettleLedger(
             pollDepositResults: Set[LedgerEvent.Id],

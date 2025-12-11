@@ -17,7 +17,9 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
 val costModels = blockfrost544Params.costModels
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
-val testNetwork: Network = Mainnet // this is what scalus uses
+/** WARNING: Use this. Don't use Network.Testnet. Scalus uses Mainnet in its test utils.
+  */
+val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
 def slotConfig(network: Network): SlotConfig = network match {

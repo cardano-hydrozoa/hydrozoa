@@ -4,22 +4,19 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
-import cats.syntax.all.*
-import com.suprnation.actor.{ActorSystem, test as _, *}
+import com.suprnation.actor.{ActorSystem, test as _}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.{GetState, RegisterDeposit}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, Tx}
-import hydrozoa.multisig.ledger.dapp.txseq.{InitializationTxSeq, InitializationTxSeqTest}
+import hydrozoa.multisig.ledger.dapp.tx.Tx
+import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq, InitializationTxSeqTest}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.protocol.types.LedgerEvent
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.ledger.*
 import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
-import scalus.testing.kit.TestUtil.testEnvironment
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, nonSigningValidators, signTx, testEvaluator}
 
@@ -37,19 +34,19 @@ object DappLedgerTest extends Properties("DappLedger") {
             val peer: TestPeer = testPeers.head
             val hns = HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
 
-            val eitherT: EitherT[IO, String, Prop] = for {
-                debugMessage <- right(Ref.of[IO, Option[String]](None))
+            // Making the error type "Any" because we end up needing to combine a bunch of different errors together.
+            // Is there a better way?
+            val eitherT: EitherT[IO, Any, Prop] = for {
 
                 system <-
                     right(
                       ActorSystem[IO](
-                        "DappLedger",
-                        (event: Any) => debugMessage.set(Some(event.toString))
+                        "DappLedger"
                       ).allocated.map(_._1)
-                    ).leftMap(_.toString)
+                    )
 
                 initTx: InitializationTxSeq <- EitherT.fromEither[IO](
-                  InitializationTxSeq.Builder.build(args).leftMap(_.toString)
+                  InitializationTxSeq.Builder.build(args)
                 )
 
                 config = Tx.Builder.Config(
@@ -67,57 +64,73 @@ object DappLedgerTest extends Properties("DappLedger") {
                   )
                 )
 
-                utxosFunding = Gen
-                    .nonEmptyListOf(
-                      genAdaOnlyPubKeyUtxo(peer, genCoinWithMinimum = Some(Coin.ada(5)))
+                virtualOutputs = NonEmptyList.fromListUnsafe(
+                  Gen.nonEmptyListOf(genAdaOnlyBabbageOutput(peer, minimumCoin = Coin.ada(5)))
+                      .sample
+                      .get
+                )
+                virtualOutputsValue = Value.combine(virtualOutputs.map(_.value).toList)
+
+                utxosFundingTail = Gen
+                    .listOf(
+                      genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
                     )
                     .sample
                     .get
+                utxosFundingHead = genAdaOnlyPubKeyUtxo(
+                  peer,
+                  minimumCoin = virtualOutputsValue.coin
+                ).sample.get
 
-                peerCredential = LedgerToPlutusTranslation.getCredential(
-                  Credential.KeyHash(AddrKeyHash(peer.address().payment.asHash))
-                )
-                depositRecipe = DepositTx.Recipe(
-                  depositAmount = Coin(utxosFunding.map(_._2.value.coin.value).sum / 2),
-                  datum = DepositUtxo.Datum(
-                    address = peerCredential,
-                    datum = SOption.None,
-                    deadline = 0,
-                    refundAddress = LedgerToPlutusTranslation.getAddress(peer.address()),
-                    refundDatum = SOption.None
+                utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
+
+                utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
+
+                depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
+                  config = config,
+                  refundInstructions = DepositUtxo.Refund.Instructions(
+                    LedgerToPlutusTranslation.getAddress(peer.address()),
+                    SOption.None,
+                    100
                   ),
-                  headAddress = hns.mkAddress(Testnet),
-                  utxosFunding = NonEmptyList.fromListUnsafe(utxosFunding),
+                  refundValue = virtualOutputsValue + Value.ada(5),
+                  virtualOutputs = virtualOutputs,
                   changeAddress = peer.address(),
-                  network = Testnet,
-                  protocolParams = testEnvironment.protocolParams,
-                  evaluator = testEvaluator,
-                  validators = nonSigningValidators
+                  utxosFunding = utxosFunding
                 )
 
-                depositTx <- EitherT.fromEither(DepositTx.build(depositRecipe).leftMap(_.toString))
+                depositRefundTxSeq <- EitherT.fromEither[IO](depositRefundSeqBuilder.build)
 
-                signedTx = signTx(peer, depositTx.tx)
+                signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
 
                 serializedDeposit = signedTx.toCbor
 
                 _ <- EitherT.right(
-                  dappLedger ! RegisterDeposit(serializedDeposit, LedgerEvent.Id(0, 1))
+                  dappLedger ! RegisterDeposit(
+                    serializedDeposit,
+                    virtualOutputs,
+                    LedgerEvent.Id(0, 1)
+                  )
                 )
 
-                stateReq <- right(GetState()).leftMap(_.toString)
-                s <- EitherT(dappLedger ?: stateReq).leftMap(_.toString)
+                stateReq <- right(GetState())
+                s <- EitherT(dappLedger ?: stateReq)
 
                 prop = {
                     (s"We should only have 1 deposit in the state, but we have ${s.deposits.length}"
                         |: s.deposits.length == 1)
-                    && ("Inorrect deposit(s) in state" |: s.deposits.head._2 == depositTx.depositProduced)
+                    && ("Inorrect deposit(s) in state" |: s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced)
                     && ("Incorrect treasury in state" |: s.treasury == initTx.initializationTx.treasuryProduced)
 
                 }
             } yield prop
             eitherT.value.unsafeRunSync() match {
-                case Left(e)  => s"register deposit happy path failed: $e" |: false
+                case Left(e) => {
+                    val error =
+                        e // only putting this here because I can't figure out how to get the debugger to
+                    // break on the error otherwise
+                    s"register deposit happy path failed: $error" |: false
+                }
                 case Right(p) => p
             }
         }

@@ -45,7 +45,7 @@ object DepositRefundTxSeq {
                 .map(Builder.Error.Deposit(_))
 
             refundTx <- partialRefundTx
-                .complete(depositTx.depositProduced)
+                .complete(depositTx.depositProduced, config)
                 .left
                 .map(Builder.Error.Refund(_))
         } yield DepositRefundTxSeq(depositTx, refundTx)
@@ -105,7 +105,7 @@ object DepositRefundTxSeq {
         expectedRefundTx <- RefundTx.Builder
             .PostDated(config, refundInstructions, refundValue)
             .partialResult
-            .map(_.complete(depositUtxo))
+            .map(_.complete(depositUtxo, config))
             .left
             .map(ParseError.ExpectedRefundBuildError(_))
 

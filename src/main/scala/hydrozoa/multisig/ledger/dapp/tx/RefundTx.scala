@@ -13,10 +13,11 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{Environment, NativeScriptWitness, SomeBuildError, TransactionBuilder}
 import scalus.ledger.api.v3.PosixTime
 
 sealed trait RefundTx extends Tx {
@@ -69,9 +70,23 @@ object RefundTx {
             def refundInstructions: DepositUtxo.Refund.Instructions
             def postProcess(ctx: TransactionBuilder.Context): T
 
-            final def complete(depositSpent: DepositUtxo): BuildErrorOr[T] = for {
+            final def complete(
+                depositSpent: DepositUtxo,
+                config: Tx.Builder.Config
+            ): BuildErrorOr[T] = for {
                 addedDepositSpent <- TransactionBuilder
-                    .modify(ctx, List(Spend(depositSpent.toUtxo)))
+                    .modify(
+                      ctx,
+                      List(
+                        Spend(
+                          depositSpent.toUtxo,
+                          NativeScriptWitness(
+                            NativeScriptAttached,
+                            config.headNativeScript.requiredSigners
+                          )
+                        )
+                      )
+                    )
                     .explainConst("adding real spend deposit failed.")
             } yield postProcess(addedDepositSpent)
         }
@@ -166,7 +181,10 @@ object RefundTx {
             )
 
             val trialResult = for {
-                addedSpendDeposit <- TransactionBuilder.modify(ctx, List(Spend(spendDeposit)))
+                addedSpendDeposit <- TransactionBuilder.modify(
+                  ctx,
+                  List(Spend(spendDeposit, NativeScriptWitness(NativeScriptAttached, Set.empty)))
+                )
                 res <- addedSpendDeposit.finalizeContext(
                   config.env.protocolParams,
                   prebalancedLovelaceDiffHandler,

@@ -11,7 +11,6 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Hash as SHash, *}
-import scalus.ledger.api.v3
 import scalus.prelude.Option as SOption
 
 // A sum type for ledger events
@@ -47,15 +46,15 @@ object L2EventGenesis:
         hash(treasuryTokenNAme ++ blockMajorVersion.toString)
          */
 
-            // TODO: Derive a deposit tx's genesis obligations from the l2 outputs list provided offchain
-            //  and hashed in the deposit utxo's datum. Each deposit utxo can generate multiple genesis obligations.
-            // Maybe use validation monad instead? This will only report the first error
+        // TODO: Derive a deposit tx's genesis obligations from the l2 outputs list provided offchain
+        //  and hashed in the deposit utxo's datum. Each deposit utxo can generate multiple genesis obligations.
+        // Maybe use validation monad instead? This will only report the first error
 //            l2Obligations = utxosL1.zipWithIndex.map(utxoAndIndex =>
 //                createObligation(utxoAndIndex._1, utxoAndIndex._2, hash)
 //            )
 
-            volume = Coin(utxosL1.map(dutxo => ???).sum)
-        } yield L2EventGenesis(???, hash, volume)
+        // val   volume = Coin(utxosL1.map(dutxo => ???).sum)
+        L2EventGenesis(???, hash, ???)
     }
 
 final case class L2EventGenesis private (
