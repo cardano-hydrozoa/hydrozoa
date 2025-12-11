@@ -147,6 +147,11 @@ object DepositTx {
 
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
 
+    case class InsufficientFundsForVirtualOutputs(
+        depositValue: Value,
+        virtualValue: Value
+    ) extends ParseError
+
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
       */
@@ -188,8 +193,7 @@ object DepositTx {
                         .lift(depositUtxoIx)
                         .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                    // Check that the output is babbage, extract and parse its inline datum
-                    dutxo <- DepositUtxo
+                    depositUtxo <- DepositUtxo
                         .fromUtxo(
                           Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
                           config.headAddress,
@@ -197,10 +201,17 @@ object DepositTx {
                         )
                         .left
                         .map(DepositUtxoError(_))
-                } yield DepositTx(
-                  dutxo,
-                  tx
-                )
+
+                    // Ensure sufficient value in deposit utxo
+                    depositValue = depositUtxo.l1OutputValue
+                    virtualValue = Value.combine(virtualOutputs.toList.map(_.value))
+
+                    _ <- Either.cond(
+                      (depositValue.coin >= virtualValue.coin) && (depositValue.assets == virtualValue.assets),
+                      (),
+                      InsufficientFundsForVirtualOutputs(depositValue, virtualValue)
+                    )
+                } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 
