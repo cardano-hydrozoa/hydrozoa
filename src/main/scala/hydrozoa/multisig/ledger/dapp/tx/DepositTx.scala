@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -10,7 +11,6 @@ import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.given
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
@@ -27,25 +27,17 @@ object DepositTx {
         object Error {
             final case class InsufficientFundingForVirtualOutputs(diff: Value) extends Throwable
         }
-
-        final case class Result(
-            depositTx: DepositTx,
-            refundTx: RefundTx.PostDated
-        )
     }
-
-    private given Encoder[TransactionOutput.Babbage] =
-        summon[Encoder[TransactionOutput]].asInstanceOf[Encoder[TransactionOutput.Babbage]]
 
     final case class Builder(
         override val config: Tx.Builder.Config,
-        partialRefundTx: RefundTx.Builder.PartialResult.PostDated,
+        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
         changeAddress: ShelleyAddress
     ) extends Tx.Builder {
-        def build: Either[(Builder.Error, String), Builder.Result] = {
-            import partialRefundTx.builder.refundInstructions
+        def build(): Either[(Builder.Error, String), DepositTx] = {
+            import partialRefundTx.refundInstructions
 
             val depositValue = partialRefundTx.inputValueNeeded
 
@@ -132,11 +124,7 @@ object DepositTx {
                   rawDepositProduced.value,
                   virtualOutputs
                 )
-
-                depositTx = DepositTx(depositProduced, tx)
-
-                refundTx <- partialRefundTx.complete(depositProduced)
-            } yield Builder.Result(depositTx, refundTx)
+            } yield DepositTx(depositProduced, tx)
         }
     }
 
@@ -160,10 +148,10 @@ object DepositTx {
       */
     def parse(
         txBytes: Tx.Serialized,
-        env: Environment,
+        config: Tx.Builder.Config,
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
     ): Either[ParseError, DepositTx] = {
-        given ProtocolVersion = env.protocolParams.protocolVersion
+        given ProtocolVersion = config.env.protocolParams.protocolVersion
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
         val virtualOutputsList = virtualOutputs.toList
@@ -200,6 +188,7 @@ object DepositTx {
                     dutxo <- DepositUtxo
                         .fromUtxo(
                           Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          config.headAddress,
                           virtualOutputs
                         )
                         .left

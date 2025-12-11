@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.prebalancedLovelaceDiffHandler
 import scala.annotation.tailrec
 import scala.language.implicitConversions
+import scala.util.{Failure, Success}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
@@ -18,7 +19,12 @@ import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
 import scalus.ledger.api.v3.PosixTime
 
-sealed trait RefundTx extends Tx
+sealed trait RefundTx extends Tx {
+    def mStartTime: Option[PosixTime] = this match {
+        case self: RefundTx.PostDated => Some(self.startTime)
+        case _                        => None
+    }
+}
 
 object RefundTx {
     final case class Immediate(override val tx: Transaction) extends RefundTx
@@ -38,10 +44,7 @@ object RefundTx {
                 ctx: TransactionBuilder.Context,
                 valueNeeded: Value
             ): PartialResult.Immediate =
-                PartialResult.Immediate(this, ctx, valueNeeded)
-
-            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
-                RefundTx.Immediate(ctx.transaction)
+                PartialResult.Immediate(ctx, valueNeeded, refundInstructions)
         }
 
         final case class PostDated(
@@ -57,32 +60,40 @@ object RefundTx {
                 ctx: TransactionBuilder.Context,
                 valueNeeded: Value
             ): PartialResult.PostDated =
-                PartialResult.PostDated(this, ctx, valueNeeded)
-
-            override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
-                RefundTx.PostDated(ctx.transaction, refundInstructions.startTime)
+                PartialResult.PostDated(ctx, valueNeeded, refundInstructions)
         }
 
-        enum PartialResult[T <: RefundTx] extends Tx.Builder.HasCtx, State.Fields.HasInputRequired {
-            def builder: Builder[T]
-
-            case Immediate(
-                builder: Builder[RefundTx.Immediate],
-                override val ctx: TransactionBuilder.Context,
-                override val inputValueNeeded: Value
-            ) extends PartialResult[RefundTx.Immediate]
-
-            case PostDated(
-                builder: Builder[RefundTx.PostDated],
-                override val ctx: TransactionBuilder.Context,
-                override val inputValueNeeded: Value
-            ) extends PartialResult[RefundTx.PostDated]
+        sealed trait PartialResult[T <: RefundTx]
+            extends Tx.Builder.HasCtx,
+              State.Fields.HasInputRequired {
+            def refundInstructions: DepositUtxo.Refund.Instructions
+            def postProcess(ctx: TransactionBuilder.Context): T
 
             final def complete(depositSpent: DepositUtxo): BuildErrorOr[T] = for {
                 addedDepositSpent <- TransactionBuilder
                     .modify(ctx, List(Spend(depositSpent.toUtxo)))
                     .explainConst("adding real spend deposit failed.")
-            } yield builder.postProcess(addedDepositSpent)
+            } yield postProcess(addedDepositSpent)
+        }
+
+        object PartialResult {
+            final case class Immediate(
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value,
+                override val refundInstructions: DepositUtxo.Refund.Instructions
+            ) extends PartialResult[RefundTx.Immediate] {
+                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
+                    RefundTx.Immediate(ctx.transaction)
+            }
+
+            final case class PostDated(
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value,
+                override val refundInstructions: DepositUtxo.Refund.Instructions
+            ) extends PartialResult[RefundTx.PostDated] {
+                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
+                    RefundTx.PostDated(ctx.transaction, refundInstructions.startTime)
+            }
         }
 
         object State {
@@ -107,7 +118,6 @@ object RefundTx {
             ctx: TransactionBuilder.Context,
             valueNeededWithFee: Value
         ): Builder.PartialResult[T]
-        def postProcess(ctx: TransactionBuilder.Context): T
 
         final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
             val stepReferenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)
@@ -207,36 +217,33 @@ object RefundTx {
     sealed trait ParseError extends Throwable
 
     case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
 
     def parse(
-        tx: Transaction,
+        txBytes: Tx.Serialized,
         env: Environment
     ): Either[ParseError, RefundTx] = {
         given ProtocolVersion = env.protocolParams.protocolVersion
-        for {
-            imd <- MD.parse(tx) match {
-                case Right(md: Metadata.Refund) => Right(md)
-                case Right(md) =>
-                    Left(
-                      MetadataParseError(
-                        MD.UnexpectedTxType(actual = md, expected = "Refund")
-                      )
-                    )
-                case Left(e) =>
-                    Left(
-                      MetadataParseError(
-                        MD.MalformedTxTypeKey(
-                          "Could not find the expected TxTypeKey for Refund" +
-                              s" transaction. Got: $e"
-                        )
-                      )
-                    )
-            }
+        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
 
-            refundTx = tx.body.value.validityStartSlot match {
-                case None            => RefundTx.Immediate(tx)
-                case Some(startSlot) => RefundTx.PostDated(tx, env.slotConfig.slotToTime(startSlot))
-            }
-        } yield refundTx
+        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            case Success(tx) =>
+                for {
+                    imd <- MD.parse(tx) match {
+                        case Right(md: Metadata.Refund) => Right(md)
+                        case Right(md) =>
+                            Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
+                        case Left(e) => Left(MetadataParseError(e))
+                    }
+
+                    refundTx = tx.body.value.validityStartSlot match {
+                        case None => RefundTx.Immediate(tx)
+                        case Some(startSlot) =>
+                            RefundTx.PostDated(tx, env.slotConfig.slotToTime(startSlot))
+                    }
+                } yield refundTx
+            case Failure(e) => Left(TxCborDeserializationFailed(e))
+        }
+
     }
 }

@@ -104,9 +104,9 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     test("Build deposit tx") {
         forAll(genDepositRecipe()) { depositTxBuilder =>
-            depositTxBuilder.build match {
+            depositTxBuilder.build() match {
                 case Left(e) => fail(s"Build failed $e")
-                case Right(DepositTx.Builder.Result(depositTx, refundTx)) =>
+                case Right(depositTx) =>
                     DepositTx.parse(depositTx.tx.toCbor, ???, ???) match {
                         case Left(e) =>
                             fail(

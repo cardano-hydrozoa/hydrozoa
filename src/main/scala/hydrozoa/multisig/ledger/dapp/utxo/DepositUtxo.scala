@@ -98,7 +98,7 @@ object DepositUtxo {
 
     enum DepositUtxoConversionError:
         case DepositUtxoNotBabbage
-        case AddressNotShelley
+        case NotAtExpectedHeadAddress
         case InvalidDatumContent(e: Throwable)
         case InvalidDatumType
         case InvalidValue
@@ -106,6 +106,7 @@ object DepositUtxo {
 
     def fromUtxo(
         utxo: Utxo,
+        headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage]
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
@@ -114,8 +115,8 @@ object DepositUtxo {
                 case _                => Left(DepositUtxoNotBabbage)
             }
             addr <- babbage.address match {
-                case sa: ShelleyAddress => Right(sa)
-                case _                  => Left(AddressNotShelley)
+                case sa: ShelleyAddress if sa == headNativeScriptAddress => Right(sa)
+                case _ => Left(NotAtExpectedHeadAddress)
             }
             datum <- babbage.datumOption match {
                 case Some(Inline(d)) =>
