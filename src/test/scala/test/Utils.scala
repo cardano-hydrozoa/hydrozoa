@@ -1,7 +1,7 @@
 package test
 import scala.language.postfixOps
 import scalus.cardano.address.Network
-import scalus.cardano.address.Network.Testnet
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
@@ -17,7 +17,7 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
 val costModels = blockfrost544Params.costModels
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
-val testNetwork: Network = Testnet
+val testNetwork: Network = Mainnet // this is what scalus uses
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
 def slotConfig(network: Network): SlotConfig = network match {

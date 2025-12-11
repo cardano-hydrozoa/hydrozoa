@@ -16,7 +16,6 @@ import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.*
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -41,6 +40,7 @@ object Generators {
         // ===================================
         // Generators
         // ===================================
+
         /** Generate random bytestring data. Good for testing user-provided, untrusted data against
           * size attacks
           */
@@ -204,27 +204,48 @@ object Generators {
         def genAdaOnlyPubKeyUtxo(
             peer: TestPeer,
             params: ProtocolParams = blockfrost544Params,
-            network: Network = Testnet,
-
-            /** `None` for minAda; Some(Coin)` to generate lovelace values with some minimum amount
-              */
-            genCoinWithMinimum: Option[Coin] = None,
-
-            /** `None` for no datum; `Some(gen)` to generate an optional datum */
+            network: Network = testNetwork,
+            minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
         ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
+                txOutput <- genAdaOnlyBabbageOutput(
+                  peer,
+                  params,
+                  network,
+                  minimumCoin,
+                  datumGenerator
+                )
+            } yield Utxo(txId, txOutput)
+
+        /** @param peer
+          *   The test peer who's PKH this output will be at
+          * @param network
+          *   The network of the address, defaults to Testnet
+          * @param params
+          *   The protocol params, defaults to testProtocolParams
+          * @param minimumCoin
+          *   an optional minimum coin. Should be positive, defaults to 0
+          * @param datumGenerator
+          *   an Optional datum generator. Will generate an empty datum if not passed
+          * @return
+          */
+        def genAdaOnlyBabbageOutput(
+            peer: TestPeer,
+            params: ProtocolParams = testProtocolParams,
+            network: Network = testNetwork,
+            minimumCoin: Coin = Coin.zero,
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None
+        ): Gen[Babbage] =
+            for {
                 value <- genAdaOnlyValue
-                coin <- genCoinWithMinimum match {
-                    case None      => Gen.const(Coin(0))
-                    case Some(min) => arbitrary[Coin].map(_ + min)
-                }
+                coin <- arbitrary[Coin].map(_ + minimumCoin)
+
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
                 }
-
                 txOutput: TransactionOutput.Babbage = ensureMinAda(
                   Babbage(
                     address = peer.address(network),
@@ -234,14 +255,14 @@ object Generators {
                   ),
                   params
                 ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
-            } yield Utxo(txId, txOutput)
+            } yield txOutput
 
         /** Generate a treasury utxo with at least minAda */
         def genTreasuryUtxo(
             network: Network = testNetwork,
             params: ProtocolParams = blockfrost544Params,
             headAddress: Option[ShelleyAddress],
-            coin: Option[Coin] = None // None to generate
+            coin: Option[Coin] = None
         ): Gen[TreasuryUtxo] =
             for {
                 txId <- arbitrary[TransactionInput]

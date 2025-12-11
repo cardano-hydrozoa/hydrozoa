@@ -94,7 +94,11 @@ object DepositTx {
                       Builder.Error
                           .InsufficientFundingForVirtualOutputs(depositValue - virtualValue)
                     )
-                    .explainConst("insufficient funding in deposit utxo for virtual outputs")
+                    .explainConst(
+                      "insufficient funding in deposit utxo for virtual outputs.\n" +
+                          s"depositValue: $depositValue \n" +
+                          s"virtualValue : $virtualValue"
+                    )
 
                 ctx <- TransactionBuilder
                     .build(

@@ -41,13 +41,11 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         // a max non-plutus fee
         seedUtxo <- genAdaOnlyPubKeyUtxo(
           peers.head,
-          genCoinWithMinimum = Some(
-            minInitTreasuryAda
-                + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-          )
+          minimumCoin = minInitTreasuryAda
+              + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
         ).map(x => Utxo(x._1, x._2))
         otherSpentUtxos <- Gen
-            .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
+            .listOf(genAdaOnlyPubKeyUtxo(peers.head))
             .map(_.map(x => Utxo(x._1, x._2)))
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
