@@ -30,7 +30,12 @@ final case class DepositUtxo(
             scriptRef = None
           )
         )
-
+    // NOTE: I need this in the dapp ledger, but can't access it because the field is private and
+    // this is a separate package.
+    // we could make the _constructor_ private with
+    //   final case class DepositUtxo private ( ... )
+    // but then we need to make sure that the DepositTx build can still access it...
+    val datum: DepositUtxo.Datum = l1OutputDatum
 }
 
 object DepositUtxo {

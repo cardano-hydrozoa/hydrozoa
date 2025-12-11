@@ -32,10 +32,16 @@ import test.*
 import test.Generators.Hydrozoa.*
 import test.TransactionChain.observeTxChain
 
-// TODO: make the spentUtxos contain arbitrary assets, not just ada.
-val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
-    for {
-        peers <- genTestPeers
+object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
+    import Prop.forAll
+    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
+        p.withMinSuccessfulTests(10_000)
+    }
+
+    // TODO: make the spentUtxos contain arbitrary assets, not just ada.
+    val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
+        for {
+            peers <- genTestPeers
 
         // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
         // a max non-plutus fee
@@ -62,26 +68,21 @@ val genArgs: Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
             )
             .map(Coin(_))
 
-    } yield (
-      InitializationTxSeq.Builder.Args(
-        spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
-        initialDeposit = initialDeposit,
-        peers = peers.map(_.wallet.exportVerificationKeyBytes),
-        env = testTxBuilderEnvironment,
-        evaluator = testEvaluator,
-        validators = testValidators,
-        initializationTxChangePP = Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
-        tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100
-      ),
-      peers
-    )
-
-object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
-    import Prop.forAll
-    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(10_000)
-    }
+        } yield (
+          InitializationTxSeq.Builder.Args(
+            spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
+            initialDeposit = initialDeposit,
+            peers = peers.map(_.wallet.exportVerificationKeyBytes),
+            env = testTxBuilderEnvironment,
+            evaluator = testEvaluator,
+            validators = nonSigningValidators,
+            initializationTxChangePP =
+                Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
+            tallyFeeAllowance = Coin.ada(2),
+            votingDuration = 100
+          ),
+          peers
+        )
 
     // NOTE (Peter, 2025-11-28): These properties primarily test the built transaction with coherence against
     // the "semantic" InitializationTx value produced.
@@ -129,7 +130,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
               tokenNames = iTx.tokenNames,
               env = testTxBuilderEnvironment,
               evaluator = testEvaluator,
-              validators = testValidators
+              validators = nonSigningValidators
             )
             val hns = config.headNativeScript
             val disputeResolutionAddress = ShelleyAddress(

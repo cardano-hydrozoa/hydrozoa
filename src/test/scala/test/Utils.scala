@@ -35,7 +35,7 @@ val evaluator = PlutusScriptEvaluator(
 
 val testEvaluator: PlutusScriptEvaluator = evaluator
 
-val testValidators: Seq[Validator] =
+val nonSigningValidators: Seq[Validator] =
     // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
     List(
       EmptyInputsValidator,

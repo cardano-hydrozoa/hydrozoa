@@ -82,7 +82,7 @@ object FallbackTx {
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
           deadlineVoting = recipe.votingDuration,
-          versionMajor = multisigDatum.versionMajor,
+          versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // KZG setup I think?
           setup = SList.empty
