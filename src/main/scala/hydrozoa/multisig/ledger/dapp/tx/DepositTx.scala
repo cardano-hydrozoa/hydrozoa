@@ -22,10 +22,10 @@ final case class DepositTx(
 
 object DepositTx {
     object Builder {
-        type Error = SomeBuildError | Error.InsufficientFundingForVirtualOutputs
+        type Error = SomeBuildError | Error.DepositValueMismatch
 
         object Error {
-            final case class InsufficientFundingForVirtualOutputs(diff: Value) extends Throwable
+            case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
         }
     }
 
@@ -34,12 +34,11 @@ object DepositTx {
         partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
+        donationToTreasury: Coin,
         changeAddress: ShelleyAddress
     ) extends Tx.Builder {
         def build(): Either[(Builder.Error, String), DepositTx] = {
             import partialRefundTx.refundInstructions
-
-            val depositValue = partialRefundTx.inputValueNeeded
 
             val virtualOutputsList = virtualOutputs.toList
 
@@ -66,6 +65,12 @@ object DepositTx {
 
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
+            val refundFee = partialRefundTx.ctx.transaction.body.value.fee
+
+            val depositValue = partialRefundTx.inputValueNeeded
+
+            val expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
+
             val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
 
             val rawDepositProduced = TransactionOutput.Babbage(
@@ -89,10 +94,9 @@ object DepositTx {
             for {
                 _ <- Either
                     .cond(
-                      (depositValue.coin >= virtualValue.coin) && (depositValue.assets == virtualValue.assets),
+                      depositValue == expectedDepositValue,
                       (),
-                      Builder.Error
-                          .InsufficientFundingForVirtualOutputs(depositValue - virtualValue)
+                      Builder.Error.DepositValueMismatch(depositValue, virtualValue)
                     )
                     .explainConst(
                       "insufficient funding in deposit utxo for virtual outputs.\n" +
@@ -147,11 +151,6 @@ object DepositTx {
 
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
 
-    case class InsufficientFundsForVirtualOutputs(
-        depositValue: Value,
-        virtualValue: Value
-    ) extends ParseError
-
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
       */
@@ -202,15 +201,6 @@ object DepositTx {
                         .left
                         .map(DepositUtxoError(_))
 
-                    // Ensure sufficient value in deposit utxo
-                    depositValue = depositUtxo.l1OutputValue
-                    virtualValue = Value.combine(virtualOutputs.toList.map(_.value))
-
-                    _ <- Either.cond(
-                      (depositValue.coin >= virtualValue.coin) && (depositValue.assets == virtualValue.assets),
-                      (),
-                      InsufficientFundsForVirtualOutputs(depositValue, virtualValue)
-                    )
                 } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
