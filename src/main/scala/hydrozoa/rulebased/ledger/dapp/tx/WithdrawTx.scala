@@ -15,7 +15,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend, ValidityEndSlot}
 import scalus.ledger.api.v3.{TxId, TxOutRef}
@@ -121,7 +120,7 @@ object WithdrawTx {
                   List(
                     // Spend the treasury utxo with withdrawal proof
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.asUtxo),
+                      treasuryUtxo.asUtxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         withdrawRedeemer.toData,

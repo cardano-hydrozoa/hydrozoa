@@ -7,9 +7,8 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction, Utxo}
-import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx {

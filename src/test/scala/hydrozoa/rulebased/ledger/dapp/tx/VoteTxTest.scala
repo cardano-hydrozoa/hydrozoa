@@ -122,7 +122,7 @@ def genVoteTxRecipe(
         // Create builder context (not needed for Recipe anymore)
         allUtxos = Map(
           voteUtxo.utxo.input.untagged -> voteUtxo.utxo.output.untagged,
-          treasuryUtxo.asUtxo._1 -> treasuryUtxo.asUtxo._2,
+          treasuryUtxo.asTuple._1 -> treasuryUtxo.asTuple._2,
           collateralUtxo._1 -> collateralUtxo._2
         )
 

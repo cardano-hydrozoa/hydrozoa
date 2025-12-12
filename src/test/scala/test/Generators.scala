@@ -28,8 +28,8 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.txbuilder.Environment
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
 import scalus.prelude.Option as SOption
 import scalus.|>
 
@@ -161,7 +161,7 @@ object Generators {
             // Pass this if you need a specific token name for coherence with the rest of your test.
             // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
             hmrwTokenName: Option[AssetName] = None
-        ): Gen[TransactionUnspentOutput] = for {
+        ): Gen[Utxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
 
             hmrwTn <- hmrwTokenName match {
@@ -188,7 +188,7 @@ object Generators {
               None,
               Some(ScriptRef.apply(script.script))
             )
-        } yield TransactionUnspentOutput((utxoId, output))
+        } yield Utxo((utxoId, output))
 
         def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
             for {

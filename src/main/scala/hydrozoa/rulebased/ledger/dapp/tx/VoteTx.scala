@@ -17,7 +17,6 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.prelude.List as SList
@@ -116,7 +115,7 @@ object VoteTx {
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
                     Spend(
-                      TransactionUnspentOutput(voteInput, voteOutput),
+                      SUtxo(voteInput, voteOutput),
                       ThreeArgumentPlutusScriptWitness(
                         // TODO: use a reference utxo
                         //  Rule-based regime scripts will be deployed as reference script with well-known coordinates.
@@ -137,7 +136,7 @@ object VoteTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.asUtxo)),
+                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.asTuple)),
                     AddCollateral(recipe.collateralUtxo.toScalus),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )

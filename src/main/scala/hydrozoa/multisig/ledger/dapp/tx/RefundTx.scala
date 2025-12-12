@@ -1,11 +1,11 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.*
 import hydrozoa.multisig.ledger.DappLedger.Tx
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.RefundPostDated
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.{Utxo as _, *}
 import scala.language.implicitConversions
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
@@ -71,7 +71,7 @@ object RefundTx {
             // Step definitions
 
             val spendDeposit = Spend(
-              utxo = TransactionUnspentOutput(recipe.depositTx.depositProduced.toUtxo),
+              utxo = Utxo(recipe.depositTx.depositProduced.toUtxo),
               witness = NativeScriptWitness(
                 scriptSource = NativeScriptValue(recipe.headScript.script),
                 additionalSigners = recipe.headScript.requiredSigners

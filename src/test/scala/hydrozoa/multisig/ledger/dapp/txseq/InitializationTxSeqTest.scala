@@ -26,7 +26,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -380,7 +379,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             props.append("default vote utxo with min ada and vote token created" |: {
 
-                val defaultVoteUtxo = TransactionUnspentOutput(
+                val defaultVoteUtxo = Utxo(
                   TransactionInput(transactionId = fbTx.tx.id, index = 1),
                   Babbage(
                     address = disputeResolutionAddress,

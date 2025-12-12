@@ -18,7 +18,6 @@ import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Coin
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TestPeer.Alice
@@ -65,10 +64,10 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
             minInitTreasuryAda
                 + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
           )
-        ).map(x => TransactionUnspentOutput(x._1, x._2))
+        ).map(x => Utxo(x._1, x._2))
         otherSpentUtxos <- Gen
             .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
-            .map(_.map(x => TransactionUnspentOutput(x._1, x._2)))
+            .map(_.map(x => Utxo(x._1, x._2)))
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
 

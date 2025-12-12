@@ -69,7 +69,7 @@ def genEmptyResolvedTreasuryUtxo(
         )
 
         // Respect minAda
-        val outputMinAda = treasuryUtxo.asUtxo._2.ensureMinAda(testProtocolParams)
+        val outputMinAda = treasuryUtxo.asTuple._2.ensureMinAda(testProtocolParams)
         treasuryUtxo.copy(value = outputMinAda.value)
     }
 }

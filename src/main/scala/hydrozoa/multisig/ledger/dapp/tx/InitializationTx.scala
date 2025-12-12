@@ -19,7 +19,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
@@ -62,7 +61,7 @@ object InitializationTx {
             recipe.spentUtxos.fundingUtxos
                 .map(utxo =>
                     Spend(
-                      TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                      Utxo.apply(utxo._1, utxo._2),
                       PubKeyWitness
                     )
                 )
