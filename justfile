@@ -27,6 +27,10 @@ nixfmt-check:
   - nixfmt flake.nix --check	
   just notify "nixfmt-check"
 
+test:
+  - sbt test
+  just notify "test"  
+
 [parallel]
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"

@@ -14,10 +14,9 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class TallyTx(
     continuingVoteUtxo: TallyVoteUtxo,
@@ -139,7 +138,7 @@ object TallyTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(SUtxo(treasuryUtxo.toUtxo._1, treasuryUtxo.toUtxo._2)),
+                    ReferenceOutput(SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2)),
                     AddCollateral(collateralUtxo.toScalus),
                     ValidityEndSlot(validityEndSlot)
                   )

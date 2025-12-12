@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.DappLedger.Requests.*
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
@@ -25,7 +25,7 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.ledger.api.v3.PosixTime
 
 trait DappLedger(
-    initialTreasuryUtxo: TreasuryUtxo,
+    initialTreasuryUtxo: MultisigTreasuryUtxo,
     config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 ) extends Actor[IO, Request] {
     val headAddress: ShelleyAddress = initialTreasuryUtxo.address
@@ -223,7 +223,7 @@ trait DappLedger(
   */
 object DappLedger {
     final case class State(
-        treasury: TreasuryUtxo,
+        treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
         deposits: Queue[(LedgerEvent.Id, DepositUtxo)] = Queue()
     ) {

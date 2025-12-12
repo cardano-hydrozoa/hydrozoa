@@ -54,7 +54,7 @@ object DappLedgerTest extends Properties("DappLedger") {
 
                 config = Tx.Builder.Config(
                   headNativeScript = hns,
-                  headNativeScriptReferenceInput = initTx.initializationTx.multisigRegimeWitness,
+                  multisigRegimeUtxo = initTx.initializationTx.multisigRegimeWitness,
                   tokenNames = initTx.initializationTx.tokenNames,
                   env = TestUtil.testEnvironment,
                   evaluator = testEvaluator,

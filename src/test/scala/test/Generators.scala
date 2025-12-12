@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
@@ -28,8 +28,8 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.txbuilder.Environment
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.cardano.txbuilder.{Environment, TransactionUnspentOutput}
 import scalus.prelude.Option as SOption
 import scalus.|>
 
@@ -85,7 +85,7 @@ object Generators {
             } yield (
               Tx.Builder.Config(
                 headNativeScript = hns,
-                headNativeScriptReferenceInput = multisigWitnessUtxo,
+                multisigRegimeUtxo = multisigWitnessUtxo,
                 tokenNames = tokenNames,
                 env = env,
                 evaluator = evaluator,
@@ -105,14 +105,18 @@ object Generators {
                 ti <- arbitrary[TransactionInput]
             } yield CIP67.TokenNames(ti).headTokenName
 
-        val genTreasuryDatum: Gen[TreasuryUtxo.Datum] = {
+        val genTreasuryDatum: Gen[MultisigTreasuryUtxo.Datum] = {
             for {
                 mv <- Gen.posNum[BigInt]
                 // Verify that this is the correct length!
                 kzg <- genByteStringOfN(32)
                 paramsHash <- genByteStringOfN(32)
 
-            } yield TreasuryUtxo.Datum(commit = kzg, versionMajor = mv, paramsHash = paramsHash)
+            } yield MultisigTreasuryUtxo.Datum(
+              commit = kzg,
+              versionMajor = mv,
+              paramsHash = paramsHash
+            )
         }
 
         /** Generate a positive Ada value */
@@ -157,7 +161,7 @@ object Generators {
             // Pass this if you need a specific token name for coherence with the rest of your test.
             // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
             hmrwTokenName: Option[AssetName] = None
-        ): Gen[TransactionUnspentOutput] = for {
+        ): Gen[MultisigRegimeUtxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
 
             hmrwTn <- hmrwTokenName match {
@@ -178,13 +182,13 @@ object Generators {
               )
             )
 
-            output = Babbage(
-              script.mkAddress(network),
-              Value.ada(2) + hmrwToken,
-              None,
-              Some(ScriptRef.apply(script.script))
-            )
-        } yield TransactionUnspentOutput((utxoId, output))
+        } yield MultisigRegimeUtxo(
+          multisigRegimeTokenName = hmrwTn,
+          utxoId = utxoId,
+          address = script.mkAddress(network),
+          value = Value.ada(2) + hmrwToken,
+          script = script
+        )
 
         def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
             for {
@@ -248,7 +252,7 @@ object Generators {
             params: ProtocolParams = blockfrost544Params,
             headAddress: Option[ShelleyAddress],
             coin: Option[Coin] = None // None to generate
-        ): Gen[TreasuryUtxo] =
+        ): Gen[MultisigTreasuryUtxo] =
             for {
                 txId <- arbitrary[TransactionInput]
                 headTn <- genHeadTokenName
@@ -273,7 +277,7 @@ object Generators {
                 )
 
                 treasuryMinAda = ensureMinAda(
-                  TreasuryUtxo(
+                  MultisigTreasuryUtxo(
                     treasuryTokenName = headTn,
                     utxoId = txId,
                     address = scriptAddress,
@@ -285,7 +289,7 @@ object Generators {
 
                 treasuryAda <- arbitrary[Coin].map(l => l - Coin(1L) + treasuryMinAda)
 
-            } yield TreasuryUtxo(
+            } yield MultisigTreasuryUtxo(
               treasuryTokenName = headTn,
               utxoId = txId,
               datum = datum,
@@ -294,7 +298,7 @@ object Generators {
             )
 
         /** Generate a treasury utxo according to a builder config */
-        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[TreasuryUtxo] =
+        def genTreasuryUtxo(config: Tx.Builder.Config): Gen[MultisigTreasuryUtxo] =
             genTreasuryUtxo(
               network = config.env.network,
               params = config.env.protocolParams,

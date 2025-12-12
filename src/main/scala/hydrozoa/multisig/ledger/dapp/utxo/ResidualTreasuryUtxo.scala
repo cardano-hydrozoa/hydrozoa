@@ -2,8 +2,7 @@ package hydrozoa.multisig.ledger.dapp.utxo
 
 import scalus.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
 
 /** A treasury utxo output of the finalization tx. Contains fallback deposits from mltisig utxo,
   * residual equity from the treasury, and two head tokens. Doesn't contain datum since it's not
@@ -16,8 +15,8 @@ final case class ResidualTreasuryUtxo(
     address: ShelleyAddress,
     value: Value
 ) {
-    val asUtxo: TransactionUnspentOutput =
-        TransactionUnspentOutput(
+    val asUtxo: Utxo =
+        Utxo(
           utxoId,
           TransactionOutput.apply(
             address = address,

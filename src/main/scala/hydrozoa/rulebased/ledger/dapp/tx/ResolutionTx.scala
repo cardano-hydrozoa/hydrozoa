@@ -16,10 +16,9 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.{AddCollateral, Send, Spend, ValidityEndSlot}
-import scalus.cardano.txbuilder.{SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, SomeBuildError, ThreeArgumentPlutusScriptWitness, TransactionBuilder}
 
 final case class ResolutionTx(
     talliedVoteUtxo: TallyVoteUtxo,
@@ -141,7 +140,7 @@ object ResolutionTx {
                     ),
                     // Spend the treasury utxo and update its datum to resolved state
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
+                      treasuryUtxo.asUtxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         treasuryRedeemer.toData,
@@ -152,7 +151,7 @@ object ResolutionTx {
                     // Send resolved treasury back with resolved datum and total value
                     Send(
                       Babbage(
-                        address = treasuryUtxo.addr,
+                        address = treasuryUtxo.address,
                         value = newTreasuryValue,
                         datumOption = Some(Inline(resolvedTreasuryDatum.toData)),
                         scriptRef = None
@@ -175,9 +174,9 @@ object ResolutionTx {
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              beaconTokenName = recipe.treasuryUtxo.beaconTokenName,
-              txId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
-              addr = recipe.treasuryUtxo.addr,
+              treasuryTokenName = recipe.treasuryUtxo.treasuryTokenName,
+              utxoId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
+              address = recipe.treasuryUtxo.address,
               datum = resolvedTreasuryDatum,
               value = recipe.treasuryUtxo.value
             )

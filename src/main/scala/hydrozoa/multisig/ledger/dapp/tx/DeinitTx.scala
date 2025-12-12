@@ -88,7 +88,7 @@ object DeinitTx:
             ) ++ burnHeadTokens
 
         private def stepReferenceHNS =
-            ReferenceOutput(config.headNativeScriptReferenceInput)
+            ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
         private def spendTreasury =
             Spend(residualTreasuryToSpend.asUtxo, config.headNativeScript.witness)

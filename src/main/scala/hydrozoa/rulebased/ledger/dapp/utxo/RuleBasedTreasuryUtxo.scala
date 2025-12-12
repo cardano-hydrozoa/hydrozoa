@@ -7,26 +7,32 @@ import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
 
 // TODO: Make opaque
 final case class RuleBasedTreasuryUtxo(
-    beaconTokenName: AssetName,
-    txId: TransactionInput,
-    addr: ShelleyAddress,
+    treasuryTokenName: AssetName,
+    utxoId: TransactionInput,
+    address: ShelleyAddress,
     datum: RuleBasedTreasuryDatum,
     value: Value
 ) {
-    def toUtxo: (TransactionInput, Babbage) =
-        (
-          txId,
-          Babbage(
-            address = addr,
-            value = value,
-            datumOption = Some(Inline(datum.toData)),
-            scriptRef = None
-          )
+    val output: Babbage =
+        Babbage(
+          address = address,
+          value = value,
+          datumOption = Some(Inline(datum.toData)),
+          scriptRef = None
         )
+
+    val asTuple: (TransactionInput, Babbage) =
+        (
+          utxoId,
+          output
+        )
+
+    val asUtxo: Utxo =
+        Utxo(utxoId, output)
 }
 
 object RuleBasedTreasuryUtxo {

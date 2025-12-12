@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
-import scalus.cardano.txbuilder.TransactionUnspentOutput
+import scalus.cardano.ledger.Utxo
 
-final case class RolloutUtxo(utxo: TransactionUnspentOutput)
+final case class RolloutUtxo(utxo: Utxo)
 
 object RolloutUtxo {
     trait Spent {
