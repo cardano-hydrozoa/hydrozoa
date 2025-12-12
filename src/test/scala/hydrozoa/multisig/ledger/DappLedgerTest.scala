@@ -93,6 +93,7 @@ object DappLedgerTest extends Properties("DappLedger") {
                     SOption.None,
                     100
                   ),
+                  donationToTreasury = Coin.zero,
                   refundValue = virtualOutputsValue + Value.ada(5),
                   virtualOutputs = virtualOutputs,
                   changeAddress = peer.address(),
