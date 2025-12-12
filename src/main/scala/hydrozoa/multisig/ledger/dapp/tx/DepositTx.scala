@@ -1,150 +1,213 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
-import hydrozoa.given
-import hydrozoa.multisig.ledger.DappLedger
-import hydrozoa.multisig.ledger.DappLedger.Tx
+import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.Deposit
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import io.bullet.borer.Cbor
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import io.bullet.borer.{Cbor, Encoder}
 import scala.util.{Failure, Success}
 import scalus.builtin.Data.toData
-import scalus.cardano.address.{Network, ShelleyAddress}
+import scalus.builtin.{ByteString, platform}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
 
-// TODO: Make opaque. Only `parse` and `build` should create deposit Txs.
-// TODO: List out exactly the invariants we expect.
 final case class DepositTx(
     depositProduced: DepositUtxo,
     override val tx: Transaction
 ) extends Tx
 
 object DepositTx {
-    case class Recipe(
-        depositAmount: Coin,
-        datum: DepositUtxo.Datum,
-        headAddress: ShelleyAddress,
-        utxosFunding: NonEmptyList[(TransactionInput, TransactionOutput)],
-        changeAddress: ShelleyAddress,
-        network: Network,
-        protocolParams: ProtocolParams,
-        evaluator: PlutusScriptEvaluator,
-        validators: Seq[Validator]
-    )
+    object Builder {
+        type Error = SomeBuildError | Error.DepositValueMismatch
+
+        object Error {
+            case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
+        }
+    }
+
+    final case class Builder(
+        override val config: Tx.Builder.Config,
+        partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
+        utxosFunding: NonEmptyList[Utxo],
+        virtualOutputs: NonEmptyList[GenesisObligation],
+        donationToTreasury: Coin,
+        changeAddress: ShelleyAddress
+    ) extends Tx.Builder {
+        def build(): Either[(Builder.Error, String), DepositTx] = {
+            import partialRefundTx.refundInstructions
+
+            val virtualOutputsList = virtualOutputs.toList
+
+            val virtualValue = Value.combine(virtualOutputsList.map(vo => Value(vo.l2OutputValue)))
+
+            val virtualOutputsCbor: Array[Byte] =
+                Cbor.encode(virtualOutputsList.map(_.toBabbage)).toByteArray
+
+            val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
+              platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
+            )
+
+            val stepRefundMetadata =
+                ModifyAuxiliaryData(_ =>
+                    Some(
+                      MD(
+                        MD.Deposit(
+                          headAddress = config.headAddress,
+                          depositUtxoIx = 0, // This builder produces the deposit utxo at index 0
+                          virtualOutputsHash = virtualOutputsHash
+                        )
+                      )
+                    )
+                )
+
+            val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
+
+            val refundFee = partialRefundTx.ctx.transaction.body.value.fee
+
+            val depositValue = partialRefundTx.inputValueNeeded
+
+            val expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
+
+            val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
+
+            val rawDepositProduced = TransactionOutput.Babbage(
+              address = config.headAddress,
+              value = depositValue,
+              datumOption = Some(DatumOption.Inline(toData(depositDatum))),
+              scriptRef = None
+            )
+
+            val sendDeposit = Send(rawDepositProduced)
+
+            val sendChange = Send(
+              TransactionOutput.Babbage(
+                address = changeAddress,
+                value = Value.zero,
+                datumOption = None,
+                scriptRef = None
+              )
+            )
+
+            for {
+                _ <- Either
+                    .cond(
+                      depositValue == expectedDepositValue,
+                      (),
+                      Builder.Error.DepositValueMismatch(depositValue, virtualValue)
+                    )
+                    .explainConst(
+                      "insufficient funding in deposit utxo for virtual outputs.\n" +
+                          s"depositValue: $depositValue \n" +
+                          s"virtualValue : $virtualValue"
+                    )
+
+                ctx <- TransactionBuilder
+                    .build(
+                      config.env.network,
+                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange)
+                    )
+                    .explainConst("building unbalanced deposit tx failed")
+
+                finalized <- ctx
+                    .finalizeContext(
+                      config.env.protocolParams,
+                      diffHandler = new ChangeOutputDiffHandler(
+                        config.env.protocolParams,
+                        1
+                      ).changeOutputDiffHandler,
+                      evaluator = config.evaluator,
+                      validators = config.validators
+                    )
+                    .explainConst("balancing deposit tx failed")
+
+                tx = finalized.transaction
+
+                depositProduced = DepositUtxo(
+                  TransactionInput(tx.id, 0),
+                  config.headAddress,
+                  depositDatum,
+                  rawDepositProduced.value,
+                  virtualOutputs
+                )
+            } yield DepositTx(depositProduced, tx)
+        }
+    }
 
     sealed trait ParseError extends Throwable
-    private case class MetadataParseError(e: MD.ParseError) extends ParseError
-    case object NoUtxoAtHeadAddress extends ParseError
-    private case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
-        extends ParseError
+
+    case class MetadataParseError(e: MD.ParseError) extends ParseError
+
+    case class HashMismatchVirtualOutputs(
+        virtualOutputs: NonEmptyList[GenesisObligation],
+        hash: Hash32
+    ) extends ParseError
+
+    case class MissingDepositOutputAtIndex(e: Int) extends ParseError
+
+    case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError) extends ParseError
+
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
-    case class MultipleUtxosAtHeadAddress(numUtxos: Int) extends ParseError
 
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
       */
-    def parse(txBytes: Tx.Serialized): Either[ParseError, DepositTx] = {
+    def parse(
+        txBytes: Tx.Serialized,
+        config: Tx.Builder.Config,
+        virtualOutputs: NonEmptyList[GenesisObligation]
+    ): Either[ParseError, DepositTx] = {
+        given ProtocolVersion = config.env.protocolParams.protocolVersion
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
-        Cbor.decode(txBytes).to[Transaction].valueTry match {
+
+        val virtualOutputsList = virtualOutputs.toList
+
+        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
             case Success(tx) =>
                 for {
                     // Pull head address from metadata
                     d <- MD
                         .parse(tx) match {
-                        case Right(d: Deposit) => Right(d)
+                        case Right(d: Metadata.Deposit) => Right(d)
                         case Right(o) => Left(MetadataParseError(MD.UnexpectedTxType(o, "Deposit")))
                         case Left(e)  => Left(MetadataParseError(e))
                     }
-                    Deposit(headAddress) = d
-                    // Grab the single output at the head address, along with its index/
-                    depositUtxoWithIndex <- tx.body.value.outputs.zipWithIndex
-                        .filter(_._1.value.address == headAddress) match {
-                        case x if x.size == 1 => Right(x.head)
-                        case x if x.isEmpty   => Left(NoUtxoAtHeadAddress)
-                        case x                => Left(MultipleUtxosAtHeadAddress(x.size))
-                    }
-                    // Check that the output is babbage, extract and parse its inline datum
-                    dutxo <- DepositUtxo
+                    Metadata.Deposit(headAddress, depositUtxoIx, virtualOutputsHash) = d
+
+                    // Compare hash with virtual outputs
+                    virtualOutputsCbor: Array[Byte] = Cbor
+                        .encode(virtualOutputsList.map(_.toBabbage))
+                        .toByteArray
+                    calculatedVirtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
+                      platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
+                    )
+                    _ <- Either.cond(
+                      virtualOutputsHash == calculatedVirtualOutputsHash,
+                      (),
+                      HashMismatchVirtualOutputs(virtualOutputs, virtualOutputsHash)
+                    )
+
+                    // Grab the deposit output at the index specified in the metadata
+                    depositOutput <- tx.body.value.outputs
+                        .lift(depositUtxoIx)
+                        .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
+
+                    depositUtxo <- DepositUtxo
                         .fromUtxo(
-                          (
-                            TransactionInput(tx.id, depositUtxoWithIndex._2),
-                            depositUtxoWithIndex._1.value
-                          )
+                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          config.headAddress,
+                          virtualOutputs
                         )
                         .left
                         .map(DepositUtxoError(_))
-                } yield DepositTx(
-                  dutxo,
-                  tx
-                )
+
+                } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
-
-    }
-
-    def build(recipe: Recipe): Either[SomeBuildError, DepositTx] = {
-        val depositValue: Value =
-            Value(coin = recipe.depositAmount)
-
-        val steps = Seq(
-          // Deposit Output
-          Send(
-            Babbage(
-              address = recipe.headAddress,
-              value = depositValue,
-              datumOption = Some(Inline(toData(recipe.datum))),
-              scriptRef = None
-            )
-          ),
-          // Change Output
-          Send(
-            Babbage(
-              address = recipe.changeAddress,
-              value = Value.zero,
-              datumOption = None,
-              scriptRef = None
-            )
-          ),
-          ModifyAuxiliaryData(_ => Some(MD(MD.Deposit(recipe.headAddress))))
-        ) ++ recipe.utxosFunding.toList.toSet
-            .map(utxo =>
-                Spend(
-                  TransactionUnspentOutput(utxo._1, utxo._2),
-                  PubKeyWitness
-                )
-            )
-
-        for {
-            unbalanced <- TransactionBuilder
-                .build(recipe.network, steps)
-            finalized <- unbalanced
-                .finalizeContext(
-                  recipe.protocolParams,
-                  diffHandler = new ChangeOutputDiffHandler(
-                    recipe.protocolParams,
-                    1
-                  ).changeOutputDiffHandler,
-                  evaluator = recipe.evaluator,
-                  validators = recipe.validators
-                )
-
-        } yield DepositTx(
-          depositProduced = DepositUtxo(
-            l1Input = TransactionInput(finalized.transaction.id, 0),
-            l1OutputAddress = recipe.headAddress,
-            l1OutputDatum = recipe.datum,
-            l1OutputValue = depositValue.coin,
-            l1RefScript = None
-          ),
-          tx = finalized.transaction
-        )
 
     }
 }

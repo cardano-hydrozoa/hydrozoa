@@ -7,7 +7,6 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test as ScalaCheckTest}
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -16,30 +15,33 @@ import scalus.ledger.api.v3
 import scalus.prelude.Option as SOption
 import test.Generators.Hydrozoa.{genL2EventTransactionAttack, genL2WithdrawalFromUtxosAndPeer}
 import test.TestPeer.{Alice, Bob}
-import test.{TestPeer, l2EventTransactionFromInputsAndPeer}
+import test.{TestPeer, l2EventTransactionFromInputsAndPeer, testNetwork}
 
 /** Build dummy deposit datum from a pubkey, setting the L2 and refund addresses to the pkh address
   */
 def depositDatumFromPeer(peer: TestPeer): DepositUtxo.Datum = {
     val v3Addr: v3.Address = v3.Address(
       v3.Credential
-          .PubKeyCredential(v3.PubKeyHash(peer.address(Testnet).payment.asHash)),
+          .PubKeyCredential(v3.PubKeyHash(peer.address(testNetwork).payment.asHash)),
       SOption.None
     )
 
-    DepositUtxo.Datum(
+    DepositUtxo.Datum(???) /*
       address = v3Addr.credential,
       datum = SOption.None,
       deadline = 100,
       refundAddress = v3Addr,
-      refundDatum = SOption.None
-    )
+      refundDatum = SOption.None*/
+
 }
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
   * event
   */
-def genDepositFromPeer(peer: TestPeer, address: Option[ShelleyAddress] = None): Gen[DepositUtxo] =
+def genDepositUtxoFromPeer(
+    peer: TestPeer,
+    address: Option[ShelleyAddress] = None
+): Gen[DepositUtxo] =
     for
         txId: TransactionHash <- genByteStringOfN(32).map(
           Hash.apply[Blake2b_256, HashPurpose.TransactionHash](_)
@@ -54,10 +56,10 @@ def genDepositFromPeer(peer: TestPeer, address: Option[ShelleyAddress] = None): 
         coin <- Arbitrary.arbitrary[Coin]
     yield DepositUtxo(
       l1Input = txIn,
-      l1OutputAddress = peer.address(Testnet),
+      l1OutputAddress = peer.address(testNetwork),
       l1OutputDatum = depositDatumFromPeer(peer),
-      l1OutputValue = coin,
-      l1RefScript = None
+      l1OutputValue = ???, // coin,
+      virtualOutputs = ???
     )
 
 /** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the
@@ -68,14 +70,18 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
         // Always generate at least one deposit
         if numberOfDepositsAbsorbed == 0 then {
             for {
-                deposit <- genDepositFromPeer(peer)
-            } yield L2EventGenesis.fromDepositUtxos(NonEmptyList.one(deposit))
+                deposit <- genDepositUtxoFromPeer(peer)
+                genesisId <- Arbitrary.arbitrary[TransactionHash]
+            } yield L2EventGenesis(
+              genesisId = genesisId,
+              genesisObligations = deposit.virtualOutputs
+            )
 
         } else {
             var counter = 0
             var genesisSeq: Seq[DepositUtxo] = Seq.empty
             while {
-                val deposit: DepositUtxo = genDepositFromPeer(peer).sample.get
+                val deposit: DepositUtxo = genDepositUtxoFromPeer(peer).sample.get
                 if !genesisSeq.contains(deposit)
                 then {
                     genesisSeq = genesisSeq.appended(deposit);
@@ -83,7 +89,16 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
                 }
                 counter != numberOfDepositsAbsorbed
             } do ()
-            L2EventGenesis.fromDepositUtxos(NonEmptyList.fromListUnsafe(genesisSeq.toList))
+
+            for {
+                genesisId <- Arbitrary.arbitrary[TransactionHash]
+                genesisObligations =
+                    NonEmptyList.fromListUnsafe(
+                      genesisSeq.foldLeft(List.empty[GenesisObligation])((acc, utxo) =>
+                          acc ++ utxo.virtualOutputs.toList
+                      )
+                    )
+            } yield L2EventGenesis(genesisId = genesisId, genesisObligations = genesisObligations)
         }
 }
 
@@ -104,7 +119,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
         forAll(genL2EventGenesisFromPeer(Alice)) { genesisEvent =>
             val outState = {
                 val genesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-                  genesisEvent.genesisObligations,
+                  genesisEvent,
                   State.empty
                 )
 
@@ -132,7 +147,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
     val _ = property("Alice cannot withdraw Bob's genesis utxos") = {
         forAll(genL2EventGenesisFromPeer(Bob)) { genesisEvent =>
             val postGenesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-              genesisEvent.genesisObligations,
+              genesisEvent,
               State.empty
             )
             val res = for {
@@ -146,9 +161,9 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
 
                 // We expect a failure _specifically_ due to missing signatures. Any other failures are rejected
                 expectedException = TransactionException.MissingKeyHashesException(
-                  transactionId = withdrawlEvent.getEventId,
+                  transactionId = withdrawlEvent.transaction.id,
                   missingInputsKeyHashes = Set(
-                    AddrKeyHash(ByteString.fromArray(Bob.address(Testnet).payment.asHash.bytes))
+                    AddrKeyHash(ByteString.fromArray(Bob.address(testNetwork).payment.asHash.bytes))
                   ),
                   missingCollateralInputsKeyHashes = Set.empty,
                   missingVotingProceduresKeyHashes = Set.empty,
@@ -190,7 +205,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
             {
                 val postGenesisState: State =
                     HydrozoaGenesisMutator.addGenesisUtxosToState(
-                      genesisEvent.genesisObligations,
+                      genesisEvent,
                       State.empty
                     )
                 val res = for {
@@ -229,7 +244,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
     val _ = property("correct transaction") = forAll(genL2EventGenesisFromPeer(Alice)) {
         genesisEvent =>
             val postGenesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-              genesisEvent.genesisObligations,
+              genesisEvent,
               State.empty
             )
 
@@ -262,7 +277,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
         forAll(genL2EventGenesisFromPeer(Alice), genL2EventTransactionAttack) {
             (genesisEvent, attack) =>
                 val postGenesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-                  genesisEvent.genesisObligations,
+                  genesisEvent,
                   State.empty
                 )
                 // Then generate the transaction event, where Alice tries to send all UTxOs to bob

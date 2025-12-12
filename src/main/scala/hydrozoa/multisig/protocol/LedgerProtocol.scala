@@ -33,12 +33,12 @@ object LedgerProtocol {
     }
 
     final case class RegisterDeposit(
-        txSerialized: ledger.DappLedger.Tx.Serialized,
+        txSerialized: ledger.dapp.tx.Tx.Serialized,
         override val dResponse: Deferred[IO, Either[RegisterDeposit.Error, RegisterDeposit.Success]]
     ) extends SyncRequest[IO, RegisterDeposit.Error, RegisterDeposit.Success]
 
     object RegisterDeposit {
-        def apply(txSerialized: ledger.DappLedger.Tx.Serialized): IO[RegisterDeposit] = for {
+        def apply(txSerialized: ledger.dapp.tx.Tx.Serialized): IO[RegisterDeposit] = for {
             deferredResponse <- Deferred[IO, Either[Error, Success]]
         } yield RegisterDeposit(txSerialized, deferredResponse)
 

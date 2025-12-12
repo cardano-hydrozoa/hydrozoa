@@ -17,6 +17,7 @@ trait Tx {
 }
 
 object Tx {
+    type Serialized = Array[Byte]
 
     /** A result that includes additional information besides the built transaction.
       *

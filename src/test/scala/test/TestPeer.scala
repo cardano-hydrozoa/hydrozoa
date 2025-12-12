@@ -12,7 +12,6 @@ import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
@@ -41,7 +40,7 @@ enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
 
     def walletId: WalletId = TestPeer.mkWalletId(this)
 
-    def address(network: Network = Testnet): ShelleyAddress = TestPeer.address(this, network)
+    def address(network: Network = testNetwork): ShelleyAddress = TestPeer.address(this, network)
 
 object TestPeer:
     private val mnemonic: String =
@@ -111,7 +110,7 @@ def l2EventTransactionFromInputsAndPeer(
     utxoSet: Map[TransactionInput, TransactionOutput],
     inPeer: TestPeer,
     outPeer: TestPeer,
-    network: Network = Testnet
+    network: Network = testNetwork
 ): L2EventTransaction = {
 
     val totalVal: Value = inputs.toSeq.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)

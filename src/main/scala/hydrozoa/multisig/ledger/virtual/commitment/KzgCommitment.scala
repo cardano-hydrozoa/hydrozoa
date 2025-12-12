@@ -14,9 +14,11 @@ import supranational.blst.{P1, Scalar}
 
 object KzgCommitment {
 
+    def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
+
     type KzgCommitment = IArray[Byte]
 
-    def hashToScalar(utxo: UTxO): SList[Scalar] =
+    def hashToScalar(utxo: Utxos): SList[Scalar] =
 
         def toPlutus(ti: TransactionInput, to: TransactionOutput): TxInInfo =
             LedgerToPlutusTranslation.getTxInInfoV3(ti, Map(ti -> to))

@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Arbitrary.arbitrary
@@ -88,8 +88,10 @@ def genFinalizationTxSeqBuilder(
 
         majorVersion <- Gen.posNum[Int]
 
-        payouts <- genHelper(genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
+        payouts <- genHelper(genPayoutObligation(network))
+        payoutAda = payouts
+            .map(_.utxo.value.coin)
+            .fold(Coin.zero)(_ + _)
 
         headAddress = config.headNativeScript.mkAddress(network)
 
@@ -101,9 +103,11 @@ def genFinalizationTxSeqBuilder(
 
         shares <- genEquityShares(peers)
 
+        kzgCommitment: KzgCommitment = ???
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
+        kzgCommitment = kzgCommitment,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
