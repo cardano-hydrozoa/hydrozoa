@@ -11,22 +11,26 @@ import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Va
 
 // TODO: Make opaque
 final case class RuleBasedTreasuryUtxo(
-    beaconTokenName: AssetName,
-    txId: TransactionInput,
-    addr: ShelleyAddress,
+    treasuryTokenName: AssetName,
+    utxoId: TransactionInput,
+    address: ShelleyAddress,
     datum: RuleBasedTreasuryDatum,
     value: Value
 ) {
-    def toUtxo: (TransactionInput, Babbage) =
-        (
-          txId,
-          Babbage(
-            address = addr,
-            value = value,
-            datumOption = Some(Inline(datum.toData)),
-            scriptRef = None
-          )
+    val output: Babbage =
+        Babbage(
+          address = address,
+          value = value,
+          datumOption = Some(Inline(datum.toData)),
+          scriptRef = None
         )
+
+    val asUtxo: (TransactionInput, Babbage) =
+        (
+          utxoId,
+          output
+        )
+
 }
 
 object RuleBasedTreasuryUtxo {

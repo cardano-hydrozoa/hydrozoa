@@ -139,7 +139,7 @@ object TallyTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(SUtxo(treasuryUtxo.toUtxo._1, treasuryUtxo.toUtxo._2)),
+                    ReferenceOutput(SUtxo(treasuryUtxo.asUtxo._1, treasuryUtxo.asUtxo._2)),
                     AddCollateral(collateralUtxo.toScalus),
                     ValidityEndSlot(validityEndSlot)
                   )

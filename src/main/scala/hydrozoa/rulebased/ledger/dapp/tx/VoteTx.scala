@@ -137,7 +137,7 @@ object VoteTx {
                         scriptRef = None
                       )
                     ),
-                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.toUtxo)),
+                    ReferenceOutput(SUtxo(recipe.treasuryUtxo.asUtxo)),
                     AddCollateral(recipe.collateralUtxo.toScalus),
                     ValidityEndSlot(recipe.validityEndSlot)
                   )

@@ -141,7 +141,7 @@ object ResolutionTx {
                     ),
                     // Spend the treasury utxo and update its datum to resolved state
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
+                      TransactionUnspentOutput(treasuryUtxo.asUtxo),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         treasuryRedeemer.toData,
@@ -152,7 +152,7 @@ object ResolutionTx {
                     // Send resolved treasury back with resolved datum and total value
                     Send(
                       Babbage(
-                        address = treasuryUtxo.addr,
+                        address = treasuryUtxo.address,
                         value = newTreasuryValue,
                         datumOption = Some(Inline(resolvedTreasuryDatum.toData)),
                         scriptRef = None
@@ -175,9 +175,9 @@ object ResolutionTx {
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              beaconTokenName = recipe.treasuryUtxo.beaconTokenName,
-              txId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
-              addr = recipe.treasuryUtxo.addr,
+              treasuryTokenName = recipe.treasuryUtxo.treasuryTokenName,
+              utxoId = TransactionInput(finalized.transaction.id, 0), // Treasury output at index 0
+              address = recipe.treasuryUtxo.address,
               datum = resolvedTreasuryDatum,
               value = recipe.treasuryUtxo.value
             )

@@ -167,7 +167,7 @@ object DeinitTx {
                   List(
                     // Spend the treasury utxo
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
+                      TransactionUnspentOutput(treasuryUtxo.asUtxo),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         TreasuryRedeemer.Deinit.toData,

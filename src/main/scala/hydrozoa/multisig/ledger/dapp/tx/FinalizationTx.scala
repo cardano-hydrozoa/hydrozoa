@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, ResidualTreasuryUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
@@ -21,7 +21,7 @@ import scalus.|>
 sealed trait FinalizationTx
     extends Tx,
       Block.Version.Major.Produced,
-      TreasuryUtxo.Spent,
+      MultisigTreasuryUtxo.Spent,
       ResidualTreasuryUtxo.MbProduced,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos
@@ -37,7 +37,7 @@ object FinalizationTx {
     case class NoPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends WithDeinit,
@@ -46,7 +46,7 @@ object FinalizationTx {
     case class NoPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends Monolithic,
           MergedDeinit
@@ -54,7 +54,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends WithDeinit
@@ -62,7 +62,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends Monolithic,
           MergedDeinit
@@ -70,7 +70,7 @@ object FinalizationTx {
     case class WithRollouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos
@@ -82,7 +82,7 @@ object FinalizationTx {
     case class WithRolloutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val treasurySpent: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends FinalizationTx,
@@ -246,7 +246,7 @@ object FinalizationTx {
 
         sealed trait PartialResult
             extends HasCtx,
-              TreasuryUtxo.Spent,
+              MultisigTreasuryUtxo.Spent,
               ResidualTreasuryUtxo.Produced,
               RolloutUtxo.MbProduced {
 
@@ -337,7 +337,7 @@ object FinalizationTx {
         object PartialResult {
 
             case class NoPayouts(
-                override val treasurySpent: TreasuryUtxo,
+                override val treasurySpent: MultisigTreasuryUtxo,
                 override val residualTreasuryProduced: ResidualTreasuryUtxo,
                 override val ctx: TransactionBuilder.Context
             ) extends PartialResult {
@@ -368,7 +368,7 @@ object FinalizationTx {
             }
 
             case class WithOnlyDirectPayouts(
-                override val treasurySpent: TreasuryUtxo,
+                override val treasurySpent: MultisigTreasuryUtxo,
                 override val residualTreasuryProduced: ResidualTreasuryUtxo,
                 override val ctx: TransactionBuilder.Context
             ) extends PartialResult {
@@ -399,7 +399,7 @@ object FinalizationTx {
             }
 
             case class WithRollouts(
-                override val treasurySpent: TreasuryUtxo,
+                override val treasurySpent: MultisigTreasuryUtxo,
                 override val residualTreasuryProduced: ResidualTreasuryUtxo,
                 override val rolloutProduced: RolloutUtxo,
                 override val ctx: TransactionBuilder.Context,

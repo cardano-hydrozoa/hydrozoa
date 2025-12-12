@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
@@ -286,11 +286,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // Semantic parsing
             props.append {
                 val expectedTx: InitializationTx = InitializationTx(
-                  treasuryProduced = TreasuryUtxo(
+                  treasuryProduced = MultisigTreasuryUtxo(
                     treasuryTokenName = expectedHeadTokenName,
                     utxoId = TransactionInput(iTx.tx.id, 0),
                     address = expectedHeadNativeScript.mkAddress(env.network),
-                    datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+                    datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
                     value = Value(
                       initialDeposit,
                       MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))

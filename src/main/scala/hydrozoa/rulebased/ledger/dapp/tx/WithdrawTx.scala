@@ -121,7 +121,7 @@ object WithdrawTx {
                   List(
                     // Spend the treasury utxo with withdrawal proof
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
+                      TransactionUnspentOutput(treasuryUtxo.asUtxo),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         withdrawRedeemer.toData,
@@ -132,7 +132,7 @@ object WithdrawTx {
                     // Send the remaining treasury back
                     Send(
                       Babbage(
-                        address = treasuryUtxo.addr,
+                        address = treasuryUtxo.address,
                         value = residualValue,
                         datumOption = Some(Inline(newTreasuryDatum.toData)),
                         scriptRef = None
@@ -157,12 +157,12 @@ object WithdrawTx {
                 )
 
             newTreasuryUtxo = RuleBasedTreasuryUtxo(
-              beaconTokenName = treasuryUtxo.beaconTokenName,
-              txId = TransactionInput(
+              treasuryTokenName = treasuryUtxo.treasuryTokenName,
+              utxoId = TransactionInput(
                 finalized.transaction.id,
                 0
               ), // Treasury output index
-              addr = treasuryUtxo.addr,
+              address = treasuryUtxo.address,
               datum = treasuryUtxo.datum,
               value = residualValue
             )

@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
@@ -88,7 +88,7 @@ object InitializationTxSeq {
             )
             ftxRecipe = FallbackTx.Recipe(
               config = config,
-              treasuryUtxo = iTx.treasuryProduced,
+              treasuryUtxoSpent = iTx.treasuryProduced,
               tallyFeeAllowance = expectedTallyFeeAllowance,
               votingDuration = expectedVotingDuration
             )
@@ -148,7 +148,7 @@ object InitializationTxSeq {
             // ===================================
             // Init Treasury
             // ===================================
-            val initTreasuryDatum = TreasuryUtxo.mkInitMultisigTreasuryDatum
+            val initTreasuryDatum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum
 
             // ===================================
             // Vote Utxos
@@ -246,7 +246,7 @@ object InitializationTxSeq {
 
                 fallbackTxRecipe = FallbackTx.Recipe(
                   config = config,
-                  treasuryUtxo = initializationTx.treasuryProduced,
+                  treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration
                 )

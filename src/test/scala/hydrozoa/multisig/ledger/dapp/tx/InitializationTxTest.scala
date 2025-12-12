@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString
@@ -41,7 +41,7 @@ val minInitTreasuryAda: Coin = {
           )
         )
       ),
-      datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
+      datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
       scriptRef = None
     )
     ensureMinAda(mockTreasury, blockfrost544Params).value.coin

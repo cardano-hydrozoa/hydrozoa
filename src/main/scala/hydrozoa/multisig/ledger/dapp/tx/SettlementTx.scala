@@ -4,8 +4,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo.mkMultisigTreasuryDatum
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo.mkMultisigTreasuryDatum
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.protocol.types.Block
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
@@ -21,8 +21,8 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 sealed trait SettlementTx
     extends Tx,
       Block.Version.Major.Produced,
-      TreasuryUtxo.Spent,
-      TreasuryUtxo.Produced,
+      MultisigTreasuryUtxo.Spent,
+      MultisigTreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos
@@ -38,8 +38,8 @@ object SettlementTx {
     case class NoPayouts(
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
-        override val treasurySpent: TreasuryUtxo,
-        override val treasuryProduced: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
+        override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val resolvedUtxos: ResolvedUtxos
     ) extends SettlementTx,
@@ -48,8 +48,8 @@ object SettlementTx {
     case class WithOnlyDirectPayouts(
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
-        override val treasurySpent: TreasuryUtxo,
-        override val treasuryProduced: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
+        override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val resolvedUtxos: ResolvedUtxos
     ) extends SettlementTx,
@@ -59,8 +59,8 @@ object SettlementTx {
     case class WithRollouts(
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
-        override val treasurySpent: TreasuryUtxo,
-        override val treasuryProduced: TreasuryUtxo,
+        override val treasurySpent: MultisigTreasuryUtxo,
+        override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos
@@ -140,7 +140,7 @@ object SettlementTx {
 
         trait Args
             extends Block.Version.Major.Produced,
-              TreasuryUtxo.ToSpend,
+              MultisigTreasuryUtxo.ToSpend,
               DepositUtxo.Many.ToSpend {
             final def mbRolloutValue: Option[Value] =
                 this match {
@@ -153,13 +153,13 @@ object SettlementTx {
         object Args {
             final case class NoPayouts(
                 override val majorVersionProduced: Block.Version.Major,
-                override val treasuryToSpend: TreasuryUtxo,
+                override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo]
             ) extends Args
 
             final case class WithPayouts(
                 override val majorVersionProduced: Block.Version.Major,
-                override val treasuryToSpend: TreasuryUtxo,
+                override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Args
@@ -285,7 +285,10 @@ object SettlementTx {
             def referenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
 
-            def consumeTreasury(config: Tx.Builder.Config, treasuryToSpend: TreasuryUtxo): Spend =
+            def consumeTreasury(
+                config: Tx.Builder.Config,
+                treasuryToSpend: MultisigTreasuryUtxo
+            ): Spend =
                 Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
 
             def sendTreasury(args: Args): Send =
@@ -302,17 +305,17 @@ object SettlementTx {
                 )
             }
 
-            def treasuryOutputDatum(majorVersion: Block.Version.Major): TreasuryUtxo.Datum =
+            def treasuryOutputDatum(majorVersion: Block.Version.Major): MultisigTreasuryUtxo.Datum =
                 mkMultisigTreasuryDatum(majorVersion, ByteString.empty)
 
             def treasuryOutputValue(
-                treasurySpent: TreasuryUtxo,
+                treasurySpent: MultisigTreasuryUtxo,
                 mbRolloutValue: Option[Value]
             ): Value =
                 mbRolloutValue.fold(treasurySpent.value)(treasurySpent.value - _)
 
             def mbApplySendRollout(
-                treasuryToSpend: TreasuryUtxo,
+                treasuryToSpend: MultisigTreasuryUtxo,
                 mbRolloutValue: Option[Value]
             ): (
                 ctx: TransactionBuilder.Context
@@ -322,7 +325,7 @@ object SettlementTx {
                     case Some(value) => applySendRollout(treasuryToSpend, value)
                 }
 
-            def applySendRollout(treasuryToSpend: TreasuryUtxo, rolloutValue: Value)(
+            def applySendRollout(treasuryToSpend: MultisigTreasuryUtxo, rolloutValue: Value)(
                 ctx: TransactionBuilder.Context
             ): BuildErrorOr[TransactionBuilder.Context] = {
                 val extraStep = Send(rolloutOutput(treasuryToSpend, rolloutValue))
@@ -334,7 +337,7 @@ object SettlementTx {
             }
 
             def rolloutOutput(
-                treasuryToSpend: TreasuryUtxo,
+                treasuryToSpend: MultisigTreasuryUtxo,
                 firstRolloutTxInputValue: Value
             ): TxOutput.Babbage =
                 TxOutput.Babbage(
@@ -502,7 +505,7 @@ object SettlementTx {
                   TransactionBuilder.Context
                 ],
                 state: State[SettlementTx.WithPayouts],
-                treasuryToSpend: TreasuryUtxo,
+                treasuryToSpend: MultisigTreasuryUtxo,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ): BuildErrorOr[(State[SettlementTx.WithPayouts], Merge.Result)] =
                 import Merge.Result.*
@@ -556,9 +559,9 @@ object SettlementTx {
         object PostProcess {
 
             /** Given the transaction context of a [[Builder]] that has finished building, apply
-              * post-processing to get the [[TreasuryUtxo]] produced by the [[SettlementTx]].
-              * Assumes that the treasury output is present in the transaction and is the first
-              * output.
+              * post-processing to get the [[MultisigTreasuryUtxo]] produced by the
+              * [[SettlementTx]]. Assumes that the treasury output is present in the transaction and
+              * is the first output.
               *
               * @param ctx
               *   The transaction context of a finished builder state.
@@ -569,9 +572,9 @@ object SettlementTx {
             @throws[AssertionError]
             def getTreasuryProduced[T <: SettlementTx](
                 majorVersion: Block.Version.Major,
-                treasurySpent: TreasuryUtxo,
+                treasurySpent: MultisigTreasuryUtxo,
                 ctx: State[T]
-            ): TreasuryUtxo = {
+            ): MultisigTreasuryUtxo = {
                 val tx = ctx.ctx.transaction
                 val outputs = tx.body.value.outputs
 

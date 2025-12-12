@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
@@ -25,7 +25,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
 
 final case class InitializationTx(
-    treasuryProduced: TreasuryUtxo,
+    treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeWitness: Utxo,
     tokenNames: TokenNames,
     override val resolvedUtxos: ResolvedUtxos,
@@ -95,7 +95,7 @@ object InitializationTx {
               initialDeposit,
               MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))
             ),
-            datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
+            datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
           )
         )
 
@@ -144,14 +144,14 @@ object InitializationTx {
                 )
 
         } yield InitializationTx(
-          treasuryProduced = TreasuryUtxo(
+          treasuryProduced = MultisigTreasuryUtxo(
             treasuryTokenName = headTokenName,
             utxoId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
             ),
             address = headAddress,
-            datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+            datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
             value = createTreasury.output.value
           ),
           tx = finalized.transaction,
@@ -263,11 +263,12 @@ object InitializationTx {
                 case Some(_) => Left(InvalidTransactionError("treasury output datum not inline"))
             }
             decodedTreasuryDatum <- Try(
-              Data.fromData[TreasuryUtxo.Datum](encodedTreasuryDatum)
+              Data.fromData[MultisigTreasuryUtxo.Datum](encodedTreasuryDatum)
             ).toEither.left
                 .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
             _ <-
-                if decodedTreasuryDatum == TreasuryUtxo.mkInitMultisigTreasuryDatum then Right(())
+                if decodedTreasuryDatum == MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum then
+                    Right(())
                 else
                     Left(
                       InvalidTransactionError(
@@ -360,11 +361,11 @@ object InitializationTx {
                 case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
             }
 
-            treasury = TreasuryUtxo(
+            treasury = MultisigTreasuryUtxo(
               treasuryTokenName = derivedTokenNames.headTokenName,
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
-              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+              datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
               value = actualTreasuryOutput.value
             )
 
