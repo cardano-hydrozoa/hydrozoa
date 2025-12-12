@@ -8,8 +8,8 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
-import hydrozoa.multisig.ledger.virtual.L2EventTransaction
+import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
@@ -19,7 +19,6 @@ import scala.collection.immutable.SortedMap
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data}
 import scalus.cardano.address.*
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -121,9 +120,6 @@ object Generators {
                 coin <- arbitrary[Coin]
             } yield Value(coin)
 
-        def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
-            genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
-
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
 
@@ -157,7 +153,7 @@ object Generators {
             // Pass this if you need a specific token name for coherence with the rest of your test.
             // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
             hmrwTokenName: Option[AssetName] = None
-        ): Gen[TransactionUnspentOutput] = for {
+        ): Gen[Utxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
 
             hmrwTn <- hmrwTokenName match {
@@ -186,7 +182,7 @@ object Generators {
             )
         } yield TransactionUnspentOutput((utxoId, output))
 
-        def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
+        def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
             for {
                 l2Input <- arbitrary[TransactionInput]
 
@@ -200,7 +196,7 @@ object Generators {
                   datumOption = Some(Inline(datum.toData)),
                   scriptRef = None
                 )
-            } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
+            } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
 
         /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index,
           * no datum, no script ref
@@ -209,45 +205,104 @@ object Generators {
         def genAdaOnlyPubKeyUtxo(
             peer: TestPeer,
             params: ProtocolParams = blockfrost544Params,
-            network: Network = Testnet,
-
-            /** `None` for minAda; Some(Coin)` to generate lovelace values with some minimum amount
-              */
-            genCoinWithMinimum: Option[Coin] = None,
-
-            /** `None` for no datum; `Some(gen)` to generate an optional datum */
+            network: Network = testNetwork,
+            minimumCoin: Coin = Coin.zero,
             datumGenerator: Option[Gen[Option[DatumOption]]] = None
-        ): Gen[(TransactionInput, Babbage)] =
+        ): Gen[Utxo] =
             for {
                 txId <- arbitrary[TransactionInput]
+                txOutput <- genAdaOnlyBabbageOutput(
+                  peer,
+                  params,
+                  network,
+                  minimumCoin,
+                  datumGenerator
+                )
+            } yield Utxo(txId, txOutput)
+
+        /** @param peer
+          *   The test peer who's PKH this output will be at
+          * @param network
+          *   The network of the address, defaults to Testnet
+          * @param params
+          *   The protocol params, defaults to testProtocolParams
+          * @param minimumCoin
+          *   an optional minimum coin. Should be positive, defaults to 0
+          * @param datumGenerator
+          *   an Optional datum generator. Will generate an empty datum if not passed
+          * @return
+          */
+        def genAdaOnlyBabbageOutput(
+            peer: TestPeer,
+            params: ProtocolParams = testProtocolParams,
+            network: Network = testNetwork,
+            minimumCoin: Coin = Coin.zero,
+            datumGenerator: Option[Gen[Option[DatumOption]]] = None
+        ): Gen[Babbage] =
+            for {
                 value <- genAdaOnlyValue
-                coin <- genCoinWithMinimum match {
-                    case None      => Gen.const(Coin(0))
-                    case Some(min) => arbitrary[Coin].map(_ + min)
-                }
+                coin <- arbitrary[Coin].map(_ + minimumCoin)
+
                 datum <- datumGenerator match {
                     case None      => Gen.const(None)
                     case Some(gen) => gen
                 }
-            } yield (
-              txId,
-              ensureMinAda(
-                Babbage(
-                  address = peer.address(network),
-                  value = Value(coin),
-                  datumOption = datum,
-                  scriptRef = None
-                ),
-                params
-              ).asInstanceOf[Babbage]
-            ).focus(_._2.value).modify(_ + value)
+                txOutput: TransactionOutput.Babbage = ensureMinAda(
+                  Babbage(
+                    address = peer.address(network),
+                    value = Value(coin),
+                    datumOption = datum,
+                    scriptRef = None
+                  ),
+                  params
+                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
+            } yield txOutput
+
+        // Has duplication with genAdaOnlyBabbageOutput
+        def genGenesisObligation(
+            peer: TestPeer,
+            params: ProtocolParams = testProtocolParams,
+            network: Network = testNetwork,
+            minimumCoin: Coin = Coin.zero,
+            datumGenerator: Option[Gen[Option[Inline]]] = None
+        ): Gen[GenesisObligation] =
+            for {
+                value <- genAdaOnlyValue
+                coin <- arbitrary[Coin].map(_ + minimumCoin)
+
+                datum <- datumGenerator match {
+                    case None      => Gen.const(None)
+                    case Some(gen) => gen
+                }
+                txOutput: TransactionOutput.Babbage = ensureMinAda(
+                  Babbage(
+                    address = peer.address(network),
+                    value = Value(coin),
+                    datumOption = datum,
+                    scriptRef = None
+                  ),
+                  params
+                ).asInstanceOf[Babbage].focus(_.value).modify(_ + value)
+
+                genesisObligation = GenesisObligation(
+                  l2OutputPaymentAddress = peer.address(network).payment,
+                  l2OutputNetwork = network,
+                  l2OutputDatum = datum match {
+                      case None    => SOption.None
+                      case Some(d) => SOption.Some(d.data)
+                  },
+                  l2OutputValue = txOutput.value.coin,
+                  l2OutputRefScript = None
+                )
+
+            } yield genesisObligation
 
         /** Generate a treasury utxo with at least minAda */
         def genTreasuryUtxo(
             network: Network = testNetwork,
             params: ProtocolParams = blockfrost544Params,
             headAddress: Option[ShelleyAddress],
-            coin: Option[Coin] = None // None to generate
+            coin: Option[Coin] = None
         ): Gen[TreasuryUtxo] =
             for {
                 txId <- arbitrary[TransactionInput]
@@ -430,7 +485,7 @@ object Generators {
             /** NOTE: You can't change the network very easily because this is an opaque type. You
               * should only use this for fuzz testing.
               */
-            given Arbitrary[Payout.Obligation.L2] = Arbitrary {
+            given Arbitrary[Payout.Obligation] = Arbitrary {
                 for {
                     l2Input <- arbitrary[TransactionInput]
 
@@ -443,13 +498,7 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
-            }
-
-            given Arbitrary[Payout.Obligation.L1] = Arbitrary {
-                for {
-                    l2 <- arbitrary[Payout.Obligation.L2]
-                } yield Payout.Obligation.L1(l2)
+                } yield ??? // Payout.Obligation(l2Input = l2Input, output = output)
             }
         }
     }

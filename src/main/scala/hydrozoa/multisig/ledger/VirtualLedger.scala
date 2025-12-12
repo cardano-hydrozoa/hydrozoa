@@ -5,7 +5,7 @@ import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -29,7 +29,7 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     // where the L1-bound and L2-bound utxos are distinguished in the metadata
     private def applyInternalTx(
         args: ApplyInternalTx
-    ): IO[Vector[Payout.Obligation.L1]] =
+    ): IO[Vector[Payout.Obligation]] =
         val txSerialized = args.tx
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
@@ -53,9 +53,7 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
                         case Left(e)  => throw TransactionInvalidError(e)
                         case Right(v) => IO.pure(v)
                     }
-                    payoutObligations = l1Utxos.map(utxo =>
-                        Payout.Obligation.L1(Payout.Obligation.L2(utxo._1, utxo._2))
-                    )
+                    payoutObligations = l1Utxos.map(utxo => Payout.Obligation(utxo._1, utxo._2))
                 } yield Vector.from(payoutObligations)
         }
 
@@ -128,15 +126,15 @@ object VirtualLedger {
     final case class ApplyInternalTx private (
         tx: Tx.Serialized,
         override val dResponse: Deferred[IO, Either[ErrorApplyInternalTx, Vector[
-          Payout.Obligation.L1
+          Payout.Obligation
         ]]]
-    ) extends SyncRequest[IO, ErrorApplyInternalTx, Vector[Payout.Obligation.L1]]
+    ) extends SyncRequest[IO, ErrorApplyInternalTx, Vector[Payout.Obligation]]
 
     object ApplyInternalTx {
 
         def apply(tx: Tx.Serialized): IO[ApplyInternalTx] = for {
             deferredResponse <- Deferred[IO, Either[ErrorApplyInternalTx, Vector[
-              Payout.Obligation.L1
+              Payout.Obligation
             ]]]
         } yield ApplyInternalTx(tx, deferredResponse)
     }

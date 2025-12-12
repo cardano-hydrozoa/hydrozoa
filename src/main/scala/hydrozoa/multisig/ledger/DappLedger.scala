@@ -1,24 +1,23 @@
 package hydrozoa.multisig.ledger
 
-import cats.data.EitherT
+import cats.data.{EitherT, NonEmptyList}
 import cats.effect.IO.realTime
 import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.ledger.DappLedger.*
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
+import hydrozoa.multisig.ledger.DappLedger.{State, *}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
-
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
@@ -49,7 +48,7 @@ trait DappLedger(
     private def registerDeposit(depositSeq: RegisterDeposit): IO[Unit] = {
         val eitherTxs: Either[ParseDepositError, DepositTx] = for {
             depositTx <- DepositTx
-                .parse(depositSeq.serializedDeposit)
+                .parse(depositSeq.serializedDeposit, config, depositSeq.virtualOutputs)
                 .left
                 .map(ParseDepositError(_))
             //            refundTx: RefundTx.PostDated <- RefundTx.PostDated
@@ -64,7 +63,7 @@ trait DappLedger(
                 for {
                     _ <- validateTimeBounds(x)
                     _ <- state
-                        .update(s => s.appendToQueue((depositSeq._2, x.depositProduced)))
+                        .update(s => s.appendToQueue((depositSeq.eventId, x.depositProduced)))
                         .map(Right(_))
                 } yield ()
         }
@@ -78,7 +77,9 @@ trait DappLedger(
         for {
             currentTime <- realTime
             _ <-
-                if tx.depositProduced.datum.deadline < BigInt(currentTime.toSeconds)
+                if tx.depositProduced.datum.refundInstructions.startTime >= BigInt(
+                      currentTime.toSeconds
+                    )
                 then IO.pure(Left(InvalidTimeBound("deposit deadline exceeded")))
                 else IO.pure(Right(()))
         } yield Right(())
@@ -124,21 +125,20 @@ trait DappLedger(
                 depositsNotInPollResults = depositPartition._2
 
                 _ <-
-                    if depositsInPollResults.isEmpty && payouts.isEmpty
+                    if depositsInPollResults.isEmpty && payoutObligations.isEmpty
                     then
                         EitherT.leftT[IO, SettleLedger.ResultWithSettlement](
                           SettleLedger.ResultWithoutSettlement(depositsNotInPollResults)
                         )
                     else EitherT.pure[IO, SettleLedger.ResultWithoutSettlement](())
 
-                genesisObligations: Queue[(LedgerEvent.Id, GenesisObligation)] =
+                genesisObligations: Queue[(LedgerEvent.Id, NonEmptyList[GenesisObligation])] =
                     if depositsInPollResults.isEmpty then Queue.empty
                     else
                         depositsInPollResults.map(d =>
                             (
                               d._1,
-                              GenesisObligation
-                                  .fromDepositUtxo(d._2, network = config.headAddress.network)
+                              d._2.virtualOutputs
                             )
                         )
 
@@ -149,13 +149,15 @@ trait DappLedger(
                 virtualLedger ?: GetState
             and the settlement tx builder needs to be updated to take the KZG commit
                  */
+                kzg: KzgCommitment = ???
+
                 settlementTxSeqArgs = SettlementTxSeq.Builder.Args(
-                  // Is this field redundant?
+                  kzgCommitment = kzg,
                   majorVersionProduced =
                       Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
                   treasuryToSpend = s.treasury,
                   depositsToSpend = depositsInPollResults.map(_._2).toVector,
-                  payoutObligationsRemaining = payouts,
+                  payoutObligationsRemaining = payoutObligations,
                   tallyFeeAllowance = tallyFeeAllowance,
                   votingDuration = votingDuration
                 )
@@ -214,7 +216,7 @@ trait DappLedger(
         val eitherT: EitherT[IO, FinalizationTxSeq.Builder.Error, FinalizationTxSeq] =
             for {
                 s <- EitherT.right(state.get)
-                kzg : KzgCommitment <- ???
+                kzg: KzgCommitment <- EitherT(???)
                 args = FinalizationTxSeq.Builder.Args(
                   kzgCommitment = kzg,
                   majorVersionProduced =
@@ -265,12 +267,13 @@ object DappLedger {
         final case class RegisterDeposit private (
             serializedDeposit: Array[Byte],
             eventId: LedgerEvent.Id,
+            virtualOutputs: NonEmptyList[GenesisObligation],
             override val dResponse: Deferred[IO, Either[ParseDepositError, Unit]]
         ) extends SyncRequest[IO, ParseDepositError, Unit]
 
         final case class SettleLedger private (
             pollDepositResults: Set[LedgerEvent.Id],
-            payouts: Vector[Payout.Obligation.L1],
+            payoutObligations: Vector[Payout.Obligation],
             blockCreationTime: PosixTime,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime,
@@ -285,16 +288,19 @@ object DappLedger {
             // want to make sure that they correspond to each other
             def apply(
                 serializedDeposit: Array[Byte],
-                eventId: LedgerEvent.Id
+                eventId: LedgerEvent.Id,
+                virtualOutputs: NonEmptyList[GenesisObligation]
             ): IO[RegisterDeposit] =
                 Deferred[IO, Either[ParseDepositError, Unit]]
-                    .flatMap(x => IO.pure(new RegisterDeposit(serializedDeposit, eventId, x)))
+                    .flatMap(x =>
+                        IO.pure(new RegisterDeposit(serializedDeposit, eventId, virtualOutputs, x))
+                    )
         }
 
         object SettleLedger {
             def apply(
                 pollDepositResults: Set[LedgerEvent.Id],
-                payouts: Vector[Payout.Obligation.L1],
+                payoutObligations: Vector[Payout.Obligation],
                 blockCreationTime: PosixTime,
                 tallyFeeAllowance: Coin,
                 votingDuration: PosixTime
@@ -304,7 +310,7 @@ object DappLedger {
                         IO.pure(
                           new SettleLedger(
                             pollDepositResults = pollDepositResults,
-                            payouts = payouts,
+                            payoutObligations = payoutObligations,
                             blockCreationTime = blockCreationTime,
                             tallyFeeAllowance = tallyFeeAllowance,
                             votingDuration = votingDuration,
@@ -327,7 +333,7 @@ object DappLedger {
             final case class ResultWithSettlement(
                 settlementTxSeq: SettlementTxSeq,
                 fallBack: FallbackTx,
-                absorbedDeposits: Queue[(LedgerEvent.Id, GenesisObligation)],
+                absorbedDeposits: Queue[(LedgerEvent.Id, NonEmptyList[GenesisObligation])],
                 refundedDeposits: Queue[(LedgerEvent.Id, DepositUtxo)]
             ) extends Result
 
@@ -341,7 +347,7 @@ object DappLedger {
         }
 
         final case class FinalizeLedger private (
-            payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
             override val dResponse: Deferred[
@@ -352,7 +358,7 @@ object DappLedger {
 
         object FinalizeLedger {
             def apply(
-                payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+                payoutObligationsRemaining: Vector[Payout.Obligation],
                 multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
                 equityShares: EquityShares
             ): IO[FinalizeLedger] = for {
@@ -377,8 +383,6 @@ object DappLedger {
     }
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
-    // TODO: We actually want to pass a pre-formed Initialization Tx into the dapp ledger to create it.
-    // Or perhaps just the treasury UTxO? Either way, we still need a builder config.
     def create(
         initTx: InitializationTx,
         config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
@@ -415,9 +419,5 @@ object DappLedger {
             extends DappLedgerError
 
         case object GetStateError extends DappLedgerError
-    }
-
-    object Tx {
-        type Serialized = Array[Byte]
     }
 }

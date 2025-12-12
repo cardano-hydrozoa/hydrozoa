@@ -1,6 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -9,25 +11,24 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.ledger.api.v1.PosixTime
-import scalus.ledger.api.v3.{Address, Credential}
+import scalus.ledger.api.v3.{Address, PosixTime}
 import scalus.prelude.Option as ScalusOption
 
 final case class DepositUtxo(
-    private val l1Input: TransactionInput,
-    private val l1OutputAddress: ShelleyAddress,
-    private val l1OutputDatum: DepositUtxo.Datum,
-    private val l1OutputValue: Coin,
-    private val l1RefScript: Option[Script.Native | Script.PlutusV3]
+    l1Input: TransactionInput,
+    l1OutputAddress: ShelleyAddress,
+    l1OutputDatum: DepositUtxo.Datum,
+    l1OutputValue: Value,
+    virtualOutputs: NonEmptyList[GenesisObligation]
 ) {
-    def toUtxo: (TransactionInput, TransactionOutput) =
-        (
+    def toUtxo: Utxo =
+        Utxo(
           l1Input,
           TransactionOutput.apply(
             address = l1OutputAddress,
-            value = Value(l1OutputValue),
+            value = l1OutputValue,
             datumOption = Some(Inline(toData(l1OutputDatum))),
-            scriptRef = l1RefScript.map(ScriptRef(_))
+            scriptRef = None
           )
         )
     // NOTE: I need this in the dapp ledger, but can't access it because the field is private and
@@ -39,6 +40,34 @@ final case class DepositUtxo(
 }
 
 object DepositUtxo {
+
+    /** A deposit utxo's datum contains:
+      * @param refundInstructions
+      *   instructions for when and how the deposit should be refunded if it is not absorbed into
+      *   the head's treasury.
+      */
+    final case class Datum(refundInstructions: Refund.Instructions) derives FromData, ToData
+
+    object Refund {
+
+        /** A deposit's refund instructions specify:
+          *
+          * @param address
+          *   the address to which the deposit's funds should be refunded.
+          * @param datum
+          *   the datum that should be attached to the refund utxo.
+          * @param startTime
+          *   starting at this time, the head must refund the deposit's funds and must not attempt
+          *   to absorb them into the head's treasury. -
+          */
+        final case class Instructions(
+            address: Address,
+            datum: ScalusOption[Data],
+            startTime: PosixTime,
+        ) derives FromData,
+              ToData
+    }
+
     trait Spent {
         def depositSpent: DepositUtxo
     }
@@ -75,14 +104,15 @@ object DepositUtxo {
 
     enum DepositUtxoConversionError:
         case DepositUtxoNotBabbage
-        case AddressNotShelley
+        case NotAtExpectedHeadAddress
         case InvalidDatumContent(e: Throwable)
         case InvalidDatumType
-        case InvalidValue
-        case InvalidRefScript
+        case RefScriptNotAllowed
 
     def fromUtxo(
-        utxo: (TransactionInput, TransactionOutput)
+        utxo: Utxo,
+        headNativeScriptAddress: ShelleyAddress,
+        virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {
@@ -90,8 +120,8 @@ object DepositUtxo {
                 case _                => Left(DepositUtxoNotBabbage)
             }
             addr <- babbage.address match {
-                case sa: ShelleyAddress => Right(sa)
-                case _                  => Left(AddressNotShelley)
+                case sa: ShelleyAddress if sa == headNativeScriptAddress => Right(sa)
+                case _ => Left(NotAtExpectedHeadAddress)
             }
             datum <- babbage.datumOption match {
                 case Some(Inline(d)) =>
@@ -101,36 +131,17 @@ object DepositUtxo {
                     }
                 case _ => Left(InvalidDatumType)
             }
-            value <-
-                if babbage.value.assets == MultiAsset.empty then Right(babbage.value.coin)
-                else Left(InvalidValue)
 
             refScript: Option[Script.Native | Script.PlutusV3] <- babbage.scriptRef match {
-                case None => Right(None)
-                case Some(ScriptRef(s)) =>
-                    s match {
-                        case n: Script.Native    => Right(Some(n))
-                        case v3: Script.PlutusV3 => Right(Some(v3))
-                        case _                   => Left(InvalidRefScript)
-                    }
+                case None               => Right(None)
+                case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
             }
 
         } yield DepositUtxo(
           l1Input = utxo._1,
           l1OutputAddress = addr,
           l1OutputDatum = datum,
-          l1OutputValue = value,
-          l1RefScript = refScript
+          l1OutputValue = babbage.value,
+          virtualOutputs = virtualOutputs
         )
-
-    /** This is all placeholder stuff: */
-
-    case class Datum(
-        address: Credential,
-        datum: ScalusOption[Data],
-        deadline: PosixTime,
-        refundAddress: Address,
-        refundDatum: ScalusOption[Data]
-    ) derives FromData,
-          ToData
 }

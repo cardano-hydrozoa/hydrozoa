@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
@@ -31,7 +31,7 @@ private case class TransientFields(
     transactionsInvalid: List[LedgerEvent.Id],
     depositsRegistered: List[LedgerEvent.Id],
     depositsRejected: List[LedgerEvent.Id],
-    blockWithdrawnUtxos: Vector[Payout.Obligation.L1]
+    blockWithdrawnUtxos: Vector[Payout.Obligation]
 )
 
 sealed trait State
@@ -162,9 +162,9 @@ final case class JointLedger(
         import args.*
 
         def appendTransactionValid(
-           oldState: Producing,
-           eventId: LedgerEvent.Id,
-           payoutObligations: Vector[Payout.Obligation.L1]
+            oldState: Producing,
+            eventId: LedgerEvent.Id,
+            payoutObligations: Vector[Payout.Obligation]
         ): IO[Unit] =
             val newState = oldState
                 .focus(_.nextBlockData.transactionsValid)
@@ -188,7 +188,7 @@ final case class JointLedger(
             res <- EitherT.right(virtualLedger ?: req)
             p <- EitherT.right(unsafeGetProducing)
             newState = res match {
-                case Left(_)        => appendTransactionInvalid(p, id)
+                case Left(_)                  => appendTransactionInvalid(p, id)
                 case Right(payoutObligations) => appendTransactionValid(p, id, payoutObligations)
             }
             _ <- EitherT.right(state.set(p))
@@ -261,7 +261,9 @@ final case class JointLedger(
                   throw new RuntimeException("error getting state from virtual ledger")
                 )
 
-                kzgCommit = KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(vrState.activeUtxos))
+                kzgCommit = KzgCommitment.calculateCommitment(
+                  KzgCommitment.hashToScalar(vrState.activeUtxos)
+                )
 
                 // FIXME: unsafe cast
                 nextBlock: Block.Minor = p.previousBlock
@@ -331,7 +333,7 @@ final case class JointLedger(
 
             settleLedgerReq <- SettleLedger(
               pollDepositResults = pollResults,
-              payouts = producing.nextBlockData.blockWithdrawnUtxos,
+              payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
               blockCreationTime = producing.startTime,
               tallyFeeAllowance = tallyFeeAllowance,
               votingDuration = votingDuration

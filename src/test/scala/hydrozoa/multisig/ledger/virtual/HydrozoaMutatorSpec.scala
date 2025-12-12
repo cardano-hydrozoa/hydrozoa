@@ -7,7 +7,6 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test as ScalaCheckTest}
 import scalus.builtin.ByteString
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -16,24 +15,24 @@ import scalus.ledger.api.v3
 import scalus.prelude.Option as SOption
 import test.Generators.Hydrozoa.{genL2EventTransactionAttack, genL2WithdrawalFromUtxosAndPeer}
 import test.TestPeer.{Alice, Bob}
-import test.{TestPeer, l2EventTransactionFromInputsAndPeer}
+import test.{TestPeer, l2EventTransactionFromInputsAndPeer, testNetwork}
 
 /** Build dummy deposit datum from a pubkey, setting the L2 and refund addresses to the pkh address
   */
 def depositDatumFromPeer(peer: TestPeer): DepositUtxo.Datum = {
     val v3Addr: v3.Address = v3.Address(
       v3.Credential
-          .PubKeyCredential(v3.PubKeyHash(peer.address(Testnet).payment.asHash)),
+          .PubKeyCredential(v3.PubKeyHash(peer.address(testNetwork).payment.asHash)),
       SOption.None
     )
 
-    DepositUtxo.Datum(
+    DepositUtxo.Datum(???) /*
       address = v3Addr.credential,
       datum = SOption.None,
       deadline = 100,
       refundAddress = v3Addr,
-      refundDatum = SOption.None
-    )
+      refundDatum = SOption.None*/
+
 }
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
@@ -57,10 +56,10 @@ def genDepositUtxoFromPeer(
         coin <- Arbitrary.arbitrary[Coin]
     yield DepositUtxo(
       l1Input = txIn,
-      l1OutputAddress = peer.address(Testnet),
+      l1OutputAddress = peer.address(testNetwork),
       l1OutputDatum = depositDatumFromPeer(peer),
-      l1OutputValue = coin,
-      l1RefScript = None
+      l1OutputValue = ???, // coin,
+      virtualOutputs = ???
     )
 
 /** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the
@@ -75,8 +74,7 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
                 genesisId <- Arbitrary.arbitrary[TransactionHash]
             } yield L2EventGenesis(
               genesisId = genesisId,
-              genesisObligations =
-                  NonEmptyList.one(GenesisObligation.fromDepositUtxo(deposit, Testnet))
+              genesisObligations = deposit.virtualOutputs
             )
 
         } else {
@@ -94,10 +92,13 @@ def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
 
             for {
                 genesisId <- Arbitrary.arbitrary[TransactionHash]
-                go = NonEmptyList
-                    .fromListUnsafe(genesisSeq.toList)
-                    .map(GenesisObligation.fromDepositUtxo(_, Testnet))
-            } yield L2EventGenesis(genesisId = genesisId, genesisObligations = go)
+                genesisObligations =
+                    NonEmptyList.fromListUnsafe(
+                      genesisSeq.foldLeft(List.empty[GenesisObligation])((acc, utxo) =>
+                          acc ++ utxo.virtualOutputs.toList
+                      )
+                    )
+            } yield L2EventGenesis(genesisId = genesisId, genesisObligations = genesisObligations)
         }
 }
 
@@ -162,7 +163,7 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
                 expectedException = TransactionException.MissingKeyHashesException(
                   transactionId = withdrawlEvent.transaction.id,
                   missingInputsKeyHashes = Set(
-                    AddrKeyHash(ByteString.fromArray(Bob.address(Testnet).payment.asHash.bytes))
+                    AddrKeyHash(ByteString.fromArray(Bob.address(testNetwork).payment.asHash.bytes))
                   ),
                   missingCollateralInputsKeyHashes = Set.empty,
                   missingVotingProceduresKeyHashes = Set.empty,

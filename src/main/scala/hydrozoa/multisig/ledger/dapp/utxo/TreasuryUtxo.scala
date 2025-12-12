@@ -1,15 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.multisig.ledger.virtual.commitment
 import hydrozoa.multisig.protocol.types.Block
+import scala.util.Try
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
-import hydrozoa.multisig.ledger.virtual.commitment
-
-import scala.util.Try
 
 // TODO: Make opaque
 final case class TreasuryUtxo(
@@ -70,29 +69,33 @@ object TreasuryUtxo {
     // TODO: implement hashing for params
     // TODO: implement root hash
     def mkInitMultisigTreasuryDatum: Datum =
-        Datum(ByteString.fromArray(IArray.genericWrapArray(commitment.KzgCommitment.empty).toArray), BigInt(Block.Version.Major(0).toLong), ByteString.empty)
+        Datum(
+          ByteString.fromArray(IArray.genericWrapArray(commitment.KzgCommitment.empty).toArray),
+          BigInt(Block.Version.Major(0).toLong),
+          ByteString.empty
+        )
 
     // TODO: Make into Either?
-    def fromUtxo(utxo : Utxo) : Option[TreasuryUtxo] = {
-      val t = for {
-        // Utxo has to be at a shelley address
-        shelleyAddress <- Try(utxo.output.address.asInstanceOf[ShelleyAddress])
-        
-        // Treasury token name has to be the only asset in the value of the UTxO that is at the policy ID corresponding
-        // to the script hash
-        hnsScriptHash <- Try(shelleyAddress._2.asInstanceOf[ShelleyPaymentPart.Script].hash)
-        treasuryTokenName <- Try(utxo.output.value.assets.assets(hnsScriptHash).keys.head)
+    def fromUtxo(utxo: Utxo): Option[TreasuryUtxo] = {
+        val t = for {
+            // Utxo has to be at a shelley address
+            shelleyAddress <- Try(utxo.output.address.asInstanceOf[ShelleyAddress])
 
-        // Datum has to be inline and deserializable from Data
-        inline <- Try(utxo.output.datumOption.get.asInstanceOf[Inline].data)
-        datum : TreasuryUtxo.Datum <- Try(fromData[TreasuryUtxo.Datum](inline))
-      } yield 
-        TreasuryUtxo(
-          treasuryTokenName = treasuryTokenName, 
-          utxoId = utxo.input, 
-          address = shelleyAddress, 
+            // Treasury token name has to be the only asset in the value of the UTxO that is at the policy ID corresponding
+            // to the script hash
+            hnsScriptHash <- Try(shelleyAddress._2.asInstanceOf[ShelleyPaymentPart.Script].hash)
+            treasuryTokenName <- Try(utxo.output.value.assets.assets(hnsScriptHash).keys.head)
+
+            // Datum has to be inline and deserializable from Data
+            inline <- Try(utxo.output.datumOption.get.asInstanceOf[Inline].data)
+            datum: TreasuryUtxo.Datum <- Try(fromData[TreasuryUtxo.Datum](inline))
+        } yield TreasuryUtxo(
+          treasuryTokenName = treasuryTokenName,
+          utxoId = utxo.input,
+          address = shelleyAddress,
           datum = datum,
-          value = utxo.output.value)
-      t.toOption    
+          value = utxo.output.value
+        )
+        t.toOption
     }
 }

@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
@@ -186,18 +186,18 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
-           override val kzgCommitment: KzgCommitment,
+            override val kzgCommitment: KzgCommitment,
             override val majorVersionProduced: Block.Version.Major,
             override val treasuryToSpend: TreasuryUtxo,
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            override val payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares
         ) extends SingleArgs(kzgCommitment),
-              Payout.Obligation.L1.Many.Remaining {
+              Payout.Obligation.Many.Remaining {
 
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
-                  kzgCommitment = kzgCommitment,  
+                  kzgCommitment = kzgCommitment,
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend
@@ -206,7 +206,7 @@ object FinalizationTxSeq {
             def toArgsWithPayouts(
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
-                kzgCommitment = kzgCommitment,
+              kzgCommitment = kzgCommitment,
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,

@@ -4,17 +4,15 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, RolloutUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
-
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, Utxo, Value, TransactionOutput as TxOutput}
+import scalus.cardano.ledger.{Sized, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -154,11 +152,13 @@ object SettlementTx {
 
         object Args {
             final case class NoPayouts(
-                override val kzgCommitment: KzgCommitment,               
+                override val kzgCommitment: KzgCommitment,
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: TreasuryUtxo,
-                // FIXME (Peter, 2025-12-10): there's an issue here -- if there's no payouts and this vector is empty,
-                // what is this supposed to do?
+                // FIXME (Peter, 2025-12-10): If there's no deposits and no payouts,
+                // then this is a "roll forward" transaction, which is supposed to
+                // reset the fallback timer.
+                // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo]
             ) extends Args(kzgCommitment)
 
@@ -253,7 +253,7 @@ object SettlementTx {
                 deposit: DepositUtxo
             ): BuildErrorOr[TransactionBuilder.Context] =
                 val depositStep = Spend(
-                  TransactionUnspentOutput(deposit.toUtxo),
+                  deposit.toUtxo,
                   NativeScriptWitness(
                     NativeScriptAttached,
                     config.headNativeScript.requiredSigners
@@ -292,7 +292,10 @@ object SettlementTx {
             private def referenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.headNativeScriptReferenceInput)
 
-            private def consumeTreasury(config: Tx.Builder.Config, treasuryToSpend: TreasuryUtxo): Spend =
+            private def consumeTreasury(
+                config: Tx.Builder.Config,
+                treasuryToSpend: TreasuryUtxo
+            ): Spend =
                 Spend(treasuryToSpend.asUtxo, config.headNativeScript.witness)
 
             private def sendTreasury(args: Args): Send =
@@ -303,10 +306,17 @@ object SettlementTx {
                   address = args.treasuryToSpend.address,
                   value = treasuryOutputValue(args.treasuryToSpend, args.mbRolloutValue),
                   datumOption = Some(
-                    Inline(TreasuryUtxo.Datum(
-                      ByteString.fromArray(IArray.genericWrapArray(args.kzgCommitment).toArray), 
-                      args.majorVersionProduced, 
-                      ByteString.empty).toData)
+                    Inline(
+                      TreasuryUtxo
+                          .Datum(
+                            ByteString.fromArray(
+                              IArray.genericWrapArray(args.kzgCommitment).toArray
+                            ),
+                            args.majorVersionProduced,
+                            ByteString.empty
+                          )
+                          .toData
+                    )
                   ),
                   scriptRef = None
                 )
@@ -485,7 +495,7 @@ object SettlementTx {
                 val rolloutOutput = outputsTail.head.value
 
                 RolloutUtxo(
-                 Utxo(
+                  Utxo(
                     TransactionInput(transactionId = tx.id, index = 1),
                     rolloutOutput
                   )
@@ -584,8 +594,7 @@ object SettlementTx {
 
                 assert(outputs.nonEmpty)
                 // TODO: Throw other assertion errors in `.fromUtxo` and instead of `.get`?
-                TreasuryUtxo.fromUtxo(
-                  Utxo(TransactionInput(tx.id, 0), outputs.head.value)).get
+                TreasuryUtxo.fromUtxo(Utxo(TransactionInput(tx.id, 0), outputs.head.value)).get
             }
         }
     }

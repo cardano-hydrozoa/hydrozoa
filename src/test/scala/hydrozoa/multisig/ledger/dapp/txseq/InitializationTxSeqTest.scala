@@ -19,7 +19,6 @@ import scala.collection.mutable
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -47,13 +46,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // a max non-plutus fee
             seedUtxo <- genAdaOnlyPubKeyUtxo(
               peers.head,
-              genCoinWithMinimum = Some(
-                minInitTreasuryAda
-                    + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-              )
+              minimumCoin = minInitTreasuryAda
+                  + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
             ).map(x => Utxo(x._1, x._2))
             otherSpentUtxos <- Gen
-                .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
+                .listOf(genAdaOnlyPubKeyUtxo(peers.head))
                 .map(_.map(x => Utxo(x._1, x._2)))
 
             spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
@@ -64,7 +61,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             initialDeposit <- Gen
                 .choose(
                   minInitTreasuryAda.value,
-                  sumUtxoValues(spentUtxos.toList.map(_.toTuple)).coin.value
+                  sumUtxoValues(spentUtxos.toList).coin.value
                       - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
                       - minPubkeyAda().value
                 )
@@ -317,7 +314,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 val parseResult = InitializationTx.parse(
                   peerKeys = peers,
-                  expectedNetwork = Testnet,
+                  expectedNetwork = testNetwork,
                   tx = iTx.tx,
                   resolver = mockResolver
                 )
@@ -511,9 +508,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     txsToSign.map(tx => signTx(peer, tx))
                 )
 
-            val observationRes = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
+            val observationRes =
+                observeTxChain(signedTxs)(initialState, CardanoMutator, Context.testMainnet())
 
-            props.append("Sequence Observation successful" |: observationRes.isRight)
+            props.append {
+                observationRes match {
+                    case Left(e)  => s"Sequence Observation unsuccessful $e" |: false
+                    case Right(_) => Prop(true)
+                }
+            }
 
             // Semantic parsing of entire sequence
             props.append {
@@ -523,7 +526,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 val parseRes = InitializationTxSeq.parse(
                   txSeq,
-                  expectedNetwork = Testnet,
+                  expectedNetwork = testNetwork,
                   peerKeys = peers,
                   expectedTallyFeeAllowance = args.tallyFeeAllowance,
                   expectedVotingDuration = args.votingDuration,
