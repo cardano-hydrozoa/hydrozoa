@@ -17,7 +17,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptValue
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.prelude.List as SList

@@ -19,7 +19,7 @@ import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.txbuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 
