@@ -101,7 +101,6 @@ object DepositUtxo {
         case NotAtExpectedHeadAddress
         case InvalidDatumContent(e: Throwable)
         case InvalidDatumType
-        case InvalidValue
         case RefScriptNotAllowed
 
     def fromUtxo(

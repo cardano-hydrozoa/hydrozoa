@@ -98,6 +98,7 @@ def genDepositRecipe(
       partialRefundTx = partialRefundTx,
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
+      donationToTreasury = ???,
       changeAddress = depositor.address(testNetwork),
     )
 

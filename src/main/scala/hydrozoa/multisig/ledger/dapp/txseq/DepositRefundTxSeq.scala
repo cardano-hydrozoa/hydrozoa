@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import io.bullet.borer.Cbor
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
 
 final case class DepositRefundTxSeq(
@@ -29,6 +29,7 @@ object DepositRefundTxSeq {
         refundValue: Value,
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[TransactionOutput.Babbage],
+        donationToTreasury: Coin,
         changeAddress: ShelleyAddress
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
@@ -39,7 +40,14 @@ object DepositRefundTxSeq {
                 .map(Builder.Error.Refund(_))
 
             depositTx <- DepositTx
-                .Builder(config, partialRefundTx, utxosFunding, virtualOutputs, changeAddress)
+                .Builder(
+                  config,
+                  partialRefundTx,
+                  utxosFunding,
+                  virtualOutputs,
+                  donationToTreasury,
+                  changeAddress
+                )
                 .build()
                 .left
                 .map(Builder.Error.Deposit(_))
@@ -55,6 +63,7 @@ object DepositRefundTxSeq {
 
     object ParseError {
         final case class Deposit(e: DepositTx.ParseError) extends ParseError
+        final case class DepositValueMismatch(parsed: Value, expected: Value) extends ParseError
 
         final case class Refund(e: RefundTx.ParseError) extends ParseError
         case object RefundNotPostDated extends ParseError
@@ -70,6 +79,7 @@ object DepositRefundTxSeq {
         depositTxBytes: Tx.Serialized,
         refundTxBytes: Tx.Serialized,
         virtualOutputsBytes: Array[Byte],
+        donationToTreasury: Coin,
         config: Tx.Builder.Config
     ): Either[ParseError, DepositRefundTxSeq] = for {
         virtualOutputs <- for {
@@ -87,6 +97,8 @@ object DepositRefundTxSeq {
             }
         } yield babbage
 
+        virtualValue = Value.combine(virtualOutputs.toList.map(_.value))
+
         depositTx <- DepositTx
             .parse(depositTxBytes, config, virtualOutputs)
             .left
@@ -99,15 +111,32 @@ object DepositRefundTxSeq {
         }
 
         depositUtxo = depositTx.depositProduced
+        depositValue = depositUtxo.l1OutputValue
+
         refundInstructions = depositUtxo.l1OutputDatum.refundInstructions
-        refundValue = depositUtxo.l1OutputValue - Value(refundTx.tx.body.value.fee)
+        refundFee = refundTx.tx.body.value.fee
+        refundValue = depositValue - Value(refundFee)
+
+        expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
 
         expectedRefundTx <- RefundTx.Builder
             .PostDated(config, refundInstructions, refundValue)
             .partialResult
-            .map(_.complete(depositUtxo))
+            .flatMap(_.complete(depositUtxo))
             .left
             .map(ParseError.ExpectedRefundBuildError(_))
+
+        _ <- Either.cond(
+          depositValue == expectedDepositValue,
+          (),
+          ParseError.DepositValueMismatch(depositValue, expectedDepositValue)
+        )
+
+        _ <- Either.cond(
+          refundTx == expectedRefundTx,
+          (),
+          ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
+        )
 
     } yield DepositRefundTxSeq(depositTx, refundTx)
 }
