@@ -140,7 +140,7 @@ object ResolutionTx {
                     ),
                     // Spend the treasury utxo and update its datum to resolved state
                     Spend(
-                        treasuryUtxo.asUtxo,
+                      treasuryUtxo.asUtxo,
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         treasuryRedeemer.toData,

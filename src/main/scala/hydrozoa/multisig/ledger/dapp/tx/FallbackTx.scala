@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{RuleBasedTreasuryDatum, UnresolvedDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
@@ -31,7 +31,7 @@ final case class FallbackTx(
     // The rest should have domain-specific types as well. See:
     // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
     treasuryProduced: RuleBasedTreasuryUtxo,
-    consumedHMRWUtxo: Utxo,
+    consumedHMRWUtxo: MultisigRegimeUtxo,
     producedDefaultVoteUtxo: Utxo,
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
@@ -134,7 +134,7 @@ object FallbackTx {
 
         ////////////////////////////////////////////////////
         // Define steps
-        val spendHMRW: Spend = Spend(config.headNativeScriptReferenceInput, hns.witness)
+        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witness)
 
         val spendMultisigTreasury: Spend =
             Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
@@ -210,7 +210,13 @@ object FallbackTx {
                 datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),
                 value = createDisputeTreasury.output.value
               ),
-              consumedHMRWUtxo = spendHMRW.utxo,
+              consumedHMRWUtxo = MultisigRegimeUtxo(
+                multisigRegimeTokenName = tokenNames.multisigRegimeTokenName,
+                utxoId = TransactionInput(txId, 1),
+                address = headAddress,
+                value = spendHMRW.utxo.output.value,
+                script = headNativeScript
+              ),
               producedDefaultVoteUtxo =
                   Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
               producedPeerVoteUtxos = createPeerVoteUtxos

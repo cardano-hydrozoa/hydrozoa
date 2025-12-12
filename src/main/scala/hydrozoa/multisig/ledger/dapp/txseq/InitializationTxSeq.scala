@@ -80,7 +80,7 @@ object InitializationTxSeq {
 
             config = Tx.Builder.Config(
               headNativeScript = HeadMultisigScript(peerKeys),
-              headNativeScriptReferenceInput = iTx.multisigRegimeWitness,
+              multisigRegimeUtxo = iTx.multisigRegimeWitness,
               tokenNames = iTx.tokenNames,
               env = env,
               evaluator = evaluator,
@@ -237,7 +237,7 @@ object InitializationTxSeq {
 
                 config = Tx.Builder.Config(
                   headNativeScript = hns,
-                  headNativeScriptReferenceInput = initializationTx.multisigRegimeWitness,
+                  multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
                   tokenNames = initializationTx.tokenNames,
                   env = args.env,
                   evaluator = args.evaluator,

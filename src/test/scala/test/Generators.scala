@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
@@ -85,7 +85,7 @@ object Generators {
             } yield (
               Tx.Builder.Config(
                 headNativeScript = hns,
-                headNativeScriptReferenceInput = multisigWitnessUtxo,
+                multisigRegimeUtxo = multisigWitnessUtxo,
                 tokenNames = tokenNames,
                 env = env,
                 evaluator = evaluator,
@@ -161,7 +161,7 @@ object Generators {
             // Pass this if you need a specific token name for coherence with the rest of your test.
             // In general, it should be obtained via `CIP67.TokenNames(seedUtxo).multisigRegimeTokenName
             hmrwTokenName: Option[AssetName] = None
-        ): Gen[Utxo] = for {
+        ): Gen[MultisigRegimeUtxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
 
             hmrwTn <- hmrwTokenName match {
@@ -182,13 +182,13 @@ object Generators {
               )
             )
 
-            output = Babbage(
-              script.mkAddress(network),
-              Value.ada(2) + hmrwToken,
-              None,
-              Some(ScriptRef.apply(script.script))
-            )
-        } yield Utxo((utxoId, output))
+        } yield MultisigRegimeUtxo(
+          multisigRegimeTokenName = hmrwTn,
+          utxoId = utxoId,
+          address = script.mkAddress(network),
+          value = Value.ada(2) + hmrwToken,
+          script = script
+        )
 
         def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
             for {

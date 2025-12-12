@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
@@ -127,7 +127,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
             val config = Tx.Builder.Config(
               headNativeScript = expectedHeadNativeScript,
-              headNativeScriptReferenceInput = multisigRegimeUtxo,
+              multisigRegimeUtxo = multisigRegimeUtxo,
               tokenNames = iTx.tokenNames,
               env = testTxBuilderEnvironment,
               evaluator = testEvaluator,
@@ -295,14 +295,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
                     )
                   ),
-                  multisigRegimeWitness = Utxo(
-                    TransactionInput(iTx.tx.id, 1),
-                    TransactionOutput(
-                      expectedHeadNativeScript.mkAddress(testNetwork),
-                      value = multisigRegimeUtxo.output.value,
-                      datumOption = None,
-                      scriptRef = Some(ScriptRef(expectedHeadNativeScript.script))
-                    )
+                  multisigRegimeWitness = MultisigRegimeUtxo(
+                    multisigRegimeTokenName = expectedMulitsigRegimeTokenName,
+                    utxoId = TransactionInput(iTx.tx.id, 1),
+                    address = expectedHeadNativeScript.mkAddress(testNetwork),
+                    value = multisigRegimeUtxo.output.value,
+                    script = expectedHeadNativeScript
                   ),
                   tokenNames = CIP67.TokenNames(spentUtxos.seedUtxo.input),
 
@@ -342,7 +340,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             props.append(
               "multisig regime utxo spent" |:
-                  fbTxBody.inputs.toSeq.contains(config.headNativeScriptReferenceInput.input)
+                  fbTxBody.inputs.toSeq.contains(config.multisigRegimeUtxo.input)
             )
 
             props.append("multisig regime token burned and vote tokens minted" |: {
@@ -436,7 +434,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                   val expectedHMRWCoin: Coin =
                       maxNonPlutusTxFee(env.protocolParams)
                           + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
-                  config.headNativeScriptReferenceInput.output.value.coin == expectedHMRWCoin
+                  config.multisigRegimeUtxo.output.value.coin == expectedHMRWCoin
               }
             )
 

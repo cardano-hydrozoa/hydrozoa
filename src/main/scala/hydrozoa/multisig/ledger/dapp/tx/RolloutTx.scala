@@ -324,7 +324,7 @@ object RolloutTx {
                 ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
             private def stepReferenceHNS(config: Tx.Builder.Config) =
-                ReferenceOutput(config.headNativeScriptReferenceInput)
+                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
         }
 

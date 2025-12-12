@@ -4,6 +4,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import scalus.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.TransactionOutput.Babbage
 
 final case class MultisigRegimeUtxo(
     multisigRegimeTokenName: AssetName,
@@ -12,15 +13,18 @@ final case class MultisigRegimeUtxo(
     value: Value,
     script: HeadMultisigScript
 ) {
+    val input: TransactionInput = utxoId
+    val output: Babbage = Babbage(
+      address = address,
+      value = value,
+      datumOption = None,
+      scriptRef = Some(ScriptRef.apply(script.script))
+    )
+
     val asUtxo: Utxo =
         Utxo(
-          utxoId,
-          TransactionOutput.apply(
-            address = address,
-            value = value,
-            datumOption = None,
-            scriptRef = Some(ScriptRef.apply(script.script))
-          )
+          input,
+          output
         )
 }
 

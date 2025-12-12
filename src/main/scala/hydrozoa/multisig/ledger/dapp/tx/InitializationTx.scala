@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
@@ -25,7 +25,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryDat
 
 final case class InitializationTx(
     treasuryProduced: MultisigTreasuryUtxo,
-    multisigRegimeWitness: Utxo,
+    multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction
@@ -154,7 +154,12 @@ object InitializationTx {
             value = createTreasury.output.value
           ),
           tx = finalized.transaction,
-          multisigRegimeWitness = Utxo(TransactionInput(finalized.transaction.id, 1), hmrwOutput),
+          multisigRegimeWitness = MultisigRegimeUtxo(
+            tokenNames.multisigRegimeTokenName,
+            utxoId = TransactionInput(finalized.transaction.id, 1),
+            output = hmrwOutput,
+            script = headNativeScript
+          ),
           tokenNames = tokenNames,
           resolvedUtxos = finalized.resolvedUtxos
         )
@@ -375,7 +380,13 @@ object InitializationTx {
 
         } yield InitializationTx(
           treasuryProduced = treasury,
-          multisigRegimeWitness = multisigRegimeWitness,
+          multisigRegimeWitness = MultisigRegimeUtxo(
+            multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
+            utxoId = TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+            address = expectedHeadAddress,
+            value = actualMultisigRegimeOutput.value,
+            script = expectedHNS
+          ),
           tokenNames = derivedTokenNames,
           resolvedUtxos =
               resolver(tx.body.value.inputs.toSeq ++ tx.body.value.referenceInputs.toSeq),
