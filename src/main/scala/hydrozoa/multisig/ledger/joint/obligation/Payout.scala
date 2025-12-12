@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.joint.obligation
 
+import cats.data.NonEmptyVector
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput}
 
 object Payout {
@@ -19,6 +20,18 @@ object Payout {
     object Obligation {
         trait Many {
             def payoutObligations: Vector[Payout.Obligation]
+        }
+
+        object Many {
+            trait Remaining {
+                def payoutObligationsRemaining: Vector[Payout.Obligation]
+            }
+
+            object Remaining {
+                trait NonEmpty {
+                    def payoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
+                }
+            }
         }
 
         /** A payout obligation discharged by an L1 transaction output. */

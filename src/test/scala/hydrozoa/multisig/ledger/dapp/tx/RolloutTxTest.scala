@@ -8,7 +8,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.{TransactionUnspentOutput, addDummySignatures}
+import scalus.cardano.txbuilder.addDummySignatures
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
@@ -17,7 +17,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
             config <- genTxConfig()
-            genPayouts = genPayoutObligationL1(config.env.network)
+            genPayouts = genPayoutObligation(config.env.network)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -32,7 +32,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genNotLastBuilder: Gen[(RolloutTx.Builder.NotLast, RolloutTx.Builder.Args.NotLast)] =
         for {
             config <- genTxConfig()
-            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligationL1(config.env.network))
+            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligation(config.env.network))
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
         } yield (
           RolloutTx.Builder.NotLast(config),
@@ -80,7 +80,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 txId = Arbitrary.arbitrary[TransactionHash].sample.get
                 input = TransactionInput(txId, 0)
                 output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
-                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+                rolloutUtxo = RolloutUtxo(Utxo(input, output))
                 res <- pr.complete(rolloutUtxo)
             } yield res
             assert(res.isRight)

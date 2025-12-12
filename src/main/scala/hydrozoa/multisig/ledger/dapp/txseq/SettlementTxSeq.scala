@@ -4,7 +4,7 @@ import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.obligation.old.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.protocol.types.Block
 import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError
@@ -121,11 +121,11 @@ object SettlementTxSeq {
             override val majorVersionProduced: Block.Version.Major,
             override val treasuryToSpend: TreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            override val payoutObligationsRemaining: Vector[Payout.Obligation],
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
         ) extends SingleArgs,
-              Payout.Obligation.L1.Many.Remaining {
+              Payout.Obligation.Many.Remaining {
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,

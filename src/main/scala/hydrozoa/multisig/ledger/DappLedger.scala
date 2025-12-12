@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.obligation.old.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
 import scala.collection.immutable.Queue
@@ -245,14 +245,14 @@ object DappLedger {
 
         final case class SettleLedger(
             pollDepositResults: Set[LedgerEvent.Id],
-            payouts: Vector[Payout.Obligation.L1],
+            payouts: Vector[Payout.Obligation],
             blockCreationTime: PosixTime,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime,
         )
 
         final case class FinalizeLedger(
-            payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
         )

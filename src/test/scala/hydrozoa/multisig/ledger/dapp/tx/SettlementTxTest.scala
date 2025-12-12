@@ -4,7 +4,6 @@ import cats.data.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.joint.obligation.old.Payout
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -102,8 +101,10 @@ def genSettlementTxSeqBuilder(
         )
         deposits <- genHelper(genDeposit)
 
-        payouts <- genHelper(genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
+        payouts <- genHelper(genPayoutObligation(network))
+        payoutAda = payouts
+            .map(_.utxo.value.coin)
+            .fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
           headAddress = Some(hns.mkAddress(network)),
           network = network,

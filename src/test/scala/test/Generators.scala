@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
-import hydrozoa.multisig.ledger.joint.obligation.old.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
@@ -120,9 +120,6 @@ object Generators {
                 coin <- arbitrary[Coin]
             } yield Value(coin)
 
-        def genPayoutObligationL1(network: Network): Gen[Payout.Obligation.L1] =
-            genPayoutObligationL2(network).map(Payout.Obligation.L1(_))
-
         val genAddrKeyHash: Gen[AddrKeyHash] =
             genByteStringOfN(28).map(AddrKeyHash.fromByteString)
 
@@ -185,7 +182,7 @@ object Generators {
             )
         } yield TransactionUnspentOutput((utxoId, output))
 
-        def genPayoutObligationL2(network: Network): Gen[Payout.Obligation.L2] =
+        def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
             for {
                 l2Input <- arbitrary[TransactionInput]
 
@@ -199,7 +196,7 @@ object Generators {
                   datumOption = Some(Inline(datum.toData)),
                   scriptRef = None
                 )
-            } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
+            } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
 
         /** Ada-only pub key utxo from the given peer, at least minAda, random tx id, random index,
           * no datum, no script ref
@@ -449,7 +446,7 @@ object Generators {
             /** NOTE: You can't change the network very easily because this is an opaque type. You
               * should only use this for fuzz testing.
               */
-            given Arbitrary[Payout.Obligation.L2] = Arbitrary {
+            given Arbitrary[Payout.Obligation] = Arbitrary {
                 for {
                     l2Input <- arbitrary[TransactionInput]
 
@@ -462,13 +459,7 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield Payout.Obligation.L2(l2Input = l2Input, output = output)
-            }
-
-            given Arbitrary[Payout.Obligation.L1] = Arbitrary {
-                for {
-                    l2 <- arbitrary[Payout.Obligation.L2]
-                } yield Payout.Obligation.L1(l2)
+                } yield ??? // Payout.Obligation(l2Input = l2Input, output = output)
             }
         }
     }

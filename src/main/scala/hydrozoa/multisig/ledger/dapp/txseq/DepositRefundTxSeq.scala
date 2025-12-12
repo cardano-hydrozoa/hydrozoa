@@ -23,6 +23,17 @@ object DepositRefundTxSeq {
         }
     }
 
+    /**   - If you want to deposit X ada, you set that as the refundValue
+      *   - refundValue + fee has to be enough to cover virtualOutputs
+      *   - utxosFunding has to be enough to cover refundValue + fee
+      *
+      * @param config
+      * @param refundInstructions
+      * @param refundValue
+      * @param utxosFunding
+      * @param virtualOutputs
+      * @param changeAddress
+      */
     final case class Builder(
         config: Tx.Builder.Config,
         refundInstructions: DepositUtxo.Refund.Instructions,

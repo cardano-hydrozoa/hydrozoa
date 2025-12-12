@@ -4,7 +4,7 @@ import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.obligation.old.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.prebalancedLovelaceDiffHandler
 import scala.Function.const
 import scala.annotation.tailrec
@@ -160,9 +160,9 @@ object RolloutTx {
                 override val builder: Builder[T],
                 override val ctx: TransactionBuilder.Context,
                 override val inputValueNeeded: Value,
-                override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation.L1]
+                override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
             ) extends PartialResult[T],
-                  Payout.Obligation.L1.Many.Remaining.NonEmpty {
+                  Payout.Obligation.Many.Remaining.NonEmpty {
                 def asFirst: First[T] = First(
                   builder = builder,
                   ctx = ctx,
@@ -185,10 +185,10 @@ object RolloutTx {
             }
         }
 
-        enum Args extends Payout.Obligation.L1.Many.Remaining.NonEmpty {
-            case Last(override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation.L1])
+        enum Args extends Payout.Obligation.Many.Remaining.NonEmpty {
+            case Last(override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation])
             case NotLast(
-                override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation.L1],
+                override val payoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
                 rolloutOutputValue: Value
             ) extends Args
 
@@ -209,10 +209,10 @@ object RolloutTx {
         final case class State[T <: RolloutTx](
             override val ctx: TransactionBuilder.Context,
             override val inputValueNeeded: Value,
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1]
+            override val payoutObligationsRemaining: Vector[Payout.Obligation]
         ) extends Tx.Builder.HasCtx,
               State.Fields.HasInputRequired,
-              Payout.Obligation.L1.Many.Remaining
+              Payout.Obligation.Many.Remaining
 
         object State {
             object Fields {
@@ -304,9 +304,9 @@ object RolloutTx {
           */
         private final def tryAddPayout(
             ctx: TransactionBuilder.Context,
-            payoutObligation: Payout.Obligation.L1
+            payoutObligation: Payout.Obligation
         ): BuildErrorOr[(TransactionBuilder.Context, Value)] =
-            val payoutStep = Send(payoutObligation.output)
+            val payoutStep = Send(payoutObligation.utxo)
             for {
                 newCtx <- TransactionBuilder
                     .modify(ctx, List(payoutStep))
