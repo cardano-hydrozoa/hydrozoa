@@ -27,13 +27,13 @@ object CardanoBackendProtocol {
         final case class GetCardanoHeadState(
             override val dResponse: Deferred[
               IO,
-              Either[CardanoBackendError.type, GetCardanoHeadStateResp]
+              Either[CardanoBackendError, GetCardanoHeadStateResp]
             ]
-        ) extends SyncRequest[IO, CardanoBackendError.type, GetCardanoHeadStateResp]
+        ) extends SyncRequest[IO, CardanoBackendError, GetCardanoHeadStateResp]
 
         object GetCardanoHeadState:
             def apply(): IO[GetCardanoHeadState] = for {
-                dResponse <- Deferred[IO, Either[CardanoBackendError.type, GetCardanoHeadStateResp]]
+                dResponse <- Deferred[IO, Either[CardanoBackendError, GetCardanoHeadStateResp]]
             } yield GetCardanoHeadState(dResponse)
 
         /** The head's current utxo state in Cardano, provided in response to
@@ -41,7 +41,7 @@ object CardanoBackendProtocol {
           * address.
           */
         final case class GetCardanoHeadStateResp(
-            utxoIds: Seq[UtxoIdL1],
+            utxoIds: Set[UtxoIdL1],
             currentSlot: Slot
         )
 
@@ -49,13 +49,13 @@ object CardanoBackendProtocol {
           */
         final case class GetTxInfo(
             txHash: TransactionHash,
-            override val dResponse: Deferred[IO, Either[CardanoBackendError.type, GetTxInfoResp]]
-        ) extends SyncRequest[IO, CardanoBackendError.type, GetTxInfoResp]
+            override val dResponse: Deferred[IO, Either[CardanoBackendError, GetTxInfoResp]]
+        ) extends SyncRequest[IO, CardanoBackendError, GetTxInfoResp]
 
         object GetTxInfo:
             def apply(txHash: TransactionHash): IO[GetTxInfo] =
                 for {
-                    dResponse <- Deferred[IO, Either[CardanoBackendError.type, GetTxInfoResp]]
+                    dResponse <- Deferred[IO, Either[CardanoBackendError, GetTxInfoResp]]
                 } yield GetTxInfo(txHash, dResponse)
 
         /** Response to [[GetTxInfo]].
@@ -65,6 +65,6 @@ object CardanoBackendProtocol {
             // TODO: add more fields?
         )
 
-        object CardanoBackendError extends Throwable
+        case class CardanoBackendError(msg: String) extends Throwable
     }
 }

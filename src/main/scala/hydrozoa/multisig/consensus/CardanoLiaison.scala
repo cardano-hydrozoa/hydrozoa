@@ -8,7 +8,7 @@ import hydrozoa.multisig.consensus.CardanoLiaison.Config
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo}
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, SubmitL1Effects}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.types.Block
@@ -66,7 +66,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         for {
             _ <- subscribers.set(Some(Subscribers()))
             // TODO: this is something we likely want to make dynamic
-            _ <- context.setReceiveTimeout(10.seconds, CardanoLiaison.Timeout)
+            _ <- context.setReceiveTimeout(5.seconds, CardanoLiaison.Timeout)
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -97,7 +97,9 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     /** Handle [[ConfirmMajorBlock]] request:
       *   - saves the effects in the internal actor's state
       */
-    private def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
+    // TODO make protected
+    def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
+        _ <- IO.println("handleMajorBlockL1Effects")
         // TODO: check effect uniqueness?
         _ <- state.update(s => {
             val (blockEffectInputs, blockEffects) = mkEffectInputsAndEffects(block.settlementTxSeq)
@@ -115,7 +117,9 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     /** Handle [[ConfirmFinalBlock]] request:
       *   - saves the effects in the internal actor's state
       */
-    private def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
+    // TODO make protected
+    def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
+        _ <- IO.println("handleFinalBlockL1Effects")
         // TODO: check effect uniqueness?
         _ <- state.update(s => {
             val (blockEffectInputs, blockEffects) =
@@ -123,7 +127,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             s.copy(
               targetState = TargetState.Finalized(block.finalizationTxSeq.finalizationTx.tx.id),
               effectInputs = s.effectInputs ++ blockEffectInputs,
-              effects = s.effects ++ blockEffects,
+              effects = s.effects ++ blockEffects
             )
         })
     } yield ()
@@ -227,62 +231,83 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
 
     private def runEffects: IO[Unit] = for {
 
+        _ <- IO.println("runEffects")
+
         // 1. Get the L1 state, i.e. the list of utxo ids + the current slot
         getCardanoHeadState <- GetCardanoHeadState()
         resp <- config.cardanoBackend ?: getCardanoHeadState
 
-        l1State <- resp match {
-            // TODO: better error
-            case Left(_)        => IO.raiseError(Errors.CardanoBackendError())
-            case Right(l1State) => IO.pure(l1State)
-        }
+        _ <- resp match {
 
-        // 2. Based on the local state, find all due actions
-        state <- state.get
+            case Left(err) =>
+                // This may happen if L1 API is temporarily unavailable
+                // TODO: we need to address time when we work on autonomous mode
+                //   but for now we can just ignore it and skip till the next event/timeout
+                IO.println(s"error when getting Cardano L1 state: ${err.msg}")
 
-        // (i.e. those that are directly caused by effect inputs in L1 response).
-        dueActions: Seq[Action] = mkDirectActions(state, l1State.utxoIds, l1State.currentSlot)
+            case Right(l1State) =>
+                for {
 
-        // 3. Determine whether the initialization requires submission.
-        actionsToSubmit <-
-            if dueActions.nonEmpty
-            then IO.pure(dueActions)
-            else {
-                // Empty direct actions is a precondition for the init tx submission
-                lazy val initAction = Seq(
-                  Action.InitializeHead(state.effects.values.map(_.tx).toSeq)
-                )
-                // FIXME: check the rule-based treasury!
-                state.targetState match {
-                    case TargetState.Active(targetTreasuryUtxoId) =>
-                        IO.pure(
-                          if l1State.utxoIds.contains(targetTreasuryUtxoId)
-                          then List.empty
-                          else initAction
-                        )
-                    case TargetState.Finalized(finalizationTxHash) =>
-                        for {
-                            // TODO: better error
-                            getTxInfo <- GetTxInfo(finalizationTxHash)
-                            txResp <- config.cardanoBackend ?: getTxInfo
-                            mbInitAction <- txResp match {
-                                case Left(_) => IO.raiseError(Errors.CardanoBackendError())
-                                case Right(txInfo) =>
-                                    IO.pure(if txInfo.isKnown then Seq.empty else initAction)
+                    // 2. Based on the local state, find all due actions
+                    state <- state.get
+
+                    // (i.e. those that are directly caused by effect inputs in L1 response).
+                    dueActions: Seq[Action] = mkDirectActions(
+                      state,
+                      l1State.utxoIds,
+                      l1State.currentSlot
+                    )
+
+                    // 3. Determine whether the initialization requires submission.
+                    actionsToSubmit <-
+                        if dueActions.nonEmpty
+                        then IO.pure(dueActions)
+                        else {
+                            // Empty direct actions is a precondition for the init (happy path) tx submission
+                            lazy val initAction = Seq(
+                              Action.InitializeHead(state.effects.values.map(_.tx).toSeq)
+                            )
+                            // FIXME: check the rule-based treasury!
+                            state.targetState match {
+                                case TargetState.Active(targetTreasuryUtxoId) =>
+                                    IO.pure(
+                                      if l1State.utxoIds.contains(targetTreasuryUtxoId)
+                                      then List.empty
+                                      else initAction
+                                    )
+                                case TargetState.Finalized(finalizationTxHash) =>
+                                    for {
+                                        getTxInfo <- GetTxInfo(finalizationTxHash)
+                                        txResp <- config.cardanoBackend ?: getTxInfo
+                                        mbInitAction <- txResp match {
+                                            case Left(err) =>
+                                                for {
+                                                    _ <- IO.println(
+                                                      s"error when getting finalization tx info: ${err.msg}"
+                                                    )
+                                                } yield Seq.empty
+                                            case Right(txInfo) =>
+                                                IO.pure(
+                                                  if txInfo.isKnown then Seq.empty else initAction
+                                                )
+                                        }
+                                    } yield mbInitAction
                             }
-                        } yield mbInitAction
-                }
-            }
+                        }
 
-        // FIXME: revert back
-        //// 4. Submit flattened txs for actions it there are some
-        // _ <- IO.whenA(actionsToSubmit.nonEmpty)(
-        //  config.cardanoBackend ! SubmitL1Effects(actionsToSubmit.flatMap(actionTxs).toList)
-        // )
+                    _ <- IO.println(s"actionsToSubmit: ${actionsToSubmit.length}")
 
+                    // 4. Submit flattened txs for actions it there are some
+                    _ <- IO.whenA(actionsToSubmit.nonEmpty)(
+                      config.cardanoBackend ! SubmitL1Effects(
+                        actionsToSubmit.flatMap(actionTxs).toList
+                      )
+                    )
+                } yield ()
+        }
     } yield ()
 
-    private def mkDirectActions(state: State, utxosFound: Seq[UtxoIdL1], slot: Slot): Seq[Action] =
+    private def mkDirectActions(state: State, utxosFound: Set[UtxoIdL1], slot: Slot): Seq[Action] =
         // Split into known effect inputs/unknown utxos
         // val (inputs, _unknown) = utxosFound.partition(state.effectInputs.keySet.contains)
 
@@ -290,6 +315,8 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             .map(state.effectInputs.get)
             .filter(_.isDefined)
             .map(_.get)
+            .toSeq
+            .sorted
             .map(mkDirectAction(state, slot))
 
     private def mkDirectAction(state: State, currentSlot: Slot)(
@@ -303,7 +330,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 // By construction either the fallback tx for N is valid or the "settlementOrFinalizationTx" for N+1 is valid:
                 // - seems obvious WRT a settlement(finalization)/fallback pair
                 // - deinit neither has ttl, nor fallback, so it's always valid
-                if mbFallbackTx.isDefined && mbFallbackTx.get.validityStartSlot >= currentSlot then
+                if mbFallbackTx.isDefined && currentSlot >= mbFallbackTx.get.validityStartSlot then
                     Action.FallbackToRuleBased(mbFallbackTx.get.tx)
                 else {
                     val effectTxs =
@@ -416,8 +443,6 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     // ===================================
 
     enum Errors extends Throwable:
-        case CardanoBackendError()
-
         /** The state already contains a fallback tx for a particular utxo. */
         case NonUniqueFallbackTx()
 }

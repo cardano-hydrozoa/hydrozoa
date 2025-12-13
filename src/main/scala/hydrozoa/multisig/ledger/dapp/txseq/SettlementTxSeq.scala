@@ -19,11 +19,18 @@ enum SettlementTxSeq {
 
     case WithRollouts(
         override val settlementTx: SettlementTx.WithRollouts,
-        rolloutTxSeq: RolloutTxSeq
+        rolloutTxSeq: RolloutTxSeq,
     )
 }
 
 object SettlementTxSeq {
+
+    extension (settlementTxSeq: SettlementTxSeq)
+        def mbRolloutSeq: Option[RolloutTxSeq] = settlementTxSeq match {
+            case SettlementTxSeq.NoRollouts(_)                 => None
+            case SettlementTxSeq.WithRollouts(_, rolloutTxSeq) => Some(rolloutTxSeq)
+        }
+
     import Builder.*
 
     final case class Builder(

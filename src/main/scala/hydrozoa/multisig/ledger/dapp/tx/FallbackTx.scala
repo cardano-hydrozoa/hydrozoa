@@ -204,7 +204,7 @@ object FallbackTx {
             val txId = finalized.transaction.id
             FallbackTx(
               // FIXME:
-              validityStartSlot = Slot(0),
+              validityStartSlot = Slot(100),
               treasurySpent = treasuryUtxo,
               //
               treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
