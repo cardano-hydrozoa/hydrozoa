@@ -8,7 +8,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.{TransactionUnspentOutput, addDummySignatures}
+import scalus.cardano.txbuilder.addDummySignatures
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other as GenOther
@@ -80,7 +80,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                 txId = Arbitrary.arbitrary[TransactionHash].sample.get
                 input = TransactionInput(txId, 0)
                 output = Babbage(address = builder.config.headAddress, value = pr.inputValueNeeded)
-                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+                rolloutUtxo = RolloutUtxo(Utxo(input, output))
                 res <- pr.complete(rolloutUtxo)
             } yield res
             assert(res.isRight)

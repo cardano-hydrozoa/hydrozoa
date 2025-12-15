@@ -9,11 +9,11 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
 
 // TODO: Make opaque
-final case class TreasuryUtxo(
+final case class MultisigTreasuryUtxo(
     treasuryTokenName: AssetName,
     utxoId: TransactionInput,
     address: ShelleyAddress,
-    datum: TreasuryUtxo.Datum,
+    datum: MultisigTreasuryUtxo.Datum,
     value: Value
 ) {
     val asUtxo: Utxo =
@@ -27,28 +27,28 @@ final case class TreasuryUtxo(
         )
 }
 
-object TreasuryUtxo {
+object MultisigTreasuryUtxo {
 
     /** If SomeTx extends TreasuryUtxo.Spent it means that tx is spending it. */
     trait Spent {
-        def treasurySpent: TreasuryUtxo
+        def treasurySpent: MultisigTreasuryUtxo
     }
 
     /** If SomeTx extends TreasuryUtxo.Produced it means that tx is producing it. */
     trait Produced {
-        def treasuryProduced: TreasuryUtxo
+        def treasuryProduced: MultisigTreasuryUtxo
     }
 
     /** If SomeTx extends TreasuryUtxo.MbProduced it means that tx produced it optionally. */
     trait MbProduced {
-        final def mbTreasuryProduced: Option[TreasuryUtxo] = this match
+        final def mbTreasuryProduced: Option[MultisigTreasuryUtxo] = this match
             case produced: (this.type & Produced) => Some(produced.treasuryProduced)
             case _                                => None
     }
 
     /** If some args extend this, it means that args contain it. */
     trait ToSpend {
-        def treasuryToSpend: TreasuryUtxo
+        def treasuryToSpend: MultisigTreasuryUtxo
     }
 
     final case class Datum(

@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
@@ -186,7 +186,7 @@ object FinalizationTxSeq {
 
         final case class Args(
             override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: TreasuryUtxo,
+            override val treasuryToSpend: MultisigTreasuryUtxo,
             override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares

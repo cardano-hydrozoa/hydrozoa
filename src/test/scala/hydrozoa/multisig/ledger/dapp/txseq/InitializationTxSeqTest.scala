@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee}
@@ -26,7 +26,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -128,7 +127,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
             val config = Tx.Builder.Config(
               headNativeScript = expectedHeadNativeScript,
-              headNativeScriptReferenceInput = multisigRegimeUtxo,
+              multisigRegimeUtxo = multisigRegimeUtxo,
               tokenNames = iTx.tokenNames,
               env = testTxBuilderEnvironment,
               evaluator = testEvaluator,
@@ -286,24 +285,22 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // Semantic parsing
             props.append {
                 val expectedTx: InitializationTx = InitializationTx(
-                  treasuryProduced = TreasuryUtxo(
+                  treasuryProduced = MultisigTreasuryUtxo(
                     treasuryTokenName = expectedHeadTokenName,
                     utxoId = TransactionInput(iTx.tx.id, 0),
                     address = expectedHeadNativeScript.mkAddress(env.network),
-                    datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+                    datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
                     value = Value(
                       initialDeposit,
                       MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
                     )
                   ),
-                  multisigRegimeWitness = Utxo(
-                    TransactionInput(iTx.tx.id, 1),
-                    TransactionOutput(
-                      expectedHeadNativeScript.mkAddress(testNetwork),
-                      value = multisigRegimeUtxo.output.value,
-                      datumOption = None,
-                      scriptRef = Some(ScriptRef(expectedHeadNativeScript.script))
-                    )
+                  multisigRegimeWitness = MultisigRegimeUtxo(
+                    multisigRegimeTokenName = expectedMulitsigRegimeTokenName,
+                    utxoId = TransactionInput(iTx.tx.id, 1),
+                    address = expectedHeadNativeScript.mkAddress(testNetwork),
+                    value = multisigRegimeUtxo.output.value,
+                    script = expectedHeadNativeScript
                   ),
                   tokenNames = CIP67.TokenNames(spentUtxos.seedUtxo.input),
 
@@ -343,7 +340,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             props.append(
               "multisig regime utxo spent" |:
-                  fbTxBody.inputs.toSeq.contains(config.headNativeScriptReferenceInput.input)
+                  fbTxBody.inputs.toSeq.contains(config.multisigRegimeUtxo.input)
             )
 
             props.append("multisig regime token burned and vote tokens minted" |: {
@@ -380,7 +377,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             props.append("default vote utxo with min ada and vote token created" |: {
 
-                val defaultVoteUtxo = TransactionUnspentOutput(
+                val defaultVoteUtxo = Utxo(
                   TransactionInput(transactionId = fbTx.tx.id, index = 1),
                   Babbage(
                     address = disputeResolutionAddress,
@@ -437,7 +434,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                   val expectedHMRWCoin: Coin =
                       maxNonPlutusTxFee(env.protocolParams)
                           + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
-                  config.headNativeScriptReferenceInput.output.value.coin == expectedHMRWCoin
+                  config.multisigRegimeUtxo.output.value.coin == expectedHMRWCoin
               }
             )
 

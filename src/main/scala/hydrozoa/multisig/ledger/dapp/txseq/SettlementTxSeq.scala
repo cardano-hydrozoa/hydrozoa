@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
 import scalus.cardano.ledger.Coin
@@ -41,7 +41,7 @@ object SettlementTxSeq {
 
                         ftxRecipe = FallbackTx.Recipe(
                           config = config,
-                          treasuryUtxo = settlementTx.transaction.treasuryProduced,
+                          treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration
                         )
@@ -84,7 +84,7 @@ object SettlementTxSeq {
                             }
                         ftxRecipe = FallbackTx.Recipe(
                           config = config,
-                          treasuryUtxo = settlementTxRes.transaction.treasuryProduced,
+                          treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration
                         )
@@ -119,7 +119,7 @@ object SettlementTxSeq {
 
         final case class Args(
             override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: TreasuryUtxo,
+            override val treasuryToSpend: MultisigTreasuryUtxo,
             override val depositsToSpend: Vector[DepositUtxo],
             override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             tallyFeeAllowance: Coin,
