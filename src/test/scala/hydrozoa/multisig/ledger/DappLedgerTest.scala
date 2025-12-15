@@ -20,6 +20,55 @@ import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, nonSigningValidators, signTx, testEvaluator}
+import org.scalacheck.effect.PropF
+import org.scalacheck.Test
+import cats.effect.{ExitCode, IO, IOApp}
+import org.scalacheck.rng.Seed
+
+object Example extends IOApp {
+    def run(args: List[String]): IO[ExitCode] = {
+        val p: PropF[IO] =
+            for {
+                res <- PropF.forAllF { (x: Int) =>
+                    IO(x).map(res => assert(res == x))
+                }
+            } yield res
+
+        val result: IO[Test.Result] = p.check()
+
+        result.flatMap(r => IO(println(r))).as(ExitCode.Success)
+    }
+}
+
+/*
+genProp :: Gen[Prop]
+
+
+forall(gen1)(args1 =>
+  (some IO)
+  args2 = gen2(args1).sample.get
+  (some more IO)
+  prop
+)
+
+
+// This works
+forAllM(gen1)(args1 =>
+  (some IO)
+  args2 <- pick(gen2(args1))
+  (some more IO)
+  prop
+  (gen3)(...)
+      forall(gen4)(
+  )
+)
+
+do
+  result1 <- run(prop1)
+  args <- pick(gen2(result1)
+
+
+ */
 
 object DappLedgerTest extends Properties("DappLedger") {
 
@@ -27,7 +76,9 @@ object DappLedgerTest extends Properties("DappLedger") {
     import Prop.forAll
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(100)
+        p
+            .withMinSuccessfulTests(100)
+            .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
     }
 
     val _ = property("DappLedger Register Deposit Happy Path") = {
@@ -110,7 +161,7 @@ object DappLedgerTest extends Properties("DappLedger") {
                     100
                   ),
                   donationToTreasury = Coin.zero,
-                  refundValue = virtualOutputsValue + Value.ada(5),
+                  refundValue = virtualOutputsValue,
                   virtualOutputs = virtualOutputs,
                   changeAddress = peer.address(),
                   utxosFunding = utxosFunding
@@ -139,7 +190,7 @@ object DappLedgerTest extends Properties("DappLedger") {
                 prop = {
                     (s"We should only have 1 deposit in the state, but we have ${s.deposits.length}"
                         |: s.deposits.length == 1)
-                    && ("Inorrect deposit(s) in state" |: s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced)
+                    && ("Incorrect deposit(s) in state" |: s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced)
                     && ("Incorrect treasury in state" |: s.treasury == initTx.initializationTx.treasuryProduced)
 
                 }
