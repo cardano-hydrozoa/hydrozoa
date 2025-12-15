@@ -5,10 +5,11 @@ import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
+import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, calculateCommitment, hashToScalar}
 import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
 import scala.util.{Failure, Success}
@@ -20,13 +21,11 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case itx: ApplyInternalTx => itx.handleRequest(applyInternalTx)
-        case ApplyGenesis(go)     => applyGenesisTx(go)
-        case gs: GetState         => gs.handleRequest(_ => state.get)
+        case itx: ApplyInternalTx        => itx.handleRequest(applyInternalTx)
+        case ApplyGenesis(go)            => applyGenesisTx(go)
+        case gs: GetCurrentKzgCommitment => gs.handleRequest(_ => state.get.map(_.kzgCommitment))
     }
 
-    // TODO: We want to collapse "InternalTx" and "WithdrawalTx" into a single tx type
-    // where the L1-bound and L2-bound utxos are distinguished in the metadata
     private def applyInternalTx(
         args: ApplyInternalTx
     ): IO[Vector[Payout.Obligation]] =
@@ -120,7 +119,7 @@ object VirtualLedger {
 
     ///////////////////////////////////////////
     // Requests
-    type Request = ApplyInternalTx | ApplyGenesis | GetState
+    type Request = ApplyInternalTx | ApplyGenesis | GetCurrentKzgCommitment
 
     // Internal Tx
     final case class ApplyInternalTx private (
@@ -142,20 +141,21 @@ object VirtualLedger {
     // Genesis Tx
     final case class ApplyGenesis(go: L2EventGenesis)
 
-    final case class GetState private (
-        override val dResponse: Deferred[IO, Either[GetStateError, State]]
-    ) extends SyncRequest[IO, GetStateError, State]
+    final case class GetCurrentKzgCommitment private (
+        override val dResponse: Deferred[IO, Either[GetStateError, KzgCommitment]]
+    ) extends SyncRequest[IO, GetStateError, KzgCommitment]
 
-    object GetState {
-        def apply(): IO[GetState] = for {
-            deferredResponse <- Deferred[IO, Either[GetStateError, State]]
-        } yield GetState(deferredResponse)
+    object GetCurrentKzgCommitment {
+        def apply(): IO[GetCurrentKzgCommitment] = for {
+            deferredResponse <- Deferred[IO, Either[GetStateError, KzgCommitment]]
+        } yield GetCurrentKzgCommitment(deferredResponse)
     }
 
     //////////////////////////////////////////////
     // Other Types
     final case class Config(
         slotConfig: SlotConfig = SlotConfig.Mainnet,
+        // FIXME: This should be passed where its needed, not in the config. (It's volatile)
         slot: SlotNo,
         protocolParams: ProtocolParams,
         network: Network
@@ -175,7 +175,7 @@ object VirtualLedger {
     object Config:
         /** Project an L1 context into an L2 context
           */
-        def fromL1Context(l1Context: Context): Config = Config(
+        private def fromL1Context(l1Context: Context): Config = Config(
           slotConfig = l1Context.slotConfig,
           slot = l1Context.env.slot,
           protocolParams = l1Context.env.params,
@@ -188,19 +188,12 @@ object VirtualLedger {
         activeUtxos: Map[TransactionInput, TransactionOutput]
     ) {
         def toScalusState: ScalusState = ScalusState(utxos = activeUtxos)
+        lazy val kzgCommitment: KzgCommitment = calculateCommitment(hashToScalar(this.activeUtxos))
     }
 
     object State:
         def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
         val empty: State = State(activeUtxos = Map.empty)
-
-    sealed trait Tx {
-        val tx: Transaction
-    }
-
-    object Tx {
-        type Serialized = Array[Byte]
-    }
 
     sealed trait ErrorApplyInternalTx extends Throwable
 

@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
+import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.{ActorSystem, test as _}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.{GetState, RegisterDeposit}
@@ -58,9 +59,22 @@ object DappLedgerTest extends Properties("DappLedger") {
                   validators = nonSigningValidators
                 )
 
+                virtualLedgerConfig = VirtualLedger.Config(
+                  slotConfig = config.env.slotConfig,
+                  slot = 0L,
+                  protocolParams = config.env.protocolParams,
+                  network = config.env.network
+                )
+                virtualLedger <- right(
+                  VirtualLedger(virtualLedgerConfig) >>= (vl => system.actorOf(vl))
+                )
                 dappLedger <- right(
                   system.actorOfWithDebug(
-                    new DappLedger(initTx.initializationTx.treasuryProduced, config) {}
+                    new DappLedger(
+                      initTx.initializationTx.treasuryProduced,
+                      config,
+                      virtualLedger
+                    ) {}
                   )
                 )
 

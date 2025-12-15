@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRoll
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
@@ -253,16 +252,11 @@ final case class JointLedger(
             )
 
             for {
-                // TODO: Change this to GetKZGCommit
-                gsReq <- VirtualLedger.GetState()
+                gsReq <- VirtualLedger.GetCurrentKzgCommitment()
                 gsRes <- virtualLedger ?: gsReq
 
-                vrState = gsRes.getOrElse(
+                kzgCommit = gsRes.getOrElse(
                   throw new RuntimeException("error getting state from virtual ledger")
-                )
-
-                kzgCommit = KzgCommitment.calculateCommitment(
-                  KzgCommitment.hashToScalar(vrState.activeUtxos)
                 )
 
                 // FIXME: unsafe cast

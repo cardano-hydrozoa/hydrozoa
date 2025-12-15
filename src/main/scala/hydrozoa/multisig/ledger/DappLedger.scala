@@ -3,14 +3,15 @@ package hydrozoa.multisig.ledger
 import cats.data.{EitherT, NonEmptyList}
 import cats.effect.IO.realTime
 import cats.effect.{Deferred, IO, Ref}
+import cats.implicits.catsSyntaxFlatMapOps
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
 import hydrozoa.multisig.ledger.DappLedger.{State, *}
-import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
@@ -22,12 +23,12 @@ import scala.collection.immutable.Queue
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.ledger.api.v3.PosixTime
 
 trait DappLedger(
     initialTreasuryUtxo: TreasuryUtxo,
-    config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
+    config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config,
+    virtualLedger: ActorRef[IO, VirtualLedger.Request]
 ) extends Actor[IO, Request] {
     val headAddress: ShelleyAddress = initialTreasuryUtxo.address
 
@@ -109,6 +110,10 @@ trait DappLedger(
             for {
                 s <- EitherT.right(state.get)
 
+                // ===================================
+                // Step 1: Figure out which deposits are valid and turn them into genesis obligations
+                // ===================================
+
                 // TODO: partitioning probably isn't the fastest way, because it will inspect each
                 // element of the queue. But I don't recall if we assume the queue is sorted according to
                 // maturity time, so I'll go with this for now. If it is sorted, there's almost certainly
@@ -142,17 +147,22 @@ trait DappLedger(
                             )
                         )
 
-                /* FIXME:
-            At this point, I'm fairly certain that the DappLedger needs to call out to the virtual ledger
-            in order to pass it the genesis obligations. We need all of the obligations in this Tx applied
-            in order to calculate the KZG commit, which we subsequently need to get in a synchronous call via
-                virtualLedger ?: GetState
-            and the settlement tx builder needs to be updated to take the KZG commit
-                 */
-                kzg: KzgCommitment = ???
+                // ===================================
+                // Step 2: determine the necessary KZG commit
+                // ===================================
+
+                gsReq <- EitherT.right(VirtualLedger.GetCurrentKzgCommitment())
+                kzgCommit <- EitherT.right((virtualLedger ?: gsReq) >>= {
+                    case Left(e)  => throw GetKzgError
+                    case Right(r) => IO.pure(r)
+                })
+
+                // ===================================
+                // Step 3: Build up a settlement Tx
+                // ===================================
 
                 settlementTxSeqArgs = SettlementTxSeq.Builder.Args(
-                  kzgCommitment = kzg,
+                  kzgCommitment = kzgCommit,
                   majorVersionProduced =
                       Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
                   treasuryToSpend = s.treasury,
@@ -167,6 +177,10 @@ trait DappLedger(
                         case Left(e)  => throw SettlementTxSeqBuilderError(e)
                         case Right(r) => EitherT.right(IO.pure(r))
                     }
+
+                // ===================================
+                // Step 4: build the result
+                // ===================================
 
                 // We update the state with:
                 // - the treasury produced by the settlement tx
@@ -325,10 +339,6 @@ object DappLedger {
 
             /** Returned if either a deposit absorption or withdrawal is necessary to settle the
               * ledger
-              *
-              * @param settlementTxSeq
-              * @param absorbedDeposits
-              * @param refundedDeposits
               */
             final case class ResultWithSettlement(
                 settlementTxSeq: SettlementTxSeq,
@@ -338,8 +348,6 @@ object DappLedger {
             ) extends Result
 
             /** Returned if no deposit absorptions or withdrawals are necessary to settle the ledger
-              *
-              * @param refundedDeposits
               */
             final case class ResultWithoutSettlement(
                 refundedDeposits: Queue[(LedgerEvent.Id, DepositUtxo)]
@@ -385,23 +393,10 @@ object DappLedger {
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
     def create(
         initTx: InitializationTx,
-        config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
+        config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config,
+        virtualLedger: ActorRef[IO, VirtualLedger.Request]
     ): DappLedger =
-        new DappLedger(initialTreasuryUtxo = initTx.treasuryProduced, config) {}
-
-    trait Tx {
-        def tx: Transaction
-
-        /** A transaction belongs to a [[DappLedger]] if it matches on address and currency symbol
-          */
-        def txBelongsToLedger(ledger: DappLedger): Boolean =
-            this.tx.auxiliaryData.getOrElse(false) match {
-                case Metadata(m) =>
-                    m.get(TransactionMetadatumLabel(CIP67.Tags.head))
-                        .fold(false)(_ == ledger.headAddress)
-                case _ => false
-            }
-    }
+        new DappLedger(initialTreasuryUtxo = initTx.treasuryProduced, config, virtualLedger) {}
 
     object Errors {
         sealed trait DappLedgerError extends Throwable
@@ -419,5 +414,10 @@ object DappLedger {
             extends DappLedgerError
 
         case object GetStateError extends DappLedgerError
+
+        // NOTE: at the time of writing, this shouldn't be able to throw an error (except in the general
+        // sense that any IO request can throw an error). But the API currently requires us to account for
+        // errors, so we do
+        case object GetKzgError extends DappLedgerError
     }
 }
