@@ -23,8 +23,11 @@ object DepositRefundTxSeq {
         sealed trait Error extends Throwable
 
         object Error {
-            final case class Deposit(e: (DepositTx.Builder.Error, String)) extends Builder.Error
+            final case class Deposit(e: (SomeBuildError, String)) extends Builder.Error
             final case class Refund(e: (SomeBuildError, String)) extends Builder.Error
+
+            final case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
+                extends Builder.Error
         }
     }
 
@@ -61,6 +64,21 @@ object DepositRefundTxSeq {
                 .complete(depositTx.depositProduced, config)
                 .left
                 .map(Builder.Error.Refund(_))
+
+            virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
+
+            refundFee = refundTx.tx.body.value.fee
+
+            depositValue = depositTx.depositProduced.l1OutputValue
+
+            expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
+
+            _ <- Either
+                .cond(
+                  depositValue == expectedDepositValue,
+                  (),
+                  Builder.Error.DepositValueMismatch(depositValue, virtualValue)
+                )
         } yield DepositRefundTxSeq(depositTx, refundTx)
     }
 

@@ -22,14 +22,6 @@ final case class DepositTx(
 ) extends Tx
 
 object DepositTx {
-    object Builder {
-        type Error = SomeBuildError | Error.DepositValueMismatch
-
-        object Error {
-            case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
-        }
-    }
-
     final case class Builder(
         override val config: Tx.Builder.Config,
         partialRefundTx: RefundTx.Builder.PartialResult[RefundTx.PostDated],
@@ -38,15 +30,11 @@ object DepositTx {
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress
     ) extends Tx.Builder {
-        def build(): Either[(Builder.Error, String), DepositTx] = {
+        def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
 
-            val virtualOutputsList = virtualOutputs.toList
-
-            val virtualValue = Value.combine(virtualOutputsList.map(vo => Value(vo.l2OutputValue)))
-
             val virtualOutputsCbor: Array[Byte] =
-                Cbor.encode(virtualOutputsList.map(_.toBabbage)).toByteArray
+                Cbor.encode(virtualOutputs.toList.map(_.toBabbage)).toByteArray
 
             val virtualOutputsHash: Hash32 = Hash[Blake2b_256, Any](
               platform.blake2b_256(ByteString.unsafeFromArray(virtualOutputsCbor))
@@ -67,11 +55,7 @@ object DepositTx {
 
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
-            val refundFee = partialRefundTx.ctx.transaction.body.value.fee
-
             val depositValue = partialRefundTx.inputValueNeeded
-
-            val expectedDepositValue = virtualValue + Value(donationToTreasury + refundFee)
 
             val depositDatum: DepositUtxo.Datum = DepositUtxo.Datum(refundInstructions)
 
@@ -94,18 +78,6 @@ object DepositTx {
             )
 
             for {
-                _ <- Either
-                    .cond(
-                      depositValue == expectedDepositValue,
-                      (),
-                      Builder.Error.DepositValueMismatch(depositValue, virtualValue)
-                    )
-                    .explainConst(
-                      "insufficient funding in deposit utxo for virtual outputs.\n" +
-                          s"depositValue: $depositValue \n" +
-                          s"virtualValue : $virtualValue"
-                    )
-
                 ctx <- TransactionBuilder
                     .build(
                       config.env.network,
