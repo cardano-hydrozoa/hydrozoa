@@ -1,9 +1,9 @@
 package hydrozoa.lib.actor
 
-import cats.MonadError
-import cats.effect.Deferred
+import cats.effect.{Concurrent, Deferred, MonadCancelThrow}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
+
 import scala.reflect.ClassTag
 
 /*
@@ -60,40 +60,56 @@ for {
   *   A [[Throwable]] error type associated with the computation
   * @tparam Response
   *   The type of the response
+  *
+  * @param request
+  *   The request...
+  * @param dResponse
+  *   The [[Deferred]] cell created by the sender and sent to the receiver. The receiver should
+  *   populate this cell, via [[handleRequest]] or otherwise.
   */
-trait SyncRequest[F[+_], E <: Throwable, Response](implicit
-    F: MonadError[F, Throwable],
-    tag: ClassTag[E]
+final case class SyncRequest[
+    F[+_]: MonadCancelThrow,
+    E <: Throwable: ClassTag,
+    Request,
+    Response
+] protected (
+    request: Request,
+    dResponse: Deferred[F, Either[E, Response]]
 ) {
 
-    /** The [[Deferred]] cell created by the sender and sent to the receiver. The receiver should
-      * populate this cell, via [[handleRequest]] or otherwise.
-      */
-    def dResponse: Deferred[F, Either[E, Response]]
-
-    /** The default implementation of this method runs the handler function and completes the
-      * deferred with the result.
+    /** Handle a synchronous request with a function, ensuring that the deferred result is completed
+      * with the function's result.
       *
       * This should be used by the receiver of this request.
       * @param f
       * @return
       */
-    final def handleRequest(f: this.type => F[Response]): F[Unit] =
+    def handleRequest(f: this.type => F[Response]): F[Unit] =
         for {
             eResult <- f(this).attemptNarrow
             _ <- dResponse.complete(eResult)
         } yield ()
+}
 
-    /** The default implementation of this function messages the actor with the request and blocks
-      * on the response.
-      *
-      * This should be used by the sender of this request.
-      * @param actorRef
-      * @return
-      */
-    final def ?:(actorRef: ActorRef[F, this.type]): F[Either[E, Response]] =
-        for {
-            _ <- actorRef ! this
-            eResponse <- this.dResponse.get
-        } yield eResponse
+object SyncRequest {
+    trait TypeClass[F[+_]: Concurrent, E <: Throwable: ClassTag, Request, Response] {
+        extension (self: Request)
+            /** Send the request to the actor and block until the receiver completes the deferred
+              * response.
+              *
+              * This should be used by the sender of this request.
+              *
+              * @param actorRef
+              * @return
+              */
+            def ?:(
+                actorRef: ActorRef[F, SyncRequest[F, E, Request, Response]]
+            ): F[Either[E, Response]] =
+                for {
+                    dResponse <- Deferred[F, Either[E, Response]]
+                    syncRequest = SyncRequest(self, dResponse)
+                    _ <- actorRef ! syncRequest
+                    eResponse <- syncRequest.dResponse.get
+                } yield eResponse
+    }
 }
