@@ -113,8 +113,8 @@ def genFinalizationTxSeqBuilder(
         payoutObligationsRemaining = payouts,
         multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
           config.tokenNames.multisigRegimeTokenName,
-          config.headNativeScriptReferenceInput.input,
-          config.headNativeScriptReferenceInput.output,
+          config.multisigRegimeUtxo.input,
+          config.multisigRegimeUtxo.output,
           config.headNativeScript
         ),
         equityShares = shares

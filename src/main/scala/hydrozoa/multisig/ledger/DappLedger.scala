@@ -9,12 +9,12 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.multisig.ledger.DappLedger.*
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
-import hydrozoa.multisig.ledger.DappLedger.{State, *}
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -26,7 +26,7 @@ import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.PosixTime
 
 trait DappLedger(
-    initialTreasuryUtxo: TreasuryUtxo,
+    initialTreasuryUtxo: MultisigTreasuryUtxo,
     config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config,
     virtualLedger: ActorRef[IO, VirtualLedger.Request]
 ) extends Actor[IO, Request] {
@@ -267,7 +267,7 @@ trait DappLedger(
   */
 object DappLedger {
     final case class State(
-        treasury: TreasuryUtxo,
+        treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
         deposits: Queue[(LedgerEvent.Id, DepositUtxo)] = Queue()
     ) {

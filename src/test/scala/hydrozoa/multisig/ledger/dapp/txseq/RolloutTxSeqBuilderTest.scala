@@ -8,8 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{TransactionHash, TransactionInput}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
+import scalus.cardano.ledger.{TransactionHash, TransactionInput, Utxo}
 import test.*
 import test.Generators.Hydrozoa.*
 
@@ -40,7 +39,7 @@ class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks 
                   address = builder.config.headAddress,
                   value = pr.firstOrOnly.inputValueNeeded
                 )
-                rolloutUtxo = RolloutUtxo(TransactionUnspentOutput(input, output))
+                rolloutUtxo = RolloutUtxo(Utxo(input, output))
                 res <- pr.finishPostProcess(rolloutUtxo)
             } yield res
             res match {

@@ -15,60 +15,12 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.protocol.types.LedgerEvent
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
+import org.scalacheck.rng.Seed
 import scalus.cardano.ledger.*
 import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, nonSigningValidators, signTx, testEvaluator}
-import org.scalacheck.effect.PropF
-import org.scalacheck.Test
-import cats.effect.{ExitCode, IO, IOApp}
-import org.scalacheck.rng.Seed
-
-object Example extends IOApp {
-    def run(args: List[String]): IO[ExitCode] = {
-        val p: PropF[IO] =
-            for {
-                res <- PropF.forAllF { (x: Int) =>
-                    IO(x).map(res => assert(res == x))
-                }
-            } yield res
-
-        val result: IO[Test.Result] = p.check()
-
-        result.flatMap(r => IO(println(r))).as(ExitCode.Success)
-    }
-}
-
-/*
-genProp :: Gen[Prop]
-
-
-forall(gen1)(args1 =>
-  (some IO)
-  args2 = gen2(args1).sample.get
-  (some more IO)
-  prop
-)
-
-
-// This works
-forAllM(gen1)(args1 =>
-  (some IO)
-  args2 <- pick(gen2(args1))
-  (some more IO)
-  prop
-  (gen3)(...)
-      forall(gen4)(
-  )
-)
-
-do
-  result1 <- run(prop1)
-  args <- pick(gen2(result1)
-
-
- */
 
 object DappLedgerTest extends Properties("DappLedger") {
 
@@ -103,7 +55,7 @@ object DappLedgerTest extends Properties("DappLedger") {
 
                 config = Tx.Builder.Config(
                   headNativeScript = hns,
-                  headNativeScriptReferenceInput = initTx.initializationTx.multisigRegimeWitness,
+                  multisigRegimeUtxo = initTx.initializationTx.multisigRegimeWitness,
                   tokenNames = initTx.initializationTx.tokenNames,
                   env = TestUtil.testEnvironment,
                   evaluator = testEvaluator,

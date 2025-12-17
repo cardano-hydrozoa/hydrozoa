@@ -61,15 +61,15 @@ def genEmptyResolvedTreasuryUtxo(
         )
 
         val treasuryUtxo = RuleBasedTreasuryUtxo(
-          beaconTokenName = beaconTokenName,
-          txId = txId,
-          addr = scriptAddr,
+          treasuryTokenName = beaconTokenName,
+          utxoId = txId,
+          address = scriptAddr,
           datum = Resolved(emptyResolvedDatum),
           value = value
         )
 
         // Respect minAda
-        val outputMinAda = treasuryUtxo.toUtxo._2.ensureMinAda(testProtocolParams)
+        val outputMinAda = treasuryUtxo.asTuple._2.ensureMinAda(testProtocolParams)
         treasuryUtxo.copy(value = outputMinAda.value)
     }
 }
@@ -125,6 +125,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
     for {
         (hns, headTokenName, peers, peersVks, versionMajor, setupSize, fallbackTxId) <-
             genHeadParams
+
         // Min treasury
         defaultVoteDeposit = Coin(
           CollectiveContingency.apply(UByte(peers.size)).defaultVoteDeposit.underlying
@@ -133,6 +134,7 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
         minTreasury = defaultVoteDeposit + Coin(voteDeposit.value * peers.size)
 
         equity <- Gen.choose(minTreasury.value, 10000_000_000L).map(Coin(_))
+
         treasuryUtxo <- genEmptyResolvedTreasuryUtxo(
           fallbackTxId,
           hns.policyId,
@@ -141,7 +143,9 @@ def genSimpleDeinitTxRecipe: Gen[Recipe] =
           peers.length + 1,
           equity
         )
+
         shares <- genEquityShares(peers)
+
         collateralUtxo <- genCollateralUtxo
     } yield {
         Recipe(

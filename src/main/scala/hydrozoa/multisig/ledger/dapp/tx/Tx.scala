@@ -2,14 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction, Utxo}
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx {
@@ -95,7 +95,7 @@ object Tx {
 
         final case class Config(
             headNativeScript: HeadMultisigScript,
-            headNativeScriptReferenceInput: Utxo,
+            multisigRegimeUtxo: MultisigRegimeUtxo,
             tokenNames: TokenNames,
             env: Environment,
             evaluator: PlutusScriptEvaluator,
