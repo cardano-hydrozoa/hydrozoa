@@ -126,6 +126,9 @@ def genStandaloneFinalizationTxSeqBuilder(
 def genFinalizationTxSeqBuilder(
     treasuryToSpend: TreasuryUtxo,
     majorVersion: Int,
+    fallbackValidityStart: PosixTime,
+    blockCreatedOn: PosixTime,
+    txTiming: TxTiming,
     config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],
     estimatedFeesAndEquity: Coin = Coin(50_000_000L),
@@ -163,9 +166,9 @@ def genFinalizationTxSeqBuilder(
           config.headNativeScript
         ),
         equityShares = shares,
-        competingFallbackValidityStart = ???,
-        blockCreatedOn = ???,
-        txTiming = ???
+        competingFallbackValidityStart = fallbackValidityStart,
+        blockCreatedOn = blockCreatedOn,
+        txTiming = txTiming
       )
     )
 }

@@ -139,6 +139,7 @@ def genSettlementTxSeqBuilder(
 def genNextSettlementTxSeqBuilder(
     treasuryToSpend: TreasuryUtxo,
     fallbackValidityStart: PosixTime,
+    blockCreatedOn: PosixTime,
     majorVersion: Int,
     headNativeScript: HeadMultisigScript,
     builderConfig: Tx.Builder.Config,
@@ -188,9 +189,9 @@ def genNextSettlementTxSeqBuilder(
         treasuryToSpend = treasuryToSpend,
         tallyFeeAllowance = Coin.ada(2),
         votingDuration = 100,
-        competingFallbackValidityStart = ???,
-        blockCreatedOn = ???,
-        txTiming = ???
+        competingFallbackValidityStart = fallbackValidityStart,
+        blockCreatedOn = blockCreatedOn,
+        txTiming = txTiming
       ),
     )
 }

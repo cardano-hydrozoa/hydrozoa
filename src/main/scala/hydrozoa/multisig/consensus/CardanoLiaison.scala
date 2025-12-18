@@ -13,28 +13,30 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.types.Block
 import scala.collection.immutable.{Seq, TreeMap}
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Slot, Transaction, TransactionHash, TransactionInput}
 
 /** Hydrozoa's liaison to Cardano L1 (actor):
-  *   - Keeps track of the target L1 state the liaison tries to achieve finally.
-  *   - Observe all L1-bound block effects (i.e. effects for major and final blocks) and stores them
-  *     in the local state.
-  *   - Periodically polls the Cardano blockchain for the head's utxo state.
+  *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
+  *     effects (i.e. effects for major and final blocks) and storing them in the local state.
+  *   - Periodically polls the Cardano blockchain for the head's utxo state (and some additional
+  *     information occasinally).
   *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
   *   - Keeps track of confirmed L1 effects of L2 blocks that are immutable on L1 (TODO)
   *
   * Some notes:
-  *   - Though it belongs to the multisig regime, the component's lifespan lasts longer since once a
-  *     fallback tx gets submitted unfinished rollouts still may exist.
-  *   - More broadly, we don't want to die even there is nothing to submit - an L1 rollback may
-  *     happen which may require re-applying some effects.
-  *   - The core concept the liaison is built around is the "effect", which can be any L1
-  *     transaction like initialization, settlement, rollback, deinit or a fallback tx.
-  *   - Every effect is tagged with an effect id which is a pair of (block number, index) that
+  *   - Though this module belongs to the multisig regime, the component's lifespan lasts longer
+  *     since once a fallback tx gets submitted unfinished rollouts still may exist.
+  *   - More broadly, we don't want to die even there is nothing to submit for a particalar time -
+  *     an L1 rollback may happen at any momenet and that may require re-applying some of the
+  *     effects.
+  *   - The core concept the liaison is built around the "effect", which can be any L1 transaction
+  *     like initialization, settlement, rollback, deinit or a fallback tx.
+  *   - Every effect is tagged with an _effect id_ which is a pair: (block number, index). This
   *     allows running range queries.
-  *   - Every effect is associated with a utxo id it can handle.
-  *   - L1 utxo state represented by list of utxo ids existent.
+  *   - Every effect is associated with a utxo id it can handle (i.e. spend). This is more efficient
+  *     than monitoring which transactions have been already submitted.
+  *   - L1 utxo state represented by list of utxo IDs.
   *   - In every run the liaison tries to handle all utxos found with known effects pushing L1
   *     towards the known target state.
   */
@@ -46,7 +48,8 @@ object CardanoLiaison {
         cardanoBackend: CardanoBackend.Ref,
         // persistence: Persistence.Ref,
         initializationTx: InitializationTx,
-        initializationFallbackTx: FallbackTx
+        initializationFallbackTx: FallbackTx,
+        receiveTimeout: FiniteDuration
     )
 
     final case class ConnectionsPending()
@@ -65,8 +68,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     override def preStart: IO[Unit] =
         for {
             _ <- subscribers.set(Some(Subscribers()))
-            // TODO: this is something we likely want to make dynamic
-            _ <- context.setReceiveTimeout(3.seconds, CardanoLiaison.Timeout)
+            _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -97,8 +99,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     /** Handle [[ConfirmMajorBlock]] request:
       *   - saves the effects in the internal actor's state
       */
-    // TODO make protected
-    def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
+    protected[consensus] def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
         _ <- IO.println("handleMajorBlockL1Effects")
         // TODO: check effect uniqueness?
         _ <- state.update(s => {
@@ -117,8 +118,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     /** Handle [[ConfirmFinalBlock]] request:
       *   - saves the effects in the internal actor's state
       */
-    // TODO make protected
-    def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
+    protected[consensus] def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
         _ <- IO.println("handleFinalBlockL1Effects")
         // TODO: check effect uniqueness?
         _ <- state.update(s => {

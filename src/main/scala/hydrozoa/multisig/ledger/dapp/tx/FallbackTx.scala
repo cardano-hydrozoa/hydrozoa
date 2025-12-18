@@ -209,8 +209,8 @@ object FallbackTx {
         } yield {
             val txId = finalized.transaction.id
             FallbackTx(
-              // FIXME:
-              validityStart = Slot(100),
+              // This is safe since we always set it
+              validityStart = Slot(finalized.transaction.body.value.validityStartSlot.get),
               treasurySpent = treasuryUtxo,
               //
               treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
