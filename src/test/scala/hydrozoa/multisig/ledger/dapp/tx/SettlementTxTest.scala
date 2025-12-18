@@ -120,7 +120,10 @@ def genSettlementTxSeqBuilder(
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100
+        votingDuration = 100,
+        competingFallbackValidityStart = ???,
+        blockCreatedOn = ???,
+        txTiming = ???
       ),
       peers
     )
@@ -135,9 +138,11 @@ def genSettlementTxSeqBuilder(
   */
 def genNextSettlementTxSeqBuilder(
     treasuryToSpend: TreasuryUtxo,
+    fallbackValidityStart: PosixTime,
     majorVersion: Int,
     headNativeScript: HeadMultisigScript,
     builderConfig: Tx.Builder.Config,
+    txTiming: TxTiming,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork
@@ -182,7 +187,10 @@ def genNextSettlementTxSeqBuilder(
         payoutObligationsRemaining = biggest,
         treasuryToSpend = treasuryToSpend,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100
+        votingDuration = 100,
+        competingFallbackValidityStart = ???,
+        blockCreatedOn = ???,
+        txTiming = ???
       ),
     )
 }

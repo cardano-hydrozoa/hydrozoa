@@ -30,6 +30,10 @@ object InitializationTxSeq {
     case class InitializationTxParseError(wrapped: InitializationTx.ParseError) extends ParseError
     case class FallbackTxBuildError(wrapped: SomeBuildError) extends ParseError
     case class FallbackTxMismatch(expected: FallbackTx, actual: Transaction) extends ParseError
+    case object FallbackTxValidityStartIsMissing extends ParseError
+    case class FallbackTxValidityStartError(lowerPossible: Slot, upperPossible: Slot, actual: Slot)
+        extends ParseError
+    case class TTLValidityStartGapError(difference: Slot, actual: Slot) extends ParseError
 
     /** Given two transaction that should form a valid Initialization-Fallback Transaction Sequence,
       * we:
@@ -62,10 +66,13 @@ object InitializationTxSeq {
         env: Environment,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator],
-        resolver: Seq[TransactionInput] => ResolvedUtxos
+        resolver: Seq[TransactionInput] => ResolvedUtxos,
+        initializationRequestTimestamp: PosixTime,
+        txTiming: TxTiming
     ): Either[ParseError, InitializationTxSeq] = {
 
         val initializationTx = transactionSequence._1
+        val fallbackTx = transactionSequence._2
 
         for {
             iTx <- InitializationTx
@@ -86,20 +93,64 @@ object InitializationTxSeq {
               evaluator = evaluator,
               validators = validators
             )
+
+            fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
+                .toRight(FallbackTxValidityStartIsMissing)
+
             ftxRecipe = FallbackTx.Recipe(
               config = config,
               treasuryUtxo = iTx.treasuryProduced,
               tallyFeeAllowance = expectedTallyFeeAllowance,
-              votingDuration = expectedVotingDuration
+              votingDuration = expectedVotingDuration,
+              // Time checks are done for the whole sequence later on, see down below.
+              validityStart = Slot(fallbackValidityStartSlot)
             )
             expectedFallbackTx <- FallbackTx.build(ftxRecipe).left.map(FallbackTxBuildError(_))
+
             _ <-
-                if expectedFallbackTx.tx == transactionSequence._2 then Right(())
+                if expectedFallbackTx.tx == fallbackTx then Right(())
                 else
                     Left(
                       FallbackTxMismatch(
                         expected = expectedFallbackTx,
-                        actual = transactionSequence._2
+                        actual = fallbackTx
+                      )
+                    )
+
+            // Check validity ranges are correct and match each other
+            // 1. Fallback starts in a reasonable slot
+            initReq = initializationRequestTimestamp.toLong
+            devMillis = txTiming.initializationFallbackDeviation.toMillis
+            toSlot = env.slotConfig.timeToSlot
+            possibleRange = (toSlot(initReq - devMillis), toSlot(initReq + devMillis))
+
+            _ <-
+                if fallbackValidityStartSlot < possibleRange._1 || fallbackValidityStartSlot > possibleRange._2
+                then
+                    Left(
+                      FallbackTxValidityStartError(
+                        Slot(possibleRange._1),
+                        Slot(possibleRange._2),
+                        Slot(fallbackValidityStartSlot)
+                      )
+                    )
+                else Right(())
+
+            // 2. Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
+            toTime = env.slotConfig.slotToTime
+
+            // TODO: Do we need a tolerance window here as well?
+            expectedFallbackValidityStart = toSlot(
+              toTime(iTx.ttl.slot) + txTiming.silencePeriod.toMillis
+            )
+            _ <-
+                if fallbackValidityStartSlot == expectedFallbackValidityStart
+                then Right(())
+                else
+                    Left(
+                      TTLValidityStartGapError(
+                        Slot(expectedFallbackValidityStart),
+                        Slot(fallbackValidityStartSlot)
                       )
                     )
 
@@ -206,6 +257,14 @@ object InitializationTxSeq {
             }
 
             // ===================================
+            // Validity ranges
+            // ===================================
+            val fallbackTxValidityStart =
+                args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
+                    args.txTiming.majorBlockTimeout.toMillis
+            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod.toMillis
+
+            // ===================================
             // Init Tx
             // ===================================
 
@@ -218,6 +277,7 @@ object InitializationTxSeq {
                 )
 
             val initializationTxRecipe = InitializationTx.Recipe(
+              ttl = initializationTxTtl,
               spentUtxos = args.spentUtxos,
               headNativeScript = hns,
               initialDeposit = args.initialDeposit,
@@ -248,7 +308,8 @@ object InitializationTxSeq {
                   config = config,
                   treasuryUtxo = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
-                  votingDuration = args.votingDuration
+                  votingDuration = args.votingDuration,
+                  validityStart = Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
                 )
 
                 fallbackTx <- FallbackTx
@@ -275,7 +336,14 @@ object InitializationTxSeq {
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
-            votingDuration: PosixTime
+            // TODO: use FiniteDuration?
+            // TODO: move to TxTiming?
+            votingDuration: PosixTime,
+            txTiming: TxTiming,
+            // This is the zero point against which we calculate validity
+            // ranges. For initialization tx it corresponds to the time
+            // an initialization request was received.
+            initializedOn: PosixTime
         )
     }
 }

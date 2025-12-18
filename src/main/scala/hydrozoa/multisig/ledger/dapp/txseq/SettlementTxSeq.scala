@@ -1,12 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.PosixTime as HPosixTime
 import hydrozoa.multisig.ledger.dapp.tx
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.utxo.Payout
 import hydrozoa.multisig.protocol.types.Block
-import scalus.cardano.ledger.Coin
+import scalus.cardano.ledger.{Coin, Slot}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.ledger.api.v3.PosixTime
 
@@ -50,7 +51,14 @@ object SettlementTxSeq {
                           config = config,
                           treasuryUtxo = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration
+                          votingDuration = args.votingDuration,
+                          validityStart = Slot(
+                            config.env.slotConfig.timeToSlot(
+                              args.blockCreatedOn.toLong
+                                  + args.txTiming.minSettlementDuration.toMillis
+                                  + args.txTiming.majorBlockTimeout.toMillis
+                            )
+                          )
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -89,11 +97,19 @@ object SettlementTxSeq {
                                         .map(Error.RolloutSeqError(_))
                                         .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
+
                         ftxRecipe = FallbackTx.Recipe(
                           config = config,
                           treasuryUtxo = settlementTxRes.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration
+                          votingDuration = args.votingDuration,
+                          validityStart = Slot(
+                            config.env.slotConfig.timeToSlot(
+                              args.blockCreatedOn.toLong
+                                  + args.txTiming.minSettlementDuration.toMillis
+                                  + args.txTiming.majorBlockTimeout.toMillis
+                            )
+                          )
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -125,19 +141,25 @@ object SettlementTxSeq {
         ) extends DepositUtxo.Many.Spent.Partition
 
         final case class Args(
-            override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: TreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            majorVersionProduced: Block.Version.Major,
+            treasuryToSpend: TreasuryUtxo,
+            depositsToSpend: Vector[DepositUtxo],
+            payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             tallyFeeAllowance: Coin,
-            votingDuration: PosixTime
-        ) extends SingleArgs,
-              Payout.Obligation.L1.Many.Remaining {
+            votingDuration: PosixTime,
+            competingFallbackValidityStart: HPosixTime,
+            blockCreatedOn: HPosixTime,
+            txTiming: TxTiming
+        )
+        // TODO: confirm: this one is not needed
+        // extends SingleArgs,
+            extends Payout.Obligation.L1.Many.Remaining {
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend
+                  depositsToSpend = depositsToSpend,
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
                 )
 
             def toArgsWithPayouts(
@@ -146,7 +168,8 @@ object SettlementTxSeq {
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
-              rolloutTxSeqPartial = rolloutTxSeqPartial
+              rolloutTxSeqPartial = rolloutTxSeqPartial,
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
             )
         }
     }

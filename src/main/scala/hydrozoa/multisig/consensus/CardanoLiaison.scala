@@ -66,7 +66,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         for {
             _ <- subscribers.set(Some(Subscribers()))
             // TODO: this is something we likely want to make dynamic
-            _ <- context.setReceiveTimeout(5.seconds, CardanoLiaison.Timeout)
+            _ <- context.setReceiveTimeout(3.seconds, CardanoLiaison.Timeout)
         } yield ()
 
     override def receive: Receive[IO, Request] =
@@ -330,7 +330,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 // By construction either the fallback tx for N is valid or the "settlementOrFinalizationTx" for N+1 is valid:
                 // - seems obvious WRT a settlement(finalization)/fallback pair
                 // - deinit neither has ttl, nor fallback, so it's always valid
-                if mbFallbackTx.isDefined && currentSlot >= mbFallbackTx.get.validityStartSlot then
+                if mbFallbackTx.isDefined && currentSlot >= mbFallbackTx.get.validityStart then
                     Action.FallbackToRuleBased(mbFallbackTx.get.tx)
                 else {
                     val effectTxs =

@@ -114,7 +114,10 @@ def genStandaloneFinalizationTxSeqBuilder(
           config.headNativeScriptReferenceInput.output,
           config.headNativeScript
         ),
-        equityShares = shares
+        equityShares = shares,
+        competingFallbackValidityStart = ???,
+        blockCreatedOn = ???,
+        txTiming = ???
       ),
       peers
     )
@@ -159,7 +162,10 @@ def genFinalizationTxSeqBuilder(
           config.headNativeScriptReferenceInput.output,
           config.headNativeScript
         ),
-        equityShares = shares
+        equityShares = shares,
+        competingFallbackValidityStart = ???,
+        blockCreatedOn = ???,
+        txTiming = ???
       )
     )
 }

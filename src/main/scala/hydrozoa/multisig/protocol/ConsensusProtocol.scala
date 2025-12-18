@@ -94,6 +94,8 @@ object ConsensusProtocol {
         type Subscriber = ActorRef[IO, NewLedgerEvent]
     }
 
+    // TODO: trait BlockEffectsSigned ???
+
     /** L2 block confirmations (local-only signal) */
     sealed trait ConfirmBlock {
         def id: Block.Number

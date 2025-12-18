@@ -18,8 +18,7 @@ import hydrozoa.multisig.ledger.DappLedgerTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, Tx, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
-import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.Builder
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, FallbackTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, GetTxInfoResp, Request, SubmitL1Effects}
@@ -29,6 +28,7 @@ import java.util.concurrent.TimeoutException
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.{forAll, propBoolean}
+import org.scalacheck.rng.Seed
 import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Network.Testnet
@@ -42,19 +42,28 @@ import test.{TestPeer, nonSigningValidators, signTx, testEvaluator, testTxBuilde
 object DappLedgerTest extends Properties("DappLedger"), TestKit {
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(5)
+        p
+            .withWorkers(1) // useful for debugging
+            .withMinSuccessfulTests(100)
+            .withInitialSeed(Seed.fromBase64("8czA3wXox-sglWTZMEUIycey4uTcf53dVpyUFswYW4A=").get)
     }
 
-    type Skeleton = (InitializationTxSeq, List[Builder.Result], FinalizationTxSeq)
+    // TODO: use BlockEffects as BlockEffectChain
+    // TODO: use (SettlementTxSeq, FallbackTx) not Result
+    type Skeleton = (InitializationTxSeq, List[SettlementTxSeq.Builder.Result], FinalizationTxSeq)
 
     object Skeleton:
 
-        def skeletonGen(
+        /** Generates the "skeleton", i.e. random chain of happy-path transactions and fallbacks
+          * with requested parameters.
+          */
+        def genL1BlockEffectsChain(
             minSettlements: Int = 5,
-            maxSettlements: Int = 25
-        ): Gen[(InitializationTxSeq, List[Builder.Result], FinalizationTxSeq)] = for {
+            maxSettlements: Int = 25,
+            txTiming: TxTiming = TxTiming.default
+        ): Gen[Skeleton] = for {
             // init args
-            initArgs <- InitializationTxSeqTest.genArgs
+            initArgs <- InitializationTxSeqTest.genArgs(txTiming)
             (args, peers) = initArgs
             peer: TestPeer = peers.head
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -74,7 +83,11 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
             )
 
             // Settlements
-            initialTreasuryToSpend = initializationTxSeq.initializationTx.treasuryProduced
+            initializationTreasuryProduced = initializationTxSeq.initializationTx.treasuryProduced
+            initializationFallbackValidityStart = testTxBuilderEnvironment.slotConfig.slotToTime(
+              initializationTxSeq.fallbackTx.validityStart.slot
+            )
+
             config = Config(
               headNativeScript = hns,
               headNativeScriptReferenceInput = multisigWitnessUtxo,
@@ -87,17 +100,24 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
             numOfSettlements <- choose(minSettlements, maxSettlements)
 
             settlementTxSeqs <- tailRecM(
-              (initialTreasuryToSpend, List.empty: List[SettlementTxSeq.Builder.Result], 1)
-            ) { case (treasuryToSpend, acc, settlementNum) =>
+              (
+                initializationTreasuryProduced,
+                initializationFallbackValidityStart,
+                List.empty: List[SettlementTxSeq.Builder.Result],
+                1
+              )
+            ) { case (treasuryToSpend, fallbackValidityStart, acc, settlementNum) =>
                 if settlementNum >= numOfSettlements
                 then Gen.const(Right(acc.reverse))
                 else
                     for {
                         settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
                           treasuryToSpend,
+                          fallbackValidityStart,
                           settlementNum,
                           hns,
-                          config
+                          config,
+                          txTiming
                         )
                         (builder, args) = settlementBuilderAndArgs
                         seq = builder.build(args) match {
@@ -105,7 +125,13 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
                             case Right(seq) => seq
                         }
                         nextTreasuryToSpend = seq.settlementTxSeq.settlementTx.treasuryProduced
-                    } yield Left((nextTreasuryToSpend, seq :: acc, settlementNum + 1))
+                        fallbackValidityStart = testTxBuilderEnvironment.slotConfig.slotToTime(
+                          seq.fallbackTx.validityStart.slot
+                        )
+
+                    } yield Left(
+                      (nextTreasuryToSpend, fallbackValidityStart, seq :: acc, settlementNum + 1)
+                    )
             }
 
             // Finalization seq
@@ -133,11 +159,12 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
         extension (skeleton: Skeleton)
             def happyPathTxs: Set[Transaction] = {
 
-                def settlementTxs(r: Builder.Result): List[Transaction] = r.settlementTxSeq match {
-                    case SettlementTxSeq.NoRollouts(settlementTx) => List(settlementTx.tx)
-                    case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
-                        settlementTx.tx +: mbRollouts(rolloutTxSeq)
-                }
+                def settlementTxs(r: SettlementTxSeq.Builder.Result): List[Transaction] =
+                    r.settlementTxSeq match {
+                        case SettlementTxSeq.NoRollouts(settlementTx) => List(settlementTx.tx)
+                        case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
+                            settlementTx.tx +: mbRollouts(rolloutTxSeq)
+                    }
 
                 def finalizationTxs(seq: FinalizationTxSeq): List[Transaction] = seq match {
                     case FinalizationTxSeq.Monolithic(finalizationTx) =>
@@ -183,84 +210,167 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
                         }
                     }
 
-            def rolloutSeqsBefore(
-                mbBackbonePoint: Option[TransactionHash] = None
-            ): List[List[Transaction]] = {
-                // common structure for settlements and finalization
-                val nodesWithRollouts =
-                    skeleton._2
-                        .map(node =>
-                            node.settlementTxSeq.settlementTx.tx.id -> node.settlementTxSeq.mbRolloutSeq
-                                .map(mbRollouts)
-                                .getOrElse(List.empty)
-                        )
+            def fallbackTxFor(backbonePoint: TransactionHash): Option[FallbackTx] = {
+                backboneTxs
+                    .map(_.id)
+                    .zip(
+                      // There is no (None) fallback txs for the initialization tx and the deinit tx
+                      List(None, Some(skeleton._1.fallbackTx)) ++ skeleton._2.map(node =>
+                          Some(node.fallbackTx)
+                      ) ++ List(None)
+                    )
+                    .find(_._1 == backbonePoint)
+                    .flatMap(_._2)
+            }
+
+            // The common structure for the initialization tx, settlement txs, and the finalization tx
+            // with the linked rollouts (where applicable,otherwise None)
+            def backboneNodesWithRollouts = {
+                (skeleton._1.initializationTx.tx.id -> List.empty)
+                    +:
+                        skeleton._2
+                            .map(node =>
+                                node.settlementTxSeq.settlementTx.tx.id -> node.settlementTxSeq.mbRolloutSeq
+                                    .map(mbRollouts)
+                                    .getOrElse(List.empty)
+                            )
                         :+ skeleton._3.finalizationTx.tx.id -> skeleton._3.mbRolloutSeq
                             .map(mbRollouts)
                             .getOrElse(List.empty)
+            }
 
-                mbBackbonePoint match {
-                    case Some(point) => nodesWithRollouts.takeWhile(_._1 != point).map(_._2)
-                    case None        => nodesWithRollouts.map(_._2)
+            def rolloutSeqsBefore(
+                backbonePoint: TransactionHash
+            ): List[List[Transaction]] =
+                backboneNodesWithRollouts
+                    .takeWhile(_._1 != backbonePoint)
+                    .filter(_._2.nonEmpty)
+                    .map(_._2)
+
+            def rolloutSeqsStarting(
+                backbonePoint: TransactionHash
+            ): List[List[Transaction]] =
+                backboneNodesWithRollouts
+                    .dropWhile(_._1 != backbonePoint)
+                    .filter(_._2.nonEmpty)
+                    .map(_._2)
+
+            def dumpSkeletonInfo: Unit =
+                // dump some info
+                println(s"initialization  tx: ${skeleton._1.initializationTx.tx.id}")
+                println(s"fallback tx: ${skeleton._1.fallbackTx.tx.id}")
+                skeleton._2.foreach(settlement =>
+                    settlement.settlementTxSeq match {
+                        case SettlementTxSeq.NoRollouts(settlementTx) =>
+                            println(s"settlementTx: ${settlementTx.tx.id}")
+                            println(s"fallbackTx: ${settlement.fallbackTx.tx.id}")
+                        case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
+                            println(
+                              s"settlementTx: ${settlementTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}" +
+                                  s" (${rolloutTxSeq.notLast.map(_.tx.id)} and ${rolloutTxSeq.last.tx.id})"
+                            )
+                            println(s"fallbackTx: ${settlement.fallbackTx.tx.id}")
+                    }
+                )
+                skeleton._3 match {
+                    case FinalizationTxSeq.Monolithic(finalizationTx) =>
+                        println(s"monolithic finalization tx: ${finalizationTx.tx.id}")
+                    case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
+                        println(s"finalization tx: ${finalizationTx.tx.id}")
+                        println(s"deinit tx: ${deinitTx.tx.id}")
+                    case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
+                        println(
+                          s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
+                        )
+                    case FinalizationTxSeq.WithDeinitAndRollouts(
+                          finalizationTx,
+                          deinitTx,
+                          rolloutTxSeq
+                        ) =>
+                        println(s"finalization tx: ${finalizationTx.tx.id}")
+                        println(
+                          s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
+                        )
+                        println(s"deinit tx: ${deinitTx.tx.id}")
                 }
 
-            }
+    end Skeleton
 
-            def mkRollback(
-                backbonePoint: TransactionHash,
-                rolloutPoints: List[TransactionHash]
-            ): Rollback = {
-                // Backbone
-                val backboneTxs1 = backboneTxs
-                val backboneIndex = backboneTxs1.indexWhere(_.id == backbonePoint)
-                // val backboneTx = backboneTxs1(backboneIndex)
-                val (backboneSurvived, backboneLost) = backboneTxs1
-                    .splitAt(backboneIndex)
-                // Rollouts
-                val allRolloutSeqs = rolloutSeqsBefore(Some(backbonePoint))
-                val rolloutIndices =
-                    allRolloutSeqs.zip(rolloutPoints).map(e => e._1.indexWhere(_.id == e._2))
-                val rolloutTxsPartitions = allRolloutSeqs
-                    .zip(rolloutIndices)
-                    .map(e => e._1.splitAt(e._2))
-                //
-                val edgeTxs = backboneLost.head +: rolloutTxsPartitions.map(_._2.head)
-                Rollback(
-                  utxoIds =
-                      edgeTxs.flatMap(_.body.value.inputs.toSet.toList).map(UtxoIdL1.apply).toSet,
-                  txsSurvived =
-                      (backboneSurvived ++ rolloutTxsPartitions.flatMap(_._1)).map(_.id).toSet,
-                  txsLost = (backboneLost ++ rolloutTxsPartitions.flatMap(_._2)).map(_.id).toSet
-                )
-            }
-
-        /** Generate the (sub)state of utxos that represent a L1 rollback:
-          *   - picks random node in the backbone, adds the inputs of the settlemnt
-          *
-          * @param skeleton
-          * @return
-          */
+    object Rollback:
 
         /** Utxo ids + transaction partitions (survived/lost). */
         final case class Rollback(
-            /** IDs of utxos that exist immedaitely after the rollback. */
+            /** IDs of utxos that exist immediately after the rollback. */
             utxoIds: Set[UtxoIdL1],
+            // NB: this field can be used for debugging purposes, it's not used directly in the tests
             txsSurvived: Set[TransactionHash],
-            txsLost: Set[TransactionHash]
+            txsLost: Set[TransactionHash],
+            // The slot number (as of rollback is completed)
+            currentSlot: Slot,
+            // The tx id of the first possible fallback transaction. It's not defined for the deinit tx.
+            mbFallbackTx: Option[TransactionHash],
+            fallbackIsValid: Boolean
         )
 
         def genRollback(skeleton: Skeleton): Gen[Rollback] = for {
             backboneTxs <- Gen.const(skeleton.backboneTxs.map(_.id))
             // The node in the backbone with the leading rolled back backbone tx
             backbonePoint <- Gen.oneOf(backboneTxs)
-            // Survived rollout sequences and their rollback points
-            rolloutSeqsSurvived = skeleton.rolloutSeqsBefore(Some(backbonePoint)).map(_.map(_.id))
+            // Survived rollout sequences
+            rolloutSeqsSurvived = skeleton.rolloutSeqsBefore(backbonePoint).map(_.map(_.id))
+            // Generate rollback points for evert survived sequence
             // Why does it default to java ArrayList?
             rolloutSeqPoints <- Gen
-                .sequence(rolloutSeqsSurvived.filter(_.nonEmpty).map(xs => Gen.oneOf(xs)))
+                .sequence(rolloutSeqsSurvived.map(xs => Gen.oneOf(xs)))
                 .map(_.asScala.toList)
-        } yield skeleton.mkRollback(backbonePoint, rolloutSeqPoints)
+            // The depth of the rollback in slots, for now:
+            //  - 0 indicates it's an instant rollback, the happy path is expected to be submitted
+            //  - 100 indicates this is a long-living rollback, the fallback tx is expected to be submitted
+            currentSlot <- Gen.oneOf(Slot(0), Slot(100))
+        } yield mkRollback(skeleton, backbonePoint, rolloutSeqPoints, currentSlot)
 
-    end Skeleton
+        def mkRollback(
+            skeleton: Skeleton,
+            backbonePoint: TransactionHash,
+            rolloutPoints: List[TransactionHash],
+            currentSlot: Slot
+        ): Rollback = {
+            // Backbone
+            val backboneTxs1 = skeleton.backboneTxs
+            val backboneIndex = backboneTxs1.indexWhere(_.id == backbonePoint)
+            val (backboneSurvived, backboneLost) = backboneTxs1.splitAt(backboneIndex)
+
+            // Rollouts lost due to te backbone point
+            val rolloutLost = skeleton.rolloutSeqsStarting(backbonePoint).flatten
+
+            // Rolled back rollouts
+            val allRolloutSeqs = skeleton.rolloutSeqsBefore(backbonePoint)
+            val rolloutIndices =
+                allRolloutSeqs.zip(rolloutPoints).map(e => e._1.indexWhere(_.id == e._2))
+            val rolloutTxsPartitions = allRolloutSeqs
+                .zip(rolloutIndices)
+                .map(e => e._1.splitAt(e._2))
+
+            // Txs at the verge: these are needed to build the utxo state
+            val edgeTxs = backboneLost.head +: rolloutTxsPartitions.map(_._2.head)
+            // println(s"edge txs: ${edgeTxs.map(_.id)}")
+            // Fallback tx
+            val mbFallbackTx = skeleton.fallbackTxFor(backbonePoint)
+            // Result
+            Rollback(
+              utxoIds = edgeTxs.flatMap(_.body.value.inputs.toSet.toList).map(UtxoIdL1.apply).toSet,
+              txsSurvived =
+                  (backboneSurvived ++ rolloutTxsPartitions.flatMap(_._1)).map(_.id).toSet,
+              txsLost = (
+                backboneLost
+                    ++ rolloutLost
+                    ++ rolloutTxsPartitions.flatMap(_._2)
+              ).map(_.id).toSet,
+              currentSlot = currentSlot,
+              mbFallbackTx = mbFallbackTx.map(_.tx.id),
+              fallbackIsValid = mbFallbackTx.fold(false)(currentSlot.slot >= _.validityStart.slot)
+            )
+        }
 
     // val _ = property("Fish skeleton gets generated") = {
     //   val sample = skeletonGen().sample.get
@@ -268,81 +378,14 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
     //   Prop.proved
     // }
 
-    def dumpSkeletonInfo(sample: Skeleton): Unit =
-        // dump some info
-        println(s"initialization  tx: ${sample._1.initializationTx.tx.id}")
-        println(s"fallback tx: ${sample._1.fallbackTx.tx.id}")
-        sample._2.foreach(settlement =>
-            settlement.settlementTxSeq match {
-                case SettlementTxSeq.NoRollouts(settlementTx) =>
-                    println(s"settlementTx: ${settlementTx.tx.id}")
-                    println(s"fallbackTx: ${settlement.fallbackTx.tx.id}")
-                case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
-                    println(
-                      s"settlementTx: ${settlementTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                    )
-                    println(s"fallbackTx: ${settlement.fallbackTx.tx.id}")
-
-            }
-        )
-        sample._3 match {
-            case FinalizationTxSeq.Monolithic(finalizationTx) =>
-                println(s"monolithic finalization tx: ${finalizationTx.tx.id}")
-            case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
-                println(s"finalization tx: ${finalizationTx.tx.id}")
-                println(s"deinit tx: ${deinitTx.tx.id}")
-            case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
-                println(
-                  s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                )
-            case FinalizationTxSeq.WithDeinitAndRollouts(finalizationTx, deinitTx, rolloutTxSeq) =>
-                println(s"finalization tx: ${finalizationTx.tx.id}")
-                println(
-                  s"finalizationTx: ${finalizationTx.tx.id}, rollouts: ${rolloutTxSeq.notLast.length + 1}"
-                )
-                println(s"deinit tx: ${deinitTx.tx.id}")
-        }
-
-    // val _ = property("forced multiple inner tests") = forAll { (outer: Int) =>
-    //    // Create inner property
-    //    val innerProp = forAll { (inner: Int) => outer + inner == inner + outer}
-    //
-    //    // Run it multiple times manually
-    //    val result = Test.check(
-    //        Test.Parameters.default.withMinSuccessfulTests(20),
-    //        innerProp
-    //    )
-    //
-    //    // Return success/failure
-    //    result.passed
-    // }
-
-    // val outerValues = List(0, 1, 10, 100, 1000) ++
-    //    (1 to 10).flatMap(_ => Gen.choose(0, 10000).sample)
-    //
-    // outerValues.distinct.zipWithIndex.foreach { case (outer, idx) =>
-    //
-    //    val innerProp = forAll { (inner: Int) =>
-    //        val sum = outer + inner
-    //        val product = outer * inner
-    //
-    //        Prop.all(
-    //          s"commutative addition" |: (outer + inner == inner + outer),
-    //          s"product commutative" |: (outer * inner == inner * outer)
-    //        )
-    //    }
-    //
-    //    include(new Properties(s"outer_${idx}_val_$outer") {
-    //        val _ = property("inner_test") = innerProp
-    //    })
-    // }
-
     // Test skeletons against which the (multiple) properties are checked.
     // TODO: figure out why this fails with (1,1)
-    val testSkeletons: Seq[(InitializationTxSeq, List[Builder.Result], FinalizationTxSeq)] =
-        // List((2, 2), (2, 5), (10, 10))
-        List((2, 2))
-            .flatMap((min, max) => Skeleton.skeletonGen(min, max).sample)
+    // TODO: it's really slow, benchmark to see why
+    val testSkeletons: Seq[Skeleton] =
+        List(
+          (3, 5), // short skeleton for fast feedback loop
+          (20, 20) // more realistic skeleton
+        ).flatMap((min, max) => Skeleton.genL1BlockEffectsChain(min, max).sample)
 
     testSkeletons.distinct.zipWithIndex.foreach { case (skeleton, idx) =>
         include(new Properties(s"Skeleton ${idx}") {
@@ -408,7 +451,7 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
                   case m: SubmitL1Effects if m.txs.toSet == happyPathTxs(skeleton) => ()
               } >> IO.pure(Prop.proved))
                   .handleErrorWith { case _: TimeoutException =>
-                      IO.pure("custom msg" |: false)
+                      IO.pure("not all happy path txs are submitted" |: false)
                   }
             )
 
@@ -437,6 +480,7 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
 
         private def getTxInfo(r: GetTxInfo): IO[Unit] = for {
             _ <- IO.println("getTxInfo")
+            // TODO: constant
             _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(false)))
         } yield ()
 
@@ -444,19 +488,25 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
 
         dumpSkeletonInfo(skeleton)
 
-        forAll(genRollback(skeleton)) { rollback =>
+        forAll(Rollback.genRollback(skeleton)) { rollback =>
 
             println(
               s"Rollback is (utxos: ${rollback.utxoIds.size}, " +
-                  s"survived: ${rollback.txsSurvived}, " +
-                  s"lost: ${rollback.txsLost}"
+                  s"\nsurvived: ${rollback.txsSurvived}, " +
+                  s"\nlost: ${rollback.txsLost}" +
+                  s"\ncurrent slot: ${rollback.currentSlot}" +
+                  s"\nfallbackTx: ${rollback.mbFallbackTx}" +
+                  s"\nfallbackIsValid: ${rollback.fallbackIsValid}"
             )
 
             val result: EitherT[IO, String, Prop] = for {
                 system <- right(ActorSystem[IO]("Cardano Liaison SUT").allocated.map(_._1))
                     .leftMap(_.toString)
 
-                cardanoBackendMock = TestCardanoBackendWithRollbacks(rollback.utxoIds)
+                cardanoBackendMock = TestCardanoBackendWithRollbacks(
+                  rollback.utxoIds,
+                  rollback.currentSlot
+                )
 
                 cardanoBackendMockActor <- right(
                   system.actorOf(
@@ -494,7 +544,7 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
                 )
 
                 cardanoLiaisonActor <- right(
-                  // TODO: uncomment if you want to see all passed msgs
+                  // TODO: uncomment if you want to see all msgs passing
                   // system.actorOfWithDebug(
                   system.actorOf(cardanoLiaison)
                 )
@@ -504,11 +554,13 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
                   timeout = 10.seconds
                 )
 
-                _ <- right(expectMsg { case m: GetCardanoHeadState => () })
-
                 check <- right(
                   (expectMsg {
-                      case m: SubmitL1Effects if m.txs.toSet.map(_.id) == rollback.txsLost => ()
+                      case m: SubmitL1Effects
+                          if m.txs.toSet.map(_.id) == (if rollback.fallbackIsValid then
+                                                           Set(rollback.mbFallbackTx.get)
+                                                       else rollback.txsLost) =>
+                          ()
                   } >> IO.pure(Prop.proved))
                       .handleErrorWith { case _: TimeoutException =>
                           IO.pure("not all txs that were rolled back are submitted" |: false)
@@ -524,7 +576,8 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
         }
     }
 
-    class TestCardanoBackendWithRollbacks(utxoIds: Set[UtxoIdL1]) extends CardanoBackend:
+    class TestCardanoBackendWithRollbacks(utxoIds: Set[UtxoIdL1], currentSlot: Slot)
+        extends CardanoBackend:
 
         override def receive: Receive[IO, Request] = {
             case r: SubmitL1Effects     => submitL1Effects(r)
@@ -537,17 +590,16 @@ object DappLedgerTest extends Properties("DappLedger"), TestKit {
 
         private def getCardanoHeadState(r: GetCardanoHeadState): IO[Unit] = for {
             _ <- IO.println("getCardanoHeadState")
-            _ <- r.dResponse.complete(Right(GetCardanoHeadStateResp(utxoIds, Slot(0))))
+            _ <- r.dResponse.complete(Right(GetCardanoHeadStateResp(utxoIds, currentSlot)))
         } yield ()
 
         private def getTxInfo(r: GetTxInfo): IO[Unit] = for {
             _ <- IO.println("getTxInfo")
-            // TODO: should be found by ScalaCheck, we need to know whether the initialization was rolled back or not.
-            _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(false)))
+            // _ <- IO.raiseError(RuntimeException("should not be called in this property"))
         } yield ()
 
     val _ = property("DappLedger Register Deposit Happy Path") = {
-        forAll(InitializationTxSeqTest.genArgs) { (args, testPeers) =>
+        forAll(InitializationTxSeqTest.genArgs()) { (args, testPeers) =>
             val peer: TestPeer = testPeers.head
             val hns = HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
 

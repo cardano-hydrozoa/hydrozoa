@@ -25,7 +25,7 @@ import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
-    validityStartSlot: Slot,
+    override val validityStart: Slot,
     treasurySpent: TreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
@@ -37,7 +37,9 @@ final case class FallbackTx(
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction
-) extends Tx {
+) extends HasValidityStartSlot,
+    // TODO: shall we add separate raw-type traits for that?
+    Tx {
     def producedVoteUtxos: NonEmptyList[Utxo] =
         NonEmptyList(producedDefaultVoteUtxo, producedPeerVoteUtxos.toList)
 
@@ -85,6 +87,7 @@ object FallbackTx {
           deadlineVoting = recipe.votingDuration,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
+          // TODO: pull in N first elements of G2 CRS
           // KZG setup I think?
           setup = SList.empty
         )
@@ -176,6 +179,8 @@ object FallbackTx {
             )
         )
 
+        val setStartSlot = ValidityStartSlot(validityStart.slot)
+
         val steps = {
             Seq(
               spendHMRW,
@@ -184,7 +189,8 @@ object FallbackTx {
               mintVoteTokens,
               createDisputeTreasury,
               createDefaultVoteUtxo,
-              setMetaData
+              setMetaData,
+              setStartSlot
             )
                 ++ createPeerVoteUtxos.toList
                 ++ createCollateralUtxos.toList
@@ -204,7 +210,7 @@ object FallbackTx {
             val txId = finalized.transaction.id
             FallbackTx(
               // FIXME:
-              validityStartSlot = Slot(100),
+              validityStart = Slot(100),
               treasurySpent = treasuryUtxo,
               //
               treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
@@ -238,12 +244,17 @@ object FallbackTx {
         }
     }
 
+    // TODO: rename to args for consistency?
     case class Recipe(
         config: Tx.Builder.Config,
         treasuryUtxo: TreasuryUtxo,
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
-        votingDuration: PosixTime
+        votingDuration: PosixTime,
+        // This is specified in slots rather than in the millis, since the builder
+        // is used in fallback tx parsing, and we have to be able to specify precisely
+        // the slot we see in the incoming exogenous fallback tx.
+        validityStart: Slot
     )
 }

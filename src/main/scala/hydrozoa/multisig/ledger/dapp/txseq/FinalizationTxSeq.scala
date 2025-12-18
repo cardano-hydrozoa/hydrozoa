@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.PosixTime
 import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
@@ -194,19 +195,25 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
-            override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: TreasuryUtxo,
-            override val payoutObligationsRemaining: Vector[Payout.Obligation.L1],
+            majorVersionProduced: Block.Version.Major,
+            treasuryToSpend: TreasuryUtxo,
+            payoutObligationsRemaining: Vector[Payout.Obligation.L1],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-            equityShares: EquityShares
-        ) extends SingleArgs,
-              Payout.Obligation.L1.Many.Remaining {
+            equityShares: EquityShares,
+            competingFallbackValidityStart: PosixTime,
+            blockCreatedOn: PosixTime,
+            txTiming: TxTiming
+        ) extends
+            // TODO: confirm: this is not needed
+            // SingleArgs,
+            Payout.Obligation.L1.Many.Remaining {
 
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend
+                  depositsToSpend = depositsToSpend,
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
                 )
 
             def toArgsWithPayouts(
@@ -215,11 +222,12 @@ object FinalizationTxSeq {
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis,
               rolloutTxSeqPartial = rolloutTxSeqPartial
             )
 
             // No deposits in finalization tx
-            override def depositsToSpend: Vector[DepositUtxo] = Vector.empty
+            val depositsToSpend: Vector[DepositUtxo] = Vector.empty
         }
     }
 }
