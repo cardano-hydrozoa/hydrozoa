@@ -19,6 +19,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
+
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
@@ -36,11 +37,15 @@ trait DappLedger(
         Ref.unsafe[IO, State](State(initialTreasuryUtxo, Queue.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case d: RegisterDeposit => d.handleRequest(registerDeposit)
-        case s: SettleLedger    => s.handleRequest(settleLedger)
-        case f: FinalizeLedger  => f.handleRequest(finalizeLedger)
+        case d: SyncRequest[IO, ParseDepositError, RegisterDeposit, Unit] =>
+            d.handleRequest(registerDeposit)
+        case s: SyncRequest[IO, SettlementTxSeqBuilderError, SettleLedger, SettleLedger.Result] =>
+            s.handleRequest(settleLedger)
+        case f: SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizeLedger, FinalizationTxSeq] =>
+            f.handleRequest(finalizeLedger)
         // FIXME: this can't actually throw an error, not really. But using ?: makes it seem like it can
-        case g: GetState => g.handleRequest(_ => state.get)
+        case g: SyncRequest[IO, Errors.GetStateError.type, GetState, State] =>
+            g.handleRequest(_ => state.get)
     }
 
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
@@ -150,12 +155,23 @@ trait DappLedger(
                 // ===================================
                 // Step 2: determine the necessary KZG commit
                 // ===================================
-
-                gsReq <- EitherT.right(VirtualLedger.GetCurrentKzgCommitment())
-                kzgCommit <- EitherT.right((virtualLedger ?: gsReq) >>= {
+                kzgCommit <- EitherT((virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment) >>= {
                     case Left(e)  => throw GetKzgError
                     case Right(r) => IO.pure(r)
                 })
+
+//              Pattern: 
+                //  res: ActorRef[IO, SyncRequest[IO, VirtualLedger.GetStateError, VirtualLedger.GetCurrentKzgCommitment, KzgCommitment]]
+                //          => IO[Either[VirtualLedger.GetStateError, KzgCommitment]]
+
+
+//                Found: hydrozoa.multisig.ledger.VirtualLedger.GetCurrentKzgCommitment =>
+//                cats.effect.IO[
+//                Either[hydrozoa.multisig.ledger.VirtualLedger.GetStateError,
+//                hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment]
+//                ]
+//                Required: F[Either[A, B]]
+
 
                 // ===================================
                 // Step 3: Build up a settlement Tx
@@ -276,62 +292,32 @@ object DappLedger {
     }
 
     object Requests {
-        type Request = RegisterDeposit | SettleLedger | FinalizeLedger | GetState
+        type Request =
+            SyncRequest[IO, ParseDepositError, RegisterDeposit, Unit] |
+                SyncRequest[IO, SettlementTxSeqBuilderError, SettleLedger, SettleLedger.Result] |
+                SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizeLedger, FinalizationTxSeq] |
+                SyncRequest[IO, Errors.GetStateError.type, GetState, State]
 
-        final case class RegisterDeposit private (
+        final case class RegisterDeposit(
             serializedDeposit: Array[Byte],
             eventId: LedgerEvent.Id,
             virtualOutputs: NonEmptyList[GenesisObligation],
-            override val dResponse: Deferred[IO, Either[ParseDepositError, Unit]]
-        ) extends SyncRequest[IO, ParseDepositError, Unit]
+        ) extends SyncRequest.TypeClass[IO, ParseDepositError, RegisterDeposit, Unit]
 
-        final case class SettleLedger private (
+        final case class SettleLedger(
             pollDepositResults: Set[LedgerEvent.Id],
             payoutObligations: Vector[Payout.Obligation],
             blockCreationTime: PosixTime,
             tallyFeeAllowance: Coin,
-            votingDuration: PosixTime,
-            override val dResponse: Deferred[
+            votingDuration: PosixTime
+        ) extends SyncRequest.TypeClass[
               IO,
-              Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+              SettlementTxSeqBuilderError,
+              SettleLedger,
+              SettleLedger.Result
             ]
-        ) extends SyncRequest[IO, SettlementTxSeqBuilderError, SettleLedger.Result]
-
-        object RegisterDeposit {
-            // TODO: Make opaque? We don't want just any random deposit with any random event ID, we
-            // want to make sure that they correspond to each other
-            def apply(
-                serializedDeposit: Array[Byte],
-                eventId: LedgerEvent.Id,
-                virtualOutputs: NonEmptyList[GenesisObligation]
-            ): IO[RegisterDeposit] =
-                Deferred[IO, Either[ParseDepositError, Unit]]
-                    .flatMap(x =>
-                        IO.pure(new RegisterDeposit(serializedDeposit, eventId, virtualOutputs, x))
-                    )
-        }
 
         object SettleLedger {
-            def apply(
-                pollDepositResults: Set[LedgerEvent.Id],
-                payoutObligations: Vector[Payout.Obligation],
-                blockCreationTime: PosixTime,
-                tallyFeeAllowance: Coin,
-                votingDuration: PosixTime
-            ): IO[SettleLedger] =
-                Deferred[IO, Either[SettlementTxSeqBuilderError, SettleLedger.Result]]
-                    .flatMap(x =>
-                        IO.pure(
-                          new SettleLedger(
-                            pollDepositResults = pollDepositResults,
-                            payoutObligations = payoutObligations,
-                            blockCreationTime = blockCreationTime,
-                            tallyFeeAllowance = tallyFeeAllowance,
-                            votingDuration = votingDuration,
-                            dResponse = x
-                          )
-                        )
-                    )
 
             /** Sum type for results of calls to SettleLedger
               */
@@ -354,40 +340,19 @@ object DappLedger {
             ) extends Result
         }
 
-        final case class FinalizeLedger private (
+        final case class FinalizeLedger(
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-            equityShares: EquityShares,
-            override val dResponse: Deferred[
+            equityShares: EquityShares
+        ) extends SyncRequest.TypeClass[
               IO,
-              Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+              FinalizationTxSeqBuilderError,
+              FinalizeLedger,
+              FinalizationTxSeq
             ]
-        ) extends SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizationTxSeq]
 
-        object FinalizeLedger {
-            def apply(
-                payoutObligationsRemaining: Vector[Payout.Obligation],
-                multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-                equityShares: EquityShares
-            ): IO[FinalizeLedger] = for {
-                deferred <- Deferred[IO, Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]]
-            } yield FinalizeLedger(
-              payoutObligationsRemaining,
-              multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-              equityShares = equityShares,
-              dResponse = deferred
-            )
-        }
-
-        final case class GetState(
-            override val dResponse: Deferred[IO, Either[Errors.GetStateError.type, State]]
-        ) extends SyncRequest[IO, Errors.GetStateError.type, State]
-
-        object GetState {
-            def apply(): IO[GetState] = for {
-                deferred <- Deferred[IO, Either[Errors.GetStateError.type, State]]
-            } yield GetState(deferred)
-        }
+        final case class GetState()
+            extends SyncRequest.TypeClass[IO, Errors.GetStateError.type, GetState, State]
     }
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */

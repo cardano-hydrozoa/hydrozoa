@@ -84,9 +84,9 @@ final case class SyncRequest[
       * @param f
       * @return
       */
-    def handleRequest(f: this.type => F[Response]): F[Unit] =
+    def handleRequest(f: Request => F[Response]): F[Unit] =
         for {
-            eResult <- f(this).attemptNarrow
+            eResult <- f(request).attemptNarrow
             _ <- dResponse.complete(eResult)
         } yield ()
 }

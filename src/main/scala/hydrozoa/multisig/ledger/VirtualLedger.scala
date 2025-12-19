@@ -21,9 +21,13 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case itx: ApplyInternalTx        => itx.handleRequest(applyInternalTx)
-        case ApplyGenesis(go)            => applyGenesisTx(go)
-        case gs: GetCurrentKzgCommitment => gs.handleRequest(_ => state.get.map(_.kzgCommitment))
+        case itx: SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
+              Payout.Obligation
+            ]] =>
+            itx.handleRequest(applyInternalTx)
+        case ApplyGenesis(go) => applyGenesisTx(go)
+        case gs: SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment] =>
+            gs.handleRequest(_ => state.get.map(_.kzgCommitment))
     }
 
     private def applyInternalTx(
@@ -119,37 +123,22 @@ object VirtualLedger {
 
     ///////////////////////////////////////////
     // Requests
-    type Request = ApplyInternalTx | ApplyGenesis | GetCurrentKzgCommitment
+    type Request =
+        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
+            ApplyGenesis | SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
 
     // Internal Tx
-    final case class ApplyInternalTx private (
+    final case class ApplyInternalTx(
         tx: Tx.Serialized,
-        override val dResponse: Deferred[IO, Either[ErrorApplyInternalTx, Vector[
+    ) extends SyncRequest.TypeClass[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
           Payout.Obligation
-        ]]]
-    ) extends SyncRequest[IO, ErrorApplyInternalTx, Vector[Payout.Obligation]]
-
-    object ApplyInternalTx {
-
-        def apply(tx: Tx.Serialized): IO[ApplyInternalTx] = for {
-            deferredResponse <- Deferred[IO, Either[ErrorApplyInternalTx, Vector[
-              Payout.Obligation
-            ]]]
-        } yield ApplyInternalTx(tx, deferredResponse)
-    }
+        ]]
 
     // Genesis Tx
     final case class ApplyGenesis(go: L2EventGenesis)
 
-    final case class GetCurrentKzgCommitment private (
-        override val dResponse: Deferred[IO, Either[GetStateError, KzgCommitment]]
-    ) extends SyncRequest[IO, GetStateError, KzgCommitment]
-
-    object GetCurrentKzgCommitment {
-        def apply(): IO[GetCurrentKzgCommitment] = for {
-            deferredResponse <- Deferred[IO, Either[GetStateError, KzgCommitment]]
-        } yield GetCurrentKzgCommitment(deferredResponse)
-    }
+    case object GetCurrentKzgCommitment
+        extends SyncRequest.TypeClass[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
 
     //////////////////////////////////////////////
     // Other Types
