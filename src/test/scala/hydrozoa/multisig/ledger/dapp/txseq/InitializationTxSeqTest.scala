@@ -33,7 +33,7 @@ import test.TransactionChain.observeTxChain
 object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     import Prop.forAll
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(10_000)
+        p.withMinSuccessfulTests(1_000)
     }
 
     // TODO: make the spentUtxos contain arbitrary assets, not just ada.

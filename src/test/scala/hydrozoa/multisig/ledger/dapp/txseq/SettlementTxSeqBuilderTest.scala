@@ -66,7 +66,11 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
                                 txsToSign.map(tx => signTx(peer, tx))
                             )
 
-                        val res = observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
+                        val res = observeTxChain(signedTxs)(
+                          initialState,
+                          CardanoMutator,
+                          Context.testMainnet()
+                        )
 
                         props.append(
                           s"SettlementTxSeq observation should be successful: ${res}" |: res.isRight

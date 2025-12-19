@@ -13,23 +13,23 @@ class Unit extends AnyFunSuite, Matchers {
     // Long constructor
     // =====================
     test("Coin(0L) === Right(Coin.zero)") {
-        assert(Right(Coin.zero) === Coin(0L))
+        val _ = assert(Right(Coin.zero) === Coin(0L))
     }
 
     test("Coin(1L) succeeds") {
-        assert(Coin(1L).isRight)
+        val _ = assert(Coin(1L).isRight)
     }
 
     test("Coin(-1L) fails") {
-        assert(Coin(-1L) === Left(Coin.ArithmeticError.Underflow))
+        val _ = assert(Coin(-1L) === Left(Coin.ArithmeticError.Underflow))
     }
 
     test("Coin(Long.MaxValue + 1 fails") {
-        assert(Coin(Long.MaxValue + 1) === Left(Coin.ArithmeticError.Underflow))
+        val _ = assert(Coin(Long.MaxValue + 1) === Left(Coin.ArithmeticError.Underflow))
     }
 
     test("Coin(Long.MinValue - 1 succeeds") {
-        assert(Coin(Long.MinValue - 1).isRight)
+        val _ = assert(Coin(Long.MinValue - 1).isRight)
     }
 
     // =====================
@@ -37,11 +37,11 @@ class Unit extends AnyFunSuite, Matchers {
     // =====================
 
     test("Coin(SafeLong(0L) === Right(Coin.zero)") {
-        assert(Right(Coin.zero) === Coin(SafeLong(0L)))
+        val _ = assert(Right(Coin.zero) === Coin(SafeLong(0L)))
     }
 
     test("Coin(SafeLong(1L)) succeeds") {
-        assert(Coin(SafeLong(1L)).isRight)
+        val _ = assert(Coin(SafeLong(1L)).isRight)
     }
 
     test("Coin(SafeLong(-1L)) fails") {
@@ -61,7 +61,7 @@ class Unit extends AnyFunSuite, Matchers {
     // =====================
 
     test("Genuinely massive coin construction fails for bounded coin") {
-        assert(
+        val _ = assert(
           Coin(SafeLong(spire.math.pow(BigInt(2), BigInt(128)))) === Left(
             Coin.ArithmeticError.Overflow
           )
@@ -69,20 +69,20 @@ class Unit extends AnyFunSuite, Matchers {
     }
 
     test("Coin(pow(2,32)) round trips") {
-        assert(Coin(math.pow(2, 32).toLong).map(_.underlying) === Right(math.pow(2, 32)))
+        val _ = assert(Coin(math.pow(2, 32).toLong).map(_.underlying) === Right(math.pow(2, 32)))
     }
 
     test("Coin 1 + 2 === 3") {
-        assert(Coin.unsafeApply(1L) +~ Coin.unsafeApply(2L) === Coin.unsafeApply(3L))
+        val _ = assert(Coin.unsafeApply(1L) +~ Coin.unsafeApply(2L) === Coin.unsafeApply(3L))
     }
 
-    test("zero denominator fractional should fail")(
-      assert(Try(Coin.Fractional(Rational(1, 0))).isFailure)
-    )
+    test("zero denominator fractional should fail") {
+        val _ = assert(Try(Coin.Fractional(Rational(1, 0))).isFailure)
+    }
 
     test("Coin signum") {
-        assert(Coin.unsafeApply(0).signum === 0)
-        assert(Coin.unsafeApply(100).signum === 1)
+        val _ = assert(Coin.unsafeApply(0).signum === 0)
+        val _ = assert(Coin.unsafeApply(100).signum === 1)
     }
 
     // =====================
@@ -91,14 +91,14 @@ class Unit extends AnyFunSuite, Matchers {
 
     test("Coin.Unbounded => Coin.Coin fails on big positive coin") {
         val bigCoin = Coin.Unbounded(SafeLong(Long.MaxValue) * 10)
-        assert(bigCoin.toCoin === Left(Coin.ArithmeticError.Overflow))
+        val _ = assert(bigCoin.toCoin === Left(Coin.ArithmeticError.Overflow))
         assert(Try(bigCoin.unsafeToCoin).isFailure)
     }
 
     test("Coin.Unbounded => Coin.Coin fails on big negative coin") {
         val bigCoin = Coin.Unbounded(SafeLong(Long.MaxValue) * -10)
-        assert(bigCoin.toCoin === Left(Coin.ArithmeticError.Underflow))
-        assert(Try(bigCoin.unsafeToCoin).isFailure)
+        val _ = assert(bigCoin.toCoin === Left(Coin.ArithmeticError.Underflow))
+        val _ = assert(Try(bigCoin.unsafeToCoin).isFailure)
     }
 
     // =====================
@@ -106,29 +106,29 @@ class Unit extends AnyFunSuite, Matchers {
     // =====================
     test("Coin.Fractional(1/2) rounds to 0") {
         val oneHalf = Coin.Fractional(Rational(1, 2))
-        assert(oneHalf.toCoin === Right(Coin.zero))
-        assert(oneHalf.unsafeToCoin === Coin.zero)
-        assert(oneHalf.toUnbounded === Coin.Unbounded.zero)
+        val _ = assert(oneHalf.toCoin === Right(Coin.zero))
+        val _ = assert(oneHalf.unsafeToCoin === Coin.zero)
+        val _ = assert(oneHalf.toUnbounded === Coin.Unbounded.zero)
     }
 
     test("Coin.Fractional(-1/2) rounds to 0") {
         val oneHalf = Coin.Fractional(Rational(-1, 2))
-        assert(oneHalf.toCoin === Right(Coin.zero))
-        assert(oneHalf.unsafeToCoin === Coin.zero)
-        assert(oneHalf.toUnbounded === Coin.Unbounded.zero)
+        val _ = assert(oneHalf.toCoin === Right(Coin.zero))
+        val _ = assert(oneHalf.unsafeToCoin === Coin.zero)
+        val _ = assert(oneHalf.toUnbounded === Coin.Unbounded.zero)
     }
 
     test("Coin.Fractional(3/2) rounds to 2") {
         val x = Coin.Fractional(Rational(3, 2))
-        assert(x.toCoin === Coin(2))
-        assert(x.toCoin === Right(Coin.unsafeApply(2)))
-        assert(x.toUnbounded === Coin.Unbounded(2))
+        val _ = assert(x.toCoin === Coin(2))
+        val _ = assert(x.toCoin === Right(Coin.unsafeApply(2)))
+        val _ = assert(x.toUnbounded === Coin.Unbounded(2))
     }
 
     test("Coin.Fraction(-3/2) rounds to -2") {
         val x = Coin.Fractional(Rational(-3, 2))
-        assert(x.toCoin === Left(Coin.ArithmeticError.Underflow))
-        assert(x.toUnbounded === Coin.Unbounded(-2))
+        val _ = assert(x.toCoin === Left(Coin.ArithmeticError.Underflow))
+        val _ = assert(x.toUnbounded === Coin.Unbounded(-2))
     }
 
     // =====================
@@ -138,8 +138,8 @@ class Unit extends AnyFunSuite, Matchers {
         val rawWeights = NonEmptyList(Rational(33), List(Rational(8812911823L), Rational(51)))
         val md = Distribution.normalizeWeights(rawWeights)
         md.fold(fail())(d =>
-            assert(d.numberOfWeights === 3)
-            assert(d.totalWeight === 1)
+            val _ = assert(d.numberOfWeights === 3)
+            val _ = assert(d.totalWeight === 1)
         )
     }
 
