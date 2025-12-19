@@ -319,6 +319,10 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                     // 2. Based on the local state, find all due actions
                     state <- state.get
 
+                    // _ <- IO.println(state.effectInputs)
+                    // _ <- IO.println(state.happyPathEffects.keys)
+                    // _ <- IO.println(state.fallbackEffects.keys)
+
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[Action] = mkDirectActions(
                       state,
@@ -328,13 +332,22 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
 
                     // 3. Determine whether the initialization requires submission.
                     actionsToSubmit <-
+                        // Empty direct actions is a precondition for the init (happy path) tx submission
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else {
-                            // Empty direct actions is a precondition for the init (happy path) tx submission
-                            lazy val initAction = Seq(
-                              Action.InitializeHead(state.happyPathEffects.values.map(_.tx).toSeq)
-                            )
+                            lazy val initAction = {
+                                if l1State.currentSlot < config.initializationTx.ttl
+                                then
+                                    Seq(
+                                      Action.InitializeHead(
+                                        state.happyPathEffects.values.map(_.tx).toSeq
+                                      )
+                                    )
+                                else {
+                                    Seq.empty
+                                }
+                            }
                             // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                             state.targetState match {
                                 case TargetState.Active(targetTreasuryUtxoId) =>
@@ -363,9 +376,10 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                             }
                         }
 
-                    _ <- IO.println(s"actionsToSubmit: ${actionsToSubmit.length}")
-
                     // 4. Submit flattened txs for actions it there are some
+                    _ <- IO.println("\nLiaison's actions:")
+                    _ <- actionsToSubmit.traverse_(a => IO.println(s"\t- ${a.msg}"))
+
                     _ <- IO.whenA(actionsToSubmit.nonEmpty)(
                       config.cardanoBackend ! SubmitL1Effects(
                         actionsToSubmit.flatMap(actionTxs).toList
@@ -407,6 +421,18 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         case Action.InitializeHead(txs)      => txs
     }
 
+    extension (action: Action)
+
+        private def msg: String =
+            import Action.*
+            action match {
+                case FallbackToRuleBased(tx)  => s"FallbackToRuleBased (${tx.id})"
+                case PushForwardMultisig(txs) => s"PushForwardMultisig (${txs.map(_.id)}"
+                case Rollout(txs)             => s"Rollout (${txs.map(_.id)}"
+                case SilencePeriodNoop        => "SilencePeriodNoop"
+                case InitializeHead(txs)      => s"InitializeHead (${txs.map(_.id)}"
+            }
+
     private type DirectAction =
         Action.FallbackToRuleBased | Action.PushForwardMultisig | Action.Rollout |
             Action.SilencePeriodNoop.type
@@ -435,6 +461,8 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             // Backbone effect - settlement/finalization/deinit
             case backboneEffectId @ (blockNum, 0) =>
 
+                println(s"backboneEffectId: $backboneEffectId")
+
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
                 // May absent for phony "deinit" block number
                 val mbCompetingFallbackEffect = state.fallbackEffects.get(blockNum.decrement)
@@ -460,6 +488,10 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                             }
 
                             fallbackValidityStart = fallback.validityStart
+
+                            _ = println(
+                              s"currentSlot: $currentSlot, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
+                            )
 
                             // Choose between (1), (2), and (3)
                             ret <- (
@@ -501,6 +533,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
 
                     // This is a deinit effect, always the last tx in the backbone
                     case None =>
+                        println("-------> mbCompetingFallbackEffect == None")
                         val deinitTxEffectId = backboneEffectId
                         Right(PushForwardMultisig(Seq(state.happyPathEffects(deinitTxEffectId).tx)))
                 }

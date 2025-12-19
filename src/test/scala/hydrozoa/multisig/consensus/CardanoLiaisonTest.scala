@@ -12,6 +12,7 @@ import com.suprnation.actor.{ActorSystem, test as _}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.BackboneNodeTimingRelation
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -37,7 +38,7 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
         p
             .withWorkers(1) // useful for debugging
             .withMinSuccessfulTests(100)
-        // .withInitialSeed(Seed.fromBase64("8czA3wXox-sglWTZMEUIycey4uTcf53dVpyUFswYW4A=").get)
+        // .withInitialSeed(Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get)
     }
 
     // TODO: use BlockEffects as BlockEffectChain
@@ -107,9 +108,11 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
                       acc,
                       settlementNum
                     ) =>
-                    if settlementNum >= numOfSettlements
+                    if settlementNum > numOfSettlements
                     then
-                        Gen.const(Right(acc.reverse, previousBlockTimestamp, fallbackValidityStart))
+                        Gen.const(
+                          Right((acc.reverse, previousBlockTimestamp, fallbackValidityStart))
+                        )
                     else
                         for {
                             blockCreatedOn <- Gen.choose(
@@ -367,7 +370,10 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
             utxoIds: Set[UtxoIdL1],
             // NB: this field can be used for debugging purposes, it's not used directly in the tests
             txsSurvived: Set[TransactionHash],
+            /** Lost backbone txs and rollout txs that sprout off them. */
             txsLost: Set[TransactionHash],
+            /** Lost rollout txs that beside before the first rolled back backbone tx. */
+            txsLostPreviousRollout: Set[TransactionHash],
             // The slot number (as of rollback is completed)
             currentSlot: Slot,
             // The tx id of the first competing fallback transaction and timing relation of the rollback.
@@ -470,18 +476,14 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
             // Txs at the verge: these are needed to build the utxo state
             val edgeTxs = backboneLost.head +: rolloutTxsPartitions.map(_._2.head)
             // println(s"edge txs: ${edgeTxs.map(_.id)}")
-            // Fallback tx
-            val mbFallbackTx = skeleton.fallbackTxFor(backbonePoint)
+
             // Result
             Rollback(
               utxoIds = edgeTxs.flatMap(_.body.value.inputs.toSet.toList).map(UtxoIdL1.apply).toSet,
               txsSurvived =
                   (backboneSurvived ++ rolloutTxsPartitions.flatMap(_._1)).map(_.id).toSet,
-              txsLost = (
-                backboneLost
-                    ++ rolloutLost
-                    ++ rolloutTxsPartitions.flatMap(_._2)
-              ).map(_.id).toSet,
+              txsLost = (backboneLost ++ rolloutLost).map(_.id).toSet,
+              txsLostPreviousRollout = rolloutTxsPartitions.flatMap(_._2).map(_.id).toSet,
               currentSlot = currentSlot,
               depth = depth
             )
@@ -498,10 +500,14 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
     // TODO: it's really slow, benchmark to see why
     val testSkeletons: Seq[Skeleton] =
         List(
-          (10, 20), // short skeleton for fast feedback loop
-          // (20, 20) // more realistic skeleton
+          (3, 3), // short skeleton for fast feedback loop
+          (20, 20) // more realistic skeleton
         ).flatMap((min, max) => {
-            val sample = Skeleton.genL1BlockEffectsChain(min, max).sample
+            // val seed = Seed.fromBase64("SEAube5f5bBsTlLeYTuh3am1vO5iJvmzNRFEXSOlXlD=").get
+            // val params = Gen.Parameters.default.withInitialSeed(seed)
+            val sample = Skeleton
+                .genL1BlockEffectsChain(min, max)
+                .sample // apply(params, params.initialSeed.get)
             dumpSkeletonInfo(sample.get)
             sample
         })
@@ -605,13 +611,16 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
         } yield ()
 
     def mkRollbackAreHandled(skeleton: Skeleton): Prop = {
+        import BackboneNodeTimingRelation.*
 
         forAll(Rollback.genRollback(skeleton)) { rollback =>
 
+            println("<~~ ROLLBACK ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~")
             println(
               s"Rollback is (utxos: ${rollback.utxoIds.size}, " +
                   s"\nsurvived: ${rollback.txsSurvived}, " +
                   s"\nlost: ${rollback.txsLost}" +
+                  s"\nlost previous rollouts: ${rollback.txsLostPreviousRollout}" +
                   s"\ncurrent slot: ${rollback.currentSlot}" +
                   s"\ndepth: ${rollback.depth}"
             )
@@ -635,7 +644,7 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
                   cardanoBackendMockActor,
                   skeleton._1.initializationTx,
                   skeleton._1.fallbackTx,
-                  3.seconds
+                  100.millis
                 )
 
                 cardanoLiaison = new CardanoLiaison(config) {}
@@ -669,21 +678,42 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
                 expectMsg = expectMsgPF(
                   actor = cardanoBackendMockActor,
-                  timeout = 10.seconds
+                  timeout = 5.seconds
                 )
 
-                check <- right(
-                  (expectMsg {
-                      case m: SubmitL1Effects
-                          if m.txs.toSet
-                              .map(_.id) == (if ??? then Set(rollback.depth.get)
-                                             else rollback.txsLost) =>
-                          ()
-                  } >> IO.pure(Prop.proved))
-                      .handleErrorWith { case _: TimeoutException =>
-                          IO.pure("not all txs that were rolled back are submitted" |: false)
-                      }
-                )
+                expectedTxs = rollback.depth match {
+                    case Some(fallback, timing) =>
+                        timing match {
+                            case BeforeBackboneTtlExpires =>
+                                rollback.txsLost ++ rollback.txsLostPreviousRollout
+                            case WithinSilencePeriod => rollback.txsLostPreviousRollout
+                            case AfterFallbackBecomesValid =>
+                                Set(fallback) ++ rollback.txsLostPreviousRollout
+                        }
+                    case None =>
+                        if rollback.currentSlot > skeleton._1.initializationTx.ttl
+                        then Seq.empty
+                        else rollback.txsLost ++ rollback.txsLostPreviousRollout
+                }
+
+                _ <- right(IO.println(s"===> Expected txs: ${expectedTxs}"))
+
+                check <-
+                    // TODO: use known txs rather than messages so we can test these cases as well
+                    if expectedTxs.isEmpty then right(IO.pure(Prop.proved))
+                    else
+                        right(
+                          (expectMsg {
+                              case m: SubmitL1Effects if m.txs.toSet.map(_.id) == expectedTxs => ()
+                          } >> IO.pure(Prop.proved))
+                              .handleErrorWith { case _: TimeoutException =>
+                                  IO.pure(
+                                    "not all txs that were rolled back are submitted" |: false
+                                  )
+                              }
+                        )
+
+                _ <- right(system.terminate())
 
             } yield check
 
@@ -713,7 +743,8 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
         private def getTxInfo(r: GetTxInfo): IO[Unit] = for {
             _ <- IO.println("getTxInfo")
-            // _ <- IO.raiseError(RuntimeException("should not be called in this property"))
+            // TODO: constant
+            _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(false)))
         } yield ()
 
 }
