@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.virtual.commitment
 
-import com.bloxbean.cardano.client.util.HexUtil
 import java.math.BigInteger
 import scalus.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.builtin.ByteString
@@ -66,7 +65,7 @@ object KzgCommitment {
         // println(s"finalPoly: ${finalPoly.map(e => BigInt.apply(e.to_bendian()))}")
 
         val commitment = evalFinalPoly(srs, finalPoly).compress()
-        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
+//        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
         IArray.unsafeFromArray(commitment)
     }
 

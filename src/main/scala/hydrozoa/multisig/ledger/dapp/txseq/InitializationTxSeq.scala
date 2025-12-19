@@ -11,7 +11,7 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.ledger.*

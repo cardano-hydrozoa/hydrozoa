@@ -19,6 +19,7 @@ import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
+import test.TestPeer.Alice
 
 def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
@@ -45,6 +46,11 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     )
 }
 
+// FIXME: This way of generating deposit Utxos was fine for earlier iterations of hydrozoa.
+// As we get closer to a real implementation, it needs to be revised to catch more corner cases.
+// In particular, with the introduction of "Virtual Utxos" in the deposit utxo, and with the deposit amount
+// set deterministically from the sum of the virtual utxos + fees necessary for refund, this
+// generator DOES NOT produce actual semantically valid deposit utxos
 def genDepositUtxo(
     network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
@@ -67,18 +73,24 @@ def genDepositUtxo(
 
         depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
 
+        // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
+        // deposit amount
+        vos <- Gen.nonEmptyListOf(genGenesisObligation(Alice)).map(NonEmptyList.fromListUnsafe)
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
-      virtualOutputs = ???
+      virtualOutputs = vos
     )
 
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    kzgCommitment: Option[KzgCommitment] =
+        None // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -112,11 +124,15 @@ def genSettlementTxSeqBuilder(
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
-        kzgCommitment: KzgCommitment = ???
+        // FIXME: Don't know if this is right. Is the KZG 32 bytes long?
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(32, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
-        kzgCommitment = kzgCommitment,
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
