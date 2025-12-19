@@ -5,7 +5,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
-import org.scalacheck.Prop.{collect, forAll, propBoolean, undecided}
+import org.scalacheck.Prop.{False, True, Undecided, collect, forAll, propBoolean, undecided}
 import org.scalacheck.gen.Unsafe.promote
 import org.scalacheck.rng.Seed
 import org.scalacheck.util.Pretty
@@ -15,11 +15,17 @@ object PropertyMTest extends Properties("PropertyM") {
 
     import PropertyM.*
 
-    // This property demonstrates calling out to an external process.
-    // Its more interesting in Haskell, because it is _necessarily_ in IO in haskell, whereas regular scala(check)
-    // lets you do arbitrary side effects.
-    //
-    // However, we do wrap the IO in `IO.blocking`, which means it can then be bound in a PropertyM for/yield via `run`
+    // Turn a failed prop into a successful on
+    def shouldFail(failingProp: Prop): Prop =
+        failingProp.map(failingRes =>
+            failingRes.copy(status = if failingRes.status == False then True else False)
+        )
+
+//    // This property demonstrates calling out to an external process.
+//    // Its more interesting in Haskell, because it is _necessarily_ in IO in haskell, whereas regular scala(check)
+//    // lets you do arbitrary side effects.
+//    //
+//    // However, we do wrap the IO in `IO.blocking`, which means it can then be bound in a PropertyM for/yield via `run`
     val _ = property("`factor` cli utility works") = {
 
         def factor(n: Int): IO[Array[Int]] = {
@@ -53,11 +59,13 @@ object PropertyMTest extends Properties("PropertyM") {
 
     // This demonstrates what it looks like when we generate multiple arguments. They are reported
     // correctly in the error message.
-    val _ = property("multiple arguments generated are reported correctly") = monadicIO(
+    val _ = property("multiple arguments generated are put into arguments list") = monadicIO(
       for {
           _ <- pick[IO, Int](Arbitrary.arbitrary[Int])
           _ <- pick[IO, String](Gen.asciiPrintableStr)
-      } yield false
+      } yield true
+    ).map(failingRes =>
+        failingRes.copy(status = if failingRes.args.length == 2 then True else False)
     )
 
     // This demonstrates running multiple PropertyM's within the monad.
@@ -71,12 +79,14 @@ object PropertyMTest extends Properties("PropertyM") {
     //  Passed: My second predicate
     //  Passed: My first predicate
     // """
-    val _ = property("assertWith Example") = monadicIO(
-      for {
-          _ <- assertWith[IO](true, "My first predicate")
-          _ <- assertWith[IO](true, "My second predicate")
-          _ <- assertWith(false, "My third predicate")
-      } yield true
+    val _ = property("assertWith Example") = shouldFail(
+      monadicIO(
+        for {
+            _ <- assertWith[IO](true, "My first predicate")
+            _ <- assertWith[IO](true, "My second predicate")
+            _ <- assertWith(false, "My third predicate")
+        } yield true
+      )
     )
 
     // Demo: collect the generation statistics for a single generated value
@@ -94,6 +104,13 @@ object PropertyMTest extends Properties("PropertyM") {
           for {
               _ <- monitor(counterexample("Failure!"))
           } yield false
+        ).map(failingRes =>
+            Prop.Result(
+              status = if failingRes.labels.contains("Failure!") then True else False,
+              args = failingRes.args,
+              collected = failingRes.collected,
+              labels = failingRes.labels
+            )
         )
     }
 
@@ -108,8 +125,7 @@ object PropertyMTest extends Properties("PropertyM") {
 
     // Using "pre". This demonstrates that test cases are skipped if the pre-condition isn't satisfied.
     // If you examine the output from this function, you'll see that many integer values were generated,
-    // all odd ones were discarded (and don't count towards "passed" tests), and that the test eventually
-    // fails
+    // all odd ones were discarded (and don't count towards "passed" tests)
     val _ = property("`pre` demo") = {
         monadicIO(
           for {
@@ -122,7 +138,7 @@ object PropertyMTest extends Properties("PropertyM") {
               )
               _ <- monitor[IO](collect(int))
               _ <- pre[IO](int % 2 == 0)
-              _ <- assert(int == 0)
+              // _ <- assert(int == 0) // Uncomment this line if you want to see the number of discarded test cases
           } yield true
         )
     }
@@ -132,38 +148,51 @@ object PropertyMTest extends Properties("PropertyM") {
     ) = {
         monadicIO(for {
             _ <- pre(false)
-        } yield true)
+        } yield true).map(undecidedRes =>
+            undecidedRes.copy(status = if undecidedRes.status == Undecided then True else False)
+        )
     }
     val _ = property("assert[IO](false) should fail") = {
-        monadicIO(for {
+        shouldFail(monadicIO(for {
             _ <- assert(false)
-        } yield true)
+        } yield true))
     }
 
     val _ = property("assert[Either[Any, _]](false) should fail") = {
         type EA[A] = Either[Any, A]
 
+        // FIXME: Factor out runners for common types
         def runner: EA[Prop] => Prop = {
             case Left(err)   => false :| s"test failed with error: $err"
             case Right(prop) => prop
         }
 
-        monadic(
-          runner,
-          for {
-              _ <- assert[EA](false)
-          } yield true
+        shouldFail(
+          monadic(
+            runner,
+            for {
+                _ <- assert[EA](false)
+            } yield true
+          )
         )
     }
 
-    // `monadicIO` should catch otherwise-unhandled exceptions and turn them into property failures.
+    // `monadicIO` should catch otherwise-unhandled exceptions and turn them into properties with the Prop.Exception
+    // status.
+
     val _ = property("demo: thrown exceptions") = {
-        monadicIO(
+        val prop = monadicIO(
           for {
               _ <- run(
                 throw new RuntimeException("This should just fail the test, not crash the suite")
               )
           } yield true
+        )
+        prop.map(eRes =>
+            eRes.status match {
+                case Prop.Exception(e) => eRes.copy(status = True)
+                case _                 => eRes.copy(status = False)
+            }
         )
     }
 
@@ -285,13 +314,17 @@ object PropertyM:
     // ===================================
 
     /** Runs the property monad for 'IO'-computations. */
-    def monadicIO[A](prop: PropertyM[IO, A])(using toProp: A => Prop, ioRuntime: IORuntime): Prop =
+    // NOTE: the by-name parameter is necessary, otherwise exceptions won't be caught properly. See the
+    // "exception" demo.
+    def monadicIO[A](
+        prop: => PropertyM[IO, A]
+    )(using toProp: A => Prop, ioRuntime: IORuntime): Prop =
         // NOTE: I'm pretty sure this is what we want -- Prop.secure evaluates its argument only at the time
         // it is actually referenced, so we should be catching the exception here
-        monadic(runner = (ioProp: IO[Prop]) => Prop.secure(ioProp.unsafeRunSync()), m = prop)
+        monadic(runner = (ioProp: IO[Prop]) => ioProp.map(Prop.secure(_)).unsafeRunSync(), m = prop)
 
     /** Given an arbitrary monadic runner and a PropertyM, return a Prop */
-    def monadic[M[_], A](runner: M[Prop] => Prop, m: PropertyM[M, A])(using
+    def monadic[M[_], A](runner: M[Prop] => Prop, m: => PropertyM[M, A])(using
         toProp: A => Prop,
         monadM: Monad[M]
     ): Prop = {
@@ -304,7 +337,6 @@ object PropertyM:
                 val (p, s) = Prop.startSeed(params)
                 mp.pureApply(p, s).apply(p)
             })
-
         Prop.secure(testableGenProp(monadic1(m).map(runner)))
     }
     /*
@@ -315,7 +347,7 @@ object PropertyM:
      */
 
     def monadic1[M[_], A](
-        m: PropertyM[M, A]
+        m: => PropertyM[M, A]
     )(using toProp: A => Prop, monadM: Monad[M]): Gen[M[Prop]] =
         m.unPropertyM(prop => monadM.pure(toProp(prop)))
 
