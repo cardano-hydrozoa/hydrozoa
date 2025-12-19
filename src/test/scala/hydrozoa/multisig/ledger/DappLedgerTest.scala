@@ -36,7 +36,8 @@ object DappLedgerTest extends Properties("DappLedger") {
     // Accept "any" as the error
     def runner(mProp: EitherT[IO, Any, Prop]): Prop =
         Prop.secure(mProp.value.unsafeRunSync() match {
-            case Left(e)  => s"Failed: $e" |: false
+            case Left(e)  =>
+              s"Failed: $e" |: false
             case Right(p) => p
         })
 
