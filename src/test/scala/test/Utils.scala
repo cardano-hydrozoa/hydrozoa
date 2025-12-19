@@ -1,17 +1,14 @@
 package test
-import monocle.*
-import monocle.syntax.all.*
+import hydrozoa.multisig.ledger.VirtualLedger
 import scala.language.postfixOps
 import scalus.cardano.address.Network
-import scalus.cardano.address.Network.Testnet
+import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.Environment
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.eval.ExBudget
-import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
 import test.TestPeer.Alice
 
 val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
@@ -21,7 +18,9 @@ val blockfrost544Params: ProtocolParams = ProtocolParams.fromBlockfrostJson(
 val costModels = blockfrost544Params.costModels
 
 // Individual parameters for Recipe constructors (replacing BuilderContext)
-val testNetwork: Network = Testnet
+/** WARNING: Use this. Don't use Network.Testnet. Scalus uses Mainnet in its test utils.
+  */
+val testNetwork: Network = Mainnet
 val testProtocolParams: ProtocolParams = blockfrost544Params
 
 def slotConfig(network: Network): SlotConfig = network match {
@@ -63,13 +62,22 @@ val testTxBuilderEnvironment: Environment = CardanoInfo(
   network = testNetwork
 )
 
+def testVirtualLedgerConfig(slot: SlotNo): VirtualLedger.Config = VirtualLedger.Config(
+  slotConfig = testTxBuilderEnvironment.slotConfig,
+  slot = slot,
+  protocolParams = testTxBuilderEnvironment.protocolParams,
+  network = testNetwork
+)
+
 // Get the minAda for an Ada only pubkey utxo
-def minPubkeyAda(params: ProtocolParams = blockfrost544Params) = {
-    val utxo = genAdaOnlyPubKeyUtxo(Alice).sample.get.focus(_._2.value.coin.value).replace(0L)
-    ensureMinAda(utxo._2, blockfrost544Params).value.coin
+def minPubkeyAda(params: ProtocolParams = blockfrost544Params): Coin = {
+    ensureMinAda(
+      TransactionOutput.Babbage(Alice.address(testNetwork), Value.zero, None, None),
+      blockfrost544Params
+    ).value.coin
 }
 
-def sumUtxoValues(utxos: Seq[(TransactionInput, TransactionOutput)]): Value =
+def sumUtxoValues(utxos: Seq[Utxo]): Value =
     utxos.map(_._2.value).foldLeft(Value.zero)((acc: Value, v: Value) => acc + v)
 
 extension [E, A](e: Either[E, A])

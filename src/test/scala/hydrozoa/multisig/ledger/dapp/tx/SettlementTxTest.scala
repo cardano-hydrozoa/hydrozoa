@@ -4,7 +4,7 @@ import cats.data.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -30,14 +30,18 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
         refundAddress <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_)
         )
-        refundDatum <- genByteStringData
+        genData = Gen.frequency(
+          (99, genByteStringData.map(data => SOption.Some(data))),
+          (1, SOption.None)
+        )
+        refundDatum <- genData
 
     } yield DepositUtxo.Datum(
-      address = address,
-      datum = SOption.Some(datum),
-      deadline = deadline,
-      refundAddress = refundAddress,
-      refundDatum = SOption.Some(refundDatum)
+      DepositUtxo.Refund.Instructions(
+        address = refundAddress,
+        datum = refundDatum,
+        startTime = deadline
+      )
     )
 }
 
@@ -61,14 +65,14 @@ def genDepositUtxo(
 
         depositMinAda = ensureMinAda(mockUtxo, params).value.coin
 
-        depositAmount <- arbitrary[Coin].map(_ + depositMinAda)
+        depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
 
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
-      l1RefScript = None
+      virtualOutputs = ???
     )
 
 def genSettlementTxSeqBuilder(
@@ -98,17 +102,21 @@ def genSettlementTxSeqBuilder(
         )
         deposits <- genHelper(genDeposit)
 
-        payouts <- genHelper(genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
+        payouts <- genHelper(genPayoutObligation(network))
+        payoutAda = payouts
+            .map(_.utxo.value.coin)
+            .fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
           headAddress = Some(hns.mkAddress(network)),
           network = network,
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
+        kzgCommitment: KzgCommitment = ???
     } yield (
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
+        kzgCommitment = kzgCommitment,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,

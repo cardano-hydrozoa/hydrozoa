@@ -1,119 +1,282 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.multisig.ledger.DappLedger.Tx
-import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
-import hydrozoa.multisig.ledger.dapp.tx.Metadata.RefundPostDated
+import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.{Utxo as _, *}
+import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
+import scala.annotation.tailrec
 import scala.language.implicitConversions
-import scalus.cardano.address.Network
+import scala.util.{Failure, Success}
+import scalus.builtin.ByteString
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.rules.STS.Validator
+import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
+import scalus.cardano.ledger.rules.TransactionSizeValidator
+import scalus.cardano.ledger.utils.TxBalance
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
+import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
-import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
+import scalus.cardano.txbuilder.TxBalancingError.CantBalance
+import scalus.ledger.api.v3.PosixTime
 
-sealed trait RefundTx {
-    def depositSpent: DepositUtxo
+sealed trait RefundTx extends Tx {
+    def mStartTime: Option[PosixTime] = this match {
+        case self: RefundTx.PostDated => Some(self.startTime)
+        case _                        => None
+    }
 }
 
 object RefundTx {
-    final case class Immediate(
-        override val depositSpent: DepositUtxo,
-        override val tx: Transaction
-    ) extends Tx,
-          RefundTx
+    final case class Immediate(override val tx: Transaction) extends RefundTx
+    final case class PostDated(override val tx: Transaction, startTime: PosixTime) extends RefundTx
 
-    final case class PostDated(
-        override val depositSpent: DepositUtxo,
-        override val tx: Transaction
-    ) extends Tx,
-          RefundTx
+    object Builder {
+        final case class Immediate(
+            override val config: Tx.Builder.Config,
+            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            override val refundValue: Value
+        ) extends Builder[RefundTx.Immediate] {
+            override val mValidityStartSlot: None.type = None
+            override val stepRefundMetadata =
+                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
-    object Immediate {
-        def build(): Immediate = ???
+            override def mkPartialResult(
+                ctx: TransactionBuilder.Context,
+                valueNeeded: Value
+            ): PartialResult.Immediate =
+                PartialResult.Immediate(ctx, valueNeeded, refundInstructions)
+        }
+
+        final case class PostDated(
+            override val config: Tx.Builder.Config,
+            override val refundInstructions: DepositUtxo.Refund.Instructions,
+            override val refundValue: Value
+        ) extends Builder[RefundTx.PostDated] {
+            override val mValidityStartSlot: Some[PosixTime] = Some(refundInstructions.startTime)
+            override val stepRefundMetadata =
+                ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
+
+            override def mkPartialResult(
+                ctx: TransactionBuilder.Context,
+                valueNeeded: Value
+            ): PartialResult.PostDated =
+                PartialResult.PostDated(ctx, valueNeeded, refundInstructions)
+        }
+
+        sealed trait PartialResult[T <: RefundTx]
+            extends Tx.Builder.HasCtx,
+              State.Fields.HasInputRequired {
+            def refundInstructions: DepositUtxo.Refund.Instructions
+            def postProcess(ctx: TransactionBuilder.Context): T
+
+            final def complete(
+                depositSpent: DepositUtxo,
+                config: Tx.Builder.Config
+            ): BuildErrorOr[T] = for {
+                addedDepositSpent <- TransactionBuilder
+                    .modify(
+                      ctx,
+                      List(
+                        Spend(
+                          depositSpent.toUtxo,
+                          NativeScriptWitness(
+                            NativeScriptAttached,
+                            config.headNativeScript.requiredSigners
+                          )
+                        )
+                      )
+                    )
+                    .explainConst("adding real spend deposit failed.")
+                finalized <- addedDepositSpent
+                    .finalizeContext(
+                      config.env.protocolParams,
+                      prebalancedLovelaceDiffHandler,
+                      config.evaluator,
+                      config.validators
+                    )
+                    .explainConst("finalizing partial result completion failed")
+            } yield postProcess(finalized)
+        }
+
+        object PartialResult {
+            final case class Immediate(
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value,
+                override val refundInstructions: DepositUtxo.Refund.Instructions
+            ) extends PartialResult[RefundTx.Immediate] {
+                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.Immediate =
+                    RefundTx.Immediate(ctx.transaction)
+            }
+
+            final case class PostDated(
+                override val ctx: TransactionBuilder.Context,
+                override val inputValueNeeded: Value,
+                override val refundInstructions: DepositUtxo.Refund.Instructions
+            ) extends PartialResult[RefundTx.PostDated] {
+                override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
+                    RefundTx.PostDated(ctx.transaction, refundInstructions.startTime)
+            }
+        }
+
+        object State {
+            object Fields {
+                sealed trait HasInputRequired {
+                    def inputValueNeeded: Value
+                }
+            }
+        }
     }
 
-    object PostDated {
-        case class Recipe(
-            depositTx: DepositTx,
-            txIx: Int,
-            network: Network,
-            protocolParams: ProtocolParams,
-            evaluator: PlutusScriptEvaluator,
-            validators: Seq[Validator],
-            headScript: HeadMultisigScript,
-            validityStartSlot: Slot
-        )
+    trait Builder[T <: RefundTx] extends Tx.Builder {
+        import BuilderOps.*
 
-        type ParseError = String
+        def refundInstructions: DepositUtxo.Refund.Instructions
+        def refundValue: Value
 
-        def parse(serialized: Array[Byte]): Either[ParseError, RefundTx.PostDated] = ???
+        def mValidityStartSlot: Option[PosixTime]
+        def stepRefundMetadata: ModifyAuxiliaryData
 
-        def build(recipe: Recipe): Either[SomeBuildError, PostDated] = {
-            /////////////////////////////////////////////////////////////////////
-            // Data extraction
+        def mkPartialResult(
+            ctx: TransactionBuilder.Context,
+            valueNeededWithFee: Value
+        ): Builder.PartialResult[T]
 
-            val deposit = recipe.depositTx.depositProduced
-            // NB: Fee is paid from deposit itself
-            val depositDatum = deposit._3
-            val refundOutput: TransactionOutput =
-                TransactionOutput(
-                  address = depositDatum.refundAddress.toScalusLedger(network = recipe.network),
-                  value = Value(deposit._4),
-                  datumOption = depositDatum.refundDatum.asScala.map(Inline(_))
-                )
+        final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
+            val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
-            /////////////////////////////////////////////////////////////////////
-            // Step definitions
+            val refundOutput: TransactionOutput = TransactionOutput.Babbage(
+              address = config.headAddress,
+              value = refundValue,
+              datumOption = refundInstructions.datum.asScala.map(Inline(_)),
+              scriptRef = None
+            )
 
-            val spendDeposit = Spend(
-              utxo = Utxo(recipe.depositTx.depositProduced.toUtxo),
-              witness = NativeScriptWitness(
-                scriptSource = NativeScriptValue(recipe.headScript.script),
-                additionalSigners = recipe.headScript.requiredSigners
+            val sendRefund = Send(refundOutput)
+
+            val setValidity = ValidityStartSlot(
+              config.env.slotConfig.timeToSlot(refundInstructions.startTime.toLong)
+            )
+
+            val steps = List(stepRefundMetadata, stepReferenceHNS, setValidity, sendRefund)
+
+            for {
+                ctx <- TransactionBuilder
+                    .build(config.env.network, steps)
+                    .explainConst("adding base refund steps failed")
+
+                valueNeeded = Placeholder.inputValueNeeded(ctx)
+
+                valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
+            } yield mkPartialResult(ctx, valueNeededWithFee)
+        }
+
+        // TODO: This is very similar to the trialFinishLoop in RolloutTx. Factor out a common lib function?
+        @tailrec
+        private def trialFinishLoop(
+            ctx: TransactionBuilder.Context,
+            trialValue: Value
+        ): BuildErrorOr[Value] = {
+            val spendDeposit = Utxo(
+              BuilderOps.Placeholder.utxoId,
+              TransactionOutput.Babbage(
+                address = config.headAddress,
+                value = trialValue,
+                datumOption =
+                    None, // Datum is not really empty, but that doesn't affect balancing here.
+                scriptRef = None
               )
             )
 
-            val createRefund: Send = Send(refundOutput)
-
-            val setValidity = ValidityStartSlot(recipe.validityStartSlot.slot)
-
-            val modifyAuxiliaryData = ModifyAuxiliaryData(_ =>
-                Some(
-                  MD(
-                    RefundPostDated(
-                      recipe.headScript.mkAddress(recipe.network)
+            val trialResult = for {
+                addedSpendDeposit <- TransactionBuilder.modify(
+                  ctx,
+                  List(
+                    Spend(
+                      spendDeposit,
+                      NativeScriptWitness(
+                        NativeScriptAttached,
+                        config.headNativeScript.requiredSigners
+                      )
                     )
                   )
                 )
-            )
+                res <- addedSpendDeposit.finalizeContext(
+                  config.env.protocolParams,
+                  prebalancedLovelaceDiffHandler,
+                  config.evaluator,
+                  List(TransactionSizeValidator)
+                )
+            } yield res
 
-            val steps = List(spendDeposit, createRefund, setValidity, modifyAuxiliaryData)
-
-            //////////////////////////////////////////////////////////////////////
-            // Build and finalize
-
-            for {
-                unbalanced <- TransactionBuilder
-                    .build(recipe.network, steps)
-                finalized <- unbalanced
-                    .finalizeContext(
-                      recipe.protocolParams,
-                      diffHandler = new ChangeOutputDiffHandler(
-                        recipe.protocolParams,
-                        0
-                      ).changeOutputDiffHandler,
-                      evaluator = recipe.evaluator,
-                      validators = recipe.validators
+            trialResult match {
+                case Left(
+                      SomeBuildError.ValidationError(
+                        e: InvalidTransactionSizeException,
+                        errorCtx
+                      )
+                    ) =>
+                    Left(SomeBuildError.ValidationError(e, errorCtx))
+                        .explainConst("trial to add placeholder spend deposit failed")
+                case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
+                    trialFinishLoop(ctx, trialValue - Value(Coin(diff)))
+                case Right(_) => Right(trialValue)
+                case e =>
+                    throw new RuntimeException(
+                      "should be impossible; " +
+                          s"loop only has two possible Lefts, but got $e"
                     )
-            } yield PostDated(
-              depositSpent = recipe.depositTx.depositProduced,
-              tx = finalized.transaction
+            }
+        }
+    }
+
+    private object BuilderOps {
+        object Placeholder {
+            // A UtxoID with the largest possible size in Flat encoding
+            // - Transaction ID should be 32 bytes of 1111 1111 because Flat uses the least number of bytes.
+            // - The index can be zero because Flat will still use a full byte
+            // https://hackage.haskell.org/package/flat-0.6/docs/Flat-Class.html
+            val utxoId = TransactionInput(
+              transactionId = TransactionHash.fromByteString(
+                ByteString.fromArray(Array.fill(32)(Byte.MinValue))
+              ),
+              index = 0
             )
+
+            def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
+                TxBalance.produced(ctx.transaction)
+        }
+    }
+
+    sealed trait ParseError extends Throwable
+
+    case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
+    case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+
+    def parse(
+        txBytes: Tx.Serialized,
+        env: Environment
+    ): Either[ParseError, RefundTx] = {
+        given ProtocolVersion = env.protocolParams.protocolVersion
+        given OriginalCborByteArray = OriginalCborByteArray(txBytes)
+
+        io.bullet.borer.Cbor.decode(txBytes).to[Transaction].valueTry match {
+            case Success(tx) =>
+                for {
+                    imd <- MD.parse(tx) match {
+                        case Right(md: Metadata.Refund) => Right(md)
+                        case Right(md) =>
+                            Left(MetadataParseError(MD.UnexpectedTxType(md, "Refund")))
+                        case Left(e) => Left(MetadataParseError(e))
+                    }
+
+                    refundTx = tx.body.value.validityStartSlot match {
+                        case None => RefundTx.Immediate(tx)
+                        case Some(startSlot) =>
+                            RefundTx.PostDated(tx, env.slotConfig.slotToTime(startSlot))
+                    }
+                } yield refundTx
+            case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 
     }

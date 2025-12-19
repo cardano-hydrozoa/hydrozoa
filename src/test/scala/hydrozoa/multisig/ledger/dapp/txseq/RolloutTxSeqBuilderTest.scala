@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
@@ -14,13 +14,13 @@ import test.Generators.Hydrozoa.*
 
 class RolloutTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyChecks {
 
-    val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation.L1])] =
+    val genBuilder: Gen[(RolloutTxSeq.Builder, NonEmptyVector[Payout.Obligation])] =
         for {
             (config, _) <- genTxBuilderConfigAndPeers()
             payouts <- Gen
-                .containerOfN[Vector, Payout.Obligation.L1](
+                .containerOfN[Vector, Payout.Obligation](
                   160,
-                  genPayoutObligationL1(config.env.network)
+                  genPayoutObligation(config.env.network)
                 )
                 .map(NonEmptyVector.fromVectorUnsafe)
         } yield (RolloutTxSeq.Builder(config), payouts)

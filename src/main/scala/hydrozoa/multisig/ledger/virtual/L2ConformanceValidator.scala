@@ -37,8 +37,8 @@ trait L2ConformanceValidator[L1]:
 object L2ConformanceValidator {
     def validate(context: Config, state: State, event: L2Event): Either[String, Unit] =
         event match {
-            case L2EventTransaction(tx)  => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-            case L2EventGenesis(_, _, _) => Right(()) // Correct by construction
+            case L2EventTransaction(tx) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
+            case L2EventGenesis(_, _)   => Right(()) // Correct by construction
         }
 }
 

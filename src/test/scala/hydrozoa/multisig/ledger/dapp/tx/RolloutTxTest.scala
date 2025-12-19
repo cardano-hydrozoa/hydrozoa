@@ -17,7 +17,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genLastBuilder: Gen[(RolloutTx.Builder.Last, RolloutTx.Builder.Args.Last)] =
         for {
             config <- genTxConfig()
-            genPayouts = genPayoutObligationL1(config.env.network)
+            genPayouts = genPayoutObligation(config.env.network)
             // We want to test small, medium, and large, so we do it with frequency
             payouts <-
                 Gen.frequency(
@@ -32,7 +32,7 @@ class RolloutTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
     val genNotLastBuilder: Gen[(RolloutTx.Builder.NotLast, RolloutTx.Builder.Args.NotLast)] =
         for {
             config <- genTxConfig()
-            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligationL1(config.env.network))
+            payouts <- GenOther.nonEmptyVectorOf(genPayoutObligation(config.env.network))
             rolloutSpentVal <- Arbitrary.arbitrary[Coin].map(Value(_))
         } yield (
           RolloutTx.Builder.NotLast(config),

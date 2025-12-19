@@ -1,8 +1,11 @@
-package test.lib.Gen
+package org.scalacheck.gen
 
+import cats.Applicative.ops.toAllApplicativeOps
 import cats.Monad
-import cats.syntax.all.*
+import org.scalacheck
 import org.scalacheck.Gen
+import org.scalacheck.Gen.Parameters
+import org.scalacheck.rng.Seed
 
 object Unsafe {
 
@@ -18,5 +21,9 @@ object Unsafe {
     // in the same way.
     //
     // I'm _pretty_ sure that its equivalent, though.
-    def delay[A]: Gen[Gen[A] => A] = Gen.const(_.sample.get)
+    def delay[A]: Gen[Gen[A] => A] =
+        // do I need to slide the seed here?
+        Gen.gen((p: Parameters, sd: Seed) =>
+            Gen.r(r = Some(genA => genA.pureApply(p, sd)), sd = sd)
+        )
 }

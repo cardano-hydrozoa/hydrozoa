@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx}
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
@@ -33,12 +33,12 @@ object LedgerProtocol {
     }
 
     final case class RegisterDeposit(
-        txSerialized: ledger.DappLedger.Tx.Serialized,
+        txSerialized: ledger.dapp.tx.Tx.Serialized,
         override val dResponse: Deferred[IO, Either[RegisterDeposit.Error, RegisterDeposit.Success]]
     ) extends SyncRequest[IO, RegisterDeposit.Error, RegisterDeposit.Success]
 
     object RegisterDeposit {
-        def apply(txSerialized: ledger.DappLedger.Tx.Serialized): IO[RegisterDeposit] = for {
+        def apply(txSerialized: ledger.dapp.tx.Tx.Serialized): IO[RegisterDeposit] = for {
             deferredResponse <- Deferred[IO, Either[Error, Success]]
         } yield RegisterDeposit(txSerialized, deferredResponse)
 
@@ -51,7 +51,7 @@ object LedgerProtocol {
     }
 
     final case class VirtualTransaction(
-        txSerialized: ledger.VirtualLedger.Tx.Serialized,
+        txSerialized: Tx.Serialized,
         override val dResponse: Deferred[
           IO,
           Either[VirtualTransaction.Error, VirtualTransaction.Success]
@@ -59,7 +59,7 @@ object LedgerProtocol {
     ) extends SyncRequest[IO, VirtualTransaction.Error, VirtualTransaction.Success]
 
     object VirtualTransaction {
-        def apply(txSerialized: ledger.VirtualLedger.Tx.Serialized): IO[VirtualTransaction] = for {
+        def apply(txSerialized: Tx.Serialized): IO[VirtualTransaction] = for {
             deferredResponse <- Deferred[IO, Either[Error, Success]]
         } yield VirtualTransaction(txSerialized, deferredResponse)
 

@@ -393,7 +393,7 @@ object InitializationTx {
           tx = tx
         )
 
-    sealed trait ParseError
+    sealed trait ParseError extends Throwable
 
     case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
 

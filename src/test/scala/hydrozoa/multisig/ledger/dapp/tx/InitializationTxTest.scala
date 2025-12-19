@@ -60,13 +60,11 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         // a max non-plutus fee
         seedUtxo <- genAdaOnlyPubKeyUtxo(
           peers.head,
-          genCoinWithMinimum = Some(
-            minInitTreasuryAda
-                + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-          )
+          minimumCoin = minInitTreasuryAda
+              + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
         ).map(x => Utxo(x._1, x._2))
         otherSpentUtxos <- Gen
-            .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
+            .listOf(genAdaOnlyPubKeyUtxo(peers.head))
             .map(_.map(x => Utxo(x._1, x._2)))
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
@@ -79,7 +77,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         initialDeposit <- Gen
             .choose(
               minInitTreasuryAda.value,
-              sumUtxoValues(spentUtxos.toList.map(_.toTuple)).coin.value
+              sumUtxoValues(spentUtxos.toList).coin.value
                   - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
                   - minPubkeyAda().value
             )
