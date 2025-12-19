@@ -4,6 +4,7 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ReplyingActor
+import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
@@ -30,33 +31,50 @@ trait Persistence extends Actor[IO, Request] {
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction {
-            case x: PersistRequest =>
-                x.handleRequest { case PersistRequest(data, dResp) =>
-                    for {
-                        _ <- data match {
-                            case x: NewLedgerEvent =>
-                                events.update(m => m + (x.id -> x))
-                            case x: Block =>
-                                blocks.update(m => m + (x.id -> x))
-                            case x: AckBlock =>
-                                acks.update(m => m + (x.id -> x))
-                            case x: ConfirmBlock =>
-                                confirmedBlock.update(_ => Some(x.id))
-                            case x: NewMsgBatch =>
-                                batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
-                                    x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
-                                    x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
-                                    events.update(m => m ++ x.events.map(y => y.id -> y))
-                        }
-                    } yield PutSucceeded
+            case x: SyncRequest[IO, Throwable, PersistRequest, PutResponse] =>
+                x.handleRequest(handlePersistRequest)
 
-                }
-            case x: PutL1Effects        => x.handleRequest(_ => IO.pure(PutSucceeded))
-            case x: PutCardanoHeadState => x.handleRequest(_ => IO.pure(PutSucceeded))
-            case x: GetBlockData        => x.handleRequest(_ => IO.pure(GetBlockDataResp()))
-            case x: GetConfirmedLocalEvents =>
-                x.handleRequest(_ => IO.pure(GetConfirmedLocalEventsResp()))
-            case x: GetConfirmedL1Effects =>
+            case x: SyncRequest[IO, Throwable, PutL1Effects.type, PutResponse] =>
+                x.handleRequest(_ => IO.pure(PutSucceeded))
+
+            case x: SyncRequest[IO, Throwable, PutCardanoHeadState.type, PutResponse] =>
+                x.handleRequest(_ => IO.pure(PutSucceeded))
+
+            case x: SyncRequest[IO, Throwable, GetBlockData.type, GetBlockDataResp] =>
+                x.handleRequest(_ => IO.pure(GetBlockDataResp()))
+
+            case x: SyncRequest[
+                  IO,
+                  Throwable,
+                  GetConfirmedL1Effects.type,
+                  GetConfirmedL1EffectsResp
+                ] =>
                 x.handleRequest(_ => IO.pure(GetConfirmedL1EffectsResp()))
+
+            case x: SyncRequest[
+                  IO,
+                  Throwable,
+                  GetConfirmedLocalEvents.type,
+                  GetConfirmedLocalEventsResp
+                ] =>
+                x.handleRequest(_ => IO.pure(GetConfirmedLocalEventsResp()))
         }
+
+    def handlePersistRequest(req: PersistRequest): IO[PutResponse] = for {
+        _ <- req.data match {
+            case x: NewLedgerEvent =>
+                events.update(m => m + (x.id -> x))
+            case x: Block =>
+                blocks.update(m => m + (x.id -> x))
+            case x: AckBlock =>
+                acks.update(m => m + (x.id -> x))
+            case x: ConfirmBlock =>
+                confirmedBlock.update(_ => Some(x.id))
+            case x: NewMsgBatch =>
+                batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
+                    x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
+                    x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
+                    events.update(m => m ++ x.events.map(y => y.id -> y))
+        }
+    } yield PutSucceeded
 }

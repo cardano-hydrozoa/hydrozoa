@@ -1,6 +1,6 @@
 package hydrozoa.multisig.protocol
 
-import cats.effect.{Deferred, IO}
+import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ReplyingActorRef
 import hydrozoa.lib.actor.SyncRequest
@@ -11,23 +11,24 @@ object PersistenceProtocol {
         type PersistenceRef = Ref
         type Ref = ReplyingActorRef[IO, Request, Response]
         type Request =
-            PersistRequest | PutL1Effects | PutCardanoHeadState | GetBlockData |
-                GetConfirmedL1Effects | GetConfirmedLocalEvents
+            SyncRequest[IO, Throwable, PersistRequest, PutResponse] |
+                SyncRequest[IO, Throwable, PutL1Effects.type, PutResponse] |
+                SyncRequest[IO, Throwable, PutCardanoHeadState.type, PutResponse] |
+                SyncRequest[IO, Throwable, GetBlockData.type, GetBlockDataResp] |
+                SyncRequest[IO, Throwable, GetConfirmedL1Effects.type, GetConfirmedL1EffectsResp] |
+                SyncRequest[
+                  IO,
+                  Throwable,
+                  GetConfirmedLocalEvents.type,
+                  GetConfirmedLocalEventsResp
+                ]
 
         type Response =
             PutResponse | GetBlockDataResp | GetConfirmedL1EffectsResp | GetConfirmedLocalEventsResp
 
         /** ==Put/write data into the persistence system== */
-        final case class PersistRequest(
-            data: Persisted.Request,
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
-
-        object PersistRequest {
-            def apply(data: Persisted.Request): IO[PersistRequest] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PersistRequest(data, deferredResponse)
-        }
+        final case class PersistRequest(data: Persisted.Request)
+            extends SyncRequest.Send[IO, Throwable, PersistRequest, PutResponse]
 
         /** Successfully persisted the data. */
         enum PutResponse:
@@ -35,45 +36,24 @@ object PersistenceProtocol {
             // case PutFailed
 
         /** Persist L1 effects of L2 blocks */
-        final case class PutL1Effects(
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
-
-        object PutL1Effects {
-            def apply(): IO[PutL1Effects] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PutL1Effects(deferredResponse)
-        }
+        case object PutL1Effects
+            extends SyncRequest.Send[IO, Throwable, PutL1Effects.type, PutResponse]
 
         /** Persist the head's latest utxo state in Cardano */
-        final case class PutCardanoHeadState(
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
-
-        object PutCardanoHeadState {
-            def apply(): IO[PutCardanoHeadState] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PutCardanoHeadState(deferredResponse)
-        }
+        case object PutCardanoHeadState
+            extends SyncRequest.Send[IO, Throwable, PutCardanoHeadState.type, PutResponse]
 
         /** ==Get/read data from the persistence system== */
 
         /** Request data referenced by a block (e.g. multi-ledger events and absorbed/rejected L1
           * deposits).
           */
-        final case class GetBlockData(
-            override val dResponse: Deferred[IO, Either[Throwable, GetBlockDataResp]]
-        ) extends SyncRequest[IO, Throwable, GetBlockDataResp]
+        case object GetBlockData
+            extends SyncRequest.Send[IO, Throwable, GetBlockData.type, GetBlockDataResp]
 
         /** Response to [[GetBlockData]]. */
         final case class GetBlockDataResp(
         )
-
-        object GetBlockData {
-            def apply(): IO[GetBlockData] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetBlockDataResp]]
-            } yield GetBlockData(deferredResponse)
-        }
 
         /** Retrieve local events referenced by a confirmed block:
           *
@@ -81,33 +61,29 @@ object PersistenceProtocol {
           *   - Multi-signed deposit and post-dated refund transactions for the deposit events
           *     referenced by the block.
           */
-        final case class GetConfirmedLocalEvents(
-            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedLocalEventsResp]]
-        ) extends SyncRequest[IO, Throwable, GetConfirmedLocalEventsResp]
+        case object GetConfirmedLocalEvents
+            extends SyncRequest.Send[
+              IO,
+              Throwable,
+              GetConfirmedLocalEvents.type,
+              GetConfirmedLocalEventsResp
+            ]
 
         /** Response to [[GetConfirmedLocalEvents]]. */
         final case class GetConfirmedLocalEventsResp(
         )
 
-        object GetConfirmedLocalEvents {
-            def apply(): IO[GetConfirmedLocalEvents] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetConfirmedLocalEventsResp]]
-            } yield GetConfirmedLocalEvents(deferredResponse)
-        }
-
         /** Retrieve L1 effects of confirmed L2 blocks. */
-        final case class GetConfirmedL1Effects(
-            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedL1EffectsResp]]
-        ) extends SyncRequest[IO, Throwable, GetConfirmedL1EffectsResp]
+        case object GetConfirmedL1Effects
+            extends SyncRequest.Send[
+              IO,
+              Throwable,
+              GetConfirmedL1Effects.type,
+              GetConfirmedL1EffectsResp
+            ]
 
         /** Response to [[GetConfirmedL1Effects]]. */
         final case class GetConfirmedL1EffectsResp(
         )
-
-        object GetConfirmedL1Effects {
-            def apply(): IO[GetConfirmedL1Effects] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetConfirmedL1EffectsResp]]
-            } yield GetConfirmedL1Effects(deferredResponse)
-        }
     }
 }

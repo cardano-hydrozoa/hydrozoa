@@ -183,8 +183,7 @@ final case class JointLedger(
             state.set(newState)
 
         val eitherT: EitherT[IO, ErrorApplyInternalTx, Unit] = for {
-            req <- EitherT.right(ApplyInternalTx(tx))
-            res <- EitherT.right(virtualLedger ?: req)
+            res <- EitherT.right(virtualLedger ?: ApplyInternalTx(tx))
             p <- EitherT.right(unsafeGetProducing)
             newState = res match {
                 case Left(_)                  => appendTransactionInvalid(p, id)
@@ -252,8 +251,7 @@ final case class JointLedger(
             )
 
             for {
-                gsReq <- VirtualLedger.GetCurrentKzgCommitment()
-                gsRes <- virtualLedger ?: gsReq
+                gsRes <- virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment
 
                 kzgCommit = gsRes.getOrElse(
                   throw new RuntimeException("error getting state from virtual ledger")
@@ -325,7 +323,7 @@ final case class JointLedger(
         for {
             producing <- unsafeGetProducing
 
-            settleLedgerReq <- SettleLedger(
+            settleLedgerReq = SettleLedger(
               pollDepositResults = pollResults,
               payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
               blockCreationTime = producing.startTime,
@@ -365,7 +363,7 @@ final case class JointLedger(
         for {
             p <- unsafeGetProducing
 
-            finalizeLedgerReq <- DappLedger.Requests.FinalizeLedger(
+            finalizeLedgerReq = DappLedger.Requests.FinalizeLedger(
               p.nextBlockData.blockWithdrawnUtxos,
               multisigRegimeUtxoToSpend = multisigRegimeUtxo,
               equityShares = equityShares

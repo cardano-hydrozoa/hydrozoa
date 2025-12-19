@@ -68,8 +68,7 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
                     newId = LedgerEvent.Id(config.peerId, newNum)
                     newEvent = NewLedgerEvent(newId, x.time, x.event)
-                    persistenceRequest <- Persistence.PersistRequest(newEvent)
-                    _ <- config.persistence ?: persistenceRequest
+                    _ <- config.persistence ?: Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>

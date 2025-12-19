@@ -124,14 +124,14 @@ object VirtualLedger {
     ///////////////////////////////////////////
     // Requests
     type Request =
-//        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
-//            ApplyGenesis |
-          SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
+        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
+            ApplyGenesis |
+            SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
 
     // Internal Tx
     final case class ApplyInternalTx(
         tx: Tx.Serialized,
-    ) extends SyncRequest.TypeClass[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
+    ) extends SyncRequest.Send[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
           Payout.Obligation
         ]]
 
@@ -139,7 +139,12 @@ object VirtualLedger {
     final case class ApplyGenesis(go: L2EventGenesis)
 
     case object GetCurrentKzgCommitment
-        extends SyncRequest.TypeClass[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
+        extends SyncRequest.Send[
+          IO,
+          GetStateError,
+          GetCurrentKzgCommitment.type,
+          KzgCommitment
+        ]
 
     //////////////////////////////////////////////
     // Other Types

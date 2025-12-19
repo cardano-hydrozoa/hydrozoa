@@ -1,6 +1,6 @@
 package hydrozoa.multisig.protocol
 
-import cats.effect.{Deferred, IO}
+import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.actor.SyncRequest
@@ -33,15 +33,15 @@ object LedgerProtocol {
     }
 
     final case class RegisterDeposit(
-        txSerialized: ledger.dapp.tx.Tx.Serialized,
-        override val dResponse: Deferred[IO, Either[RegisterDeposit.Error, RegisterDeposit.Success]]
-    ) extends SyncRequest[IO, RegisterDeposit.Error, RegisterDeposit.Success]
+        txSerialized: ledger.dapp.tx.Tx.Serialized
+    ) extends SyncRequest.Send[
+          IO,
+          RegisterDeposit.Error,
+          RegisterDeposit,
+          RegisterDeposit.Success
+        ]
 
     object RegisterDeposit {
-        def apply(txSerialized: ledger.dapp.tx.Tx.Serialized): IO[RegisterDeposit] = for {
-            deferredResponse <- Deferred[IO, Either[Error, Success]]
-        } yield RegisterDeposit(txSerialized, deferredResponse)
-
         final case class Success(
             genesisObligations: List[GenesisObligation],
             refundTxs: List[RefundTx.PostDated]
@@ -50,19 +50,15 @@ object LedgerProtocol {
         type Error = DepositTx.ParseError
     }
 
-    final case class VirtualTransaction(
-        txSerialized: Tx.Serialized,
-        override val dResponse: Deferred[
+    final case class VirtualTransaction(txSerialized: Tx.Serialized)
+        extends SyncRequest.Send[
           IO,
-          Either[VirtualTransaction.Error, VirtualTransaction.Success]
+          VirtualTransaction.Error,
+          VirtualTransaction,
+          VirtualTransaction.Success
         ]
-    ) extends SyncRequest[IO, VirtualTransaction.Error, VirtualTransaction.Success]
 
     object VirtualTransaction {
-        def apply(txSerialized: Tx.Serialized): IO[VirtualTransaction] = for {
-            deferredResponse <- Deferred[IO, Either[Error, Success]]
-        } yield VirtualTransaction(txSerialized, deferredResponse)
-
         final case class Success(
             payoutObligations: List[Unit] // ledger.JointLedger.PayoutObligation]
         )
@@ -73,14 +69,9 @@ object LedgerProtocol {
 
     final case class CompleteBlock(
         timeCreation: FiniteDuration,
-        override val dResponse: Deferred[IO, Either[CompleteBlock.Error, CompleteBlock.Success]]
-    ) extends SyncRequest[IO, CompleteBlock.Error, CompleteBlock.Success]
+    ) extends SyncRequest.Send[IO, CompleteBlock.Error, CompleteBlock, CompleteBlock.Success]
 
     object CompleteBlock {
-        def apply(timeCreation: FiniteDuration): IO[CompleteBlock] = for {
-            deferredResponse <- Deferred[IO, Either[Error, Success]]
-        } yield CompleteBlock(timeCreation, deferredResponse)
-
         final case class Success(
             newBody: Block.Body,
             newCommitment: KzgCommitment
