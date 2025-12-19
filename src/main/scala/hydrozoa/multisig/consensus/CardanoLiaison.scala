@@ -22,7 +22,7 @@ import scalus.cardano.ledger.{Slot, Transaction, TransactionHash, TransactionInp
   *   - Periodically polls the Cardano blockchain for the head's utxo state (and some additional
   *     information occasinally).
   *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
-  *   - Keeps track of confirmed L1 effects of L2 blocks that are immutable on L1 (TODO)
+  *   - Keeps track of confirmed L1 effects of L2 blocks that are immutable on L1 (TODO F14)
   *
   * Some notes:
   *   - Though this module belongs to the multisig regime, the component's lifespan lasts longer
@@ -93,6 +93,62 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         }
 
     // ===================================
+    // Internal state
+    // ===================================
+
+    /** The second part of the EffectId is a number:
+      *   - 0 - settlement
+      *   - 1,2,3,... - rollouts
+      */
+    private type EffectId = (Block.Number, Int)
+
+    private object EffectId:
+        val initializationEffectId: EffectId = Block.Number(0) -> 0
+
+    /** The state we want to achieve on L1. */
+    private enum TargetState:
+        /** Regular state of an active head represented by id of the treasury utxo. */
+        case Active(treasuryUtxoId: UtxoIdL1)
+
+        /** Final state of a head, represented by the transaction hash of the finalization tx. */
+        case Finalized(finalizationTxHash: TransactionHash)
+
+    private type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | DeinitTx |
+        RolloutTx
+
+    /** Internal state of the actor. */
+    private final case class State(
+        /** L1 target state */
+        targetState: TargetState,
+
+        /** Contains spent inputs mapping for all effects modulo the initialization tx, since
+          * usually it doesn't spend any utxos locked at the head's address, and even if this is the
+          * case, the initialization tx is handled separately.
+          */
+        effectInputs: Map[UtxoIdL1, EffectId],
+
+        /** This contains all effects, the whole fish skeleton, including the initialization tx, but
+          * with no fallback txs, which are stored separately in [[fallbackEffects]]
+          */
+        happyPathEffects: TreeMap[EffectId, HappyPathEffect],
+
+        /** Fallback effects, indexed by the block number they were created. */
+        fallbackEffects: Map[Block.Number, FallbackTx]
+    )
+
+    private object State:
+        def initialState: State = {
+            State(
+              targetState =
+                  TargetState.Active(UtxoIdL1(config.initializationTx.treasuryProduced.utxoId)),
+              effectInputs = Map.empty,
+              happyPathEffects =
+                  TreeMap(EffectId.initializationEffectId -> config.initializationTx),
+              fallbackEffects = Map(Block.Number(0) -> config.initializationFallbackTx)
+            )
+        }
+
+    // ===================================
     // Inbox handlers
     // ===================================
 
@@ -103,14 +159,15 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         _ <- IO.println("handleMajorBlockL1Effects")
         // TODO: check effect uniqueness?
         _ <- state.update(s => {
-            val (blockEffectInputs, blockEffects) = mkEffectInputsAndEffects(block.settlementTxSeq)
+            val (blockEffectInputs, blockEffects) =
+                mkHappyPathEffectInputsAndEffects(block.settlementTxSeq)
             State(
               targetState = TargetState.Active(
                 UtxoIdL1(block.settlementTxSeq.settlementTx.treasuryProduced.utxoId)
               ),
               effectInputs = s.effectInputs ++ blockEffectInputs,
-              effects = s.effects ++ blockEffects,
-              fallbackTxs = s.fallbackTxs + (block.id -> block.fallbackTx)
+              happyPathEffects = s.happyPathEffects ++ blockEffects,
+              fallbackEffects = s.fallbackEffects + (block.id -> block.fallbackTx)
             )
         })
     } yield ()
@@ -123,18 +180,21 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         // TODO: check effect uniqueness?
         _ <- state.update(s => {
             val (blockEffectInputs, blockEffects) =
-                mkEffectInputsAndEffects(block.finalizationTxSeq)
+                mkHappyPathEffectInputsAndEffects(block.finalizationTxSeq)
             s.copy(
               targetState = TargetState.Finalized(block.finalizationTxSeq.finalizationTx.tx.id),
               effectInputs = s.effectInputs ++ blockEffectInputs,
-              effects = s.effects ++ blockEffects
+              happyPathEffects = s.happyPathEffects ++ blockEffects
             )
         })
     } yield ()
 
-    private def mkEffectInputsAndEffects(
+    private def mkHappyPathEffectInputsAndEffects(
         settlementTxSeq: SettlementTxSeq
-    ): (Seq[(UtxoIdL1, EffectId)], Seq[(EffectId, EffectTx)]) = {
+    ): (
+        Seq[(UtxoIdL1, EffectId)],
+        Seq[(EffectId, HappyPathEffect)]
+    ) = {
         val settlementTx = settlementTxSeq.settlementTx
         val treasurySpent = settlementTx.treasurySpent
         val blockNumber = Block.Number(settlementTx.majorVersionProduced)
@@ -142,17 +202,18 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             case _: SettlementTxSeq.NoRollouts =>
                 (
                   Seq(UtxoIdL1(treasurySpent.utxoId) -> (blockNumber -> 0)),
-                  Seq((blockNumber -> 0) -> EffectSettlementTx(settlementTx))
+                  Seq((blockNumber -> 0) -> settlementTx)
                 )
             case withRollouts: SettlementTxSeq.WithRollouts =>
                 val last = withRollouts.rolloutTxSeq.last
-                (
-                  (treasurySpent.utxoId -> EffectSettlementTx(settlementTx))
+                val vector: Vector[(TransactionInput, HappyPathEffect)] = (
+                  (treasurySpent.utxoId -> settlementTx)
                       +: withRollouts.rolloutTxSeq.notLast.map(rolloutTx =>
-                          rolloutTx.rolloutSpent.utxo.input -> EffectRolloutTx(rolloutTx)
+                          rolloutTx.rolloutSpent.utxo.input -> rolloutTx
                       )
-                      :+ (last.rolloutSpent.utxo.input -> EffectRolloutTx(last))
-                ).zipWithIndex
+                      :+ (last.rolloutSpent.utxo.input -> last)
+                )
+                vector.zipWithIndex
                     .map((utxoIdAndEffect, index) => {
                         val effectId = blockNumber -> index
                         (UtxoIdL1(
@@ -163,26 +224,29 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         }
     }
 
-    private def mkEffectInputsAndEffects(
+    private def mkHappyPathEffectInputsAndEffects(
         finalizationTxSeq: FinalizationTxSeq
-    ): (Seq[(UtxoIdL1, EffectId)], Seq[(EffectId, EffectTx)]) =
+    ): (
+        Seq[(UtxoIdL1, EffectId)],
+        Seq[(EffectId, HappyPathEffect)]
+    ) =
         val finalizationTx = finalizationTxSeq.finalizationTx
         val treasurySpent = finalizationTx.treasurySpent
         val blockNumber = Block.Number(finalizationTx.majorVersionProduced)
         val finalizationEffectId = blockNumber -> 0
         val finalizationInputEntry = UtxoIdL1(treasurySpent.utxoId) -> finalizationEffectId
-        val finalizationEffectEntry = finalizationEffectId -> EffectFinalizationTx(finalizationTx)
+        val finalizationEffectEntry = finalizationEffectId -> finalizationTx
         val deinitEffectId = blockNumber.increment -> 0
 
         def mkWithRollout(
             rolloutTxSeq: RolloutTxSeq
-        ): Vector[((UtxoIdL1, (Block.Number, Int)), ((Block.Number, Int), EffectTx))] = {
+        ): Vector[((UtxoIdL1, (Block.Number, Int)), ((Block.Number, Int), HappyPathEffect))] = {
             val last = rolloutTxSeq.last
-            ((treasurySpent.utxoId -> EffectFinalizationTx(finalizationTx))
+            ((treasurySpent.utxoId -> finalizationTx)
                 +: rolloutTxSeq.notLast.map(rolloutTx =>
-                    rolloutTx.rolloutSpent.utxo.input -> EffectRolloutTx(rolloutTx)
+                    rolloutTx.rolloutSpent.utxo.input -> rolloutTx
                 )
-                :+ (last.rolloutSpent.utxo.input -> EffectRolloutTx(last))).zipWithIndex
+                :+ (last.rolloutSpent.utxo.input -> last)).zipWithIndex
                 .map((utxoIdAndEffect, index) => {
                     val effectId = blockNumber -> index
                     (UtxoIdL1(
@@ -203,7 +267,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 val deinitInputEffectEntry = UtxoIdL1(
                   withDeinit.deinitTx.residualTreasurySpent.utxoId
                 ) -> deinitEffectId
-                val deinitEffectEntry = deinitEffectId -> EffectDeinitTx(withDeinit.deinitTx)
+                val deinitEffectEntry = deinitEffectId -> withDeinit.deinitTx
 
                 (
                   Seq(
@@ -224,16 +288,20 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 (mkWithRollout(withDeinitAndRollout.rolloutTxSeq) :+
                     ((UtxoIdL1(
                       withDeinitAndRollout.deinitTx.residualTreasurySpent.utxoId
-                    ) -> deinitEffectId) -> (deinitEffectId -> EffectDeinitTx(
-                      withDeinitAndRollout.deinitTx
-                    )))).unzip
+                    ) -> deinitEffectId) -> (deinitEffectId -> withDeinitAndRollout.deinitTx))).unzip
         }
 
+    /** The core part of the liaison that decides whether an action is needed and submits them.
+      *
+      * It's called either when:
+      *   - the liaison learns a new effect
+      *   - by receiving timeout
+      */
     private def runEffects: IO[Unit] = for {
 
         _ <- IO.println("runEffects")
 
-        // 1. Get the L1 state, i.e. the list of utxo ids + the current slot
+        // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current slot
         getCardanoHeadState <- GetCardanoHeadState()
         resp <- config.cardanoBackend ?: getCardanoHeadState
 
@@ -256,7 +324,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                       state,
                       l1State.utxoIds,
                       l1State.currentSlot
-                    )
+                    ).fold(e => throw RuntimeException(e.msg), x => x)
 
                     // 3. Determine whether the initialization requires submission.
                     actionsToSubmit <-
@@ -265,14 +333,14 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                         else {
                             // Empty direct actions is a precondition for the init (happy path) tx submission
                             lazy val initAction = Seq(
-                              Action.InitializeHead(state.effects.values.map(_.tx).toSeq)
+                              Action.InitializeHead(state.happyPathEffects.values.map(_.tx).toSeq)
                             )
-                            // FIXME: check the rule-based treasury!
+                            // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                             state.targetState match {
                                 case TargetState.Active(targetTreasuryUtxoId) =>
                                     IO.pure(
                                       if l1State.utxoIds.contains(targetTreasuryUtxoId)
-                                      then List.empty
+                                      then List.empty // everything is up-to-date on L1
                                       else initAction
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
@@ -307,117 +375,11 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         }
     } yield ()
 
-    private def mkDirectActions(state: State, utxosFound: Set[UtxoIdL1], slot: Slot): Seq[Action] =
-        // Split into known effect inputs/unknown utxos
-        // val (inputs, _unknown) = utxosFound.partition(state.effectInputs.keySet.contains)
-
-        utxosFound
-            .map(state.effectInputs.get)
-            .filter(_.isDefined)
-            .map(_.get)
-            .toSeq
-            .sorted
-            .map(mkDirectAction(state, slot))
-
-    private def mkDirectAction(state: State, currentSlot: Slot)(
-        effectId: EffectId
-    ): Action.FallbackToRuleBased | Action.PushForwardMultisig | Action.Rollout = {
-        effectId match {
-            // Backbone tx - settlement/finalization/deinit
-            case backboneTx @ (blockNum, 0) =>
-                // May absent for phony "deinit" block number
-                val mbFallbackTx = state.fallbackTxs.get(blockNum.decrement)
-                // By construction either the fallback tx for N is valid or the "settlementOrFinalizationTx" for N+1 is valid:
-                // - seems obvious WRT a settlement(finalization)/fallback pair
-                // - deinit neither has ttl, nor fallback, so it's always valid
-                if mbFallbackTx.isDefined && currentSlot >= mbFallbackTx.get.validityStart then
-                    Action.FallbackToRuleBased(mbFallbackTx.get.tx)
-                else {
-                    val effectTxs =
-                        state.effects.rangeFrom(backboneTx).toSeq.map(_._2)
-                    Action.PushForwardMultisig(effectTxs.map(_.tx))
-                }
-            // Rollout tx
-            case rolloutTx @ (blockNum, _notZero) =>
-                val nextBackboneTx = blockNum.increment -> 0
-                val effectTxs = state.effects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
-                Action.Rollout(effectTxs.map(_.tx))
-        }
-    }
     // ===================================
-    // Internal state
+    // Actions
     // ===================================
 
-    /** The second part of the EffectId is a number:
-      *   - 0 - settlement
-      *   - 1,2,3,... - rollouts
-      */
-    private type EffectId = (Block.Number, Int)
-    private object EffectId:
-        val initializationEffectId: EffectId = Block.Number(0) -> 0
-
-    /** The existence of this trait is due to the fact the [[Tx]] trait is not sealed. */
-    private sealed trait EffectTx extends Tx:
-        def tx: Transaction
-
-    private final case class EffectInitializationTx(dtx: InitializationTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-    private final case class EffectFallbackTx(dtx: FallbackTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-    private final case class EffectSettlementTx(dtx: SettlementTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-    private final case class EffectRolloutTx(dtx: RolloutTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-    private final case class EffectFinalizationTx(dtx: FinalizationTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-    private final case class EffectDeinitTx(dtx: DeinitTx) extends EffectTx {
-        override def tx: Transaction = dtx.tx
-    }
-
-    /** The state we want to achieve on L1. */
-    private enum TargetState:
-        /** Regular state of an active head represented by id of the treasury utxo. */
-        case Active(treasuryUtxoId: UtxoIdL1)
-
-        /** Final state of a head, represented by the transaction hash of the finalization tx. */
-        case Finalized(finalizationTxHash: TransactionHash)
-
-    /** Internal state of the actor. */
-    private final case class State(
-        /** L1 target state */
-        targetState: TargetState,
-        /** Contains spent inputs mapping for all effects modulo the initialization tx, since
-          * usually it doesn't spend any utxos locked at the head's address, and even if this is the
-          * case, the initialization tx is handled separately.
-          */
-        effectInputs: Map[UtxoIdL1, EffectId],
-        /** This contains all effects, the whole fish skeleton, including the initialization tx, but
-          * with no fallback txs, which are stored separately in [[fallbackTxs]]
-          */
-        effects: TreeMap[EffectId, EffectTx],
-        /** Fallback txs, indexed by a block number of the preceding settlement tx */
-        fallbackTxs: Map[Block.Number, FallbackTx]
-    )
-
-    private object State:
-        def initialState: State = {
-            State(
-              targetState =
-                  TargetState.Active(UtxoIdL1(config.initializationTx.treasuryProduced.utxoId)),
-              effectInputs = Map.empty,
-              effects = TreeMap(
-                EffectId.initializationEffectId -> EffectInitializationTx(config.initializationTx)
-              ),
-              fallbackTxs = Map(Block.Number(0) -> config.initializationFallbackTx)
-            )
-        }
-
-    /** The set of effects the actor may want to execute over L1. */
+    /** The set of effects the actor may want to execute against L1. */
     private enum Action:
         /** Switching into the rule-based regime. */
         case FallbackToRuleBased(tx: Transaction)
@@ -425,8 +387,14 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         /** Pushing the existing state in the multisig regime forward. */
         case PushForwardMultisig(txs: Seq[Transaction])
 
-        /** Finalizing rollout sequence. */
+        /** Finalizing a rollout sequence. */
         case Rollout(txs: Seq[Transaction])
+
+        /** Represents noop action that may occur when the current slot falls into the silence
+          * period - a gap between two competeing transactions when the settlement/finzalization tx
+          * already expired but the fallback is not valid yet.
+          */
+        case SilencePeriodNoop
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
         case InitializeHead(txs: Seq[Transaction])
@@ -435,14 +403,128 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         case Action.FallbackToRuleBased(tx)  => Seq(tx)
         case Action.PushForwardMultisig(txs) => txs
         case Action.Rollout(txs)             => txs
+        case Action.SilencePeriodNoop        => Seq.empty
         case Action.InitializeHead(txs)      => txs
     }
 
-    // ===================================
-    // Errors
-    // ===================================
+    private type DirectAction =
+        Action.FallbackToRuleBased | Action.PushForwardMultisig | Action.Rollout |
+            Action.SilencePeriodNoop.type
 
-    enum Errors extends Throwable:
-        /** The state already contains a fallback tx for a particular utxo. */
-        case NonUniqueFallbackTx()
+    private def mkDirectActions(
+        state: State,
+        utxosFound: Set[UtxoIdL1],
+        slot: Slot
+    ): Either[EffectError, Seq[DirectAction]] =
+        utxosFound
+            .map(state.effectInputs.get)
+            .filter(_.isDefined)
+            .map(_.get)
+            .toSeq
+            .sorted
+            .map(mkDirectAction(state, slot))
+            .sequence
+
+    private def mkDirectAction(state: State, currentSlot: Slot)(
+        effectId: EffectId
+    ): Either[EffectError, DirectAction] =
+        import Action.*
+        import EffectError.*
+
+        effectId match {
+            // Backbone effect - settlement/finalization/deinit
+            case backboneEffectId @ (blockNum, 0) =>
+
+                val happyPathEffect = state.happyPathEffects(backboneEffectId)
+                // May absent for phony "deinit" block number
+                val mbCompetingFallbackEffect = state.fallbackEffects.get(blockNum.decrement)
+
+                // Invariant: there should be always one sensible outcome:
+                // - (1) either the settlement/finalization/deinit tx for block N+1 is valid
+                // - (2) or we are inside the silence period
+                // - (2) or the fallback tx for N is valid
+
+                // This is obvious for a regular settlement(finalization)/fallback pair, and for
+                // the deinit, that has neither has ttl, nor a competing fallback, (1) is always true.
+                mbCompetingFallbackEffect match {
+
+                    // Not a deinit effect
+                    case Some(fallback) =>
+                        for {
+                            happyPathTxTtl <- happyPathEffect match {
+                                case tx: InitializationTx => Right(tx.ttl)
+                                case tx: SettlementTx     => Right(tx.ttl)
+                                case tx: FinalizationTx   => Right(tx.ttl)
+                                // TODO: this should never happen
+                                case _ => Left(UpexpectedEffectType)
+                            }
+
+                            fallbackValidityStart = fallback.validityStart
+
+                            // Choose between (1), (2), and (3)
+                            ret <- (
+                              currentSlot,
+                              happyPathTxTtl,
+                              fallbackValidityStart
+                            ) match {
+                                // (1)
+                                case _ if currentSlot < happyPathTxTtl =>
+                                    val effectTxs =
+                                        state.happyPathEffects
+                                            .rangeFrom(backboneEffectId)
+                                            .toSeq
+                                            .map(_._2)
+                                    Right(PushForwardMultisig(effectTxs.map(_.tx)): DirectAction)
+                                // (2)
+                                case _
+                                    if currentSlot >= happyPathTxTtl && currentSlot < fallbackValidityStart =>
+                                    Right(SilencePeriodNoop: DirectAction)
+                                // (3)
+                                case _ if currentSlot >= fallbackValidityStart =>
+                                    Right(
+                                      FallbackToRuleBased(
+                                        mbCompetingFallbackEffect.get.tx
+                                      ): DirectAction
+                                    )
+                                // Should never happen, indicates an error in validity range calculation
+                                case _ =>
+                                    Left(
+                                      WrongValidityRange(
+                                        currentSlot,
+                                        happyPathTxTtl,
+                                        fallbackValidityStart
+                                      )
+                                    )
+                            }
+                            // TODO: I wasn't able to remove that "safe" cast
+                        } yield ret.asInstanceOf[DirectAction]
+
+                    // This is a deinit effect, always the last tx in the backbone
+                    case None =>
+                        val deinitTxEffectId = backboneEffectId
+                        Right(PushForwardMultisig(Seq(state.happyPathEffects(deinitTxEffectId).tx)))
+                }
+
+            // Rollout tx
+            case rolloutTx @ (blockNum, _notZero) =>
+                val nextBackboneTx = blockNum.increment -> 0
+                val effectTxs =
+                    state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
+                Right(Rollout(effectTxs.map(_.tx)))
+        }
+
+    end mkDirectAction
+
+    private enum EffectError extends Throwable:
+        case UpexpectedEffectType
+        case WrongValidityRange(currentSlot: Slot, happyPathTtl: Slot, fallbackValidityStart: Slot)
+
+    extension (self: EffectError)
+        private def msg: String = self match {
+            case EffectError.UpexpectedEffectType =>
+                "Unexpected effect type was encountered, check the integrity of effects."
+            case EffectError.WrongValidityRange(currentSlot, happyPathTtl, fallbackValidityStart) =>
+                s"Validity range invariant is not hold: current slot: ${currentSlot}," +
+                    s" happy path tx TTL: ${happyPathTtl} fallback validity start: ${fallbackValidityStart}"
+        }
 }

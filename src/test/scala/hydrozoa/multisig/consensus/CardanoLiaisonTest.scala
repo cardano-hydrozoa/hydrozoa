@@ -21,16 +21,15 @@ import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxS
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, GetTxInfoResp, Request, SubmitL1Effects}
 import hydrozoa.multisig.protocol.ConsensusProtocol.{ConfirmFinalBlock, ConfirmMajorBlock}
 import hydrozoa.multisig.protocol.types.Block
+import java.util.concurrent.TimeoutException
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.{forAll, propBoolean}
+import scala.collection.JavaConverters.asScalaBufferConverter
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
-
-import java.util.concurrent.TimeoutException
-import scala.collection.JavaConverters.asScalaBufferConverter
-import scala.concurrent.duration.DurationInt
 
 object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
