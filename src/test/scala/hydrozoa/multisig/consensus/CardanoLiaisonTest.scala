@@ -3,8 +3,8 @@ package hydrozoa.multisig.consensus
 import cats.*
 import cats.data.EitherT.right
 import cats.data.{EitherT, NonEmptyList}
-import cats.effect.IO
 import cats.effect.unsafe.implicits.*
+import cats.effect.{IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.Receive
 import com.suprnation.actor.test.TestKit
@@ -32,7 +32,7 @@ import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
 
-object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
+object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
@@ -47,6 +47,9 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
     object Skeleton:
 
+        // TODO: figure out why this fails with (minSettlements=1, maxSettlements=1)
+        // TODO: this gives no result sometimes
+        // TODO: this is always very slow
         /** Generates the "skeleton", i.e. random chain of happy-path transactions and fallbacks
           * with requested parameters.
           */
@@ -489,6 +492,7 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
             )
         }
 
+    // TODO: this maybe useful for debugging
     // val _ = property("Fish skeleton gets generated") = {
     //   val sample = skeletonGen().sample.get
     //   dumpSkeletonInfo(sample)
@@ -496,8 +500,6 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
     // }
 
     // Test skeletons against which the (multiple) properties are checked.
-    // TODO: figure out why this fails with (1,1)
-    // TODO: it's really slow, benchmark to see why
     val testSkeletons: Seq[Skeleton] =
         List(
           (3, 3), // short skeleton for fast feedback loop
@@ -514,11 +516,13 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
     testSkeletons.distinct.zipWithIndex.foreach { case (skeleton, idx) =>
         include(new Properties(s"Skeleton ${idx}") {
+            // TODO: think again, but I think we don't need it anymore?
             // val _ = property("head is initialized") = mkInitHappensProperty(skeleton)
             val _ = property("rollbacks are handled") = mkRollbackAreHandled(skeleton)
         })
     }
 
+    // TODO: remove, I think it's covered by the rollback handled property
     def mkInitHappensProperty(skeleton: Skeleton): Prop = {
 
         dumpSkeletonInfo(skeleton)
@@ -629,7 +633,7 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
                 system <- right(ActorSystem[IO]("Cardano Liaison SUT").allocated.map(_._1))
                     .leftMap(_.toString)
 
-                cardanoBackendMock = TestCardanoBackendWithRollbacks(
+                cardanoBackendMock = CardanoBackendMockWithState(
                   rollback.utxoIds,
                   rollback.currentSlot
                 )
@@ -649,6 +653,7 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
 
                 cardanoLiaison = new CardanoLiaison(config) {}
 
+                // Use protected handlers directly to present all effects
                 _ <- right(
                   skeleton._2.traverse_(s =>
                       cardanoLiaison.handleMajorBlockL1Effects(
@@ -676,12 +681,14 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
                   system.actorOf(cardanoLiaison)
                 )
 
-                expectMsg = expectMsgPF(
-                  actor = cardanoBackendMockActor,
-                  timeout = 5.seconds
-                )
+                // expectMsg = expectMsgPF(
+                //  actor = cardanoBackendMockActor,
+                //  timeout = 5.seconds
+                // )
 
                 expectedTxs = rollback.depth match {
+                    // Settlement/finalization tx is involved, we need to analyze
+                    // timing
                     case Some(fallback, timing) =>
                         timing match {
                             case BeforeBackboneTtlExpires =>
@@ -690,28 +697,42 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
                             case AfterFallbackBecomesValid =>
                                 Set(fallback) ++ rollback.txsLostPreviousRollout
                         }
+                    // This can happen in two cases - only deinit was rolled back or all effects
                     case None =>
-                        if rollback.currentSlot > skeleton._1.initializationTx.ttl
-                        then Seq.empty
-                        else rollback.txsLost ++ rollback.txsLostPreviousRollout
+                        rollback.txsLost.size match {
+                            // Only deinit
+                            case 1 => rollback.txsLost ++ rollback.txsLostPreviousRollout
+                            // All effects
+                            case _ =>
+                                if rollback.currentSlot > skeleton._1.initializationTx.ttl
+                                then rollback.txsLostPreviousRollout
+                                else rollback.txsLost ++ rollback.txsLostPreviousRollout
+                        }
                 }
 
                 _ <- right(IO.println(s"===> Expected txs: ${expectedTxs}"))
 
-                check <-
-                    // TODO: use known txs rather than messages so we can test these cases as well
-                    if expectedTxs.isEmpty then right(IO.pure(Prop.proved))
-                    else
-                        right(
-                          (expectMsg {
-                              case m: SubmitL1Effects if m.txs.toSet.map(_.id) == expectedTxs => ()
-                          } >> IO.pure(Prop.proved))
-                              .handleErrorWith { case _: TimeoutException =>
-                                  IO.pure(
-                                    "not all txs that were rolled back are submitted" |: false
-                                  )
-                              }
-                        )
+                // TODO: once we fix the deferred result it can be done
+                // We wait for two get state messages from liaison to give it opportunity
+                // to submit whatever it wants
+                // check <- right(
+                //    expectMsgSet(
+                //    actor = cardanoBackendMockActor,
+                //    timeout = 5.second
+                //  )(GetCardanoHeadState, GetCardanoHeadState) >> IO.pure(Prop.proved)
+                // )
+
+                check <- right(
+                  awaitCond(
+                    p = for {
+                        knownTxs <- cardanoBackendMock.getKnownTxs
+                        // _ <- IO.println(s"known txs: $knownTxs")
+                    } yield knownTxs == expectedTxs,
+                    max = 10.second,
+                    interval = 100.millis,
+                    message = "the list of known transaction should match the list of expected txs"
+                  ) >> IO.pure(Prop.proved)
+                )
 
                 _ <- right(system.terminate())
 
@@ -724,8 +745,21 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
         }
     }
 
-    class TestCardanoBackendWithRollbacks(utxoIds: Set[UtxoIdL1], currentSlot: Slot)
+    /** The simplest version of L1 mock that remembers ids of txs submitted and can be used to check
+      * the target state by the list of transactions that should be known to L1.
+      *
+      * @param utxoIds
+      *   utxos ids for the response for [[GetCardanoState]], goes unchanged even a tx is submitted
+      *   for simplicity's sake
+      * @param currentSlot
+      *   the slot for the response for [[GetCardanoState]], goes unchanged as well
+      */
+    class CardanoBackendMockWithState(utxoIds: Set[UtxoIdL1], currentSlot: Slot)
         extends CardanoBackend:
+
+        var knownTxs: Ref[IO, Set[TransactionHash]] = Ref.unsafe(Set.empty)
+
+        def getKnownTxs: IO[Set[TransactionHash]] = knownTxs.get
 
         override def receive: Receive[IO, Request] = {
             case r: SubmitL1Effects     => submitL1Effects(r)
@@ -733,8 +767,11 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
             case r: GetTxInfo           => getTxInfo(r)
         }
 
-        private def submitL1Effects(r: SubmitL1Effects): IO[Unit] =
-            IO.println(s"submitL1Effects: ${r.txs.map(_.id)}")
+        private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
+            txIds <- IO.pure(r.txs.map(_.id))
+            _ <- IO.println(s"submitL1Effects: ${txIds}")
+            _ <- knownTxs.update(s => s ++ txIds)
+        } yield ()
 
         private def getCardanoHeadState(r: GetCardanoHeadState): IO[Unit] = for {
             _ <- IO.println("getCardanoHeadState")
@@ -742,9 +779,9 @@ object CardanoLiaisonTest extends Properties("DappLedger"), TestKit {
         } yield ()
 
         private def getTxInfo(r: GetTxInfo): IO[Unit] = for {
-            _ <- IO.println("getTxInfo")
-            // TODO: constant
-            _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(false)))
+            _ <- IO.println(s"getTxInfo txId: ${r.txHash}")
+            txs <- knownTxs.get
+            _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(txs.contains(r.txHash))))
         } yield ()
 
 }
