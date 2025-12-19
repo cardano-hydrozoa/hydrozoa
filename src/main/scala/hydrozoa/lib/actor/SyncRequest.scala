@@ -103,6 +103,7 @@ object SyncRequest {
               * @return
               */
             def ?:(
+                self : Request,
                 actorRef: ActorRef[F, SyncRequest[F, E, Request, Response]]
             ): F[Either[E, Response]] =
                 for {

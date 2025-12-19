@@ -124,8 +124,9 @@ object VirtualLedger {
     ///////////////////////////////////////////
     // Requests
     type Request =
-        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
-            ApplyGenesis | SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
+//        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
+//            ApplyGenesis |
+          SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
 
     // Internal Tx
     final case class ApplyInternalTx(

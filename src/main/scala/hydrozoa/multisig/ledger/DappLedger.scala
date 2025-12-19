@@ -12,6 +12,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
 import hydrozoa.multisig.ledger.DappLedger.{State, *}
+import hydrozoa.multisig.ledger.VirtualLedger.{GetCurrentKzgCommitment, GetStateError}
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
@@ -106,7 +107,10 @@ trait DappLedger(
 
         import args.*
         def isMature(depositTx: DepositUtxo): Boolean = ???
-
+        
+        def getKzg[A](virtualLedger: ActorRef[IO,VirtualLedger.Request]) : EitherT[IO, GetStateError , KzgCommitment] =
+            EitherT(VirtualLedger.GetCurrentKzgCommitment.?:(virtualLedger)(GetCurrentKzgCommitment))
+              
         // We use the left branch of the eitherT to short circuit if a settlement isn't actually necessary.
         // Otherwise, we return right.
         // We also use exceptions for actual exceptional circumstances.
@@ -151,76 +155,77 @@ trait DappLedger(
                               d._2.virtualOutputs
                             )
                         )
-
+                
                 // ===================================
                 // Step 2: determine the necessary KZG commit
                 // ===================================
-                kzgCommit <- EitherT((virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment) >>= {
+                kzgCommit <- (virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment) >>= {
                     case Left(e)  => throw GetKzgError
-                    case Right(r) => IO.pure(r)
-                })
-
-//              Pattern: 
-                //  res: ActorRef[IO, SyncRequest[IO, VirtualLedger.GetStateError, VirtualLedger.GetCurrentKzgCommitment, KzgCommitment]]
-                //          => IO[Either[VirtualLedger.GetStateError, KzgCommitment]]
-
-
-//                Found: hydrozoa.multisig.ledger.VirtualLedger.GetCurrentKzgCommitment =>
-//                cats.effect.IO[
-//                Either[hydrozoa.multisig.ledger.VirtualLedger.GetStateError,
-//                hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment]
-//                ]
-//                Required: F[Either[A, B]]
-
-
-                // ===================================
-                // Step 3: Build up a settlement Tx
-                // ===================================
-
-                settlementTxSeqArgs = SettlementTxSeq.Builder.Args(
-                  kzgCommitment = kzgCommit,
-                  majorVersionProduced =
-                      Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
-                  treasuryToSpend = s.treasury,
-                  depositsToSpend = depositsInPollResults.map(_._2).toVector,
-                  payoutObligationsRemaining = payoutObligations,
-                  tallyFeeAllowance = tallyFeeAllowance,
-                  votingDuration = votingDuration
-                )
-
-                settlementTxSeqRes <-
-                    SettlementTxSeq.Builder(config).build(settlementTxSeqArgs) match {
-                        case Left(e)  => throw SettlementTxSeqBuilderError(e)
-                        case Right(r) => EitherT.right(IO.pure(r))
-                    }
-
-                // ===================================
-                // Step 4: build the result
-                // ===================================
-
-                // We update the state with:
-                // - the treasury produced by the settlement tx
-                // - The deposits that were _not_ successfully processed by the settlement transaction (due to not fitting)
-                //   and the remaining immature deposits
-                newState = State(
-                  treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced,
-                  deposits = {
-                      // The remaining "depositsToSpend" reattached to their associated refunds.
-                      // (The settlement tx builder loses this information)
-                      val correlatedDeposits =
-                          matureDeposits.filter(x =>
-                              settlementTxSeqRes.depositsToSpend.contains(x._1)
-                          )
-                      correlatedDeposits ++ immatureDeposits
-                  }
-                )
-                _ <- EitherT.right(state.set(newState))
-            } yield SettleLedger.ResultWithSettlement(
-              settlementTxSeqRes.settlementTxSeq,
-              settlementTxSeqRes.fallbackTx,
-              genesisObligations,
-              depositsNotInPollResults
-            )
+                    case Right(r) => EitherT.pure(r)
+                }
+//
+////              Pattern:
+//                //  res: ActorRef[IO, SyncRequest[IO, VirtualLedger.GetStateError, VirtualLedger.GetCurrentKzgCommitment, KzgCommitment]]
+//                //          => IO[Either[VirtualLedger.GetStateError, KzgCommitment]]
+//
+//
+////                Found: hydrozoa.multisig.ledger.VirtualLedger.GetCurrentKzgCommitment =>
+////                cats.effect.IO[
+////                Either[hydrozoa.multisig.ledger.VirtualLedger.GetStateError,
+////                hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment]
+////                ]
+////                Required: F[Either[A, B]]
+//
+//
+//                // ===================================
+//                // Step 3: Build up a settlement Tx
+//                // ===================================
+//
+//                settlementTxSeqArgs = SettlementTxSeq.Builder.Args(
+//                  kzgCommitment = kzgCommit,
+//                  majorVersionProduced =
+//                      Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
+//                  treasuryToSpend = s.treasury,
+//                  depositsToSpend = depositsInPollResults.map(_._2).toVector,
+//                  payoutObligationsRemaining = payoutObligations,
+//                  tallyFeeAllowance = tallyFeeAllowance,
+//                  votingDuration = votingDuration
+//                )
+//
+//                settlementTxSeqRes <-
+//                    SettlementTxSeq.Builder(config).build(settlementTxSeqArgs) match {
+//                        case Left(e)  => throw SettlementTxSeqBuilderError(e)
+//                        case Right(r) => EitherT.right(IO.pure(r))
+//                    }
+//
+//                // ===================================
+//                // Step 4: build the result
+//                // ===================================
+//
+//                // We update the state with:
+//                // - the treasury produced by the settlement tx
+//                // - The deposits that were _not_ successfully processed by the settlement transaction (due to not fitting)
+//                //   and the remaining immature deposits
+//                newState = State(
+//                  treasury = settlementTxSeqRes.settlementTxSeq.settlementTx.treasuryProduced,
+//                  deposits = {
+//                      // The remaining "depositsToSpend" reattached to their associated refunds.
+//                      // (The settlement tx builder loses this information)
+//                      val correlatedDeposits =
+//                          matureDeposits.filter(x =>
+//                              settlementTxSeqRes.depositsToSpend.contains(x._1)
+//                          )
+//                      correlatedDeposits ++ immatureDeposits
+//                  }
+//                )
+//                _ <- EitherT.right(state.set(newState))
+            } yield ??? 
+//            SettleLedger.ResultWithSettlement(
+//              settlementTxSeqRes.settlementTxSeq,
+//              settlementTxSeqRes.fallbackTx,
+//              genesisObligations,
+//              depositsNotInPollResults
+//            )
         eitherT.value.map {
             case Left(l)  => l
             case Right(r) => r
