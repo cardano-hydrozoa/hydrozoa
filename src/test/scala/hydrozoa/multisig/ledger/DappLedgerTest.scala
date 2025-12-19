@@ -25,7 +25,7 @@ import test.{TestPeer, nonSigningValidators, signTx, testEvaluator, testNetwork}
 object DappLedgerTest extends Properties("DappLedger") {
 
     import EitherT.*
-    import test.lib.PropertyM.*
+    import org.scalacheck.PropertyM.*
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
@@ -36,8 +36,8 @@ object DappLedgerTest extends Properties("DappLedger") {
     // Accept "any" as the error
     def runner(mProp: EitherT[IO, Any, Prop]): Prop =
         Prop.secure(mProp.value.unsafeRunSync() match {
-            case Left(e)  =>
-              s"Failed: $e" |: false
+            case Left(e) =>
+                s"Failed: $e" |: false
             case Right(p) => p
         })
 

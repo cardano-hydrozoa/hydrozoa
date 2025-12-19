@@ -502,7 +502,7 @@ object Generators {
                       datumOption = Some(Inline(datum.toData)),
                       scriptRef = None
                     )
-                } yield ??? // Payout.Obligation(l2Input = l2Input, output = output)
+                } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
             }
         }
     }

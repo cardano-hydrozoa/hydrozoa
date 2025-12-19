@@ -1,4 +1,4 @@
-package test.lib
+package org.scalacheck
 
 import cats.*
 import cats.effect.IO
@@ -6,12 +6,10 @@ import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
 import org.scalacheck.Prop.{collect, forAll, propBoolean, undecided}
-import org.scalacheck.util.Pretty
-import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test}
-
-import scala.sys.process.*
 import org.scalacheck.gen.Unsafe.promote
 import org.scalacheck.rng.Seed
+import org.scalacheck.util.Pretty
+import scala.sys.process.*
 
 object PropertyMTest extends Properties("PropertyM") {
 
@@ -129,6 +127,35 @@ object PropertyMTest extends Properties("PropertyM") {
         )
     }
 
+    val _ = property(
+      "`pre` should result in 'undecided' when given an unsatisfiable precondition"
+    ) = {
+        monadicIO(for {
+            _ <- pre(false)
+        } yield true)
+    }
+    val _ = property("assert[IO](false) should fail") = {
+        monadicIO(for {
+            _ <- assert(false)
+        } yield true)
+    }
+
+    val _ = property("assert[Either[Any, _]](false) should fail") = {
+        type EA[A] = Either[Any, A]
+
+        def runner: EA[Prop] => Prop = {
+            case Left(err)   => false :| s"test failed with error: $err"
+            case Right(prop) => prop
+        }
+
+        monadic(
+          runner,
+          for {
+              _ <- assert[EA](false)
+          } yield true
+        )
+    }
+
     // `monadicIO` should catch otherwise-unhandled exceptions and turn them into property failures.
     val _ = property("demo: thrown exceptions") = {
         monadicIO(
@@ -140,23 +167,23 @@ object PropertyMTest extends Properties("PropertyM") {
         )
     }
 
-//    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-//        p
-//          .withMinSuccessfulTests(100)
-//          .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
-//    }
-//
-//    val _ = property("demo: bound values behave deterministically when given a seed") =
-//      val prop = monadicIO(
-//          for {
-//              int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-//              int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-//              int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
-//               _ <- run(IO.println(s"$int1 $int2 $int3")) 
-//          } yield true
-//      )
-//      prop
-    
+    override def overrideParameters(p: Test.Parameters): Test.Parameters = {
+        p
+            .withMinSuccessfulTests(100)
+            .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
+    }
+
+    val _ = property("demo: bound values behave deterministically when given a seed") =
+        val prop = monadicIO(
+          for {
+              int1 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+              int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+              int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
+              _ <- run(IO.println(s"$int1 $int2 $int3"))
+          } yield true
+        )
+        prop
+
 }
 
 object PropertyM:
@@ -272,8 +299,8 @@ object PropertyM:
         //        instance Testable prop => Testable (Gen prop) where
         //          property mp = MkProperty $ do p <- mp; unProperty (property p)
         // but I'm not totally sure its correct. Do I need to slide the seed here?
-        val testableGenProp : (Gen[Prop] => Prop) = mp => Prop.apply(f =
-            params => {
+        val testableGenProp: (Gen[Prop] => Prop) = mp =>
+            Prop.apply(f = params => {
                 val (p, s) = Prop.startSeed(params)
                 mp.pureApply(p, s).apply(p)
             })
@@ -286,7 +313,6 @@ object PropertyM:
     monadic runner m = property (fmap runner (monadic' m))
 
      */
-
 
     def monadic1[M[_], A](
         m: PropertyM[M, A]

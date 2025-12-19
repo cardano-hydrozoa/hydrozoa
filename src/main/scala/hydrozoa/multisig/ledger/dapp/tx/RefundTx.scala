@@ -88,12 +88,14 @@ object RefundTx {
                       )
                     )
                     .explainConst("adding real spend deposit failed.")
-                finalized <- addedDepositSpent.finalizeContext(
-                 config.env.protocolParams,
-                 prebalancedLovelaceDiffHandler,
-                 config.evaluator,
-                 config.validators
-                ).explainConst("finalizing partial result completion failed")
+                finalized <- addedDepositSpent
+                    .finalizeContext(
+                      config.env.protocolParams,
+                      prebalancedLovelaceDiffHandler,
+                      config.evaluator,
+                      config.validators
+                    )
+                    .explainConst("finalizing partial result completion failed")
             } yield postProcess(finalized)
         }
 
@@ -189,8 +191,15 @@ object RefundTx {
             val trialResult = for {
                 addedSpendDeposit <- TransactionBuilder.modify(
                   ctx,
-                  List(Spend(spendDeposit, NativeScriptWitness(NativeScriptAttached,
-                    config.headNativeScript.requiredSigners)))
+                  List(
+                    Spend(
+                      spendDeposit,
+                      NativeScriptWitness(
+                        NativeScriptAttached,
+                        config.headNativeScript.requiredSigners
+                      )
+                    )
+                  )
                 )
                 res <- addedSpendDeposit.finalizeContext(
                   config.env.protocolParams,
