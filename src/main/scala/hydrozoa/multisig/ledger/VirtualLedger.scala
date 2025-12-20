@@ -4,8 +4,7 @@ import cats.data.EitherT
 import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.actor.{SyncRequest, SyncRequestE}
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -22,10 +21,10 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case itx: SyncRequest[IO, ApplyInternalTx, Either[ErrorApplyInternalTx, Vector[
+        case itx: SyncRequestE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[
               Payout.Obligation
-            ]]] =>
-            itx.handleRequest(applyInternalTx(_).value)
+            ]] =>
+            itx.handleRequest(applyInternalTx)
         case ApplyGenesis(go) => applyGenesisTx(go)
         case gs: SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment] =>
             gs.handleRequest(_ => state.get.map(_.kzgCommitment))
@@ -140,30 +139,24 @@ object VirtualLedger {
     ///////////////////////////////////////////
     // Requests
     type Request =
-        SyncRequest[IO, ApplyInternalTx, Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]] |
+        SyncRequestE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[Payout.Obligation]] |
             ApplyGenesis | SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment]
 
     // Internal Tx
     final case class ApplyInternalTx(
         tx: Tx.Serialized,
     ) {
-        def ?:(
-            actorRef: ActorRef[IO, SyncRequest[
-              IO,
-              ApplyInternalTx,
-              Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]
-            ]]
-        ): IO[Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]] =
-            SyncRequest.send(actorRef, this)
+        def ?: : SyncRequest.SendE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[
+          Payout.Obligation
+        ]] = SyncRequest.send(_, this)
     }
 
     // Genesis Tx
     final case class ApplyGenesis(go: L2EventGenesis)
 
     case object GetCurrentKzgCommitment {
-        def ?:(
-            actorRef: ActorRef[IO, SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment]]
-        ): IO[KzgCommitment] = SyncRequest.send(actorRef, this)
+        def ?: : SyncRequest.Send[IO, GetCurrentKzgCommitment.type, KzgCommitment] =
+            SyncRequest.send(_, this)
     }
 
     //////////////////////////////////////////////

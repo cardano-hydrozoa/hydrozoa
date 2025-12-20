@@ -1,6 +1,7 @@
 package hydrozoa.lib.actor
 
 import cats.Monad
+import cats.data.EitherT
 import cats.effect.{Concurrent, Deferred}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
@@ -21,6 +22,8 @@ import com.suprnation.actor.ActorRef.ActorRef
   *
   * @tparam F
   *   The effect in which the request/computation/response runs
+  * @tparam Request
+  *   The type of the request
   * @tparam Response
   *   The type of the response
   * @param request
@@ -35,8 +38,8 @@ import com.suprnation.actor.ActorRef.ActorRef
   * import com.suprnation.actor.Actor.{Actor, Receive}
   *
   * case class Ping(i: Int) {
-  *     def ?:(a: ActorRef[IO, SyncRequest[IO, Ping, Pong]]): IO[Pong] =
-  *         SyncRequest.send(a, this)
+  *     def ?: : SyncRequest.Send[IO, Ping, Pong] =
+  *         SyncRequest.send(_, this)
   * }
   *
   * case class Pong(i: Int)
@@ -72,8 +75,12 @@ final case class SyncRequest[
     dResponse: Deferred[F, Response]
 ) {
 
-    /** Handle a synchronous request with a function, ensuring that the deferred result is completed
-      * with the function's result.
+    /** Handle a synchronous request with a handler function, ensuring that the deferred result is
+      * completed with the function's result. The handler function can have one of the following
+      * type signatures:
+      *
+      *   - `Request => F[Response]`
+      *   - `Request => EitherT[F, L, R]`, where `Either[L,R] =:= Response`
       *
       * This should be used by the receiver of this request.
       * @param f
@@ -85,12 +92,48 @@ final case class SyncRequest[
             _ <- dResponse.complete(result)
         } yield ()
 
-    override def equals(other: Any): Boolean = other match {
-        case x: SyncRequest[F, Request, Response] => x.request == this.request
-    }
+    /** Handle a synchronous request with a handler function, ensuring that the deferred result is
+      * completed with the function's result. The handler function can have one of the following
+      * type signatures:
+      *
+      *   - `Request => F[Response]`
+      *   - `Request => EitherT[F, L, R]`, where `Either[L,R] =:= Response`
+      *
+      * @param f
+      *   the handler function
+      * @param ev
+      *   evidence that the [[Response]] type is an [[Either]]
+      * @tparam L
+      *   the left type in the response's [[Either]]
+      * @tparam R
+      *   the right type in the response's [[Either]]
+      */
+    def handleRequest[L, R](
+        f: Request => EitherT[F, L, R]
+    )(using ev: Either[L, R] =:= Response): F[Unit] =
+        for {
+            result <- f(request).value
+            _ <- dResponse.complete(result)
+        } yield ()
 }
 
+/** A [[SyncRequest]] specialized with a response type that is an [[Either]]. Its handler function
+  * (provided to its [[SyncRequest.handleRequest]] method) should have the type signature
+  * `Request => EitherT[F, L, R]`.
+  *
+  * Type parameters:
+  *   - `F` the effect in which the request/computation/response runs
+  *   - `Request` the type of the request
+  *   - `Err` the left type in the response's [[Either]]
+  *   - `Response` the right type in the response's [[Either]]
+  */
+type SyncRequestE[F[+_], Request, Err, Response] = SyncRequest[F, Request, Either[Err, Response]]
+
 object SyncRequest {
+    type Send[F[+_], Request, Response] =
+        (actorRef: ActorRef[F, SyncRequest[F, Request, Response]]) => F[Response]
+
+    type SendE[F[+_], Request, Err, Response] = Send[F, Request, Either[Err, Response]]
 
     /** Send a synchronous request to an actor that can handle it, via some concurrent monad.
       * Conventionally, it should be aliased as the `?:` method of the request's case class.

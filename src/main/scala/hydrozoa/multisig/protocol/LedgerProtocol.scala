@@ -35,14 +35,12 @@ object LedgerProtocol {
     final case class RegisterDeposit(
         txSerialized: ledger.dapp.tx.Tx.Serialized
     ) {
-        def ?:(
-            actorRef: ActorRef[IO, SyncRequest[
-              IO,
-              RegisterDeposit,
-              Either[RegisterDeposit.Error, RegisterDeposit.Success]
-            ]]
-        ): IO[Either[RegisterDeposit.Error, RegisterDeposit.Success]] =
-            SyncRequest.send(actorRef, this)
+        def ?: : SyncRequest.SendE[
+          IO,
+          RegisterDeposit,
+          RegisterDeposit.Error,
+          RegisterDeposit.Success
+        ] = SyncRequest.send(_, this)
     }
 
     object RegisterDeposit {
@@ -55,14 +53,12 @@ object LedgerProtocol {
     }
 
     final case class VirtualTransaction(txSerialized: Tx.Serialized) {
-        def ?:(
-            actorRef: ActorRef[IO, SyncRequest[
-              IO,
-              VirtualTransaction,
-              Either[VirtualTransaction.Error, VirtualTransaction.Success]
-            ]]
-        ): IO[Either[VirtualTransaction.Error, VirtualTransaction.Success]] =
-            SyncRequest.send(actorRef, this)
+        def ?: : SyncRequest.SendE[
+          IO,
+          VirtualTransaction,
+          VirtualTransaction.Error,
+          VirtualTransaction.Success
+        ] = SyncRequest.send(_, this)
     }
 
     object VirtualTransaction {
@@ -77,13 +73,8 @@ object LedgerProtocol {
     final case class CompleteBlock(
         timeCreation: FiniteDuration,
     ) {
-        def ?:(
-            actorRef: ActorRef[
-              IO,
-              SyncRequest[IO, CompleteBlock, Either[CompleteBlock.Error, CompleteBlock.Success]]
-            ]
-        ): IO[Either[CompleteBlock.Error, CompleteBlock.Success]] =
-            SyncRequest.send(actorRef, this)
+        def ?: : SyncRequest.SendE[IO, CompleteBlock, CompleteBlock.Error, CompleteBlock.Success] =
+            SyncRequest.send(_, this)
     }
 
     object CompleteBlock {

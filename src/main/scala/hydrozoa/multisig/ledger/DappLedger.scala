@@ -8,7 +8,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
 import hydrozoa.config.EquityShares
-import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.actor.{SyncRequest, SyncRequestE}
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
 import hydrozoa.multisig.ledger.DappLedger.{State, *}
@@ -36,20 +36,22 @@ trait DappLedger(
         Ref.unsafe[IO, State](State(initialTreasuryUtxo, Queue.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case d: SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]] =>
-            d.handleRequest(registerDeposit(_).value)
-        case s: SyncRequest[
+        case d: SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] =>
+            d.handleRequest(registerDeposit)
+        case s: SyncRequestE[
               IO,
               SettleLedger,
-              Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+              SettlementTxSeqBuilderError,
+              SettleLedger.Result
             ] =>
-            s.handleRequest(settleLedger(_).value)
-        case f: SyncRequest[
+            s.handleRequest(settleLedger)
+        case f: SyncRequestE[
               IO,
               FinalizeLedger,
-              Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+              FinalizationTxSeqBuilderError,
+              FinalizationTxSeq
             ] =>
-            f.handleRequest(finalizeLedger(_).value)
+            f.handleRequest(finalizeLedger)
         case g: SyncRequest[IO, GetState, State] =>
             g.handleRequest(_ => state.get)
     }
@@ -291,16 +293,18 @@ object DappLedger {
 
     object Requests {
         type Request =
-            SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]] |
-                SyncRequest[
+            SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] |
+                SyncRequestE[
                   IO,
                   SettleLedger,
-                  Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+                  SettlementTxSeqBuilderError,
+                  SettleLedger.Result
                 ] |
-                SyncRequest[
+                SyncRequestE[
                   IO,
                   FinalizeLedger,
-                  Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+                  FinalizationTxSeqBuilderError,
+                  FinalizationTxSeq
                 ] | SyncRequest[IO, GetState, State]
 
         // FIXME: This should include the refundTxBytes
@@ -310,13 +314,8 @@ object DappLedger {
             eventId: LedgerEvent.Id,
             virtualOutputs: NonEmptyList[GenesisObligation],
         ) {
-            def ?:(
-                actorRef: ActorRef[
-                  IO,
-                  SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]]
-                ]
-            ): IO[Either[RegisterDepositError, Unit]] =
-                SyncRequest.send(actorRef, this)
+            def ?: : SyncRequest.SendE[IO, RegisterDeposit, RegisterDepositError, Unit] =
+                SyncRequest.send(_, this)
         }
 
         final case class SettleLedger(
@@ -326,14 +325,12 @@ object DappLedger {
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
         ) {
-            def ?:(
-                actorRef: ActorRef[IO, SyncRequest[
-                  IO,
-                  SettleLedger,
-                  Either[SettlementTxSeqBuilderError, SettleLedger.Result]
-                ]]
-            ): IO[Either[SettlementTxSeqBuilderError, SettleLedger.Result]] =
-                SyncRequest.send(actorRef, this)
+            def ?: : SyncRequest.SendE[
+              IO,
+              SettleLedger,
+              SettlementTxSeqBuilderError,
+              SettleLedger.Result
+            ] = SyncRequest.send(_, this)
         }
 
         object SettleLedger {
@@ -364,19 +361,16 @@ object DappLedger {
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares
         ) {
-            def ?:(
-                actorRef: ActorRef[IO, SyncRequest[
-                  IO,
-                  FinalizeLedger,
-                  Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
-                ]]
-            ): IO[Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]] =
-                SyncRequest.send(actorRef, this)
+            def ?: : SyncRequest.SendE[
+              IO,
+              FinalizeLedger,
+              FinalizationTxSeqBuilderError,
+              FinalizationTxSeq
+            ] = SyncRequest.send(_, this)
         }
 
         final case class GetState() {
-            def ?:(actorRef: ActorRef[IO, SyncRequest[IO, GetState, State]]): IO[State] =
-                SyncRequest.send(actorRef, this)
+            def ?: : SyncRequest.Send[IO, GetState, State] = SyncRequest.send(_, this)
         }
     }
 
