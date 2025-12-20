@@ -1,8 +1,10 @@
 package hydrozoa.multisig.ledger
 
+import cats.data.EitherT
 import cats.effect.*
-import cats.implicits.catsSyntaxFlatMapOps
+import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.VirtualLedger.*
 import hydrozoa.multisig.ledger.dapp.tx.Tx
@@ -12,7 +14,6 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.{KzgCommitment, calculateCommitment, hashToScalar}
 import hydrozoa.{emptyContext, given}
 import io.bullet.borer.Cbor
-import scala.util.{Failure, Success}
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
@@ -21,44 +22,59 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case itx: SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
+        case itx: SyncRequest[IO, ApplyInternalTx, Either[ErrorApplyInternalTx, Vector[
               Payout.Obligation
-            ]] =>
-            itx.handleRequest(applyInternalTx)
+            ]]] =>
+            itx.handleRequest(applyInternalTx(_).value)
         case ApplyGenesis(go) => applyGenesisTx(go)
-        case gs: SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment] =>
+        case gs: SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment] =>
             gs.handleRequest(_ => state.get.map(_.kzgCommitment))
     }
 
     private def applyInternalTx(
         args: ApplyInternalTx
-    ): IO[Vector[Payout.Obligation]] =
+    ): EitherT[IO, ErrorApplyInternalTx, Vector[Payout.Obligation]] =
         val txSerialized = args.tx
         given OriginalCborByteArray = OriginalCborByteArray(txSerialized)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
         // is currently run as a ledger validation rule, but could also be run during parsing.
-        Cbor.decode(txSerialized).to[Transaction].valueTry match {
-            case Failure(e) => throw CborParseError(e)
-            case Success(tx) =>
-                val l2EventTx = L2EventTransaction(tx)
-                for {
-                    s <- state.get
-                    _ <- HydrozoaTransactionMutator.transit(
-                      context = config,
-                      state = s,
-                      l2Event = l2EventTx
-                    ) match {
-                        case Left(e)  => throw TransactionInvalidError(e)
-                        case Right(v) => state.set(v)
-                    }
-                    l1Utxos <- AddOutputsToUtxoL2Mutator.utxoPartition(l2EventTx).map(_._1) match {
-                        case Left(e)  => throw TransactionInvalidError(e)
-                        case Right(v) => IO.pure(v)
-                    }
-                    payoutObligations = l1Utxos.map(utxo => Payout.Obligation(utxo._1, utxo._2))
-                } yield Vector.from(payoutObligations)
-        }
+        for {
+            l2EventTx <- EitherT
+                .fromEither[IO](
+                  Cbor.decode(txSerialized)
+                      .to[Transaction]
+                      .valueTry
+                      .toEither
+                      .bimap(CborParseError.apply, L2EventTransaction.apply)
+                )
+
+            s <- EitherT.right(state.get)
+
+            _ <- EitherT
+                .fromEither[IO](
+                  HydrozoaTransactionMutator
+                      .transit(
+                        context = config,
+                        state = s,
+                        l2Event = l2EventTx
+                      )
+                      .left
+                      .map(TransactionInvalidError.apply)
+                )
+                .semiflatMap(state.set)
+
+            payoutObligations <- EitherT
+                .fromEither[IO](
+                  AddOutputsToUtxoL2Mutator
+                      .utxoPartition(l2EventTx)
+                      .bimap(
+                        TransactionInvalidError.apply,
+                        _.payoutObligations
+                      )
+                )
+            _ <- EitherT.pure[IO, ErrorApplyInternalTx](())
+        } yield payoutObligations
 
     private def applyGenesisTx(tx: L2EventGenesis): IO[Unit] =
         state.get >>= (s => state.set(HydrozoaGenesisMutator.addGenesisUtxosToState(tx, s)))
@@ -124,27 +140,31 @@ object VirtualLedger {
     ///////////////////////////////////////////
     // Requests
     type Request =
-        SyncRequest[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[Payout.Obligation]] |
-            ApplyGenesis |
-            SyncRequest[IO, GetStateError, GetCurrentKzgCommitment.type, KzgCommitment]
+        SyncRequest[IO, ApplyInternalTx, Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]] |
+            ApplyGenesis | SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment]
 
     // Internal Tx
     final case class ApplyInternalTx(
         tx: Tx.Serialized,
-    ) extends SyncRequest.Send[IO, ErrorApplyInternalTx, ApplyInternalTx, Vector[
-          Payout.Obligation
-        ]]
+    ) {
+        def ?:(
+            actorRef: ActorRef[IO, SyncRequest[
+              IO,
+              ApplyInternalTx,
+              Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]
+            ]]
+        ): IO[Either[ErrorApplyInternalTx, Vector[Payout.Obligation]]] =
+            SyncRequest.send(actorRef, this)
+    }
 
     // Genesis Tx
     final case class ApplyGenesis(go: L2EventGenesis)
 
-    case object GetCurrentKzgCommitment
-        extends SyncRequest.Send[
-          IO,
-          GetStateError,
-          GetCurrentKzgCommitment.type,
-          KzgCommitment
-        ]
+    case object GetCurrentKzgCommitment {
+        def ?:(
+            actorRef: ActorRef[IO, SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment]]
+        ): IO[KzgCommitment] = SyncRequest.send(actorRef, this)
+    }
 
     //////////////////////////////////////////////
     // Other Types
@@ -190,18 +210,12 @@ object VirtualLedger {
         def fromScalusState(scalusState: ScalusState): State = State(scalusState.utxos)
         val empty: State = State(activeUtxos = Map.empty)
 
-    sealed trait ErrorApplyInternalTx extends Throwable
+    sealed trait ErrorApplyInternalTx
 
-    sealed trait ErrorApplyGenesisTx extends Throwable
+    sealed trait ErrorApplyGenesisTx
 
-    sealed trait GetStateError extends Throwable
-
-    final case class CborParseError(e: Throwable)
-        extends Throwable,
-          ErrorApplyInternalTx,
-          ErrorApplyGenesisTx
+    final case class CborParseError(e: Throwable) extends ErrorApplyInternalTx, ErrorApplyGenesisTx
     final case class TransactionInvalidError(e: String | TransactionException)
-        extends Throwable,
-          ErrorApplyInternalTx,
+        extends ErrorApplyInternalTx,
           ErrorApplyGenesisTx
 }

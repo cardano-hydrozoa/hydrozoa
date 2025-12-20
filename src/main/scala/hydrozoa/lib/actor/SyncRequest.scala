@@ -1,79 +1,75 @@
 package hydrozoa.lib.actor
 
-import cats.effect.{Concurrent, Deferred, MonadCancelThrow}
+import cats.Monad
+import cats.effect.{Concurrent, Deferred}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
-import scala.reflect.ClassTag
 
-/*
-Notes (Peter, 2025-12-09):
-
-1.) Should any/all of these fields be marked `final`?
-  - A: probably
-
-2.) When I was first trying to use this class, I was switching from a regular Request to this SyncRequest trait.
-I wasn't using "handleRequest" and was instead manually extracting the dResponse, which I forgot to `_.complete`.
-
-If we wrap the Deferred into an opaque type/class and provide constructors, we can expose _only_ the methods in this
-trait as the only eliminators; only `handleRequest` and `?:`. This would ensure that the deferred is always filled
-when the request is handled.
-
-3.) Since the requests need to be issued in IO, we usually have to do something like
-
-for {
-  (...)
-  req <- MyReqConstructor
-  res <- myActor ?: req
-  (...)
-} yield (...)
-
-Does it make sense to expose a function (that initialized the request and issues the request at the same time, so
-that we can just do
-
-for {
-  (...)
-  res <- myActor ?~: MyReqConstructor
-  (...)
-} yield (...)
-
-?
-
-4.) What are the trade-offs of doing this in `EitherT` vs in F with a throwable?
- */
-
-/** A type-safe trait to handle synchronous requests between actors. We use this instead of
-  * ReplyingActor so that each request type can (optionally) have its own response type.
+/** An envelope for a synchronous request to an actor. We use this instead of
+  * cats.actor.ReplyingActor so that each request type can (optionally) have its own response type.
   *
-  * The responses are stored in a [[Deferred]] that is passed along with the request. Think of it
-  * like a "return envelope".
+  * The envelope contains the request, plus an empty [[Deferred]] through which the sender can
+  * receive the actor's response. The actor should provide an effectful handler function to the
+  * envelope's [[handleRequest]] method, which will then complete the [[Deferred]] value with the
+  * result of applying the function to the request contained in the envelope.
   *
-  * To use this, the sender of the request:
-  *   - Creates a Deferred value and places inside a value of a type that implements this trait
-  *     (usually via a _.apply)
-  *   - Issues the request to the receiving actor
-  *   - Blocks on the dResponse
+  * The constructor for [[SyncRequest]] is private, so it can't be used directly to attach a
+  * deferred response to a request and send to an actor. Instead, the request's case class should
+  * define a method (conventionally called [[?:]]) that aliases to [[SyncRequest.send]], which sends
+  * the request as a [[SyncRequest]] with a newly initialized [[Deferred]] response to a given
+  * actor.
   *
   * @tparam F
   *   The effect in which the request/computation/response runs
-  * @tparam E
-  *   A [[Throwable]] error type associated with the computation
   * @tparam Response
   *   The type of the response
-  *
   * @param request
-  *   The request...
+  *   The request being sent synchronously.
   * @param dResponse
-  *   The [[Deferred]] cell created by the sender and sent to the receiver. The receiver should
-  *   populate this cell, via [[handleRequest]] or otherwise.
+  *   An empty [[Deferred]] placeholder for the response, created by the sender and sent to the
+  *   receiver. The receiver should populate this via [[handleRequest]].
+  *
+  * {{{
+  * import cats.effect.{IO, IOApp, ExitCode, Resource}
+  * import com.suprnation.actor.ActorSystem
+  * import com.suprnation.actor.Actor.{Actor, Receive}
+  *
+  * case class Ping(i: Int) {
+  *     def ?:(a: ActorRef[IO, SyncRequest[IO, Ping, Pong]]): IO[Pong] =
+  *         SyncRequest.send(a, this)
+  * }
+  *
+  * case class Pong(i: Int)
+  *
+  * case class PingPongActor() extends Actor[IO, SyncRequest[IO, Ping, Pong]] {
+  *     override def receive: Receive[IO, SyncRequest[IO, Ping, Pong]] = {
+  *         case r: SyncRequest[IO, Ping, Pong] =>
+  *             r.handleRequest(ping => IO.pure(Pong(ping.i)))
+  *     }
+  * }
+  *
+  * object PingPongApp extends IOApp {
+  *     override def run(args: List[String]): IO[ExitCode] = {
+  *         val actorSystemResource: Resource[IO, ActorSystem[IO]] =
+  *             ActorSystem[IO]("ping pong system")
+  *
+  *         actorSystemResource.use { system =>
+  *             for {
+  *                 pingPongActor <- system.actorOf(PingPongActor(), "ping pong actor")
+  *                 pong: Pong <- pingPongActor ?: Ping(42)
+  *             } yield ExitCode.Success
+  *         }
+  *     }
+  * }
+  * }}}
   */
 final case class SyncRequest[
-    F[+_]: MonadCancelThrow,
-    E <: Throwable: ClassTag,
+    F[+_]: Monad,
     Request,
     Response
-] protected (
+] private (
     request: Request,
-    dResponse: Deferred[F, Either[E, Response]]
+    dResponse: Deferred[F, Response]
 ) {
 
     /** Handle a synchronous request with a function, ensuring that the deferred result is completed
@@ -81,36 +77,39 @@ final case class SyncRequest[
       *
       * This should be used by the receiver of this request.
       * @param f
-      * @return
+      *   the handler function
       */
     def handleRequest(f: Request => F[Response]): F[Unit] =
         for {
-            eResult <- f(request).attemptNarrow
-            _ <- dResponse.complete(eResult)
+            result <- f(request)
+            _ <- dResponse.complete(result)
         } yield ()
+
+    override def equals(other: Any): Boolean = other match {
+        case x: SyncRequest[F, Request, Response] => x.request == this.request
+    }
 }
 
 object SyncRequest {
-    trait Send[F[+_]: Concurrent, E <: Throwable: ClassTag, Request, Response] {
 
-        /** Send the request to the actor and block until the receiver completes the deferred
-          * response.
-          *
-          * This should be used by the sender of this request.
-          *
-          * @param actorRef
-          * @return
-          */
-        def ?:(
-            actorRef: ActorRef[F, SyncRequest[F, E, Request, Response]]
-        ): F[Either[E, Response]] = {
-            val self = this.asInstanceOf[Request]
-            for {
-                dResponse <- Deferred[F, Either[E, Response]]
-                syncRequest = SyncRequest(self, dResponse)
-                _ <- actorRef ! syncRequest
-                eResponse <- syncRequest.dResponse.get
-            } yield eResponse
-        }
-    }
+    /** Send a synchronous request to an actor that can handle it, via some concurrent monad.
+      * Conventionally, it should be aliased as the `?:` method of the request's case class.
+      *
+      * @tparam F
+      *   The concurrent monad type
+      * @tparam Request
+      *   The request type
+      * @tparam Response
+      *   The response type
+      */
+    def send[F[+_]: Concurrent, Request, Response](
+        actorRef: ActorRef[F, SyncRequest[F, Request, Response]],
+        self: Request
+    ): F[Response] =
+        for {
+            dResponse <- Deferred[F, Response]
+            syncRequest = SyncRequest(self, dResponse)
+            _ <- actorRef ! syncRequest
+            eResponse <- syncRequest.dResponse.get
+        } yield eResponse
 }

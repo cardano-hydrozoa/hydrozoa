@@ -34,12 +34,16 @@ object LedgerProtocol {
 
     final case class RegisterDeposit(
         txSerialized: ledger.dapp.tx.Tx.Serialized
-    ) extends SyncRequest.Send[
-          IO,
-          RegisterDeposit.Error,
-          RegisterDeposit,
-          RegisterDeposit.Success
-        ]
+    ) {
+        def ?:(
+            actorRef: ActorRef[IO, SyncRequest[
+              IO,
+              RegisterDeposit,
+              Either[RegisterDeposit.Error, RegisterDeposit.Success]
+            ]]
+        ): IO[Either[RegisterDeposit.Error, RegisterDeposit.Success]] =
+            SyncRequest.send(actorRef, this)
+    }
 
     object RegisterDeposit {
         final case class Success(
@@ -50,13 +54,16 @@ object LedgerProtocol {
         type Error = DepositTx.ParseError
     }
 
-    final case class VirtualTransaction(txSerialized: Tx.Serialized)
-        extends SyncRequest.Send[
-          IO,
-          VirtualTransaction.Error,
-          VirtualTransaction,
-          VirtualTransaction.Success
-        ]
+    final case class VirtualTransaction(txSerialized: Tx.Serialized) {
+        def ?:(
+            actorRef: ActorRef[IO, SyncRequest[
+              IO,
+              VirtualTransaction,
+              Either[VirtualTransaction.Error, VirtualTransaction.Success]
+            ]]
+        ): IO[Either[VirtualTransaction.Error, VirtualTransaction.Success]] =
+            SyncRequest.send(actorRef, this)
+    }
 
     object VirtualTransaction {
         final case class Success(
@@ -69,7 +76,15 @@ object LedgerProtocol {
 
     final case class CompleteBlock(
         timeCreation: FiniteDuration,
-    ) extends SyncRequest.Send[IO, CompleteBlock.Error, CompleteBlock, CompleteBlock.Success]
+    ) {
+        def ?:(
+            actorRef: ActorRef[
+              IO,
+              SyncRequest[IO, CompleteBlock, Either[CompleteBlock.Error, CompleteBlock.Success]]
+            ]
+        ): IO[Either[CompleteBlock.Error, CompleteBlock.Success]] =
+            SyncRequest.send(actorRef, this)
+    }
 
     object CompleteBlock {
         final case class Success(

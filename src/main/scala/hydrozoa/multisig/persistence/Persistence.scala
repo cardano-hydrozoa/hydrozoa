@@ -31,32 +31,22 @@ trait Persistence extends Actor[IO, Request] {
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction {
-            case x: SyncRequest[IO, Throwable, PersistRequest, PutResponse] =>
+            case x: SyncRequest[IO, PersistRequest, PutResponse] =>
                 x.handleRequest(handlePersistRequest)
 
-            case x: SyncRequest[IO, Throwable, PutL1Effects.type, PutResponse] =>
+            case x: SyncRequest[IO, PutL1Effects.type, PutResponse] =>
                 x.handleRequest(_ => IO.pure(PutSucceeded))
 
-            case x: SyncRequest[IO, Throwable, PutCardanoHeadState.type, PutResponse] =>
+            case x: SyncRequest[IO, PutCardanoHeadState.type, PutResponse] =>
                 x.handleRequest(_ => IO.pure(PutSucceeded))
 
-            case x: SyncRequest[IO, Throwable, GetBlockData.type, GetBlockDataResp] =>
+            case x: SyncRequest[IO, GetBlockData.type, GetBlockDataResp] =>
                 x.handleRequest(_ => IO.pure(GetBlockDataResp()))
 
-            case x: SyncRequest[
-                  IO,
-                  Throwable,
-                  GetConfirmedL1Effects.type,
-                  GetConfirmedL1EffectsResp
-                ] =>
+            case x: SyncRequest[IO, GetConfirmedL1Effects.type, GetConfirmedL1EffectsResp] =>
                 x.handleRequest(_ => IO.pure(GetConfirmedL1EffectsResp()))
 
-            case x: SyncRequest[
-                  IO,
-                  Throwable,
-                  GetConfirmedLocalEvents.type,
-                  GetConfirmedLocalEventsResp
-                ] =>
+            case x: SyncRequest[IO, GetConfirmedLocalEvents.type, GetConfirmedLocalEventsResp] =>
                 x.handleRequest(_ => IO.pure(GetConfirmedLocalEventsResp()))
         }
 

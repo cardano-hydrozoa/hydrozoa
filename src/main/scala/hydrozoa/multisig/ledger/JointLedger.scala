@@ -49,7 +49,7 @@ final case class JointLedger(
     private val dappLedger: ActorRef[IO, DappLedger.Requests.Request],
     private val virtualLedger: ActorRef[IO, VirtualLedger.Request],
     private val peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
-    // private val cardanoLiason
+    // private val cardanoLiaison
     // private val blockSigner
     private val state: Ref[IO, State],
 
@@ -98,8 +98,11 @@ final case class JointLedger(
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
         // NOTE: we don't call d.handleRequest here, because the DappLedger will fill the deferred,
         // NOT the joint ledger!
+        // FIXME: Forwarding a sync request is iffy. What if the DappLedger forgets to handle the request?
+        //   Perhaps this is another argument for combining the three ledger actors into one.
+        //   And perhaps this is an argument for avoiding sync requests between internal actors.
         case d: RegisterDeposit      => registerDeposit(d)
-        case a: ApplyInternalTxL2    => applyInternalTxL2(a)
+        case a: ApplyInternalTxL2    => applyInternalTxL2(a).value
         case s: StartBlock           => startBlock(s)
         case c: CompleteBlockRegular => completeBlockRegular(c)
         case f: CompleteBlockFinal   => completeBlockFinal(f)
@@ -142,12 +145,11 @@ final case class JointLedger(
         // Is this what we want, or do we want the dappLedger to notify the joint ledger async instead?
         for {
             s <- unsafeGetProducing
-            eRes <- dappLedger ?: req
-            _ <- eRes match {
-                // Rejected deposit
-                case Left(e)  => rejectDeposit(s, req.eventId)
-                case Right(d) => registerDepositInState(s, req.eventId)
-            }
+            _ <- EitherT(dappLedger ?: req).foldF(
+              // Rejected deposit
+              _ => rejectDeposit(s, req.eventId),
+              _ => registerDepositInState(s, req.eventId)
+            )
         } yield ()
     }
 
@@ -156,7 +158,7 @@ final case class JointLedger(
       */
     private def applyInternalTxL2(
         args: ApplyInternalTxL2
-    ): IO[Either[ErrorApplyInternalTx, Unit]] = {
+    ): EitherT[IO, ErrorApplyInternalTx, Unit] = {
 
         import args.*
 
@@ -182,17 +184,16 @@ final case class JointLedger(
                 .modify(m => m.updated(id.peerNum, id.eventNum))
             state.set(newState)
 
-        val eitherT: EitherT[IO, ErrorApplyInternalTx, Unit] = for {
-            res <- EitherT.right(virtualLedger ?: ApplyInternalTx(tx))
+        for {
             p <- EitherT.right(unsafeGetProducing)
-            newState = res match {
-                case Left(_)                  => appendTransactionInvalid(p, id)
-                case Right(payoutObligations) => appendTransactionValid(p, id, payoutObligations)
-            }
+            _ <- EitherT.right(
+              EitherT(virtualLedger ?: ApplyInternalTx(tx)).foldF(
+                _ => appendTransactionInvalid(p, id),
+                appendTransactionValid(p, id, _)
+              )
+            )
             _ <- EitherT.right(state.set(p))
         } yield ()
-
-        eitherT.value
     }
 
     /** Moves the state of the JointLedger from "Done" to "Producing", setting the time and
@@ -251,11 +252,12 @@ final case class JointLedger(
             )
 
             for {
-                gsRes <- virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment
+                kzgCommit <- virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment
 
-                kzgCommit = gsRes.getOrElse(
-                  throw new RuntimeException("error getting state from virtual ledger")
-                )
+                // TODO: Fix
+//                kzgCommit = gsRes.getOrElse(
+//                  throw new RuntimeException("error getting state from virtual ledger")
+//                )
 
                 // FIXME: unsafe cast
                 nextBlock: Block.Minor = p.previousBlock
@@ -331,6 +333,7 @@ final case class JointLedger(
               votingDuration = votingDuration
             )
 
+            // TODO: Fix
             settleLedgerRes <- (dappLedger ?: settleLedgerReq).map {
                 // should this error be thrown here or handled in the DappLedger?
                 case Left(e)  => throw new RuntimeException(s"could not settle DappLedger. $e")
@@ -348,8 +351,8 @@ final case class JointLedger(
         } yield ()
     }
 
-    // Block completion Signal is provided to the joint ledger when the block weaver says its time.
-    // If its a final block, we don't pass poll results from the cardano liason. Otherwise we do.
+    // Block completion Signal is provided to the joint ledger when the block weaver says it's time.
+    // If it's a final block, we don't pass poll results from the cardano liaison. Otherwise, we do.
     // We need to:
     //   - Compile the information from the transient fields into a block
     //   - put it into "previous block"
@@ -422,14 +425,14 @@ final case class JointLedger(
 
     // when a block is finished, we:
     //   - send Aug block to block signer along with the L1 effects settlementTxSeq, etc. for signing locally
-    //     (signatures subsequently passed to peer liason for circulation and block weaver and to the )
-    //   - sends block itself to peer liason for circulation
-    //   - sends just L1 effects to cardano liason
+    //     (signatures subsequently passed to peer liaison for circulation and block weaver and to the )
+    //   - sends block itself to peer liaison for circulation
+    //   - sends just L1 effects to cardano liaison
     private def sendAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
         for {
             // _ <- blockSigner ! augmentedBlock
             _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.block))
-            // _ <- cardanoLiason ! augementedBlock._2
+            // _ <- cardanoLiaison ! augmentedBlock._2
         } yield ()
 
     private def checkReferenceBlock(expectedBlock: Option[Block], actualBlock: Block): IO[Unit] =

@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger
 import cats.data.{EitherT, NonEmptyList}
 import cats.effect.IO.realTime
 import cats.effect.{IO, Ref}
-import cats.implicits.catsSyntaxFlatMapOps
+import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ReplyingActor
@@ -12,7 +12,6 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
 import hydrozoa.multisig.ledger.DappLedger.{State, *}
-import hydrozoa.multisig.ledger.VirtualLedger.GetStateError
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
@@ -37,42 +36,48 @@ trait DappLedger(
         Ref.unsafe[IO, State](State(initialTreasuryUtxo, Queue.empty))
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case d: SyncRequest[IO, ParseDepositError, RegisterDeposit, Unit] =>
-            d.handleRequest(registerDeposit)
-        case s: SyncRequest[IO, SettlementTxSeqBuilderError, SettleLedger, SettleLedger.Result] =>
-            s.handleRequest(settleLedger)
-        case f: SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizeLedger, FinalizationTxSeq] =>
-            f.handleRequest(finalizeLedger)
-        // FIXME: this can't actually throw an error, not really. But using ?: makes it seem like it can
-        case g: SyncRequest[IO, Errors.GetStateError.type, GetState, State] =>
+        case d: SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]] =>
+            d.handleRequest(registerDeposit(_).value)
+        case s: SyncRequest[
+              IO,
+              SettleLedger,
+              Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+            ] =>
+            s.handleRequest(settleLedger(_).value)
+        case f: SyncRequest[
+              IO,
+              FinalizeLedger,
+              Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+            ] =>
+            f.handleRequest(finalizeLedger(_).value)
+        case g: SyncRequest[IO, GetState, State] =>
             g.handleRequest(_ => state.get)
     }
 
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
       * Return the produced deposit utxo and a post-dated refund transaction for it.
       */
-    private def registerDeposit(depositSeq: RegisterDeposit): IO[Unit] = {
-        val eitherTxs: Either[ParseDepositError, DepositTx] = for {
-            depositTx <- DepositTx
-                .parse(depositSeq.serializedDeposit, config, depositSeq.virtualOutputs)
-                .left
-                .map(ParseDepositError(_))
-            //            refundTx: RefundTx.PostDated <- RefundTx.PostDated
-            //                .parse(depositSeq.serializedRefund)
-            //                .left
-            //                .map(ParseRefundPostDatedError(_))
-        } yield depositTx // , refundTx)
-
-        eitherTxs match {
-            case Left(e) => throw e
-            case Right(x) =>
-                for {
-                    _ <- validateTimeBounds(x)
-                    _ <- state
-                        .update(s => s.appendToQueue((depositSeq.eventId, x.depositProduced)))
-                        .map(Right(_))
-                } yield ()
-        }
+    private def registerDeposit(
+        depositSeq: RegisterDeposit
+    ): EitherT[IO, RegisterDepositError, Unit] = {
+        for {
+            // FIXME: DepositTx's parser does not check all the invariants.
+            //  Use DepositRefundTxSeq's parser, instead.
+            depositTx <- EitherT
+                .fromEither[IO](
+                  DepositTx
+                      .parse(depositSeq.serializedDeposit, config, depositSeq.virtualOutputs)
+                      .left
+                      .map(ParseDepositError(_))
+                )
+            _ <- EitherT(validateTimeBounds(depositTx))
+            _ <- EitherT
+                .right(
+                  state
+                      .update(s => s.appendToQueue((depositSeq.eventId, depositTx.depositProduced)))
+                )
+            _ <- EitherT.pure[IO, RegisterDepositError](())
+        } yield ()
     }
 
     // FIXME: we are supposed be checking Deposit maturity, time bounds here. But its not clear where
@@ -102,16 +107,18 @@ trait DappLedger(
     // sending it back to the joint ledger.
     private def settleLedger(
         args: SettleLedger
-    ): IO[SettleLedger.Result] = {
-
+    ): EitherT[IO, SettlementTxSeqBuilderError, SettleLedger.Result] = {
         import args.*
         def isMature(depositTx: DepositUtxo): Boolean = ???
 
         // We use the left branch of the eitherT to short circuit if a settlement isn't actually necessary.
         // Otherwise, we return right.
         // We also use exceptions for actual exceptional circumstances.
-        val eitherT
-            : EitherT[IO, SettleLedger.ResultWithoutSettlement, SettleLedger.ResultWithSettlement] =
+        type ErrorOrShortCircuit = SettleLedger.ResultWithoutSettlement |
+            SettlementTxSeqBuilderError
+
+        val eResultShortCircuit
+            : EitherT[IO, ErrorOrShortCircuit, SettleLedger.ResultWithSettlement] =
             for {
                 s <- EitherT.right(state.get)
 
@@ -155,12 +162,7 @@ trait DappLedger(
                 // ===================================
                 // Step 2: determine the necessary KZG commit
                 // ===================================
-                kzgCommit <- EitherT.right(
-                  (virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment) >>= {
-                      case Left(e)  => throw GetKzgError
-                      case Right(r) => IO.pure(r)
-                  }
-                )
+                kzgCommit <- EitherT.right(virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment)
 
                 // ===================================
                 // Step 3: Build up a settlement Tx
@@ -178,10 +180,14 @@ trait DappLedger(
                 )
 
                 settlementTxSeqRes <-
-                    SettlementTxSeq.Builder(config).build(settlementTxSeqArgs) match {
-                        case Left(e)  => throw SettlementTxSeqBuilderError(e)
-                        case Right(r) => EitherT.right(IO.pure(r))
-                    }
+                    EitherT
+                        .fromEither[IO](
+                          SettlementTxSeq
+                              .Builder(config)
+                              .build(settlementTxSeqArgs)
+                              .left
+                              .map(SettlementTxSeqBuilderError.apply)
+                        )
 
                 // ===================================
                 // Step 4: build the result
@@ -204,15 +210,17 @@ trait DappLedger(
                   }
                 )
                 _ <- EitherT.right(state.set(newState))
+                _ <- EitherT.pure[IO, ErrorOrShortCircuit](())
             } yield SettleLedger.ResultWithSettlement(
               settlementTxSeqRes.settlementTxSeq,
               settlementTxSeqRes.fallbackTx,
               genesisObligations,
               depositsNotInPollResults
             )
-        eitherT.value.map {
-            case Left(l)  => l
-            case Right(r) => r
+
+        eResultShortCircuit.leftFlatMap {
+            case txSeq: SettleLedger.ResultWithoutSettlement => EitherT.rightT(txSeq)
+            case e: SettlementTxSeqBuilderError              => EitherT.leftT(e)
         }
     }
 
@@ -230,27 +238,28 @@ trait DappLedger(
     // TODO (fund14): add Refund.Immediates to the return type
     private def finalizeLedger(
         args: FinalizeLedger
-    ): IO[FinalizationTxSeq] = {
+    ): EitherT[IO, FinalizationTxSeqBuilderError, FinalizationTxSeq] = {
         import args.*
-        val eitherT: EitherT[IO, FinalizationTxSeq.Builder.Error, FinalizationTxSeq] =
-            for {
-                s <- EitherT.right(state.get)
-                kzg: KzgCommitment <- EitherT(???)
-                args = FinalizationTxSeq.Builder.Args(
-                  kzgCommitment = kzg,
-                  majorVersionProduced =
-                      Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
-                  treasuryToSpend = s.treasury,
-                  payoutObligationsRemaining = payoutObligationsRemaining,
-                  multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-                  equityShares = equityShares
-                )
-                ftxSeq <- EitherT.fromEither[IO](FinalizationTxSeq.Builder(config).build(args))
-            } yield ftxSeq
-        eitherT.value.map {
-            case Left(e)  => throw FinalizationTxSeqBuilderError(e)
-            case Right(r) => r
-        }
+        for {
+            s <- EitherT.right(state.get)
+            kzg: KzgCommitment <- EitherT(???)
+            args = FinalizationTxSeq.Builder.Args(
+              kzgCommitment = kzg,
+              majorVersionProduced =
+                  Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
+              treasuryToSpend = s.treasury,
+              payoutObligationsRemaining = payoutObligationsRemaining,
+              multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
+              equityShares = equityShares
+            )
+            ftxSeq <- EitherT.fromEither[IO](
+              FinalizationTxSeq
+                  .Builder(config)
+                  .build(args)
+                  .left
+                  .map(FinalizationTxSeqBuilderError.apply)
+            )
+        } yield ftxSeq
     }
 }
 
@@ -282,16 +291,33 @@ object DappLedger {
 
     object Requests {
         type Request =
-            SyncRequest[IO, ParseDepositError, RegisterDeposit, Unit] |
-                SyncRequest[IO, SettlementTxSeqBuilderError, SettleLedger, SettleLedger.Result] |
-                SyncRequest[IO, FinalizationTxSeqBuilderError, FinalizeLedger, FinalizationTxSeq] |
-                SyncRequest[IO, Errors.GetStateError.type, GetState, State]
+            SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]] |
+                SyncRequest[
+                  IO,
+                  SettleLedger,
+                  Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+                ] |
+                SyncRequest[
+                  IO,
+                  FinalizeLedger,
+                  Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+                ] | SyncRequest[IO, GetState, State]
 
+        // FIXME: This should include the refundTxBytes
+        // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
         final case class RegisterDeposit(
             serializedDeposit: Array[Byte],
             eventId: LedgerEvent.Id,
             virtualOutputs: NonEmptyList[GenesisObligation],
-        ) extends SyncRequest.Send[IO, ParseDepositError, RegisterDeposit, Unit]
+        ) {
+            def ?:(
+                actorRef: ActorRef[
+                  IO,
+                  SyncRequest[IO, RegisterDeposit, Either[RegisterDepositError, Unit]]
+                ]
+            ): IO[Either[RegisterDepositError, Unit]] =
+                SyncRequest.send(actorRef, this)
+        }
 
         final case class SettleLedger(
             pollDepositResults: Set[LedgerEvent.Id],
@@ -299,12 +325,16 @@ object DappLedger {
             blockCreationTime: PosixTime,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
-        ) extends SyncRequest.Send[
-              IO,
-              SettlementTxSeqBuilderError,
-              SettleLedger,
-              SettleLedger.Result
-            ]
+        ) {
+            def ?:(
+                actorRef: ActorRef[IO, SyncRequest[
+                  IO,
+                  SettleLedger,
+                  Either[SettlementTxSeqBuilderError, SettleLedger.Result]
+                ]]
+            ): IO[Either[SettlementTxSeqBuilderError, SettleLedger.Result]] =
+                SyncRequest.send(actorRef, this)
+        }
 
         object SettleLedger {
 
@@ -333,15 +363,21 @@ object DappLedger {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares
-        ) extends SyncRequest.Send[
-              IO,
-              FinalizationTxSeqBuilderError,
-              FinalizeLedger,
-              FinalizationTxSeq
-            ]
+        ) {
+            def ?:(
+                actorRef: ActorRef[IO, SyncRequest[
+                  IO,
+                  FinalizeLedger,
+                  Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]
+                ]]
+            ): IO[Either[FinalizationTxSeqBuilderError, FinalizationTxSeq]] =
+                SyncRequest.send(actorRef, this)
+        }
 
-        final case class GetState()
-            extends SyncRequest.Send[IO, Errors.GetStateError.type, GetState, State]
+        final case class GetState() {
+            def ?:(actorRef: ActorRef[IO, SyncRequest[IO, GetState, State]]): IO[State] =
+                SyncRequest.send(actorRef, this)
+        }
     }
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */
@@ -353,13 +389,16 @@ object DappLedger {
         new DappLedger(initialTreasuryUtxo = initTx.treasuryProduced, config, virtualLedger) {}
 
     object Errors {
-        sealed trait DappLedgerError extends Throwable
+        sealed trait DappLedgerError
 
-        final case class ParseDepositError(wrapped: DepositTx.ParseError) extends DappLedgerError
+        sealed trait RegisterDepositError extends DappLedgerError
 
-        final case class ParseRefundPostDatedError(wrapped: String) extends DappLedgerError
+        final case class ParseDepositError(wrapped: DepositTx.ParseError)
+            extends RegisterDepositError
 
-        final case class InvalidTimeBound(msg: String) extends DappLedgerError
+        final case class InvalidTimeBound(msg: String) extends RegisterDepositError
+
+        final case class ParseRefundPostDatedError(wrapped: String) extends RegisterDepositError
 
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
             extends DappLedgerError
@@ -368,10 +407,5 @@ object DappLedger {
             extends DappLedgerError
 
         case object GetStateError extends DappLedgerError
-
-        // NOTE: at the time of writing, this shouldn't be able to throw an error (except in the general
-        // sense that any IO request can throw an error). But the API currently requires us to account for
-        // errors, so we do
-        case object GetKzgError extends DappLedgerError
     }
 }
