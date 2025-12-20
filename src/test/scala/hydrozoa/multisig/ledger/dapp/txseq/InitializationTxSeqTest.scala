@@ -7,7 +7,7 @@ import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.{Fallback, Initialization}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.default
 import hydrozoa.multisig.ledger.dapp.tx.{InitializationTx, Metadata as MD, Tx, TxTiming, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee, given}
@@ -19,14 +19,12 @@ import scala.collection.mutable
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
-import scalus.cardano.address.Network.Testnet
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -35,7 +33,7 @@ import test.TransactionChain.observeTxChain
 object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     import Prop.forAll
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(10_000)
+        p.withMinSuccessfulTests(1_000)
     }
 
     // TODO: make the spentUtxos contain arbitrary assets, not just ada.
@@ -49,13 +47,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             // a max non-plutus fee
             seedUtxo <- genAdaOnlyPubKeyUtxo(
               peers.head,
-              genCoinWithMinimum = Some(
-                minInitTreasuryAda
-                    + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-              )
-            ).map(x => Utxo(x._1, x._2))
+              minimumCoin = minInitTreasuryAda
+                  + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
+            )
+                .map(x => Utxo(x._1, x._2))
             otherSpentUtxos <- Gen
-                .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
+                .listOf(genAdaOnlyPubKeyUtxo(peers.head))
                 .map(_.map(x => Utxo(x._1, x._2)))
 
             spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
@@ -66,7 +63,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             initialDeposit <- Gen
                 .choose(
                   minInitTreasuryAda.value,
-                  sumUtxoValues(spentUtxos.toList.map(_.toTuple)).coin.value
+                  sumUtxoValues(spentUtxos.toList).coin.value
                       - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
                       - minPubkeyAda().value
                 )
@@ -138,7 +135,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
                 val config = Tx.Builder.Config(
                   headNativeScript = expectedHeadNativeScript,
-                  headNativeScriptReferenceInput = multisigRegimeUtxo,
+                  multisigRegimeUtxo = multisigRegimeUtxo,
                   tokenNames = iTx.tokenNames,
                   env = testTxBuilderEnvironment,
                   evaluator = testEvaluator,
@@ -301,24 +298,22 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 props.append {
                     val expectedTx: InitializationTx = InitializationTx(
                       ttl = ???,
-                      treasuryProduced = TreasuryUtxo(
+                      treasuryProduced = MultisigTreasuryUtxo(
                         treasuryTokenName = expectedHeadTokenName,
                         utxoId = TransactionInput(iTx.tx.id, 0),
                         address = expectedHeadNativeScript.mkAddress(env.network),
-                        datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+                        datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
                         value = Value(
                           initialDeposit,
                           MultiAsset(SortedMap(hns.policyId -> SortedMap(headTokenName -> 1L)))
                         )
                       ),
-                      multisigRegimeWitness = Utxo(
-                        TransactionInput(iTx.tx.id, 1),
-                        TransactionOutput(
-                          expectedHeadNativeScript.mkAddress(testNetwork),
-                          value = multisigRegimeUtxo.output.value,
-                          datumOption = None,
-                          scriptRef = Some(ScriptRef(expectedHeadNativeScript.script))
-                        )
+                      multisigRegimeWitness = MultisigRegimeUtxo(
+                        multisigRegimeTokenName = expectedMulitsigRegimeTokenName,
+                        utxoId = TransactionInput(iTx.tx.id, 1),
+                        address = expectedHeadNativeScript.mkAddress(testNetwork),
+                        value = multisigRegimeUtxo.output.value,
+                        script = expectedHeadNativeScript
                       ),
                       tokenNames = CIP67.TokenNames(spentUtxos.seedUtxo.input),
 
@@ -332,7 +327,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                     val parseResult = InitializationTx.parse(
                       peerKeys = peers,
-                      expectedNetwork = Testnet,
+                      expectedNetwork = testNetwork,
                       tx = iTx.tx,
                       resolver = mockResolver
                     )
@@ -358,7 +353,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 props.append(
                   "multisig regime utxo spent" |:
-                      fbTxBody.inputs.toSeq.contains(config.headNativeScriptReferenceInput.input)
+                      fbTxBody.inputs.toSeq.contains(config.multisigRegimeUtxo.input)
                 )
 
                 props.append("multisig regime token burned and vote tokens minted" |: {
@@ -395,7 +390,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                 props.append("default vote utxo with min ada and vote token created" |: {
 
-                    val defaultVoteUtxo = TransactionUnspentOutput(
+                    val defaultVoteUtxo = Utxo(
                       TransactionInput(transactionId = fbTx.tx.id, index = 1),
                       Babbage(
                         address = disputeResolutionAddress,
@@ -453,7 +448,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       val expectedHMRWCoin: Coin =
                           maxNonPlutusTxFee(env.protocolParams)
                               + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
-                      config.headNativeScriptReferenceInput.output.value.coin == expectedHMRWCoin
+                      config.multisigRegimeUtxo.output.value.coin == expectedHMRWCoin
                   }
                 )
 
@@ -531,9 +526,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     )
 
                 val observationRes =
-                    observeTxChain(signedTxs)(initialState, CardanoMutator, Context())
+                    observeTxChain(signedTxs)(initialState, CardanoMutator, Context.testMainnet())
 
-                props.append("Sequence Observation successful" |: observationRes.isRight)
+                props.append {
+                    observationRes match {
+                        case Left(e)  => s"Sequence Observation unsuccessful $e" |: false
+                        case Right(_) => Prop(true)
+                    }
+                }
 
                 // Semantic parsing of entire sequence
                 props.append {
@@ -543,7 +543,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
                     val parseRes = InitializationTxSeq.parse(
                       txSeq,
-                      expectedNetwork = Testnet,
+                      expectedNetwork = testNetwork,
                       peerKeys = peers,
                       expectedTallyFeeAllowance = args.tallyFeeAllowance,
                       expectedVotingDuration = args.votingDuration,

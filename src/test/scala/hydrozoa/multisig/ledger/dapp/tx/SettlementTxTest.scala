@@ -4,8 +4,8 @@ import cats.data.*
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
@@ -24,6 +24,7 @@ import scalus.prelude.{Option as SOption, Ord}
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
+import test.TestPeer.Alice
 
 def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
     for {
@@ -35,17 +36,26 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
         refundAddress <- genPubkeyAddress(network = network).map(
           LedgerToPlutusTranslation.getAddress(_)
         )
-        refundDatum <- genByteStringData
+        genData = Gen.frequency(
+          (99, genByteStringData.map(data => SOption.Some(data))),
+          (1, SOption.None)
+        )
+        refundDatum <- genData
 
     } yield DepositUtxo.Datum(
-      address = address,
-      datum = SOption.Some(datum),
-      deadline = deadline,
-      refundAddress = refundAddress,
-      refundDatum = SOption.Some(refundDatum)
+      DepositUtxo.Refund.Instructions(
+        address = refundAddress,
+        datum = refundDatum,
+        startTime = deadline
+      )
     )
 }
 
+// FIXME: This way of generating deposit Utxos was fine for earlier iterations of hydrozoa.
+// As we get closer to a real implementation, it needs to be revised to catch more corner cases.
+// In particular, with the introduction of "Virtual Utxos" in the deposit utxo, and with the deposit amount
+// set deterministically from the sum of the virtual utxos + fees necessary for refund, this
+// generator DOES NOT produce actual semantically valid deposit utxos
 def genDepositUtxo(
     network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
@@ -66,21 +76,27 @@ def genDepositUtxo(
 
         depositMinAda = ensureMinAda(mockUtxo, params).value.coin
 
-        depositAmount <- arbitrary[Coin].map(_ + depositMinAda)
+        depositAmount <- arbitrary[Coin].map(_ + depositMinAda).map(Value(_))
 
+        // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
+        // deposit amount
+        vos <- Gen.nonEmptyListOf(genGenesisObligation(Alice)).map(NonEmptyList.fromListUnsafe)
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
-      l1RefScript = None
+      virtualOutputs = vos
     )
 
 /** Generate a "standalone" settlement tx. */
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -104,17 +120,24 @@ def genSettlementTxSeqBuilder(
         )
         deposits <- genHelper(genDeposit)
 
-        payouts <- genHelper(genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
+        payouts <- genHelper(genPayoutObligation(network))
+        payoutAda = payouts
+            .map(_.utxo.value.coin)
+            .fold(Coin.zero)(_ + _)
         utxo <- genTreasuryUtxo(
           headAddress = Some(hns.mkAddress(network)),
           network = network,
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       SettlementTxSeq.Builder(config),
       SettlementTxSeq.Builder.Args(
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
         payoutObligationsRemaining = payouts,
@@ -137,7 +160,7 @@ def genSettlementTxSeqBuilder(
   *   the version of the next block
   */
 def genNextSettlementTxSeqBuilder(
-    treasuryToSpend: TreasuryUtxo,
+    treasuryToSpend: MultisigTreasuryUtxo,
     fallbackValidityStart: PosixTime,
     blockCreatedOn: PosixTime,
     majorVersion: Int,
@@ -146,7 +169,10 @@ def genNextSettlementTxSeqBuilder(
     txTiming: TxTiming,
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args)] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -168,24 +194,29 @@ def genNextSettlementTxSeqBuilder(
 
     for {
         deposits <- genHelper(genDeposit)
-        payouts <- genHelper(genPayoutObligationL1(network))
+        payouts <- genHelper(genPayoutObligation(network))
         prefixes = (payouts.length to 0 by -1).map(payouts.take)
-        biggest = prefixes
+        infimum = prefixes
             .find(prefix =>
                 getValue(
                   prefix
-                      .map(_.output.value)
+                      .map(_.utxo.value)
                       .fold(Value.zero)(_ + _)
                 ) <= getValue(treasuryToSpend.value)
             )
             // Since we have empty prefix that always satisfies the condition this is safe
             .get
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       SettlementTxSeq.Builder(builderConfig),
       SettlementTxSeq.Builder.Args(
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         depositsToSpend = deposits,
-        payoutObligationsRemaining = biggest,
+        payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         tallyFeeAllowance = Coin.ada(2),
         votingDuration = 100,

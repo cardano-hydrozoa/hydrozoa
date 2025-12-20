@@ -142,7 +142,7 @@ object TransactionChain {
     def observeTxChain(txs: Seq[Transaction])(
         initialState: State,
         mutator: STS.Mutator = CardanoMutator,
-        context: Context = Context()
+        context: Context = Context.testMainnet()
     ): Either[
       (TransactionException, Vector[(State, Transaction)]),
       Vector[(State, Transaction)]

@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
@@ -19,7 +19,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
@@ -33,8 +32,8 @@ final case class InitializationTx(
     // - then why do we want to make an exception for TTL?
     // However, I am keeping it for now and we can consider it later on.
     override val ttl: Slot,
-    treasuryProduced: TreasuryUtxo,
-    multisigRegimeWitness: Utxo,
+    treasuryProduced: MultisigTreasuryUtxo,
+    multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction
@@ -71,7 +70,7 @@ object InitializationTx {
             recipe.spentUtxos.fundingUtxos
                 .map(utxo =>
                     Spend(
-                      TransactionUnspentOutput.apply(utxo._1, utxo._2),
+                      Utxo.apply(utxo._1, utxo._2),
                       PubKeyWitness
                     )
                 )
@@ -104,7 +103,7 @@ object InitializationTx {
               initialDeposit,
               MultiAsset(SortedMap(headNativeScript.policyId -> SortedMap(headTokenName -> 1L)))
             ),
-            datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
+            datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData))
           )
         )
 
@@ -159,18 +158,23 @@ object InitializationTx {
 
         } yield InitializationTx(
           ttl = ttlSlot,
-          treasuryProduced = TreasuryUtxo(
+          treasuryProduced = MultisigTreasuryUtxo(
             treasuryTokenName = headTokenName,
             utxoId = TransactionInput(
               transactionId = finalized.transaction.id,
               index = 0
             ),
             address = headAddress,
-            datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+            datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
             value = createTreasury.output.value
           ),
           tx = finalized.transaction,
-          multisigRegimeWitness = Utxo(TransactionInput(finalized.transaction.id, 1), hmrwOutput),
+          multisigRegimeWitness = MultisigRegimeUtxo(
+            tokenNames.multisigRegimeTokenName,
+            utxoId = TransactionInput(finalized.transaction.id, 1),
+            output = hmrwOutput,
+            script = headNativeScript
+          ),
           tokenNames = tokenNames,
           resolvedUtxos = finalized.resolvedUtxos
         )
@@ -280,11 +284,12 @@ object InitializationTx {
                 case Some(_) => Left(InvalidTransactionError("treasury output datum not inline"))
             }
             decodedTreasuryDatum <- Try(
-              Data.fromData[TreasuryUtxo.Datum](encodedTreasuryDatum)
+              Data.fromData[MultisigTreasuryUtxo.Datum](encodedTreasuryDatum)
             ).toEither.left
                 .map(_ => InvalidTransactionError("data decoding of treasury datum failed"))
             _ <-
-                if decodedTreasuryDatum == TreasuryUtxo.mkInitMultisigTreasuryDatum then Right(())
+                if decodedTreasuryDatum == MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum then
+                    Right(())
                 else
                     Left(
                       InvalidTransactionError(
@@ -380,11 +385,11 @@ object InitializationTx {
                 case Some(wrongNumber) => Left(InvalidTransactionError("multiple MR tokens minted"))
             }
 
-            treasury = TreasuryUtxo(
+            treasury = MultisigTreasuryUtxo(
               treasuryTokenName = derivedTokenNames.headTokenName,
               utxoId = TransactionInput(tx.id, imd.treasuryOutputIndex),
               address = expectedHeadAddress,
-              datum = TreasuryUtxo.mkInitMultisigTreasuryDatum,
+              datum = MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum,
               value = actualTreasuryOutput.value
             )
 
@@ -396,14 +401,20 @@ object InitializationTx {
         } yield InitializationTx(
           ttl = ttl,
           treasuryProduced = treasury,
-          multisigRegimeWitness = multisigRegimeWitness,
+          multisigRegimeWitness = MultisigRegimeUtxo(
+            multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
+            utxoId = TransactionInput(tx.id, imd.multisigRegimeOutputIndex),
+            address = expectedHeadAddress,
+            value = actualMultisigRegimeOutput.value,
+            script = expectedHNS
+          ),
           tokenNames = derivedTokenNames,
           resolvedUtxos =
               resolver(tx.body.value.inputs.toSeq ++ tx.body.value.referenceInputs.toSeq),
           tx = tx
         )
 
-    sealed trait ParseError
+    sealed trait ParseError extends Throwable
 
     case class MetadataParseError(wrapped: MD.ParseError) extends ParseError
 

@@ -24,11 +24,15 @@ nixfmt:
   just notify "nixfmt"
 
 nixfmt-check:
-  - nixfmt flake.nix --check	
+  - nixfmt flake.nix --check
   just notify "nixfmt-check"
 
+test:
+  - sbt test
+  just notify "test"
+
 [parallel]
-precommit: lint-check fmt-check nixfmt-check
+precommit: lint-check fmt-check nixfmt-check test
   just notify "precommit"
 
 notify name:

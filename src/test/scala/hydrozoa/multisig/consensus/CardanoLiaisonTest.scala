@@ -78,7 +78,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             )
 
             // Settlements
-            initializationTreasuryProduced = initializationTxSeq.initializationTx.treasuryProduced
+            initializationTx = initializationTxSeq.initializationTx
+            initializationTreasuryProduced = initializationTx.treasuryProduced
             initializationFallbackValidityStart = testTxBuilderEnvironment.slotConfig.slotToTime(
               initializationTxSeq.fallbackTx.validityStart.slot
             )
@@ -86,7 +87,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             // This config is used in the settlement and finalization builders
             config = Config(
               headNativeScript = hns,
-              headNativeScriptReferenceInput = multisigWitnessUtxo,
+              multisigRegimeUtxo = initializationTx.multisigRegimeWitness,
               tokenNames = tokenNames,
               env = args.env,
               evaluator = args.evaluator,

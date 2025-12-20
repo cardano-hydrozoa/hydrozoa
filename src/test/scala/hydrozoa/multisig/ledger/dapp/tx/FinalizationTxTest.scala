@@ -5,8 +5,8 @@ import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.txseq.FinalizationTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, TreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Arbitrary.arbitrary
@@ -71,7 +71,10 @@ def genMultisigRegimeUtxo(
 def genStandaloneFinalizationTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None
 ): Gen[(FinalizationTxSeq.Builder, FinalizationTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -89,8 +92,10 @@ def genStandaloneFinalizationTxSeqBuilder(
 
         majorVersion <- Gen.posNum[Int]
 
-        payouts <- genHelper(genPayoutObligationL1(network))
-        payoutAda = payouts.map(_.output.value.coin).fold(Coin.zero)(_ + _)
+        payouts <- genHelper(genPayoutObligation(network))
+        payoutAda = payouts
+            .map(_.utxo.value.coin)
+            .fold(Coin.zero)(_ + _)
 
         headAddress = config.headNativeScript.mkAddress(network)
 
@@ -102,16 +107,21 @@ def genStandaloneFinalizationTxSeqBuilder(
 
         shares <- genEquityShares(peers)
 
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
         multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
           config.tokenNames.multisigRegimeTokenName,
-          config.headNativeScriptReferenceInput.input,
-          config.headNativeScriptReferenceInput.output,
+          config.multisigRegimeUtxo.input,
+          config.multisigRegimeUtxo.output,
           config.headNativeScript
         ),
         equityShares = shares,
@@ -124,7 +134,7 @@ def genStandaloneFinalizationTxSeqBuilder(
 }
 
 def genFinalizationTxSeqBuilder(
-    treasuryToSpend: TreasuryUtxo,
+    treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
     fallbackValidityStart: PosixTime,
     blockCreatedOn: PosixTime,
@@ -133,7 +143,10 @@ def genFinalizationTxSeqBuilder(
     peers: NonEmptyList[TestPeer],
     estimatedFeesAndEquity: Coin = Coin(50_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None
 ): Gen[(FinalizationTxSeq.Builder, FinalizationTxSeq.Builder.Args)] = {
 
     val payoutsTotal = treasuryToSpend.value.coin.value - estimatedFeesAndEquity.value
@@ -149,20 +162,25 @@ def genFinalizationTxSeqBuilder(
                 yield Left(next :: tails)
         }
 
-        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligationL1(network, Coin(l))))
+        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligationL2(network, Coin(l))))
 
         shares <- genEquityShares(peers)
 
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
         multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
           config.tokenNames.multisigRegimeTokenName,
-          config.headNativeScriptReferenceInput.input,
-          config.headNativeScriptReferenceInput.output,
+          config.multisigRegimeUtxo.input,
+          config.multisigRegimeUtxo.output,
           config.headNativeScript
         ),
         equityShares = shares,

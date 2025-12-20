@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.BuildErrorOr
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq.Builder.PartialResult.Many
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
-import hydrozoa.multisig.ledger.joint.utxo.Payout
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scala.annotation.tailrec
 import scalus.cardano.txbuilder.SomeBuildError
 
@@ -194,7 +194,7 @@ object RolloutTxSeq {
           * @return
           */
         def buildPartial(
-            payouts: NonEmptyVector[Payout.Obligation.L1]
+            payouts: NonEmptyVector[Payout.Obligation]
         ): BuildErrorOr[PartialResult] =
             for {
                 lastRolloutTx <- singleBuilderLast.partialResult(SingleBuilder.Args.Last(payouts))

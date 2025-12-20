@@ -4,11 +4,12 @@ import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
-import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.UnresolvedDatum
+import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{RuleBasedTreasuryDatum, UnresolvedDatum}
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
+import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
 import scalus.builtin.Data
 import scalus.builtin.Data.*
@@ -18,7 +19,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
@@ -26,13 +26,13 @@ import scalus.prelude.List as SList
 
 final case class FallbackTx(
     override val validityStart: Slot,
-    treasurySpent: TreasuryUtxo,
+    treasurySpent: MultisigTreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
     // The rest should have domain-specific types as well. See:
     // https://github.com/cardano-hydrozoa/hydrozoa/issues/262
-    treasuryProduced: Utxo,
-    consumedHMRWUtxo: Utxo,
+    treasuryProduced: RuleBasedTreasuryUtxo,
+    consumedHMRWUtxo: MultisigRegimeUtxo,
     producedDefaultVoteUtxo: Utxo,
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
@@ -75,7 +75,7 @@ object FallbackTx {
         //////////////////////////////////////
         // Pre-processing
 
-        val multisigDatum: TreasuryUtxo.Datum = treasuryUtxo.datum
+        val multisigDatum: MultisigTreasuryUtxo.Datum = treasuryUtxoSpent.datum
 
         val hns = headNativeScript
 
@@ -108,7 +108,7 @@ object FallbackTx {
           scriptRef = None
         ).ensureMinAda(env.protocolParams)
 
-        val defaultVoteUtxo = mkVoteUtxo(VD.default(treasuryUtxo.datum.commit).toData)
+        val defaultVoteUtxo = mkVoteUtxo(VD.default(treasuryUtxoSpent.datum.commit).toData)
 
         val peerVoteUtxos: NonEmptyList[TransactionOutput] = {
             val datums = VD(
@@ -138,10 +138,10 @@ object FallbackTx {
 
         ////////////////////////////////////////////////////
         // Define steps
-        val spendHMRW: Spend = Spend(config.headNativeScriptReferenceInput, hns.witness)
+        val spendHMRW: Spend = Spend(config.multisigRegimeUtxo.asUtxo, hns.witness)
 
         val spendMultisigTreasury: Spend =
-            Spend(treasuryUtxo.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
+            Spend(treasuryUtxoSpent.asUtxo, NativeScriptWitness(NativeScriptAttached, Set.empty))
 
         val burnMultisigRegimeToken: Mint = Mint(
           hns.policyId,
@@ -162,10 +162,11 @@ object FallbackTx {
 
         val createCollateralUtxos: NonEmptyList[Send] = collateralUtxos.map(Send(_))
 
+        val disputeTreasuryAddress = RuleBasedTreasuryScript.address(network)
         val createDisputeTreasury = Send(
           Babbage(
-            address = RuleBasedTreasuryScript.address(network),
-            value = treasuryUtxo.value,
+            address = disputeTreasuryAddress,
+            value = treasuryUtxoSpent.value,
             datumOption = Some(Inline(newTreasuryDatum.toData)),
             scriptRef = None
           )
@@ -211,10 +212,21 @@ object FallbackTx {
             FallbackTx(
               // This is safe since we always set it
               validityStart = Slot(finalized.transaction.body.value.validityStartSlot.get),
-              treasurySpent = treasuryUtxo,
-              //
-              treasuryProduced = Utxo(TransactionInput(txId, 0), createDisputeTreasury.output),
-              consumedHMRWUtxo = spendHMRW.utxo,
+              treasurySpent = treasuryUtxoSpent,
+              treasuryProduced = RuleBasedTreasuryUtxo(
+                treasuryTokenName = recipe.config.tokenNames.headTokenName,
+                utxoId = TransactionInput(txId, 0),
+                address = disputeTreasuryAddress,
+                datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),
+                value = createDisputeTreasury.output.value
+              ),
+              consumedHMRWUtxo = MultisigRegimeUtxo(
+                multisigRegimeTokenName = tokenNames.multisigRegimeTokenName,
+                utxoId = TransactionInput(txId, 1),
+                address = headAddress,
+                value = spendHMRW.utxo.output.value,
+                script = headNativeScript
+              ),
               producedDefaultVoteUtxo =
                   Utxo(TransactionInput(txId, 1), createDefaultVoteUtxo.output),
               producedPeerVoteUtxos = createPeerVoteUtxos
@@ -247,7 +259,7 @@ object FallbackTx {
     // TODO: rename to args for consistency?
     case class Recipe(
         config: Tx.Builder.Config,
-        treasuryUtxo: TreasuryUtxo,
+        treasuryUtxoSpent: MultisigTreasuryUtxo,
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//

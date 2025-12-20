@@ -1,11 +1,10 @@
 package hydrozoa.multisig.ledger.virtual
-
-import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.VirtualLedger
 import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{Context as _, State as L1State, *}
 import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, TransactionInput, TransactionOutput, Word64}
@@ -20,16 +19,13 @@ object HydrozoaGenesisMutator {
     // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
     // index
     def addGenesisUtxosToState(
-        g: NonEmptyList[GenesisObligation],
+        g: L2EventGenesis,
         state: State
     ): State = {
-        state.copy(state.activeUtxos ++ g.map(go => go.toUtxo).toList)
+        state.copy(state.activeUtxos ++ g.asUtxos)
     }
 }
 
-// Change:
-//   - We remove all inputs as usual, but we only add outputs to the UTxO Set if they are L2-bound
-//   - Update return type to return new (newState, listOfPayoutObligations)
 object HydrozoaTransactionMutator {
     def transit(
         context: Config,
@@ -79,11 +75,14 @@ object HydrozoaTransactionMutator {
 /** Outputs to the transaction can be marked as "L2 bound" in the transaction metadata.
   */
 object AddOutputsToUtxoL2Mutator:
-    def transit(
-        context: Config,
-        state: State,
-        event: L2EventTransaction
-    ): Either[String | TransactionException, State] =
+    /** @param event
+      * @return
+      *   An error if the metadata cant be parsed, or a pair of lists indicating (l1Bound, l2Bound)
+      */
+    def utxoPartition(event: L2EventTransaction): Either[
+      String | TransactionException,
+      (IndexedSeq[(TransactionInput, Babbage)], IndexedSeq[(TransactionInput, Babbage)])
+    ] =
         for {
             metadataMap <- event.transaction.auxiliaryData match {
                 case Some(keepRawM) =>
@@ -101,10 +100,15 @@ object AddOutputsToUtxoL2Mutator:
                       "found in metadata map"
                 )
 
-            outputs = event.transaction.body.value.outputs
+            outputs <- {
+                val outputs = event.transaction.body.value.outputs.map(_.value)
+                if outputs.forall(_.isInstanceOf[Babbage])
+                then Right(outputs.map(_.asInstanceOf[Babbage]))
+                else Left("Non-babbage output found in utxo partition")
+            }
 
             // TODO: This is an idiot-proof way to do it. A better way might be a bitmask -- 0 for L1, 1 for L2
-            indexList <- metaDatum match {
+            l1OrL2 <- metaDatum match {
                 case Metadatum.List(il: IndexedSeq[Metadatum])
                     if il.length == outputs.length
                         && il.forall(elem => elem == Int(1) || elem == Int(2)) =>
@@ -112,20 +116,37 @@ object AddOutputsToUtxoL2Mutator:
                 case _ => Left("Malformed index list in L2 transaction")
             }
 
-            // Format: ((output, l1OrL2), listIndex)
-            zippedOutputs = outputs.zip(indexList).zipWithIndex
+            partition = {
+                // NOTE/FIXME: there are multiple traversals here, but the transformation is a little bit
+                // tricky. This can be refactored to do it in one pass if it becomes a bottleneck.
 
-            l2UtxosToAdd: List[(TransactionInput, TransactionOutput)] = zippedOutputs.foldLeft(
-              List.empty
-            )((acc, elem) => {
-                val l1Bound = elem._1._2 == Int(1)
-                if l1Bound then acc
-                else {
-                    val input = TransactionInput(event.getEventId, elem._2)
-                    acc.appended((input, elem._1._1.value))
-                }
-            })
+                // Format: (output, l1OrL2, index)
+                val zippedOutputs =
+                    outputs.zip(l1OrL2).zipWithIndex.map(x => (x._1._1, x._1._2, x._2))
 
+                // format: ((input, output), l1orL2)
+                val utxosWithDesignation = zippedOutputs.map(x =>
+                    ((TransactionInput(event.transaction.id, x._3), x._1), x._2)
+                )
+
+                // format: ([((l1Input, l1Output), l1orL2)] , [((l2Input, l2Output), l1orL2)])
+                val partitionWithDesignation =
+                    utxosWithDesignation.partition(x => if x._2 == Int(1) then true else false)
+
+                (partitionWithDesignation._1.map(_._1), partitionWithDesignation._2.map(_._1))
+            }
+
+        } yield partition
+
+    def transit(
+        context: Config,
+        state: State,
+        event: L2EventTransaction
+    ): Either[String | TransactionException, State] =
+        for {
+            p <- utxoPartition(event)
+
+            l2UtxosToAdd = p._2
         } yield state.copy(state.activeUtxos ++ l2UtxosToAdd)
 
 //////////////////

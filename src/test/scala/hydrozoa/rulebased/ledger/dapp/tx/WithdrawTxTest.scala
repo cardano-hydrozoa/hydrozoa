@@ -42,9 +42,9 @@ def genResolvedTreasuryUtxo(
         spp = ShelleyPaymentPart.Script(RuleBasedTreasuryScript.compiledScriptHash)
         scriptAddr = ShelleyAddress(testNetwork, spp, ShelleyDelegationPart.Null)
     } yield RuleBasedTreasuryUtxo(
-      beaconTokenName = AssetName(beaconTokenName),
-      txId = txId,
-      addr = scriptAddr,
+      treasuryTokenName = AssetName(beaconTokenName),
+      utxoId = txId,
+      address = scriptAddr,
       datum = RuleBasedTreasuryDatum.Resolved(treasuryDatum),
       value = value
     )

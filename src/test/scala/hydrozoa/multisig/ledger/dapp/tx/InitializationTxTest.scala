@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.utxo.TreasuryUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import scala.collection.immutable.SortedMap
 import scalus.builtin.ByteString
@@ -18,7 +18,6 @@ import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Coin
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.cardano.txbuilder.TransactionUnspentOutput
 import test.*
 import test.Generators.Hydrozoa.*
 import test.TestPeer.Alice
@@ -41,7 +40,7 @@ val minInitTreasuryAda: Coin = {
           )
         )
       ),
-      datumOption = Some(Inline(TreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
+      datumOption = Some(Inline(MultisigTreasuryUtxo.mkInitMultisigTreasuryDatum.toData)),
       scriptRef = None
     )
     ensureMinAda(mockTreasury, blockfrost544Params).value.coin
@@ -61,14 +60,12 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         // a max non-plutus fee
         seedUtxo <- genAdaOnlyPubKeyUtxo(
           peers.head,
-          genCoinWithMinimum = Some(
-            minInitTreasuryAda
-                + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
-          )
-        ).map(x => TransactionUnspentOutput(x._1, x._2))
+          minimumCoin = minInitTreasuryAda
+              + Coin(maxNonPlutusTxFee(testProtocolParams).value * 2)
+        ).map(x => Utxo(x._1, x._2))
         otherSpentUtxos <- Gen
-            .listOf(genAdaOnlyPubKeyUtxo(peers.head, genCoinWithMinimum = Some(Coin(0))))
-            .map(_.map(x => TransactionUnspentOutput(x._1, x._2)))
+            .listOf(genAdaOnlyPubKeyUtxo(peers.head))
+            .map(_.map(x => Utxo(x._1, x._2)))
 
         spentUtxos = NonEmptyList(seedUtxo, otherSpentUtxos)
 
@@ -80,7 +77,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         initialDeposit <- Gen
             .choose(
               minInitTreasuryAda.value,
-              sumUtxoValues(spentUtxos.toList.map(_.toTuple)).coin.value
+              sumUtxoValues(spentUtxos.toList).coin.value
                   - maxNonPlutusTxFee(testTxBuilderEnvironment.protocolParams).value
                   - minPubkeyAda().value
             )

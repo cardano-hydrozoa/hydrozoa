@@ -16,10 +16,9 @@ import scalus.builtin.Data.toData
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
-import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.ledger.{Utxo as SUtxo, *}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.Datum.DatumInlined
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptValue, PlutusScriptValue}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
 
@@ -167,7 +166,7 @@ object DeinitTx {
                   List(
                     // Spend the treasury utxo
                     Spend(
-                      TransactionUnspentOutput(treasuryUtxo.toUtxo),
+                      SUtxo(treasuryUtxo.asTuple._1, treasuryUtxo.asTuple._2),
                       ThreeArgumentPlutusScriptWitness(
                         PlutusScriptValue(RuleBasedTreasuryScript.compiledPlutusV3Script),
                         TreasuryRedeemer.Deinit.toData,

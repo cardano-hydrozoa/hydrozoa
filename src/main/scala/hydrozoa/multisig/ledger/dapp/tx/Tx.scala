@@ -3,15 +3,15 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.PosixTime
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
+import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import scala.Function.const
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Slot, Transaction, Utxo}
-import scalus.cardano.txbuilder.LowLevelTxBuilder.ChangeOutputDiffHandler
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Slot, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.{Environment, SomeBuildError, TransactionBuilder}
+import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
 trait Tx {
@@ -27,11 +27,13 @@ trait HasTtlSlot {
 
 // This is used for some Args.
 // TODO: Find a better place for it.
+// TODO: Check whether we need it.
 trait HasTtlTime {
     def ttl: PosixTime
 }
 
 object Tx {
+    type Serialized = Array[Byte]
 
     /** A result that includes additional information besides the built transaction.
       *
@@ -109,7 +111,7 @@ object Tx {
 
         final case class Config(
             headNativeScript: HeadMultisigScript,
-            headNativeScriptReferenceInput: Utxo,
+            multisigRegimeUtxo: MultisigRegimeUtxo,
             tokenNames: TokenNames,
             env: Environment,
             evaluator: PlutusScriptEvaluator,

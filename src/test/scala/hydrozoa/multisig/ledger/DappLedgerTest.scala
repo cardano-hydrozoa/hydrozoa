@@ -1,130 +1,160 @@
 package hydrozoa.multisig.ledger
 
 import cats.*
-import cats.data.EitherT.right
-import cats.data.{EitherT, NonEmptyList}
+import cats.data.*
+import cats.effect.*
 import cats.effect.unsafe.implicits.*
-import cats.effect.{IO, Ref}
 import cats.syntax.all.*
-import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
-import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.{GetState, RegisterDeposit}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, Tx}
-import hydrozoa.multisig.ledger.dapp.txseq.{InitializationTxSeq, InitializationTxSeqTest}
+import hydrozoa.multisig.ledger.dapp.tx.Tx
+import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq, InitializationTxSeqTest}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.protocol.types.LedgerEvent
 import org.scalacheck.*
-import org.scalacheck.Prop.{forAll, propBoolean}
-import scalus.cardano.address.Network.Testnet
+import org.scalacheck.Prop.propBoolean
+import org.scalacheck.rng.Seed
 import scalus.cardano.ledger.*
 import scalus.prelude.Option as SOption
 import scalus.testing.kit.TestUtil
-import scalus.testing.kit.TestUtil.testEnvironment
 import test.Generators.Hydrozoa.*
-import test.{TestPeer, nonSigningValidators, signTx, testEvaluator}
+import test.{TestPeer, nonSigningValidators, signTx, testEvaluator, testNetwork}
 
-object DappLedgerTest extends Properties("DappLedger"), TestKit {
+object DappLedgerTest extends Properties("DappLedger") {
+
+    import EitherT.*
+    import org.scalacheck.PropertyM.*
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
-        p.withMinSuccessfulTests(100)
+        p
+            .withMinSuccessfulTests(100)
+            .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
     }
 
-    val _ = property("DappLedger Register Deposit Happy Path") = {
-        if true then Prop.proved
-        else
-            forAll(InitializationTxSeqTest.genArgs()) { (args, testPeers) =>
-                val peer: TestPeer = testPeers.head
-                val hns = HeadMultisigScript(testPeers.map(_.wallet.exportVerificationKeyBytes))
+    // Accept "any" as the error
+    def runner(mProp: EitherT[IO, Any, Prop]): Prop =
+        Prop.secure(mProp.value.unsafeRunSync() match {
+            case Left(e) =>
+                s"Failed: $e" |: false
+            case Right(p) => p
+        })
 
-                val eitherT: EitherT[IO, String, Prop] = for {
-                    debugMessage <- right(Ref.of[IO, Option[String]](None))
+    // FIXME(?): I used "Any" for the error type here, simply because I was too lazy to accumulate all of the
+    // possible errors. Maybe it should be "Throwable"?
+    type ET[A] = EitherT[IO, Any, A]
 
-                    system <-
-                        right(
-                          ActorSystem[IO](
-                            "DappLedger",
-                            (event: Any) => debugMessage.set(Some(event.toString))
-                          ).allocated.map(_._1)
-                        ).leftMap(_.toString)
+    val _ = property("DappLedger Register Deposit Happy Path") = monadic(
+      runner = runner,
+      m = for {
+          argsAndPeers <- pick[ET, (InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])](
+            InitializationTxSeqTest.genArgs()
+          )
+          args = argsAndPeers._1
+          peer = argsAndPeers._2.head
+          hns = HeadMultisigScript(argsAndPeers._2.map(_.wallet.exportVerificationKeyBytes))
 
-                    initTx: InitializationTxSeq <- EitherT.fromEither[IO](
-                      InitializationTxSeq.Builder.build(args).leftMap(_.toString)
-                    )
+          system <- run(right(ActorSystem[IO]("DappLedger").allocated.map(_._1)))
+          initTx <- run(fromEither[IO](InitializationTxSeq.Builder.build(args)))
 
-                    config = Tx.Builder.Config(
-                      headNativeScript = hns,
-                      headNativeScriptReferenceInput =
-                          initTx.initializationTx.multisigRegimeWitness,
-                      tokenNames = initTx.initializationTx.tokenNames,
-                      env = TestUtil.testEnvironment,
-                      evaluator = testEvaluator,
-                      validators = nonSigningValidators
-                    )
+          config = Tx.Builder.Config(
+            headNativeScript = hns,
+            multisigRegimeUtxo = initTx.initializationTx.multisigRegimeWitness,
+            tokenNames = initTx.initializationTx.tokenNames,
+            env = TestUtil.testEnvironment,
+            evaluator = testEvaluator,
+            validators = nonSigningValidators
+          )
 
-                    dappLedger <- right(
-                      system.actorOfWithDebug(
-                        new DappLedger(initTx.initializationTx.treasuryProduced, config) {}
-                      )
-                    )
+          virtualLedgerConfig = VirtualLedger.Config(
+            slotConfig = config.env.slotConfig,
+            slot = 0,
+            protocolParams = config.env.protocolParams,
+            network = testNetwork
+          )
+          virtualLedger <- run(right(system.actorOf(VirtualLedger(virtualLedgerConfig))))
 
-                    utxosFunding = Gen
-                        .nonEmptyListOf(
-                          genAdaOnlyPubKeyUtxo(peer, genCoinWithMinimum = Some(Coin.ada(5)))
-                        )
-                        .sample
-                        .get
+          dappLedger <- run(
+            right(
+              system.actorOf(
+                new DappLedger(initTx.initializationTx.treasuryProduced, config, virtualLedger) {}
+              )
+            )
+          )
 
-                    peerCredential = LedgerToPlutusTranslation.getCredential(
-                      Credential.KeyHash(AddrKeyHash(peer.address().payment.asHash))
-                    )
-                    depositRecipe = DepositTx.Recipe(
-                      depositAmount = Coin(utxosFunding.map(_._2.value.coin.value).sum / 2),
-                      datum = DepositUtxo.Datum(
-                        address = peerCredential,
-                        datum = SOption.None,
-                        deadline = 0,
-                        refundAddress = LedgerToPlutusTranslation.getAddress(peer.address()),
-                        refundDatum = SOption.None
-                      ),
-                      headAddress = hns.mkAddress(Testnet),
-                      utxosFunding = NonEmptyList.fromListUnsafe(utxosFunding),
-                      changeAddress = peer.address(),
-                      network = Testnet,
-                      protocolParams = testEnvironment.protocolParams,
-                      evaluator = testEvaluator,
-                      validators = nonSigningValidators
-                    )
+          virtualOutputs <-
+              pick[ET, NonEmptyList[GenesisObligation]](
+                Gen.nonEmptyListOf(genGenesisObligation(peer, minimumCoin = Coin.ada(5)))
+                    .map(NonEmptyList.fromListUnsafe)
+              )
 
-                    depositTx <- EitherT.fromEither(
-                      DepositTx.build(depositRecipe).leftMap(_.toString)
-                    )
+          virtualOutputsValue = Value.combine(
+            virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
+          )
 
-                    signedTx = signTx(peer, depositTx.tx)
+          utxosFundingTail <- pick[ET, List[Utxo]](
+            Gen
+                .listOf(
+                  genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
+                )
+          )
+          utxosFundingHead <- pick[ET, Utxo](
+            genAdaOnlyPubKeyUtxo(
+              peer,
+              minimumCoin = virtualOutputsValue.coin
+            )
+          )
 
-                    serializedDeposit = signedTx.toCbor
+          utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
 
-                    _ <- EitherT.right(
-                      dappLedger ! RegisterDeposit(serializedDeposit, LedgerEvent.Id(0, 1))
-                    )
+          utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
 
-                    stateReq <- right(GetState()).leftMap(_.toString)
-                    s <- EitherT(dappLedger ?: stateReq).leftMap(_.toString)
+          depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
+            config = config,
+            refundInstructions = DepositUtxo.Refund.Instructions(
+              LedgerToPlutusTranslation.getAddress(peer.address()),
+              SOption.None,
+              100
+            ),
+            donationToTreasury = Coin.zero,
+            refundValue = virtualOutputsValue,
+            virtualOutputs = virtualOutputs,
+            changeAddress = peer.address(),
+            utxosFunding = utxosFunding
+          )
 
-                    prop = {
-                        (s"We should only have 1 deposit in the state, but we have ${s.deposits.length}"
-                            |: s.deposits.length == 1)
-                        && ("Inorrect deposit(s) in state" |: s.deposits.head._2 == depositTx.depositProduced)
-                        && ("Incorrect treasury in state" |: s.treasury == initTx.initializationTx.treasuryProduced)
+          depositRefundTxSeq <- run(EitherT.fromEither[IO](depositRefundSeqBuilder.build))
 
-                    }
-                } yield prop
-                eitherT.value.unsafeRunSync() match {
-                    case Left(e)  => s"register deposit happy path failed: $e" |: false
-                    case Right(p) => p
-                }
-            }
-    }
+          signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
 
+          serializedDeposit = signedTx.toCbor
+          req <- run(
+            EitherT.right(
+              RegisterDeposit(
+                serializedDeposit = serializedDeposit,
+                virtualOutputs = virtualOutputs,
+                eventId = LedgerEvent.Id(0, 1)
+              )
+            )
+          )
+
+          _ <- run(EitherT.right(dappLedger ! req))
+          stateReq <- run(right(GetState()))
+          s <- run(EitherT(dappLedger ?: stateReq))
+
+          _ <- assertWith[ET](
+            msg = s"We should only have 1 deposit in the state, but we have ${s.deposits.length}",
+            condition = s.deposits.length == 1
+          )
+          _ <- assertWith[ET](
+            msg = "Incorrect deposit(s) in state",
+            condition = s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
+          )
+          _ <- assertWith[ET](
+            msg = "Incorrect treasury in state",
+            condition = s.treasury == initTx.initializationTx.treasuryProduced
+          )
+      } yield true
+    )
 }
