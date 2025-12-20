@@ -30,7 +30,7 @@ trait DappLedger(
     virtualLedger: ActorRef[IO, VirtualLedger.Request]
 ) extends Actor[IO, Request] {
     import DappLedger.State
-    
+
     val headAddress: ShelleyAddress = initialTreasuryUtxo.address
 
     private val state: Ref[IO, State] =
