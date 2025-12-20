@@ -70,7 +70,10 @@ def genMultisigRegimeUtxo(
 def genFinalizationTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
-    network: Network = testNetwork
+    network: Network = testNetwork,
+    kzgCommitment: Option[KzgCommitment] =
+        None // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
 ): Gen[(FinalizationTxSeq.Builder, FinalizationTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -103,18 +106,22 @@ def genFinalizationTxSeqBuilder(
 
         shares <- genEquityShares(peers)
 
-        kzgCommitment: KzgCommitment = ???
+        // FIXME: Don't know if this is right. Is the KZG 32 bytes long?
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(32, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
-        kzgCommitment = kzgCommitment,
+        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
         multisigRegimeUtxoToSpend = MultisigRegimeUtxo.apply(
           config.tokenNames.multisigRegimeTokenName,
-          config.headNativeScriptReferenceInput.input,
-          config.headNativeScriptReferenceInput.output,
+          config.multisigRegimeUtxo.input,
+          config.multisigRegimeUtxo.output,
           config.headNativeScript
         ),
         equityShares = shares

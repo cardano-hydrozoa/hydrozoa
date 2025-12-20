@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.prebalancedLovelaceDiffHandler
+import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
 import scala.annotation.tailrec
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
@@ -13,11 +13,11 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
+import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{Environment, NativeScriptWitness, SomeBuildError, TransactionBuilder}
 import scalus.ledger.api.v3.PosixTime
 
 sealed trait RefundTx extends Tx {
@@ -88,7 +88,15 @@ object RefundTx {
                       )
                     )
                     .explainConst("adding real spend deposit failed.")
-            } yield postProcess(addedDepositSpent)
+                finalized <- addedDepositSpent
+                    .finalizeContext(
+                      config.env.protocolParams,
+                      prebalancedLovelaceDiffHandler,
+                      config.evaluator,
+                      config.validators
+                    )
+                    .explainConst("finalizing partial result completion failed")
+            } yield postProcess(finalized)
         }
 
         object PartialResult {
@@ -135,7 +143,7 @@ object RefundTx {
         ): Builder.PartialResult[T]
 
         final def partialResult: BuildErrorOr[Builder.PartialResult[T]] = {
-            val stepReferenceHNS = ReferenceOutput(config.headNativeScriptReferenceInput)
+            val stepReferenceHNS = ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
             val refundOutput: TransactionOutput = TransactionOutput.Babbage(
               address = config.headAddress,
@@ -183,7 +191,15 @@ object RefundTx {
             val trialResult = for {
                 addedSpendDeposit <- TransactionBuilder.modify(
                   ctx,
-                  List(Spend(spendDeposit, NativeScriptWitness(NativeScriptAttached, Set.empty)))
+                  List(
+                    Spend(
+                      spendDeposit,
+                      NativeScriptWitness(
+                        NativeScriptAttached,
+                        config.headNativeScript.requiredSigners
+                      )
+                    )
+                  )
                 )
                 res <- addedSpendDeposit.finalizeContext(
                   config.env.protocolParams,

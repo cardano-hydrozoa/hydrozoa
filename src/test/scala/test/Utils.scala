@@ -1,4 +1,5 @@
 package test
+import hydrozoa.multisig.ledger.VirtualLedger
 import scala.language.postfixOps
 import scalus.cardano.address.Network
 import scalus.cardano.address.Network.Mainnet
@@ -58,6 +59,13 @@ val nonSigningValidators: Seq[Validator] =
 val testTxBuilderEnvironment: Environment = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),
+  network = testNetwork
+)
+
+def testVirtualLedgerConfig(slot: SlotNo): VirtualLedger.Config = VirtualLedger.Config(
+  slotConfig = testTxBuilderEnvironment.slotConfig,
+  slot = slot,
+  protocolParams = testTxBuilderEnvironment.protocolParams,
   network = testNetwork
 )
 

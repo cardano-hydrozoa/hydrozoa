@@ -110,9 +110,9 @@ object CommonGenerators {
             beaconTokenAssetName = AssetName(beaconTokenName)
             beaconToken = singleton(headMp, beaconTokenAssetName)
         } yield RuleBasedTreasuryUtxo(
-          beaconTokenName = beaconTokenAssetName,
-          txId = txId,
-          addr = scriptAddr,
+          treasuryTokenName = beaconTokenAssetName,
+          utxoId = txId,
+          address = scriptAddr,
           datum = Unresolved(unresolvedDatum),
           value = Value(adaAmount) + beaconToken
         )

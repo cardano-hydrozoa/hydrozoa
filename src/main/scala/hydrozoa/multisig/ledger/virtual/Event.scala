@@ -3,7 +3,6 @@ package hydrozoa.multisig.ledger.virtual
 import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -20,26 +19,12 @@ sealed trait L2Event
 final case class L2EventTransaction(transaction: Transaction) extends L2Event {
     def volume: Long = transaction.body.value.outputs.map(sto => sto.value.value.coin.value).sum
 }
-final case class L2EventWithdrawal(transaction: Transaction) extends L2Event {
-    val getEventId: TransactionHash = transaction.id
-}
 
 // TODO: Rename to L2Genesis
 // TODO: Fix to work with the new way that virtual utxos are created in deposit transactions.
 object L2EventGenesis:
     enum L2EventGenesisError:
         case EmptyInputs
-
-    /** Smart constructor for L2EventGenesis, ensuring that the event contains at least one valid
-      * Genesis Utxo. A genesis event absorbs a number of transaction inputs from L1 and produces
-      * corresponding L2 outputs. The TxId of a Genesis Event comes from a hash of the block number
-      * and token name of the head
-      */
-    def fromDepositUtxo(
-        utxosL1: NonEmptyList[DepositUtxo],
-        // blockMajorVersion : Block.Version.Major,
-        // treasuryTokenName : TokenName
-    ): L2EventGenesis = ???
 
 final case class L2EventGenesis(
     genesisObligations: NonEmptyList[GenesisObligation],

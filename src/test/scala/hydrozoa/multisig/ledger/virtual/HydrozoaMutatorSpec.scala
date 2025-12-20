@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
+import cats.FlatMap.nonInheritedOps.toFlatMapOps
 import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
@@ -7,15 +8,14 @@ import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import org.scalacheck.Prop.{forAll, propBoolean}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test as ScalaCheckTest}
 import scalus.builtin.ByteString
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.ledger.api.v1.ArbitraryInstances.genByteStringOfN
 import scalus.ledger.api.v3
 import scalus.prelude.Option as SOption
-import test.Generators.Hydrozoa.{genL2EventTransactionAttack, genL2WithdrawalFromUtxosAndPeer}
+import test.Generators.Hydrozoa.{genGenesisObligation, genL2EventTransactionAttack, genL2WithdrawalFromUtxosAndPeer}
 import test.TestPeer.{Alice, Bob}
-import test.{TestPeer, l2EventTransactionFromInputsAndPeer, testNetwork}
+import test.{TestPeer, l2EventTransactionFromInputsAndPeer, testNetwork, testVirtualLedgerConfig}
 
 /** Build dummy deposit datum from a pubkey, setting the L2 and refund addresses to the pkh address
   */
@@ -26,13 +26,13 @@ def depositDatumFromPeer(peer: TestPeer): DepositUtxo.Datum = {
       SOption.None
     )
 
-    DepositUtxo.Datum(???) /*
-      address = v3Addr.credential,
-      datum = SOption.None,
-      deadline = 100,
-      refundAddress = v3Addr,
-      refundDatum = SOption.None*/
-
+    DepositUtxo.Datum(
+      DepositUtxo.Refund.Instructions(
+        address = v3Addr,
+        datum = SOption.None,
+        startTime = 100,
+      )
+    )
 }
 
 /** Generate a single, semantically valid but fully synthetic deposit for inclusion into a genesis
@@ -40,7 +40,6 @@ def depositDatumFromPeer(peer: TestPeer): DepositUtxo.Datum = {
   */
 def genDepositUtxoFromPeer(
     peer: TestPeer,
-    address: Option[ShelleyAddress] = None
 ): Gen[DepositUtxo] =
     for
         txId: TransactionHash <- genByteStringOfN(32).map(
@@ -54,94 +53,81 @@ def genDepositUtxoFromPeer(
         )
 
         coin <- Arbitrary.arbitrary[Coin]
+
+        virtualOutputs <- Gen
+            .nonEmptyListOf(genGenesisObligation(peer))
+            .map(NonEmptyList.fromListUnsafe)
     yield DepositUtxo(
       l1Input = txIn,
       l1OutputAddress = peer.address(testNetwork),
       l1OutputDatum = depositDatumFromPeer(peer),
-      l1OutputValue = ???, // coin,
-      virtualOutputs = ???
+      l1OutputValue = Value(coin),
+      virtualOutputs = virtualOutputs
     )
 
 /** Generate a semantically valid, but fully synthetic, nonsensical, genesis event coming from the
   * given peer
   */
-def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] = Gen.sized {
-    numberOfDepositsAbsorbed =>
-        // Always generate at least one deposit
-        if numberOfDepositsAbsorbed == 0 then {
-            for {
-                deposit <- genDepositUtxoFromPeer(peer)
-                genesisId <- Arbitrary.arbitrary[TransactionHash]
-            } yield L2EventGenesis(
-              genesisId = genesisId,
-              genesisObligations = deposit.virtualOutputs
-            )
-
-        } else {
-            var counter = 0
-            var genesisSeq: Seq[DepositUtxo] = Seq.empty
-            while {
-                val deposit: DepositUtxo = genDepositUtxoFromPeer(peer).sample.get
-                if !genesisSeq.contains(deposit)
-                then {
-                    genesisSeq = genesisSeq.appended(deposit);
-                    counter = counter + 1
-                }
-                counter != numberOfDepositsAbsorbed
-            } do ()
-
-            for {
-                genesisId <- Arbitrary.arbitrary[TransactionHash]
-                genesisObligations =
-                    NonEmptyList.fromListUnsafe(
-                      genesisSeq.foldLeft(List.empty[GenesisObligation])((acc, utxo) =>
-                          acc ++ utxo.virtualOutputs.toList
-                      )
-                    )
-            } yield L2EventGenesis(genesisId = genesisId, genesisObligations = genesisObligations)
-        }
-}
+def genL2EventGenesisFromPeer(peer: TestPeer): Gen[L2EventGenesis] =
+    for {
+        numberOfGenesisObligations <- Gen.choose[Int](1, 50)
+        gos <- Gen
+            .listOfN(numberOfGenesisObligations, genGenesisObligation(peer))
+            .map(l => NonEmptyList.fromListUnsafe(l.distinct))
+        gid <- Arbitrary.arbitrary[TransactionHash]
+    } yield L2EventGenesis(gos, gid)
 
 object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
     override def overrideParameters(p: ScalaCheckTest.Parameters): ScalaCheckTest.Parameters = {
         p.withMinSuccessfulTests(100)
     }
 
-    // NOTE (Peter, 2025-12-03): This test is a bit of a hack, we need some stateful testing.
-    // First we have to generate the L2 genesis event, then we have to execute it, then we have to generate the
-    // withdrawal event and execute it.
-    //
-    // Scalacheck has a notion of stateful testing
-    //    (see https://github.com/typelevel/scalacheck/blob/main/doc/UserGuide.md#stateful-testing)
-    // I _think_ this should work -- we just generate new commands based on the existing state.
-    // But for now, for MVP purposes, its not worthwhile. Instead, we just sample the generator directly.
+    import org.scalacheck.PropertyM.*
+
+    // TODO: Factor this out? Maybe make these as implicits?
+    type EA[A] = Either[Any, A]
+
+    def runner: EA[Prop] => Prop = {
+        case Left(err)   => false :| s"test failed with error: $err"
+        case Right(prop) => prop
+    }
+
     val _ = property("Alice can withdraw her own deposited utxos") = {
-        forAll(genL2EventGenesisFromPeer(Alice)) { genesisEvent =>
-            val outState = {
-                val genesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-                  genesisEvent,
-                  State.empty
-                )
+        import org.scalacheck.PropertyM
+        import org.scalacheck.PropertyM.*
 
-                for
+        type EA[A] = Either[Any, A]
 
-                    withdrawal <- genL2WithdrawalFromUtxosAndPeer(
-                      genesisState.activeUtxos,
-                      Alice
-                    ).sample.toRight("withdrawal failed to generate")
-                    state <- HydrozoaTransactionMutator.transit(
-                      Config.empty,
-                      genesisState,
-                      withdrawal
-                    )
-                yield state
-            }
-            outState match {
-                case Left(err) => false :| s"'genesis => withdraw all' failed with error: $err"
-                case Right(outS) =>
-                    outS.activeUtxos.isEmpty :| "'genesis => withdraw all' should leave an empty utxo set"
-            }
+        def runner: EA[Prop] => Prop = {
+            case Left(err)   => false :| s"test failed with error: $err"
+            case Right(prop) => prop
         }
+
+        monadic(
+          runner,
+          m = for {
+              genesisEvent <- pick[EA, L2EventGenesis](genL2EventGenesisFromPeer(Alice))
+              genesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
+                genesisEvent,
+                State.empty
+              )
+              withdrawal <- pick[EA, L2EventTransaction](
+                genL2WithdrawalFromUtxosAndPeer(genesisState.activeUtxos, Alice)
+              )
+
+              // FIXME: This throws away all testcases that are too big. We should adjust the generator to avoid that
+              vlConfig = testVirtualLedgerConfig(0)
+              _ <- pre[EA](withdrawal.transaction.toCbor.length < vlConfig.protocolParams.maxTxSize)
+              state <- run[EA, State](
+                HydrozoaTransactionMutator.transit(vlConfig, genesisState, withdrawal)
+              )
+              _ <- assertWith(
+                msg = "'genesis => withdraw all' should leave empty utxo set",
+                condition = state.activeUtxos.isEmpty
+              )
+          } yield true
+        )
+
     }
 
     val _ = property("Alice cannot withdraw Bob's genesis utxos") = {
@@ -241,36 +227,45 @@ object HydrozoaMutatorSpec extends Properties("Hydrozoa Mutator") {
             }
         }
 
-    val _ = property("correct transaction") = forAll(genL2EventGenesisFromPeer(Alice)) {
-        genesisEvent =>
-            val postGenesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
-              genesisEvent,
-              State.empty
-            )
+    val _ = property("correct transaction") = {
 
-            // Then generate the transaction event, where Alice tries to send all UTxOs to bob
-            val allTxInputs = TaggedSortedSet.from(postGenesisState.activeUtxos.keySet)
+        monadic(
+          runner,
+          for {
+              genesisEvent <- pick[EA, L2EventGenesis](genL2EventGenesisFromPeer(Alice))
+              postGenesisState = HydrozoaGenesisMutator.addGenesisUtxosToState(
+                genesisEvent,
+                State.empty
+              )
+              allTxInputs = TaggedSortedSet.from(postGenesisState.activeUtxos.keySet)
+              transactionEvent = l2EventTransactionFromInputsAndPeer(
+                inputs = allTxInputs,
+                utxoSet = postGenesisState.activeUtxos,
+                inPeer = Alice,
+                outPeer = Bob
+              )
+              vlConfig = testVirtualLedgerConfig(0)
 
-            val transactionEvent = l2EventTransactionFromInputsAndPeer(
-              inputs = allTxInputs,
-              utxoSet = postGenesisState.activeUtxos,
-              inPeer = Alice,
-              outPeer = Bob
-            )
+              // Discard all test cases where the tx size would be too big.
+              // FIXME: We should just generate smaller things
+              _ <- pre[EA](
+                transactionEvent.transaction.toCbor.length < vlConfig.protocolParams.maxTxSize
+              )
 
-            // Then attempt to execute the withdrawal on the postGenesisState
-            HydrozoaTransactionMutator.transit(
-              Config.empty,
-              postGenesisState,
-              transactionEvent
-            ) match {
-                case Left(err) => false :| s"Transaction failed with error: $err"
-                case Right(outS) =>
-                    (outS.activeUtxos.size == 1) :| "Successful transaction should result in a single utxo" &&
-                    (outS.activeUtxos.head._2.address == Bob
-                        .address()) :| "Result UTxO should be at Bob's address"
-            }
+              state <- run[EA, State](
+                HydrozoaTransactionMutator.transit(vlConfig, postGenesisState, transactionEvent)
+              )
 
+              _ <- assertWith[EA](
+                state.activeUtxos.size == 1,
+                "Successful transaction should result in a single utxo"
+              )
+              _ <- assertWith[EA](
+                state.activeUtxos.head._2.address == Bob.address(),
+                "Result UTxO should be at Bob's address"
+              )
+          } yield true
+        )
     }
 
     val _ = property("transaction attack") =

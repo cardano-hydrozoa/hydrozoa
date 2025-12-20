@@ -12,10 +12,10 @@ import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Value}
+import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TransactionUnspentOutput}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep}
 
 enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
 
@@ -324,7 +324,7 @@ object RolloutTx {
                 ModifyAuxiliaryData(_ => Some(MD(MD.Rollout(headAddress = config.headAddress))))
 
             private def stepReferenceHNS(config: Tx.Builder.Config) =
-                ReferenceOutput(config.headNativeScriptReferenceInput)
+                ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
         }
 
@@ -351,7 +351,7 @@ object RolloutTx {
         object SpendRollout {
             def spendRollout(
                 config: Tx.Builder.Config,
-                resolvedUtxo: TransactionUnspentOutput
+                resolvedUtxo: Utxo
             ): Spend =
                 Spend(resolvedUtxo, config.headNativeScript.witness)
         }
@@ -414,8 +414,8 @@ object RolloutTx {
             private def placeholderRolloutResolvedUtxo(
                 config: Tx.Builder.Config,
                 value: Value
-            ): TransactionUnspentOutput =
-                TransactionUnspentOutput(
+            ): Utxo =
+                Utxo(
                   Placeholder.utxoId,
                   TxOutput.Babbage(
                     address = config.headAddress,
@@ -467,7 +467,7 @@ object RolloutTx {
                 assert(outputs.nonEmpty)
                 val rolloutOutput = outputs.head.value
 
-                val rolloutProduced = TransactionUnspentOutput(
+                val rolloutProduced = Utxo(
                   TransactionInput(transactionId = tx.id, index = 0),
                   rolloutOutput
                 )
@@ -499,7 +499,7 @@ object RolloutTx {
                 val firstInput = inputs.head
 
                 val firstInputResolved =
-                    TransactionUnspentOutput(firstInput, ctx.resolvedUtxos.utxos(firstInput))
+                    Utxo(firstInput, ctx.resolvedUtxos.utxos(firstInput))
 
                 RolloutUtxo(firstInputResolved)
             }

@@ -11,10 +11,9 @@ import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.{SyncRequest, SyncRequestE}
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
-import hydrozoa.multisig.ledger.DappLedger.{State, *}
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, TreasuryUtxo}
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -26,10 +25,12 @@ import scalus.cardano.ledger.*
 import scalus.ledger.api.v3.PosixTime
 
 trait DappLedger(
-    initialTreasuryUtxo: TreasuryUtxo,
+    initialTreasuryUtxo: MultisigTreasuryUtxo,
     config: hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config,
     virtualLedger: ActorRef[IO, VirtualLedger.Request]
 ) extends Actor[IO, Request] {
+    import DappLedger.State
+    
     val headAddress: ShelleyAddress = initialTreasuryUtxo.address
 
     private val state: Ref[IO, State] =
@@ -230,10 +231,6 @@ trait DappLedger(
       * immediate refund transactions based on the arguments. The [[DappLedger]] must be discarded
       * after this, so there's no point in updating its state.
       *
-      * @param payouts
-      *   a list of payout outputs that should be produced by the finalization and rollout
-      *   transactions.
-      *
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       * Immediate refund transactions must be constructed for every deposit in the ledger state.
       */
@@ -283,7 +280,7 @@ trait DappLedger(
   */
 object DappLedger {
     final case class State(
-        treasury: TreasuryUtxo,
+        treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
         deposits: Queue[(LedgerEvent.Id, DepositUtxo)] = Queue()
     ) {
@@ -399,7 +396,5 @@ object DappLedger {
 
         final case class FinalizationTxSeqBuilderError(wrapped: FinalizationTxSeq.Builder.Error)
             extends DappLedgerError
-
-        case object GetStateError extends DappLedgerError
     }
 }
