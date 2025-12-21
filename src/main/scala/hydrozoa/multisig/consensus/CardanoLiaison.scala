@@ -20,7 +20,7 @@ import scalus.cardano.ledger.{Slot, Transaction, TransactionHash, TransactionInp
   *   - Keeps track of the target L1 state the liaison tries to achieve by observing all L1 block
   *     effects (i.e. effects for major and final blocks) and storing them in the local state.
   *   - Periodically polls the Cardano blockchain for the head's utxo state (and some additional
-  *     information occasinally).
+  *     information occasionally).
   *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
   *   - Keeps track of confirmed L1 effects of L2 blocks that are immutable on L1 (TODO F14)
   *
@@ -405,7 +405,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         case Rollout(txs: Seq[Transaction])
 
         /** Represents noop action that may occur when the current slot falls into the silence
-          * period - a gap between two competeing transactions when the settlement/finzalization tx
+          * period - a gap between two competing transactions when the settlement/finzalization tx
           * already expired but the fallback is not valid yet.
           */
         case SilencePeriodNoop
@@ -459,6 +459,9 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
 
         effectId match {
             // Backbone effect - settlement/finalization/deinit
+            // TODO: Can't be initialization tx though. If we want to allow
+            // initialization txs to spend utxos from the same head address
+            // we should address it somehow.
             case backboneEffectId @ (blockNum, 0) =>
 
                 println(s"backboneEffectId: $backboneEffectId")
@@ -480,11 +483,13 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                     case Some(fallback) =>
                         for {
                             happyPathTxTtl <- happyPathEffect match {
-                                case tx: InitializationTx => Right(tx.ttl)
-                                case tx: SettlementTx     => Right(tx.ttl)
-                                case tx: FinalizationTx   => Right(tx.ttl)
+                                case tx: SettlementTx   => Right(tx.ttl)
+                                case tx: FinalizationTx => Right(tx.ttl)
                                 // TODO: this should never happen
-                                case _ => Left(UpexpectedEffectType)
+                                case tx: InitializationTx =>
+                                    Left(UnexpectedInitializationEffect(backboneEffectId))
+                                case _: RolloutTx => Left(UnexpectedRolloutEffect(backboneEffectId))
+                                case _: DeinitTx  => Left(DeinitEffectWithUnexpectedFallback)
                             }
 
                             fallbackValidityStart = fallback.validityStart
@@ -549,15 +554,24 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     end mkDirectAction
 
     private enum EffectError extends Throwable:
-        case UpexpectedEffectType
+        case UnexpectedRolloutEffect(effectId: EffectId)
+        case UnexpectedInitializationEffect(effectId: EffectId)
+        case DeinitEffectWithUnexpectedFallback
         case WrongValidityRange(currentSlot: Slot, happyPathTtl: Slot, fallbackValidityStart: Slot)
+
+    import EffectError.*
 
     extension (self: EffectError)
         private def msg: String = self match {
-            case EffectError.UpexpectedEffectType =>
-                "Unexpected effect type was encountered, check the integrity of effects."
-            case EffectError.WrongValidityRange(currentSlot, happyPathTtl, fallbackValidityStart) =>
+            case UnexpectedRolloutEffect(effectId) =>
+                s"Unexpected rollout effect with effectId = ${effectId}, check the integrity of effects."
+            case UnexpectedInitializationEffect(effectId) =>
+                s"Unexpected initialization effect with effectId = ${effectId}, check the integrity of effects and the initalization tx."
+            case DeinitEffectWithUnexpectedFallback =>
+                "Impossible: the deinit tx with a competing fallback tx"
+            case WrongValidityRange(currentSlot, happyPathTtl, fallbackValidityStart) =>
                 s"Validity range invariant is not hold: current slot: ${currentSlot}," +
-                    s" happy path tx TTL: ${happyPathTtl} fallback validity start: ${fallbackValidityStart}"
+                    s" happy path tx TTL: ${happyPathTtl}" +
+                    s" fallback validity start: ${fallbackValidityStart}"
         }
 }

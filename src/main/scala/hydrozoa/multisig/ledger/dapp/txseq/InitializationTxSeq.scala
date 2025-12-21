@@ -262,6 +262,7 @@ object InitializationTxSeq {
             val fallbackTxValidityStart =
                 args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
                     args.txTiming.majorBlockTimeout.toMillis
+            // TODO: this is a bit far-fetched, is there better options?
             val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod.toMillis
 
             // ===================================

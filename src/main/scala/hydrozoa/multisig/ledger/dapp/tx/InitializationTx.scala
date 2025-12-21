@@ -28,8 +28,8 @@ final case class InitializationTx(
     // bother about TTL for the initialization tx. As George said, this might be
     // useful for users since that TTL is a point before which the initialization
     // should be submitted. But the whole idea of making the init sequence exogenous
-    // serves exactly that - the way to give the users ability to do what they want to
-    // - then why do we want to make an exception for TTL?
+    // serves exactly that goal - the way to give the users ability to do what they want to.
+    // Then why do we want to make an exception for TTL?
     // However, I am keeping it for now and we can consider it later on.
     override val ttl: Slot,
     treasuryProduced: MultisigTreasuryUtxo,
