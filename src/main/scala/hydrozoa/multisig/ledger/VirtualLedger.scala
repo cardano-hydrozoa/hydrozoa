@@ -20,14 +20,16 @@ import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 trait VirtualLedger(config: Config) extends Actor[IO, Request] {
     private val state: Ref[IO, State] = Ref.unsafe[IO, State](State(Map.empty))
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case itx: SyncRequestE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[
-              Payout.Obligation
-            ]] =>
-            itx.handleRequest(applyInternalTx)
-        case ApplyGenesis(go) => applyGenesisTx(go)
-        case gs: SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment] =>
-            gs.handleRequest(_ => state.get.map(_.kzgCommitment))
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case req: SyncRequest.Any =>
+            req.request match {
+                case r: ApplyInternalTx => r.handleSync(req, applyInternalTx)
+                case r: GetCurrentKzgCommitment.type =>
+                    r.handleSync(req, _ => state.get.map(_.kzgCommitment))
+            }
+        case req: ApplyGenesis => applyGenesisTx(req)
     }
 
     private def applyInternalTx(
@@ -75,8 +77,9 @@ trait VirtualLedger(config: Config) extends Actor[IO, Request] {
             _ <- EitherT.pure[IO, ErrorApplyInternalTx](())
         } yield payoutObligations
 
-    private def applyGenesisTx(tx: L2EventGenesis): IO[Unit] =
-        state.get >>= (s => state.set(HydrozoaGenesisMutator.addGenesisUtxosToState(tx, s)))
+    private def applyGenesisTx(args: ApplyGenesis): IO[Unit] = {
+        state.update(HydrozoaGenesisMutator.addGenesisUtxosToState(args.l2EventGenesis, _))
+    }
 
     def makeUtxosCommitment: IO[KzgCommitment] =
         for {
@@ -139,24 +142,30 @@ object VirtualLedger {
     ///////////////////////////////////////////
     // Requests
     type Request =
-        SyncRequestE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[Payout.Obligation]] |
-            ApplyGenesis | SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment]
+        ApplyInternalTx.Sync | ApplyGenesis | GetCurrentKzgCommitment.Sync
 
     // Internal Tx
     final case class ApplyInternalTx(
         tx: Tx.Serialized,
-    ) {
-        def ?: : SyncRequest.SendE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[
+    ) extends SyncRequestE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[Payout.Obligation]] {
+        export ApplyInternalTx.Sync
+        def ?: : this.Send = SyncRequest.send(_, this)
+    }
+
+    object ApplyInternalTx {
+        type Sync = SyncRequest.EnvelopeE[IO, ApplyInternalTx, ErrorApplyInternalTx, Vector[
           Payout.Obligation
-        ]] = SyncRequest.send(_, this)
+        ]]
     }
 
     // Genesis Tx
-    final case class ApplyGenesis(go: L2EventGenesis)
+    final case class ApplyGenesis(l2EventGenesis: L2EventGenesis)
 
-    case object GetCurrentKzgCommitment {
-        def ?: : SyncRequest.Send[IO, GetCurrentKzgCommitment.type, KzgCommitment] =
-            SyncRequest.send(_, this)
+    case object GetCurrentKzgCommitment
+        extends SyncRequest[IO, GetCurrentKzgCommitment.type, KzgCommitment] {
+        type Sync = SyncRequest.Envelope[IO, GetCurrentKzgCommitment.type, KzgCommitment]
+
+        def ?: : this.Send = SyncRequest.send(_, this)
     }
 
     //////////////////////////////////////////////

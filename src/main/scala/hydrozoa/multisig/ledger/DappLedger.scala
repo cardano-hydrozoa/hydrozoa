@@ -36,25 +36,16 @@ trait DappLedger(
     private val state: Ref[IO, State] =
         Ref.unsafe[IO, State](State(initialTreasuryUtxo, Queue.empty))
 
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
-        case d: SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] =>
-            d.handleRequest(registerDeposit)
-        case s: SyncRequestE[
-              IO,
-              SettleLedger,
-              SettlementTxSeqBuilderError,
-              SettleLedger.Result
-            ] =>
-            s.handleRequest(settleLedger)
-        case f: SyncRequestE[
-              IO,
-              FinalizeLedger,
-              FinalizationTxSeqBuilderError,
-              FinalizationTxSeq
-            ] =>
-            f.handleRequest(finalizeLedger)
-        case g: SyncRequest[IO, GetState, State] =>
-            g.handleRequest(_ => state.get)
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case req: SyncRequest.Any =>
+            req.request match {
+                case r: RegisterDeposit => r.handleSync(req, registerDeposit)
+                case r: SettleLedger    => r.handleSync(req, settleLedger)
+                case r: FinalizeLedger  => r.handleSync(req, finalizeLedger)
+                case r: GetState.type   => r.handleSync(req, _ => state.get)
+            }
     }
 
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
@@ -289,20 +280,8 @@ object DappLedger {
     }
 
     object Requests {
-        type Request =
-            SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] |
-                SyncRequestE[
-                  IO,
-                  SettleLedger,
-                  SettlementTxSeqBuilderError,
-                  SettleLedger.Result
-                ] |
-                SyncRequestE[
-                  IO,
-                  FinalizeLedger,
-                  FinalizationTxSeqBuilderError,
-                  FinalizationTxSeq
-                ] | SyncRequest[IO, GetState, State]
+        type Request = RegisterDeposit.Sync | SettleLedger.Sync | FinalizeLedger.Sync |
+            GetState.Sync
 
         // FIXME: This should include the refundTxBytes
         // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
@@ -310,9 +289,13 @@ object DappLedger {
             serializedDeposit: Array[Byte],
             eventId: LedgerEvent.Id,
             virtualOutputs: NonEmptyList[GenesisObligation],
-        ) {
-            def ?: : SyncRequest.SendE[IO, RegisterDeposit, RegisterDepositError, Unit] =
-                SyncRequest.send(_, this)
+        ) extends SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] {
+            export RegisterDeposit.Sync
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
+
+        object RegisterDeposit {
+            type Sync = SyncRequest.EnvelopeE[IO, RegisterDeposit, RegisterDepositError, Unit]
         }
 
         final case class SettleLedger(
@@ -321,16 +304,23 @@ object DappLedger {
             blockCreationTime: PosixTime,
             tallyFeeAllowance: Coin,
             votingDuration: PosixTime
-        ) {
-            def ?: : SyncRequest.SendE[
+        ) extends SyncRequestE[
               IO,
               SettleLedger,
               SettlementTxSeqBuilderError,
               SettleLedger.Result
-            ] = SyncRequest.send(_, this)
+            ] {
+            export SettleLedger.Sync
+            def ?: : this.Send = SyncRequest.send(_, this)
         }
 
         object SettleLedger {
+            type Sync = SyncRequest.EnvelopeE[
+              IO,
+              SettleLedger,
+              SettlementTxSeqBuilderError,
+              SettleLedger.Result
+            ]
 
             /** Sum type for results of calls to SettleLedger
               */
@@ -357,18 +347,30 @@ object DappLedger {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares
-        ) {
-            def ?: : SyncRequest.SendE[
+        ) extends SyncRequestE[
               IO,
               FinalizeLedger,
               FinalizationTxSeqBuilderError,
               FinalizationTxSeq
-            ] = SyncRequest.send(_, this)
+            ] {
+            export FinalizeLedger.Sync
+            def ?: : this.Send = SyncRequest.send(_, this)
         }
 
-        final case class GetState() {
-            def ?: : SyncRequest.Send[IO, GetState, State] = SyncRequest.send(_, this)
+        object FinalizeLedger {
+            type Sync = SyncRequest.EnvelopeE[
+              IO,
+              FinalizeLedger,
+              FinalizationTxSeqBuilderError,
+              FinalizationTxSeq
+            ]
         }
+
+        case object GetState extends SyncRequest[IO, GetState.type, State] {
+            type Sync = SyncRequest.Envelope[IO, GetState.type, State]
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
+
     }
 
     /** Initialize the L1 ledger's state and return the corresponding initialization transaction. */

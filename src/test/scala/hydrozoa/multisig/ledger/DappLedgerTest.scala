@@ -146,7 +146,7 @@ object DappLedgerTest extends Properties("DappLedger") {
           )
 
           _ <- run(EitherT(dappLedger ?: req).leftWiden[TestError])
-          s <- run(EitherT.right[TestError](dappLedger ?: GetState()))
+          s <- run(EitherT.right[TestError](dappLedger ?: GetState))
 
           _ <- assertWith[ET](
             msg = s"We should only have 1 deposit in the state, but we have ${s.deposits.length}",

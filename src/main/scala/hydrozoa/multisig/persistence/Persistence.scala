@@ -29,26 +29,29 @@ trait Persistence extends Actor[IO, Request] {
     private val events = Ref.unsafe[IO, TreeMap[LedgerEvent.Id, NewLedgerEvent]](TreeMap())
     private val confirmedBlock = Ref.unsafe[IO, Option[Block.Number]](None)
 
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction {
-            case x: SyncRequest[IO, PersistRequest, PutResponse] =>
-                x.handleRequest(handlePersistRequest)
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
-            case x: SyncRequest[IO, PutL1Effects.type, PutResponse] =>
-                x.handleRequest(_ => IO.pure(PutSucceeded))
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case req: SyncRequest.Any =>
+            req.request match {
+                case r: PersistRequest =>
+                    r.handleSync(req, handlePersistRequest)
+                case r: PutL1Effects.type =>
+                    r.handleSync(req, _ => IO.pure(PutSucceeded))
 
-            case x: SyncRequest[IO, PutCardanoHeadState.type, PutResponse] =>
-                x.handleRequest(_ => IO.pure(PutSucceeded))
+                case r: PutCardanoHeadState.type =>
+                    r.handleSync(req, _ => IO.pure(PutSucceeded))
 
-            case x: SyncRequest[IO, GetBlockData.type, GetBlockDataResp] =>
-                x.handleRequest(_ => IO.pure(GetBlockDataResp()))
+                case r: GetBlockData.type =>
+                    r.handleSync(req, _ => IO.pure(GetBlockDataResp()))
 
-            case x: SyncRequest[IO, GetConfirmedL1Effects.type, GetConfirmedL1EffectsResp] =>
-                x.handleRequest(_ => IO.pure(GetConfirmedL1EffectsResp()))
+                case r: GetConfirmedL1Effects.type =>
+                    r.handleSync(req, _ => IO.pure(GetConfirmedL1EffectsResp()))
 
-            case x: SyncRequest[IO, GetConfirmedLocalEvents.type, GetConfirmedLocalEventsResp] =>
-                x.handleRequest(_ => IO.pure(GetConfirmedLocalEventsResp()))
-        }
+                case r: GetConfirmedLocalEvents.type =>
+                    r.handleSync(req, _ => IO.pure(GetConfirmedLocalEventsResp()))
+            }
+    }
 
     def handlePersistRequest(req: PersistRequest): IO[PutResponse] = for {
         _ <- req.data match {
