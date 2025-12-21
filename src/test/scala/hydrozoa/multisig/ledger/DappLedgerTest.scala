@@ -23,8 +23,6 @@ import test.Generators.Hydrozoa.*
 import test.{TestPeer, nonSigningValidators, signTx, testEvaluator, testNetwork}
 
 object DappLedgerTest extends Properties("DappLedger") {
-
-    import EitherT.*
     import org.scalacheck.PropertyM.*
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
@@ -33,8 +31,13 @@ object DappLedgerTest extends Properties("DappLedger") {
             .withInitialSeed(Seed.fromBase64("W28rrQBwU4e2me7TydWPZDGl22_0duuU4iuVz5Y6QxN=").get)
     }
 
+    type TestError = InitializationTxSeq.Builder.Error | DepositRefundTxSeq.Builder.Error |
+        DappLedger.Errors.RegisterDepositError
+
+    type ET[A] = EitherT[IO, TestError, A]
+
     // Accept "any" as the error
-    def runner(mProp: EitherT[IO, Any, Prop]): Prop =
+    def runner(mProp: ET[Prop]): Prop =
         Prop.secure(mProp.value.unsafeRunSync() match {
             case Left(e) =>
                 s"Failed: $e" |: false
@@ -43,9 +46,8 @@ object DappLedgerTest extends Properties("DappLedger") {
 
     // FIXME(?): I used "Any" for the error type here, simply because I was too lazy to accumulate all of the
     // possible errors. Maybe it should be "Throwable"?
-    type ET[A] = EitherT[IO, Any, A]
 
-    val _ = property("DappLedger Register Deposit Happy Path") = monadic(
+    val _ = property("DappLedger Register Deposit Happy Path") = monadic[ET, Boolean](
       runner = runner,
       m = for {
           argsAndPeers <- pick[ET, (InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])](
@@ -55,8 +57,12 @@ object DappLedgerTest extends Properties("DappLedger") {
           peer = argsAndPeers._2.head
           hns = HeadMultisigScript(argsAndPeers._2.map(_.wallet.exportVerificationKeyBytes))
 
-          system <- run(right(ActorSystem[IO]("DappLedger").allocated.map(_._1)))
-          initTx <- run(fromEither[IO](InitializationTxSeq.Builder.build(args)))
+          system <- run[ET, ActorSystem[IO]](
+            EitherT.right[TestError](ActorSystem[IO]("DappLedger").allocated.map(_._1))
+          )
+          initTx <- run(
+            EitherT.fromEither[IO](InitializationTxSeq.Builder.build(args)).leftWiden[TestError]
+          )
 
           config = Tx.Builder.Config(
             headNativeScript = hns,
@@ -73,10 +79,12 @@ object DappLedgerTest extends Properties("DappLedger") {
             protocolParams = config.env.protocolParams,
             network = testNetwork
           )
-          virtualLedger <- run(right(system.actorOf(VirtualLedger(virtualLedgerConfig))))
+          virtualLedger <- run(
+            EitherT.right[TestError](system.actorOf(VirtualLedger(virtualLedgerConfig)))
+          )
 
           dappLedger <- run(
-            right(
+            EitherT.right[TestError](
               system.actorOf(
                 new DappLedger(initTx.initializationTx.treasuryProduced, config, virtualLedger) {}
               )
@@ -124,24 +132,21 @@ object DappLedgerTest extends Properties("DappLedger") {
             utxosFunding = utxosFunding
           )
 
-          depositRefundTxSeq <- run(EitherT.fromEither[IO](depositRefundSeqBuilder.build))
+          depositRefundTxSeq <- run(
+            EitherT.fromEither[IO](depositRefundSeqBuilder.build).leftWiden[TestError]
+          )
 
           signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
 
           serializedDeposit = signedTx.toCbor
-          req <- run(
-            EitherT.right(
-              RegisterDeposit(
-                serializedDeposit = serializedDeposit,
-                virtualOutputs = virtualOutputs,
-                eventId = LedgerEvent.Id(0, 1)
-              )
-            )
+          req = RegisterDeposit(
+            serializedDeposit = serializedDeposit,
+            virtualOutputs = virtualOutputs,
+            eventId = LedgerEvent.Id(0, 1)
           )
 
-          _ <- run(EitherT.right(dappLedger ! req))
-          stateReq <- run(right(GetState()))
-          s <- run(EitherT(dappLedger ?: stateReq))
+          _ <- run(EitherT(dappLedger ?: req).leftWiden[TestError])
+          s <- run(EitherT.right[TestError](dappLedger ?: GetState))
 
           _ <- assertWith[ET](
             msg = s"We should only have 1 deposit in the state, but we have ${s.deposits.length}",

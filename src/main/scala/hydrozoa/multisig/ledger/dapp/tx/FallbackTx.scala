@@ -158,9 +158,10 @@ object FallbackTx {
 
         val createCollateralUtxos: NonEmptyList[Send] = collateralUtxos.map(Send(_))
 
+        val disputeTreasuryAddress = RuleBasedTreasuryScript.address(network)
         val createDisputeTreasury = Send(
           Babbage(
-            address = RuleBasedTreasuryScript.address(network),
+            address = disputeTreasuryAddress,
             value = treasuryUtxoSpent.value,
             datumOption = Some(Inline(newTreasuryDatum.toData)),
             scriptRef = None
@@ -206,7 +207,7 @@ object FallbackTx {
               treasuryProduced = RuleBasedTreasuryUtxo(
                 treasuryTokenName = recipe.config.tokenNames.headTokenName,
                 utxoId = TransactionInput(txId, 0),
-                address = headAddress,
+                address = disputeTreasuryAddress,
                 datum = RuleBasedTreasuryDatum.Unresolved(newTreasuryDatum),
                 value = createDisputeTreasury.output.value
               ),
