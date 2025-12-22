@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.virtual
 import hydrozoa.multisig.ledger.VirtualLedger
 import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -31,58 +32,64 @@ object HydrozoaTransactionMutator {
         context: Config,
         state: State,
         l2Event: L2EventTransaction
-    ): Either[String | TransactionException, State] = l2Event match {
-        case L2EventTransaction(event) =>
-            // A helper for mapping the error type and applying arguments
-            def helper(v: Validator): Either[String | TransactionException, Unit] =
-                v.validate(context.toL1Context, L1State(utxos = state.activeUtxos), event)
-            for
-                _ <- L2ConformanceValidator.validate(context, state, l2Event)
-                // Upstream validators (applied alphabetically for ease of comparison in a file browser
-                // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
-                // but I've removed the rules that I'm certain won't apply
-                _ <- helper(AllInputsMustBeInUtxoValidator)
-                _ <- helper(EmptyInputsValidator)
-                _ <- helper(InputsAndReferenceInputsDisjointValidator)
-                _ <- helper(MissingKeyHashesValidator)
-                _ <- helper(MissingOrExtraScriptHashesValidator)
-                _ <- helper(NativeScriptsValidator)
-                _ <- helper(OutputsHaveNotEnoughCoinsValidator)
-                _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
-                _ <- helper(OutsideValidityIntervalValidator)
-                _ <- helper(TransactionSizeValidator)
-                _ <- helper(ValueNotConservedUTxOValidator)
-                _ <- helper(VerifiedSignaturesInWitnessesValidator)
-                _ <- helper(ExactSetOfRedeemersValidator)
-                _ <- helper(ScriptsWellFormedValidator)
-                _ <- helper(ProtocolParamsViewHashesMatchValidator)
-                _ <- helper(WrongNetworkValidator)
-                _ <- helper(WrongNetworkInTxBodyValidator)
-                // Native mutators
-                state <- AddOutputsToUtxoL2Mutator.transit(context, state, l2Event)
-                // Upstream mutators
-                state <-
-                    RemoveInputsFromUtxoMutator.transit(
-                      context.toL1Context,
-                      state.toScalusState,
-                      event
-                    )
-            yield State.fromScalusState(state)
-        case _ => Right(state)
+    ): Either[String | TransactionException, State] = {
+        val event = l2Event.transaction
+        // A helper for mapping the error type and applying arguments
+        def helper(v: Validator): Either[String | TransactionException, Unit] =
+            v.validate(context.toL1Context, L1State(utxos = state.activeUtxos), event)
+        for
+            _ <- L2ConformanceValidator.validate(context, state, l2Event)
+            // Upstream validators (applied alphabetically for ease of comparison in a file browser
+            // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
+            // but I've removed the rules that I'm certain won't apply
+            _ <- helper(AllInputsMustBeInUtxoValidator)
+            _ <- helper(EmptyInputsValidator)
+            _ <- helper(InputsAndReferenceInputsDisjointValidator)
+            _ <- helper(MissingKeyHashesValidator)
+            _ <- helper(MissingOrExtraScriptHashesValidator)
+            _ <- helper(NativeScriptsValidator)
+            _ <- helper(OutputsHaveNotEnoughCoinsValidator)
+            _ <- helper(OutputsHaveTooBigValueStorageSizeValidator)
+            _ <- helper(OutsideValidityIntervalValidator)
+            _ <- helper(TransactionSizeValidator)
+            _ <- helper(ValueNotConservedUTxOValidator)
+            _ <- helper(VerifiedSignaturesInWitnessesValidator)
+            _ <- helper(ExactSetOfRedeemersValidator)
+            _ <- helper(ScriptsWellFormedValidator)
+            _ <- helper(ProtocolParamsViewHashesMatchValidator)
+            _ <- helper(WrongNetworkValidator)
+            _ <- helper(WrongNetworkInTxBodyValidator)
+            // Native mutators
+            state <- AddOutputsToUtxoL2Mutator.transit(context, state, l2Event)
+            // Upstream mutators
+            state <-
+                RemoveInputsFromUtxoMutator.transit(
+                  context.toL1Context,
+                  state.toScalusState,
+                  event
+                )
+        yield State.fromScalusState(state)
     }
 }
 
 /** Outputs to the transaction can be marked as "L2 bound" in the transaction metadata.
   */
 object AddOutputsToUtxoL2Mutator:
+    final case class UtxoPartition(
+        l1Utxos: IndexedSeq[(TransactionInput, Babbage)],
+        l2Utxos: IndexedSeq[(TransactionInput, Babbage)]
+    ) {
+        def payoutObligations: Vector[Payout.Obligation] =
+            Vector.from(l1Utxos.map(utxo => Payout.Obligation(utxo._1, utxo._2)))
+    }
+
     /** @param event
       * @return
       *   An error if the metadata cant be parsed, or a pair of lists indicating (l1Bound, l2Bound)
       */
-    def utxoPartition(event: L2EventTransaction): Either[
-      String | TransactionException,
-      (IndexedSeq[(TransactionInput, Babbage)], IndexedSeq[(TransactionInput, Babbage)])
-    ] =
+    def utxoPartition(
+        event: L2EventTransaction
+    ): Either[String | TransactionException, UtxoPartition] =
         for {
             metadataMap <- event.transaction.auxiliaryData match {
                 case Some(keepRawM) =>
@@ -133,7 +140,10 @@ object AddOutputsToUtxoL2Mutator:
                 val partitionWithDesignation =
                     utxosWithDesignation.partition(x => if x._2 == Int(1) then true else false)
 
-                (partitionWithDesignation._1.map(_._1), partitionWithDesignation._2.map(_._1))
+                UtxoPartition(
+                  partitionWithDesignation._1.map(_._1),
+                  partitionWithDesignation._2.map(_._1)
+                )
             }
 
         } yield partition
