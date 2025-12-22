@@ -1,32 +1,31 @@
 package hydrozoa.multisig.protocol
 
-import cats.effect.{Deferred, IO}
+import cats.effect.IO
 import cats.syntax.all.*
-import com.suprnation.actor.ReplyingActorRef
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.protocol.ConsensusProtocol.Persisted
 
 object PersistenceProtocol {
     object Persistence {
         type PersistenceRef = Ref
-        type Ref = ReplyingActorRef[IO, Request, Response]
+        type Ref = ActorRef[IO, Request]
         type Request =
-            PersistRequest | PutL1Effects | PutCardanoHeadState | GetBlockData |
-                GetConfirmedL1Effects | GetConfirmedLocalEvents
+            PersistRequest.Sync | PutL1Effects.Sync | PutCardanoHeadState.Sync | GetBlockData.Sync |
+                GetConfirmedL1Effects.Sync | GetConfirmedLocalEvents.Sync
 
         type Response =
             PutResponse | GetBlockDataResp | GetConfirmedL1EffectsResp | GetConfirmedLocalEventsResp
 
         /** ==Put/write data into the persistence system== */
-        final case class PersistRequest(
-            data: Persisted.Request,
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
+        final case class PersistRequest(data: Persisted.Request)
+            extends SyncRequest[IO, PersistRequest, PutResponse] {
+            export PersistRequest.Sync
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
 
         object PersistRequest {
-            def apply(data: Persisted.Request): IO[PersistRequest] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PersistRequest(data, deferredResponse)
+            type Sync = SyncRequest.Envelope[IO, PersistRequest, PutResponse]
         }
 
         /** Successfully persisted the data. */
@@ -35,25 +34,17 @@ object PersistenceProtocol {
             // case PutFailed
 
         /** Persist L1 effects of L2 blocks */
-        final case class PutL1Effects(
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
-
-        object PutL1Effects {
-            def apply(): IO[PutL1Effects] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PutL1Effects(deferredResponse)
+        case object PutL1Effects extends SyncRequest[IO, PutL1Effects.type, PutResponse] {
+            type Sync = SyncRequest.Envelope[IO, PutL1Effects.type, PutResponse]
+            def ?: : this.Send =
+                SyncRequest.send(_, this)
         }
 
         /** Persist the head's latest utxo state in Cardano */
-        final case class PutCardanoHeadState(
-            override val dResponse: Deferred[IO, Either[Throwable, PutResponse]]
-        ) extends SyncRequest[IO, Throwable, PutResponse]
-
-        object PutCardanoHeadState {
-            def apply(): IO[PutCardanoHeadState] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, PutResponse]]
-            } yield PutCardanoHeadState(deferredResponse)
+        case object PutCardanoHeadState
+            extends SyncRequest[IO, PutCardanoHeadState.type, PutResponse] {
+            type Sync = SyncRequest.Envelope[IO, PutCardanoHeadState.type, PutResponse]
+            def ?: : this.Send = SyncRequest.send(_, this)
         }
 
         /** ==Get/read data from the persistence system== */
@@ -61,19 +52,26 @@ object PersistenceProtocol {
         /** Request data referenced by a block (e.g. multi-ledger events and absorbed/rejected L1
           * deposits).
           */
-        final case class GetBlockData(
-            override val dResponse: Deferred[IO, Either[Throwable, GetBlockDataResp]]
-        ) extends SyncRequest[IO, Throwable, GetBlockDataResp]
+        case object GetBlockData extends SyncRequest[IO, GetBlockData.type, GetBlockDataResp] {
+            type Sync = SyncRequest.Envelope[IO, GetBlockData.type, GetBlockDataResp]
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
 
         /** Response to [[GetBlockData]]. */
         final case class GetBlockDataResp(
         )
 
-        object GetBlockData {
-            def apply(): IO[GetBlockData] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetBlockDataResp]]
-            } yield GetBlockData(deferredResponse)
+        /** Retrieve L1 effects of confirmed L2 blocks. */
+        case object GetConfirmedL1Effects
+            extends SyncRequest[IO, GetConfirmedL1Effects.type, GetConfirmedL1EffectsResp] {
+            type Sync =
+                SyncRequest.Envelope[IO, GetConfirmedL1Effects.type, GetConfirmedL1EffectsResp]
+            def ?: : this.Send = SyncRequest.send(_, this)
         }
+
+        /** Response to [[GetConfirmedL1Effects]]. */
+        final case class GetConfirmedL1EffectsResp(
+        )
 
         /** Retrieve local events referenced by a confirmed block:
           *
@@ -81,33 +79,15 @@ object PersistenceProtocol {
           *   - Multi-signed deposit and post-dated refund transactions for the deposit events
           *     referenced by the block.
           */
-        final case class GetConfirmedLocalEvents(
-            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedLocalEventsResp]]
-        ) extends SyncRequest[IO, Throwable, GetConfirmedLocalEventsResp]
+        case object GetConfirmedLocalEvents
+            extends SyncRequest[IO, GetConfirmedLocalEvents.type, GetConfirmedLocalEventsResp] {
+            type Sync =
+                SyncRequest.Envelope[IO, GetConfirmedLocalEvents.type, GetConfirmedLocalEventsResp]
+            def ?: : this.Send = SyncRequest.send(_, this)
+        }
 
         /** Response to [[GetConfirmedLocalEvents]]. */
         final case class GetConfirmedLocalEventsResp(
         )
-
-        object GetConfirmedLocalEvents {
-            def apply(): IO[GetConfirmedLocalEvents] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetConfirmedLocalEventsResp]]
-            } yield GetConfirmedLocalEvents(deferredResponse)
-        }
-
-        /** Retrieve L1 effects of confirmed L2 blocks. */
-        final case class GetConfirmedL1Effects(
-            override val dResponse: Deferred[IO, Either[Throwable, GetConfirmedL1EffectsResp]]
-        ) extends SyncRequest[IO, Throwable, GetConfirmedL1EffectsResp]
-
-        /** Response to [[GetConfirmedL1Effects]]. */
-        final case class GetConfirmedL1EffectsResp(
-        )
-
-        object GetConfirmedL1Effects {
-            def apply(): IO[GetConfirmedL1Effects] = for {
-                deferredResponse <- Deferred[IO, Either[Throwable, GetConfirmedL1EffectsResp]]
-            } yield GetConfirmedL1Effects(deferredResponse)
-        }
     }
 }
