@@ -8,7 +8,7 @@ import hydrozoa.multisig.consensus.CardanoLiaison.Config
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, SubmitL1Effects}
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.types.Block
@@ -302,8 +302,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         _ <- IO.println("runEffects")
 
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current slot
-        getCardanoHeadState <- GetCardanoHeadState()
-        resp <- config.cardanoBackend ?: getCardanoHeadState
+        resp <- config.cardanoBackend ?: GetCardanoHeadState
 
         _ <- resp match {
 
@@ -358,8 +357,9 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                                     )
                                 case TargetState.Finalized(finalizationTxHash) =>
                                     for {
-                                        getTxInfo <- GetTxInfo(finalizationTxHash)
-                                        txResp <- config.cardanoBackend ?: getTxInfo
+                                        txResp <- config.cardanoBackend ?: GetTxInfo(
+                                          finalizationTxHash
+                                        )
                                         mbInitAction <- txResp match {
                                             case Left(err) =>
                                                 for {

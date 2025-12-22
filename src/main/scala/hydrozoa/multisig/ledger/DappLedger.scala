@@ -244,11 +244,14 @@ trait DappLedger(
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
               equityShares = equityShares,
-                  competingFallbackValidityStart = ???,
-                  blockCreatedOn = ???,
-                  txTiming = ???
-                )
-                ftxSeq <- EitherT.fromEither[IO](FinalizationTxSeq.Builder(config).build(args)
+              competingFallbackValidityStart = ???,
+              blockCreatedOn = ???,
+              txTiming = ???
+            )
+            ftxSeq <- EitherT.fromEither[IO](
+              FinalizationTxSeq
+                  .Builder(config)
+                  .build(args)
                   .left
                   .map(FinalizationTxSeqBuilderError.apply)
             )

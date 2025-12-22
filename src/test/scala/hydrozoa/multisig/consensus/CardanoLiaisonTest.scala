@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.*
-import cats.data.NonEmptyList
+import cats.data.{EitherT, NonEmptyList}
 import cats.effect.unsafe.implicits.*
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
@@ -10,6 +10,7 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.actor.{ActorSystem, test as _}
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.UtxoIdL1
+import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
@@ -18,7 +19,7 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
-import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetCardanoHeadStateResp, GetTxInfo, GetTxInfoResp, Request, SubmitL1Effects}
+import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{CardanoBackendError, GetCardanoHeadState, GetTxInfo, Request, SubmitL1Effects}
 import hydrozoa.multisig.protocol.ConsensusProtocol.{ConfirmFinalBlock, ConfirmMajorBlock}
 import hydrozoa.multisig.protocol.types.Block
 import org.scalacheck.*
@@ -679,10 +680,15 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         def getKnownTxs: IO[Set[TransactionHash]] = knownTxs.get
         def getGetStateCounter: IO[Int] = getStateCounter.get
 
-        override def receive: Receive[IO, Request] = {
-            case r: SubmitL1Effects     => submitL1Effects(r)
-            case r: GetCardanoHeadState => getCardanoHeadState(r)
-            case r: GetTxInfo           => getTxInfo(r)
+        override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+        private def receiveTotal(req: Request): IO[Unit] = req match {
+            case req: SyncRequest.Any =>
+                req.request match {
+                    case x: GetCardanoHeadState.type => x.handleSync(req, getCardanoHeadState)
+                    case x: GetTxInfo                => x.handleSync(req, getTxInfo)
+                }
+            case x: SubmitL1Effects => submitL1Effects(x)
         }
 
         private def submitL1Effects(r: SubmitL1Effects): IO[Unit] = for {
@@ -691,16 +697,21 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             _ <- knownTxs.update(s => s ++ txIds)
         } yield ()
 
-        private def getCardanoHeadState(r: GetCardanoHeadState): IO[Unit] = for {
-            _ <- IO.println("getCardanoHeadState")
-            _ <- getStateCounter.update(_ + 1)
-            _ <- r.dResponse.complete(Right(GetCardanoHeadStateResp(utxoIds, currentSlot)))
-        } yield ()
+        private def getCardanoHeadState(
+            r: GetCardanoHeadState.type
+        ): EitherT[IO, CardanoBackendError, GetCardanoHeadState.Response] = for {
+            _ <- EitherT.right(
+              IO.println("getCardanoHeadState") >>
+                  getStateCounter.update(_ + 1)
+            )
+        } yield GetCardanoHeadState.Response(utxoIds, currentSlot)
 
-        private def getTxInfo(r: GetTxInfo): IO[Unit] = for {
-            _ <- IO.println(s"getTxInfo txId: ${r.txHash}")
-            txs <- knownTxs.get
-            _ <- r.handleRequest(_ => IO.pure(GetTxInfoResp(txs.contains(r.txHash))))
-        } yield ()
+        private def getTxInfo(r: GetTxInfo): EitherT[IO, CardanoBackendError, GetTxInfo.Response] =
+            for {
+                txs <- EitherT.right(
+                  IO.println(s"getTxInfo txId: ${r.txHash}") >>
+                      knownTxs.get
+                )
+            } yield GetTxInfo.Response(txs.contains(r.txHash))
 
 }

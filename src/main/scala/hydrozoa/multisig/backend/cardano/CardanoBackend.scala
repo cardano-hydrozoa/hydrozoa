@@ -2,6 +2,7 @@ package hydrozoa.multisig.backend.cardano
 
 import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.*
 
 /** Cardano backend actor is a mock interface to the Cardano blockchain:
@@ -15,9 +16,14 @@ object CardanoBackend {
 }
 
 trait CardanoBackend extends Actor[IO, Request] {
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction {
-            case x: SubmitL1Effects     => ???
-            case x: GetCardanoHeadState => ???
-        }
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction { receiveTotal }
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case req: SyncRequest.Any =>
+            req.request match {
+                case x: GetCardanoHeadState.type => ???
+                case x: GetTxInfo                => ???
+            }
+        case x: SubmitL1Effects => ???
+    }
 }
