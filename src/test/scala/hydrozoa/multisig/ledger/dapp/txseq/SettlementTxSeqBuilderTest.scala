@@ -7,7 +7,7 @@ import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Prop, Properties, Test}
 import scala.collection.mutable
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
+import scalus.cardano.ledger.rules.{Context, State}
 import scalus.cardano.txbuilder.TransactionBuilder
 import test.*
 import test.TransactionChain.*
@@ -68,7 +68,7 @@ object SettlementTxSeqBuilderTest extends Properties("SettlementTxSeq") {
 
                         val res = observeTxChain(signedTxs)(
                           initialState,
-                          CardanoMutator,
+                          ObserverMutator,
                           Context.testMainnet()
                         )
 

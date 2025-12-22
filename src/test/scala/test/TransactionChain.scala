@@ -3,7 +3,8 @@ package test
 import cats.*
 import cats.data.*
 import cats.syntax.all.*
-import scalus.cardano.ledger.rules.{CardanoMutator, STS}
+import scalus.cardano.ledger.rules.CardanoMutator.{Context, Event, Result, State}
+import scalus.cardano.ledger.rules.{CardanoMutator, OutsideValidityIntervalValidator, STS}
 
 object Kendo {
     type Kendo[F[_], A] = Kleisli[F, A, A]
@@ -172,4 +173,21 @@ object TransactionChain {
 
         }
     }
+
+    object ObserverMutator extends STS.Mutator {
+        override final type Error = TransactionException
+
+        override def transit(context: Context, state: State, event: Event): Result = {
+            STS.Mutator.transit[Error](
+              CardanoMutator.allValidators.values
+                  .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type]),
+              CardanoMutator.allMutators.values,
+              context,
+              state,
+              event
+            )
+        }
+
+    }
+
 }

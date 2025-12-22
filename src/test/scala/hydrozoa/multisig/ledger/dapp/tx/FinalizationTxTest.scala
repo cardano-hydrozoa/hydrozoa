@@ -125,9 +125,9 @@ def genStandaloneFinalizationTxSeqBuilder(
           config.headNativeScript
         ),
         equityShares = shares,
-        competingFallbackValidityStart = ???,
-        blockCreatedOn = ???,
-        txTiming = ???
+        competingFallbackValidityStart = System.currentTimeMillis() + 3_600_000,
+        blockCreatedOn = System.currentTimeMillis(),
+        txTiming = TxTiming.default
       ),
       peers
     )

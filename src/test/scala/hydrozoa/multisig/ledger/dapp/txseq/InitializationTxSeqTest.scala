@@ -24,7 +24,7 @@ import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.rules.{CardanoMutator, Context, State}
+import scalus.cardano.ledger.rules.{Context, State}
 import scalus.ledger.api.v1.PubKeyHash
 import test.*
 import test.Generators.Hydrozoa.*
@@ -297,7 +297,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 // Semantic parsing
                 props.append {
                     val expectedTx: InitializationTx = InitializationTx(
-                      ttl = ???,
+                      ttl = iTx.ttl,
                       treasuryProduced = MultisigTreasuryUtxo(
                         treasuryTokenName = expectedHeadTokenName,
                         utxoId = TransactionInput(iTx.tx.id, 0),
@@ -526,7 +526,11 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                     )
 
                 val observationRes =
-                    observeTxChain(signedTxs)(initialState, CardanoMutator, Context.testMainnet())
+                    observeTxChain(signedTxs)(
+                      initialState,
+                      TransactionChain.ObserverMutator,
+                      Context.testMainnet()
+                    )
 
                 props.append {
                     observationRes match {
@@ -551,7 +555,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       evaluator = args.evaluator,
                       validators = args.validators,
                       resolver = mockResolver,
-                      initializationRequestTimestamp = ???,
+                      initializationRequestTimestamp = args.initializedOn,
                       txTiming = TxTiming.default
                     )
 

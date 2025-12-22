@@ -176,7 +176,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
         } yield (
           initializationTxSeq,
           settlementTxSeqs,
-          finalizationTxSeq.getOrElse(???)
+          finalizationTxSeq.fold(e => throw RuntimeException(e.toString), x => x)
         )
 
         def mbRollouts(rolloutTxSeq: RolloutTxSeq): List[Transaction] =

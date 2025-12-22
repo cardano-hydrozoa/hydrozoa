@@ -119,10 +119,15 @@ object InitializationTxSeq {
 
             // Check validity ranges are correct and match each other
             // 1. Fallback starts in a reasonable slot
-            initReq = initializationRequestTimestamp.toLong
+            preciseFallbackValidityStart =
+                initializationRequestTimestamp.toLong + txTiming.minSettlementDuration.toMillis +
+                    txTiming.majorBlockTimeout.toMillis
             devMillis = txTiming.initializationFallbackDeviation.toMillis
             toSlot = env.slotConfig.timeToSlot
-            possibleRange = (toSlot(initReq - devMillis), toSlot(initReq + devMillis))
+            possibleRange = (
+              toSlot(preciseFallbackValidityStart - devMillis),
+              toSlot(preciseFallbackValidityStart + devMillis)
+            )
 
             _ <-
                 if fallbackValidityStartSlot < possibleRange._1 || fallbackValidityStartSlot > possibleRange._2

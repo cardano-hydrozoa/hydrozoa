@@ -69,7 +69,7 @@ object Generators {
         def genTxBuilderConfigAndPeers(
             env: Environment = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
+            validators: Seq[Validator] = nonSingingNonValidityChecksValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
                 peers <- genTestPeers

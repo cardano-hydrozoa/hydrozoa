@@ -96,7 +96,10 @@ def genSettlementTxSeqBuilder(
     network: Network = testNetwork,
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
-    kzgCommitment: Option[KzgCommitment] = None
+    kzgCommitment: Option[KzgCommitment] = None,
+    fallbackValidityStart: PosixTime = System.currentTimeMillis() + 3_600_000,
+    blockCreatedOn: PosixTime = System.currentTimeMillis(),
+    txTiming: TxTiming = TxTiming.default
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -144,9 +147,9 @@ def genSettlementTxSeqBuilder(
         treasuryToSpend = utxo,
         tallyFeeAllowance = Coin.ada(2),
         votingDuration = 100,
-        competingFallbackValidityStart = ???,
-        blockCreatedOn = ???,
-        txTiming = ???
+        competingFallbackValidityStart = fallbackValidityStart,
+        blockCreatedOn = blockCreatedOn,
+        txTiming = txTiming
       ),
       peers
     )
@@ -155,7 +158,7 @@ def genSettlementTxSeqBuilder(
 /** Generates the settlement seq builder for the next settlement tx that should correctly spend the
   * [[treasuryToSpend]].
   * @param treasuryToSpend
-  *   the treasury to be spend in the settlement sequence
+  *   the treasury to be spent in the settlement sequence
   * @param majorVersion
   *   the version of the next block
   */
