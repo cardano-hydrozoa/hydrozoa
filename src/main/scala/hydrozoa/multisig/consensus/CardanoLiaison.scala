@@ -12,6 +12,7 @@ import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCard
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.types.Block
+import scala.annotation.unused
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Slot, Transaction, TransactionHash, TransactionInput}
@@ -27,8 +28,8 @@ import scalus.cardano.ledger.{Slot, Transaction, TransactionHash, TransactionInp
   * Some notes:
   *   - Though this module belongs to the multisig regime, the component's lifespan lasts longer
   *     since once a fallback tx gets submitted unfinished rollouts still may exist.
-  *   - More broadly, we don't want to die even there is nothing to submit for a particalar time -
-  *     an L1 rollback may happen at any momenet and that may require re-applying some of the
+  *   - More broadly, we don't want to die even there is nothing to submit for a particular time -
+  *     an L1 rollback may happen at any moment and that may require re-applying some of the
   *     effects.
   *   - The core concept the liaison is built around the "effect", which can be any L1 transaction
   *     like initialization, settlement, rollback, deinit or a fallback tx.
@@ -83,7 +84,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             }
         )
 
-    private def receiveTotal(req: Request, _subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request, @unused _subs: Subscribers): IO[Unit] =
         req match {
             case effects: ConfirmMajorBlock =>
                 handleMajorBlockL1Effects(effects) >> runEffects
@@ -206,23 +207,27 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 )
             case withRollouts: SettlementTxSeq.WithRollouts =>
                 val last = withRollouts.rolloutTxSeq.last
-                val vector: Vector[(TransactionInput, HappyPathEffect)] = (
-                  (treasurySpent.utxoId -> settlementTx)
-                      +: withRollouts.rolloutTxSeq.notLast.map(rolloutTx =>
-                          rolloutTx.rolloutSpent.utxo.input -> rolloutTx
-                      )
-                      :+ (last.rolloutSpent.utxo.input -> last)
-                )
-                vector.zipWithIndex
-                    .map((utxoIdAndEffect, index) => {
-                        val effectId = blockNumber -> index
-                        (UtxoIdL1(
-                          utxoIdAndEffect._1
-                        ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
-                    })
-                    .unzip
+                val vector: Vector[(TransactionInput, HappyPathEffect)] =
+                    (treasurySpent.utxoId -> settlementTx)
+                        +: withRollouts.rolloutTxSeq.notLast.map(rolloutTx =>
+                            rolloutTx.rolloutSpent.utxo.input -> rolloutTx
+                        )
+                        :+ (last.rolloutSpent.utxo.input -> last)
+                indexWithEffectId(vector, blockNumber).unzip
         }
     }
+
+    private def indexWithEffectId(
+        vector: Vector[(TransactionInput, HappyPathEffect)],
+        blockNumber: Block.Number
+    ): Vector[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
+        vector.zipWithIndex
+            .map((utxoIdAndEffect, index) => {
+                val effectId = blockNumber -> index
+                (UtxoIdL1(
+                  utxoIdAndEffect._1
+                ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
+            })
 
     private def mkHappyPathEffectInputsAndEffects(
         finalizationTxSeq: FinalizationTxSeq
@@ -240,19 +245,14 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
 
         def mkWithRollout(
             rolloutTxSeq: RolloutTxSeq
-        ): Vector[((UtxoIdL1, (Block.Number, Int)), ((Block.Number, Int), HappyPathEffect))] = {
+        ): Vector[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] = {
             val last = rolloutTxSeq.last
-            ((treasurySpent.utxoId -> finalizationTx)
+            val vector = (treasurySpent.utxoId -> finalizationTx)
                 +: rolloutTxSeq.notLast.map(rolloutTx =>
                     rolloutTx.rolloutSpent.utxo.input -> rolloutTx
                 )
-                :+ (last.rolloutSpent.utxo.input -> last)).zipWithIndex
-                .map((utxoIdAndEffect, index) => {
-                    val effectId = blockNumber -> index
-                    (UtxoIdL1(
-                      utxoIdAndEffect._1
-                    ) -> effectId) -> (effectId -> utxoIdAndEffect._2)
-                })
+                :+ (last.rolloutSpent.utxo.input -> last)
+            indexWithEffectId(vector, blockNumber)
         }
 
         finalizationTxSeq match {
@@ -263,7 +263,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                   Seq(finalizationEffectEntry)
                 )
 
-            case withDeinit: FinalizationTxSeq.WithDeinit => {
+            case withDeinit: FinalizationTxSeq.WithDeinit =>
                 val deinitInputEffectEntry = UtxoIdL1(
                   withDeinit.deinitTx.residualTreasurySpent.utxoId
                 ) -> deinitEffectId
@@ -279,7 +279,6 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                     deinitEffectEntry
                   )
                 )
-            }
 
             case withRollouts: FinalizationTxSeq.WithRollouts =>
                 mkWithRollout(withRollouts.rolloutTxSeq).unzip
@@ -323,7 +322,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                     // _ <- IO.println(state.fallbackEffects.keys)
 
                     // (i.e. those that are directly caused by effect inputs in L1 response).
-                    dueActions: Seq[Action] = mkDirectActions(
+                    dueActions: Seq[DirectAction] = mkDirectActions(
                       state,
                       l1State.utxoIds,
                       l1State.currentSlot
@@ -394,24 +393,29 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     // ===================================
 
     /** The set of effects the actor may want to execute against L1. */
-    private enum Action:
+    sealed trait Action
+    sealed trait DirectAction extends Action
+
+    object Action {
+
         /** Switching into the rule-based regime. */
-        case FallbackToRuleBased(tx: Transaction)
+        final case class FallbackToRuleBased(tx: Transaction) extends DirectAction
 
         /** Pushing the existing state in the multisig regime forward. */
-        case PushForwardMultisig(txs: Seq[Transaction])
+        final case class PushForwardMultisig(txs: Seq[Transaction]) extends DirectAction
 
         /** Finalizing a rollout sequence. */
-        case Rollout(txs: Seq[Transaction])
+        final case class Rollout(txs: Seq[Transaction]) extends DirectAction
 
         /** Represents noop action that may occur when the current slot falls into the silence
-          * period - a gap between two competing transactions when the settlement/finzalization tx
+          * period - a gap between two competing transactions when the settlement/finalization tx
           * already expired but the fallback is not valid yet.
           */
-        case SilencePeriodNoop
+        case object SilencePeriodNoop extends DirectAction
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
-        case InitializeHead(txs: Seq[Transaction])
+        final case class InitializeHead(txs: Seq[Transaction]) extends Action
+    }
 
     private def actionTxs(action: Action): Seq[Transaction] = action match {
         case Action.FallbackToRuleBased(tx)  => Seq(tx)
@@ -432,10 +436,6 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 case SilencePeriodNoop        => "SilencePeriodNoop"
                 case InitializeHead(txs)      => s"InitializeHead (${txs.map(_.id)}"
             }
-
-    private type DirectAction =
-        Action.FallbackToRuleBased | Action.PushForwardMultisig | Action.Rollout |
-            Action.SilencePeriodNoop.type
 
     private def mkDirectActions(
         state: State,
@@ -511,17 +511,17 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                                             .rangeFrom(backboneEffectId)
                                             .toSeq
                                             .map(_._2)
-                                    Right(PushForwardMultisig(effectTxs.map(_.tx)): DirectAction)
+                                    Right(PushForwardMultisig(effectTxs.map(_.tx)))
                                 // (2)
                                 case _
                                     if currentSlot >= happyPathTxTtl && currentSlot < fallbackValidityStart =>
-                                    Right(SilencePeriodNoop: DirectAction)
+                                    Right(SilencePeriodNoop)
                                 // (3)
                                 case _ if currentSlot >= fallbackValidityStart =>
                                     Right(
                                       FallbackToRuleBased(
                                         mbCompetingFallbackEffect.get.tx
-                                      ): DirectAction
+                                      )
                                     )
                                 // Should never happen, indicates an error in validity range calculation
                                 case _ =>
@@ -533,8 +533,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                                       )
                                     )
                             }
-                            // TODO: I wasn't able to remove that "safe" cast
-                        } yield ret.asInstanceOf[DirectAction]
+                        } yield ret
 
                     // This is a deinit effect, always the last tx in the backbone
                     case None =>
@@ -564,14 +563,14 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     extension (self: EffectError)
         private def msg: String = self match {
             case UnexpectedRolloutEffect(effectId) =>
-                s"Unexpected rollout effect with effectId = ${effectId}, check the integrity of effects."
+                s"Unexpected rollout effect with effectId = $effectId, check the integrity of effects."
             case UnexpectedInitializationEffect(effectId) =>
-                s"Unexpected initialization effect with effectId = ${effectId}, check the integrity of effects and the initalization tx."
+                s"Unexpected initialization effect with effectId = $effectId, check the integrity of effects and the initialization tx."
             case DeinitEffectWithUnexpectedFallback =>
                 "Impossible: the deinit tx with a competing fallback tx"
             case WrongValidityRange(currentSlot, happyPathTtl, fallbackValidityStart) =>
-                s"Validity range invariant is not hold: current slot: ${currentSlot}," +
-                    s" happy path tx TTL: ${happyPathTtl}" +
-                    s" fallback validity start: ${fallbackValidityStart}"
+                s"Validity range invariant is not hold: current slot: $currentSlot," +
+                    s" happy path tx TTL: $happyPathTtl" +
+                    s" fallback validity start: $fallbackValidityStart"
         }
 }
