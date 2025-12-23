@@ -18,7 +18,6 @@ import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.protocol.types.LedgerEvent
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.rng.Seed
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.*
@@ -36,9 +35,8 @@ object DappLedgerTest extends Properties("DappLedger") {
     }
 
     type TestError =
-      InitializationTxSeq.Builder.Error
-        | DepositRefundTxSeq.Builder.Error
-        | DappLedger.Errors.RegisterDepositError
+        InitializationTxSeq.Builder.Error | DepositRefundTxSeq.Builder.Error |
+            DappLedger.Errors.RegisterDepositError
 
     type ET[A] = EitherT[IO, TestError, A]
 
@@ -163,89 +161,91 @@ object DappLedgerTest extends Properties("DappLedger") {
           dappLedger
         )
 
-  def depositScenario(e: InitializedTestEnvironment): PropertyM[ET, DepositRefundTxSeq] = {
-    import e.*
-    val peer = peers.head
-    for {
-      virtualOutputs <-
-        pick[ET, NonEmptyList[GenesisObligation]](
-          Gen.nonEmptyListOf(genGenesisObligation(peer, minimumCoin = Coin.ada(5)))
-            .map(NonEmptyList.fromListUnsafe)
-            .label("Virtual Outputs")
-        )
+    def depositScenario(e: InitializedTestEnvironment): PropertyM[ET, DepositRefundTxSeq] = {
+        import e.*
+        val peer = peers.head
+        for {
+            virtualOutputs <-
+                pick[ET, NonEmptyList[GenesisObligation]](
+                  Gen.nonEmptyListOf(genGenesisObligation(peer, minimumCoin = Coin.ada(5)))
+                      .map(NonEmptyList.fromListUnsafe)
+                      .label("Virtual Outputs")
+                )
 
-      virtualOutputsValue = Value.combine(
-        virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
-      )
+            virtualOutputsValue = Value.combine(
+              virtualOutputs.map(vo => Value(vo.l2OutputValue)).toList
+            )
 
-      utxosFundingTail <- pick[ET, List[Utxo]](
-        Gen
-          .listOf(
-            genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
+            utxosFundingTail <- pick[ET, List[Utxo]](
+              Gen
+                  .listOf(
+                    genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
+                  )
+                  .label("Funding Utxos: Tail")
+            )
+
+            utxosFundingHead <- pick[ET, Utxo](
+              genAdaOnlyPubKeyUtxo(
+                peer,
+                minimumCoin = virtualOutputsValue.coin
+              ).label("Funding Utxos: Head")
+            )
+
+            utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
+
+            utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
+
+            depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
+              config = config,
+              refundInstructions = DepositUtxo.Refund.Instructions(
+                LedgerToPlutusTranslation.getAddress(peer.address()),
+                SOption.None,
+                100
+              ),
+              donationToTreasury = Coin.zero,
+              refundValue = virtualOutputsValue,
+              virtualOutputs = virtualOutputs,
+              changeAddress = peer.address(),
+              utxosFunding = utxosFunding
+            )
+
+            depositRefundTxSeq <- run(
+              EitherT.fromEither[IO](depositRefundSeqBuilder.build).leftWiden[TestError]
+            )
+
+            signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
+
+            serializedDeposit = signedTx.toCbor
+            req =
+                RegisterDeposit(
+                  serializedDeposit = serializedDeposit,
+                  virtualOutputs = virtualOutputs,
+                  eventId = LedgerEvent.Id(0, 1)
+                )
+
+            _ <- run(EitherT.right[TestError](dappLedger ?: req))
+        } yield depositRefundTxSeq
+    }
+
+    val _ = property("DappLedger Register Deposit Happy Path") = monadic(
+      runner = runner,
+      m = for {
+          initTestEnv <- initializationScenario
+          depositRefundTxSeq <- depositScenario(initTestEnv)
+          s <- run(EitherT.right[TestError](initTestEnv.dappLedger ?: GetState))
+
+          _ <- assertWith[ET](
+            msg = s"We should only have 1 deposit in the state, but we have ${s.deposits.length}",
+            condition = s.deposits.length == 1
           )
-          .label("Funding Utxos: Tail")
-      )
-
-      utxosFundingHead <- pick[ET, Utxo](
-        genAdaOnlyPubKeyUtxo(
-          peer,
-          minimumCoin = virtualOutputsValue.coin
-        ).label("Funding Utxos: Head")
-      )
-
-      utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
-
-      utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
-
-      depositRefundSeqBuilder = DepositRefundTxSeq.Builder(
-        config = config,
-        refundInstructions = DepositUtxo.Refund.Instructions(
-          LedgerToPlutusTranslation.getAddress(peer.address()),
-          SOption.None,
-          100
-        ),
-        donationToTreasury = Coin.zero,
-        refundValue = virtualOutputsValue,
-        virtualOutputs = virtualOutputs,
-        changeAddress = peer.address(),
-        utxosFunding = utxosFunding
-      )
-
-      depositRefundTxSeq <- run(EitherT.fromEither[IO](depositRefundSeqBuilder.build).leftWiden[TestError])
-
-      signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
-
-      serializedDeposit = signedTx.toCbor
-      req =
-          RegisterDeposit(
-            serializedDeposit = serializedDeposit,
-            virtualOutputs = virtualOutputs,
-            eventId = LedgerEvent.Id(0, 1)
+          _ <- assertWith[ET](
+            msg = "Incorrect deposit(s) in state",
+            condition = s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
           )
-
-      _ <- run(EitherT.right[TestError](dappLedger ?: req))
-    } yield depositRefundTxSeq
-  }
-
-  val _ = property("DappLedger Register Deposit Happy Path") = monadic(
-    runner = runner,
-    m = for {
-      initTestEnv <- initializationScenario
-      depositRefundTxSeq <- depositScenario(initTestEnv)
-      s <- run(EitherT.right[TestError](initTestEnv.dappLedger ?: GetState))
-
-      _ <- assertWith[ET](
-        msg = s"We should only have 1 deposit in the state, but we have ${s.deposits.length}",
-        condition = s.deposits.length == 1
-      )
-      _ <- assertWith[ET](
-        msg = "Incorrect deposit(s) in state",
-        condition = s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
-      )
-      _ <- assertWith[ET](
-        msg = "Incorrect treasury in state",
-        condition = s.treasury == initTestEnv.initTx.initializationTx.treasuryProduced
-      )
+          _ <- assertWith[ET](
+            msg = "Incorrect treasury in state",
+            condition = s.treasury == initTestEnv.initTx.initializationTx.treasuryProduced
+          )
       } yield true
     )
 }

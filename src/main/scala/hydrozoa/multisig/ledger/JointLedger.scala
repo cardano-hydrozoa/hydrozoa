@@ -19,12 +19,10 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
-
 import java.util.concurrent.TimeUnit
 import monocle.syntax.all.*
-
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
-import scalus.cardano.ledger.{AssetName, Coin, Utxos}
+import scalus.cardano.ledger.{AssetName, Coin}
 import scalus.ledger.api.v3.PosixTime
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
@@ -37,17 +35,6 @@ private case class TransientFields(
     blockWithdrawnUtxos: Vector[Payout.Obligation]
 )
 
-sealed trait State
-
-final case class Done(producedBlock: Block) extends State
-
-final case class Producing(
-    previousBlock: Block,
-    startTime: PosixTime,
-    pollResults: Set[LedgerEvent.Id],                      
-    nextBlockData: TransientFields
-) extends State
-
 // NOTE: Joint ledger is created by the MultisigManager.
 // NOTE: As of 2025-11-16, George says BlockWeaver should be the ONLY actor calling the joint ledger
 final case class JointLedger(
@@ -56,8 +43,8 @@ final case class JointLedger(
     private val peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
     // private val cardanoLiaison
     // private val blockSigner
-                            private val initialBlockTime : FiniteDuration,
-    private val initialBlockKzg : KzgCommitment,
+    private val initialBlockTime: FiniteDuration,
+    private val initialBlockKzg: KzgCommitment,
     //// Static config fields
     private val tallyFeeAllowance: Coin,
     private val equityShares: EquityShares,
@@ -67,8 +54,13 @@ final case class JointLedger(
 ) extends Actor[IO, Requests.Request] {
 
     private val state: Ref[IO, State] =
-      Ref.unsafe[IO, State](Done(Block.Initial(Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg))))
-
+        Ref.unsafe[IO, State](
+          Done(
+            Block.Initial(
+              Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
+            )
+          )
+        )
 
     // TODO: Refactor to use "become" and use different receive functions
 
@@ -117,11 +109,10 @@ final case class JointLedger(
         case c: CompleteBlockRegular => completeBlockRegular(c)
         case f: CompleteBlockFinal   => completeBlockFinal(f)
         case req: SyncRequest.Any =>
-                   req.request match {
-                   case r: GetState.type => r.handleSync(req, _ => state.get)
-                   }
-      
-           
+            req.request match {
+                case r: GetState.type => r.handleSync(req, _ => state.get)
+            }
+
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
@@ -270,7 +261,7 @@ final case class JointLedger(
 
             for {
                 kzgCommit <- virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment
-                
+
                 // FIXME: unsafe cast
                 nextBlock: Block.Minor = p.previousBlock
                     .nextBlock(
@@ -491,9 +482,21 @@ object JointLedger {
         case class CompleteBlockFinal(referenceBlock: Option[Block])
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {
-          type Sync = SyncRequest.Envelope[IO, GetState.type, State]
-  
-          def ?: : this.Send = SyncRequest.send(_, this)
+            type Sync = SyncRequest.Envelope[IO, GetState.type, State]
+
+            def ?: : this.Send = SyncRequest.send(_, this)
         }
-      }
+    }
+
+    sealed trait State
+
+    final case class Done(producedBlock: Block) extends State
+
+    final case class Producing(
+        previousBlock: Block,
+        startTime: PosixTime,
+        pollResults: Set[LedgerEvent.Id],
+        nextBlockData: TransientFields
+    ) extends State
+
 }
