@@ -15,9 +15,12 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.Block.Version.Full
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
+import scalus.builtin.ByteString
+
 import scala.collection.immutable.Queue
 import scala.language.implicitConversions
 import scalus.cardano.address.ShelleyAddress
@@ -103,7 +106,7 @@ trait DappLedger(
         args: SettleLedger
     ): EitherT[IO, SettlementTxSeqBuilderError, SettleLedger.Result] = {
         import args.*
-        def isMature(depositTx: DepositUtxo): Boolean = ???
+        def isMature(depositTx: DepositUtxo): Boolean = true // FIXME
 
         // We use the left branch of the eitherT to short circuit if a settlement isn't actually necessary.
         // Otherwise, we return right.
@@ -154,8 +157,16 @@ trait DappLedger(
                         )
 
                 // ===================================
-                // Step 2: determine the necessary KZG commit
+                // Step 2: Apply the genesis obligations and determine the necessary KZG commit
                 // ===================================
+//                mbObligations = NonEmptyList.fromList(
+//                  genesisObligations.map(_._2).foldLeft(List.empty[GenesisObligation])((acc, obligations) => acc ++ obligations) )
+
+//                l2EventGenesis = L2EventGenesis(
+//                  genesisObligations.map(_._2).foldLeft(NonEmptyList.empty[GenesisObligation])((acc, obligations) => acc ++ obligations),
+//                  TransactionHash.fromByteString(platform.blake2b_256(initTestEnv.config.tokenNames.headTokenName.bytes ++
+//                    ByteString.fromBigIntBigEndian(BigInt(Full.unapply(majorBlock.header.blockVersion)._1))))).asUtxos
+
                 kzgCommit <- EitherT.right(virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment)
 
                 // ===================================

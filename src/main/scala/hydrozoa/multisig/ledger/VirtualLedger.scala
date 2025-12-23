@@ -167,7 +167,7 @@ object VirtualLedger {
 
         def ?: : this.Send = SyncRequest.send(_, this)
     }
-
+    
     //////////////////////////////////////////////
     // Other Types
     final case class Config(

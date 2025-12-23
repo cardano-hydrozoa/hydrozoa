@@ -254,7 +254,7 @@ object PropertyM:
 
     /** Short-circuit execution and fail with the given message.
       */
-    def fail_[M[_], A](s: String)(using monadM: Monad[M], toProp: A => Prop): PropertyM[M, A] =
+    def fail_[M[_], A](s: String)(using monadM: Monad[M]): PropertyM[M, A] =
         stop(s |: false)
 
     // FIXME: Error messages appear to be reported in reverse chronological order?
