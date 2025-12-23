@@ -162,7 +162,7 @@ def genFinalizationTxSeqBuilder(
                 yield Left(next :: tails)
         }
 
-        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligationL2(network, Coin(l))))
+        payouts <- Gen.sequence(coins.map(l => genKnownCoinPayoutObligation(network, Coin(l))))
 
         shares <- genEquityShares(peers)
 

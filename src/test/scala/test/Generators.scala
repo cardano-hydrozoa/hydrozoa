@@ -189,10 +189,10 @@ object Generators {
         def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
             for {
                 coin <- arbitrary[Coin]
-                res <- genKnownCoinPayoutObligationL2(network, coin)
+                res <- genKnownCoinPayoutObligation(network, coin)
             } yield res
 
-        def genKnownCoinPayoutObligationL2(
+        def genKnownCoinPayoutObligation(
             network: Network,
             coin: Coin
         ): Gen[Payout.Obligation] =
