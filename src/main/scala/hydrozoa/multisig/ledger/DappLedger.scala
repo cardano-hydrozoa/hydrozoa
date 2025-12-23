@@ -170,7 +170,10 @@ trait DappLedger(
                   depositsToSpend = depositsInPollResults.map(_._2).toVector,
                   payoutObligationsRemaining = payoutObligations,
                   tallyFeeAllowance = tallyFeeAllowance,
-                  votingDuration = votingDuration
+                  votingDuration = votingDuration,
+                  competingFallbackValidityStart = ???,
+                  blockCreatedOn = ???,
+                  txTiming = ???
                 )
 
                 settlementTxSeqRes <-
@@ -240,7 +243,10 @@ trait DappLedger(
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-              equityShares = equityShares
+              equityShares = equityShares,
+              competingFallbackValidityStart = ???,
+              blockCreatedOn = ???,
+              txTiming = ???
             )
             ftxSeq <- EitherT.fromEither[IO](
               FinalizationTxSeq

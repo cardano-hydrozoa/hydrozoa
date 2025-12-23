@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.PosixTime
 import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
@@ -44,6 +45,15 @@ enum FinalizationTxSeq {
 }
 
 object FinalizationTxSeq {
+
+    extension (finalizationTxSeq: FinalizationTxSeq)
+        def mbRolloutSeq: Option[RolloutTxSeq] = finalizationTxSeq match {
+            case FinalizationTxSeq.Monolithic(_)                             => None
+            case FinalizationTxSeq.WithDeinit(_, deinitTx)                   => None
+            case FinalizationTxSeq.WithRollouts(_, rolloutTxSeq)             => Some(rolloutTxSeq)
+            case FinalizationTxSeq.WithDeinitAndRollouts(_, _, rolloutTxSeq) => Some(rolloutTxSeq)
+        }
+
     import Builder.*
 
     final case class Builder(
@@ -186,21 +196,27 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
-            override val kzgCommitment: KzgCommitment,
-            override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val payoutObligationsRemaining: Vector[Payout.Obligation],
+            kzgCommitment: KzgCommitment,
+            majorVersionProduced: Block.Version.Major,
+            treasuryToSpend: MultisigTreasuryUtxo,
+            payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-            equityShares: EquityShares
-        ) extends SingleArgs(kzgCommitment),
-              Payout.Obligation.Many.Remaining {
+            equityShares: EquityShares,
+            competingFallbackValidityStart: PosixTime,
+            blockCreatedOn: PosixTime,
+            txTiming: TxTiming
+        ) extends
+            // TODO: confirm: this is not needed
+            // SingleArgs(kzgCommitment),
+            Payout.Obligation.Many.Remaining {
 
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   kzgCommitment = kzgCommitment,
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend
+                  depositsToSpend = depositsToSpend,
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
                 )
 
             def toArgsWithPayouts(
@@ -210,11 +226,12 @@ object FinalizationTxSeq {
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis,
               rolloutTxSeqPartial = rolloutTxSeqPartial
             )
 
             // No deposits in finalization tx
-            override def depositsToSpend: Vector[DepositUtxo] = Vector.empty
+            val depositsToSpend: Vector[DepositUtxo] = Vector.empty
         }
     }
 }

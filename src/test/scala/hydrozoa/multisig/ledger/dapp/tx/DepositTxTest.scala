@@ -102,7 +102,7 @@ def genDepositRecipe(
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
-      changeAddress = depositor.address(testNetwork),
+      changeAddress = depositor.address(testNetwork)
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {

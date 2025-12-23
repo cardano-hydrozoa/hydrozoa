@@ -56,6 +56,9 @@ val nonSigningValidators: Seq[Validator] =
       OutsideForecastValidator
     )
 
+val nonSingingNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
+    .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
+
 val testTxBuilderEnvironment: Environment = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),

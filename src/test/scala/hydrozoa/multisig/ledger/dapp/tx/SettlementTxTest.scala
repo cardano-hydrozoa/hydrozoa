@@ -2,8 +2,9 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
 import hydrozoa.*
+import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
-import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
+import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
@@ -13,9 +14,13 @@ import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.DatumOption.Inline
+import scalus.cardano.ledger.LedgerToPlutusTranslation.getValue
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
-import scalus.prelude.Option as SOption
+import scalus.ledger.api.v1
+import scalus.ledger.api.v1.Value.valueOrd
+import scalus.prelude.Ord.<=
+import scalus.prelude.{Option as SOption, Ord}
 import test.*
 import test.Generators.Hydrozoa.*
 import test.Generators.Other
@@ -84,13 +89,17 @@ def genDepositUtxo(
       virtualOutputs = vos
     )
 
+/** Generate a "standalone" settlement tx. */
 def genSettlementTxSeqBuilder(
     estimatedFee: Coin = Coin(5_000_000L),
     params: ProtocolParams = blockfrost544Params,
     network: Network = testNetwork,
-    kzgCommitment: Option[KzgCommitment] =
-        None // If passed, the kzg commitment will be set to the value.
+    // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None,
+    fallbackValidityStart: PosixTime = System.currentTimeMillis() + 3_600_000,
+    blockCreatedOn: PosixTime = System.currentTimeMillis(),
+    txTiming: TxTiming = TxTiming.default
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -124,9 +133,8 @@ def genSettlementTxSeqBuilder(
           coin = Some(payoutAda + Coin(1_000_000_000L))
         )
 
-        // FIXME: Don't know if this is right. Is the KZG 32 bytes long?
         kzg: KzgCommitment <- kzgCommitment match {
-            case None      => Gen.listOfN(32, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
             case Some(kzg) => Gen.const(kzg)
         }
     } yield (
@@ -138,8 +146,86 @@ def genSettlementTxSeqBuilder(
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100
+        votingDuration = 100,
+        competingFallbackValidityStart = fallbackValidityStart,
+        blockCreatedOn = blockCreatedOn,
+        txTiming = txTiming
       ),
       peers
+    )
+}
+
+/** Generates the settlement seq builder for the next settlement tx that should correctly spend the
+  * [[treasuryToSpend]].
+  * @param treasuryToSpend
+  *   the treasury to be spent in the settlement sequence
+  * @param majorVersion
+  *   the version of the next block
+  */
+def genNextSettlementTxSeqBuilder(
+    treasuryToSpend: MultisigTreasuryUtxo,
+    fallbackValidityStart: PosixTime,
+    blockCreatedOn: PosixTime,
+    majorVersion: Int,
+    headNativeScript: HeadMultisigScript,
+    builderConfig: Tx.Builder.Config,
+    txTiming: TxTiming,
+    estimatedFee: Coin = Coin(5_000_000L),
+    params: ProtocolParams = blockfrost544Params,
+    network: Network = testNetwork,
+    // If passed, the kzg commitment will be set to the value.
+    // If not, its randomly generated
+    kzgCommitment: Option[KzgCommitment] = None
+): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args)] = {
+    // A helper to generator empty, small, medium, large (up to 1000)
+    def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
+        Gen.frequency(
+          (1, Gen.const(Vector.empty)),
+          (2, Other.vectorOfN(size, gen)),
+          (5, Other.vectorOfN(size * 5, gen)),
+          (1, Other.vectorOfN(1, gen))
+        ).map(_.take(1000))
+    )
+
+    val genDeposit = genDepositUtxo(
+      network = network,
+      params = params,
+      headAddress = Some(headNativeScript.mkAddress(network))
+    )
+
+    given Ord[v1.Value] = valueOrd
+
+    for {
+        deposits <- genHelper(genDeposit)
+        payouts <- genHelper(genPayoutObligation(network))
+        prefixes = (payouts.length to 0 by -1).map(payouts.take)
+        infimum = prefixes
+            .find(prefix =>
+                getValue(
+                  prefix
+                      .map(_.utxo.value)
+                      .fold(Value.zero)(_ + _)
+                ) <= getValue(treasuryToSpend.value)
+            )
+            // Since we have empty prefix that always satisfies the condition this is safe
+            .get
+        kzg: KzgCommitment <- kzgCommitment match {
+            case None      => Gen.listOfN(48, Arbitrary.arbitrary[Byte]).map(IArray.from(_))
+            case Some(kzg) => Gen.const(kzg)
+        }
+    } yield (
+      SettlementTxSeq.Builder(builderConfig),
+      SettlementTxSeq.Builder.Args(
+        kzgCommitment = kzg,
+        majorVersionProduced = HBlock.Version.Major(majorVersion),
+        depositsToSpend = deposits,
+        payoutObligationsRemaining = infimum,
+        treasuryToSpend = treasuryToSpend,
+        tallyFeeAllowance = Coin.ada(2),
+        votingDuration = 100,
+        competingFallbackValidityStart = fallbackValidityStart,
+        blockCreatedOn = blockCreatedOn,
+        txTiming = txTiming
+      ),
     )
 }

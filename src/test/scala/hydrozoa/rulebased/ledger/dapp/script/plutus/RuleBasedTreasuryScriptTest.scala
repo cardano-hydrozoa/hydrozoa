@@ -30,7 +30,7 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         }
 
         assertResult(
-          11240,
+          11244,
           "Script size should be stable. In case the script is modified por Scalus is bumped lease update the test."
         ) {
             RuleBasedTreasuryScript.flatEncoded.length

@@ -86,6 +86,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
+      ttl = ???,
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
       headNativeScript = hns,
       initialDeposit = initialDeposit,
