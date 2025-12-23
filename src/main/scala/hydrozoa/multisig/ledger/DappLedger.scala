@@ -11,6 +11,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.{SyncRequest, SyncRequestE}
 import hydrozoa.multisig.ledger.DappLedger.Errors.*
 import hydrozoa.multisig.ledger.DappLedger.Requests.*
+import hydrozoa.multisig.ledger.JointLedger.Requests.RegisterLedgerEvent
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -293,9 +294,10 @@ object DappLedger {
         // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
         final case class RegisterDeposit(
             serializedDeposit: Array[Byte],
-            eventId: LedgerEvent.Id,
+            override val eventId: LedgerEvent.Id,
             virtualOutputs: NonEmptyList[GenesisObligation],
-        ) extends SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] {
+        ) extends RegisterLedgerEvent,
+              SyncRequestE[IO, RegisterDeposit, RegisterDepositError, Unit] {
             export RegisterDeposit.Sync
             def ?: : this.Send = SyncRequest.send(_, this)
         }

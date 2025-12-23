@@ -163,29 +163,18 @@ object Block {
         case Initial extends Body
 
         case Minor(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRegistered: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
+            override val events: List[(LedgerEvent.Id, Boolean)],
             override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Minor
 
         case Major(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRegistered: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
+            override val events: List[(LedgerEvent.Id, Boolean)],
             override val depositsAbsorbed: List[LedgerEvent.Id],
             override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Major
 
         case Final(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
+            override val events: List[(LedgerEvent.Id, Boolean)],
             override val depositsRefunded: List[LedgerEvent.Id]
         ) extends Body, BodyFields.Final
     }
@@ -197,46 +186,26 @@ object Block {
         }
     }
 
-    object BodyFields {
-        sealed trait Minor
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Registered,
-              Deposits.Rejected,
-              Deposits.Refunded
+    private object BodyFields {
+        sealed trait Minor extends Events, Deposits.Refunded
 
-        sealed trait Major
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Registered,
-              Deposits.Rejected,
-              Deposits.Absorbed,
-              Deposits.Refunded
+        sealed trait Major extends Events, Deposits.Absorbed, Deposits.Refunded
 
-        sealed trait Final
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Rejected,
-              Deposits.Refunded
+        sealed trait Final extends Events, Deposits.Refunded
 
-        sealed trait LedgerEventsRequired {
-            def ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number]
-        }
+        sealed trait Events {
 
-        sealed trait Transactions {
-            def transactionsValid: List[LedgerEvent.Id]
-            def transactionsInvalid: List[LedgerEvent.Id]
+            /** All the ledger events included in the block, i.e. L2 txs and deposit requests along
+              * with the validity flag. The reason we have this one list is that the fact that
+              * followers need to know the global order to replay the events in exactly the same
+              * order to get the same result.
+              *
+              * TODO: invariant: the list should be unique
+              */
+            def events: List[(LedgerEvent.Id, Boolean)]
         }
 
         object Deposits {
-            sealed trait Registered {
-                def depositsRegistered: List[LedgerEvent.Id]
-            }
-
-            sealed trait Rejected {
-                def depositsRejected: List[LedgerEvent.Id]
-            }
-
             sealed trait Absorbed {
                 def depositsAbsorbed: List[LedgerEvent.Id]
             }
