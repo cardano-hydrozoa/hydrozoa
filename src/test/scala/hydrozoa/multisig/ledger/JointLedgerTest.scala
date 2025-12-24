@@ -30,7 +30,6 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
             .withMinSuccessfulTests(100)
-            .withInitialSeed(Seed.fromBase64("2cwiZ-1fmEMhOfzokJeSsUyZHUVPV-cjnjSDh10if2B=").get)
     }
 
     /** Helper utilities to send actor Requests to the JointLedger

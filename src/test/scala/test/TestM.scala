@@ -131,7 +131,9 @@ object TestM {
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
-                  votingDuration = 100
+                  votingDuration = 100,
+                  txTiming = ???,
+                  initializedOn = ???
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

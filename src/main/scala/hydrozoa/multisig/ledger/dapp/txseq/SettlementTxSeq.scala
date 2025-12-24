@@ -1,13 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.PosixTime as HPosixTime
 import hydrozoa.multisig.ledger.dapp.tx
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
-import scalus.cardano.ledger.Coin
+import scalus.cardano.ledger.{Coin, Slot}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.ledger.api.v3.PosixTime
 
@@ -20,11 +21,18 @@ enum SettlementTxSeq {
 
     case WithRollouts(
         override val settlementTx: SettlementTx.WithRollouts,
-        rolloutTxSeq: RolloutTxSeq
+        rolloutTxSeq: RolloutTxSeq,
     )
 }
 
 object SettlementTxSeq {
+
+    extension (settlementTxSeq: SettlementTxSeq)
+        def mbRolloutSeq: Option[RolloutTxSeq] = settlementTxSeq match {
+            case SettlementTxSeq.NoRollouts(_)                 => None
+            case SettlementTxSeq.WithRollouts(_, rolloutTxSeq) => Some(rolloutTxSeq)
+        }
+
     import Builder.*
 
     final case class Builder(
@@ -44,7 +52,14 @@ object SettlementTxSeq {
                           config = config,
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration
+                          votingDuration = args.votingDuration,
+                          validityStart = Slot(
+                            config.env.slotConfig.timeToSlot(
+                              args.blockCreatedOn.toLong
+                                  + args.txTiming.minSettlementDuration.toMillis
+                                  + args.txTiming.majorBlockTimeout.toMillis
+                            )
+                          )
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -83,11 +98,19 @@ object SettlementTxSeq {
                                         .map(Error.RolloutSeqError(_))
                                         .map(SettlementTxSeq.WithRollouts(tx, _))
                             }
+
                         ftxRecipe = FallbackTx.Recipe(
                           config = config,
                           treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
-                          votingDuration = args.votingDuration
+                          votingDuration = args.votingDuration,
+                          validityStart = Slot(
+                            config.env.slotConfig.timeToSlot(
+                              args.blockCreatedOn.toLong
+                                  + args.txTiming.minSettlementDuration.toMillis
+                                  + args.txTiming.majorBlockTimeout.toMillis
+                            )
+                          )
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -119,21 +142,27 @@ object SettlementTxSeq {
         ) extends DepositUtxo.Many.Spent.Partition
 
         final case class Args(
-            override val majorVersionProduced: Block.Version.Major,
-            override val treasuryToSpend: MultisigTreasuryUtxo,
-            override val depositsToSpend: Vector[DepositUtxo],
-            override val payoutObligationsRemaining: Vector[Payout.Obligation],
-            override val kzgCommitment: KzgCommitment,
+            majorVersionProduced: Block.Version.Major,
+            treasuryToSpend: MultisigTreasuryUtxo,
+            depositsToSpend: Vector[DepositUtxo],
+            payoutObligationsRemaining: Vector[Payout.Obligation],
+            kzgCommitment: KzgCommitment,
             tallyFeeAllowance: Coin,
-            votingDuration: PosixTime
-        ) extends SingleArgs(kzgCommitment),
-              Payout.Obligation.Many.Remaining {
+            votingDuration: PosixTime,
+            competingFallbackValidityStart: HPosixTime,
+            blockCreatedOn: HPosixTime,
+            txTiming: TxTiming
+        )
+        // TODO: confirm: this one is not needed
+        // extends SingleArgs(kzgCommitment),
+            extends Payout.Obligation.Many.Remaining {
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
                   majorVersionProduced = majorVersionProduced,
                   kzgCommitment = kzgCommitment,
                   treasuryToSpend = treasuryToSpend,
-                  depositsToSpend = depositsToSpend
+                  depositsToSpend = depositsToSpend,
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
                 )
 
             def toArgsWithPayouts(
@@ -143,7 +172,8 @@ object SettlementTxSeq {
               treasuryToSpend = treasuryToSpend,
               kzgCommitment = kzgCommitment,
               depositsToSpend = depositsToSpend,
-              rolloutTxSeqPartial = rolloutTxSeqPartial
+              rolloutTxSeqPartial = rolloutTxSeqPartial,
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
             )
         }
     }

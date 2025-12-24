@@ -21,16 +21,25 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptValue
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
 final case class InitializationTx(
+    // TODO: Since we don't use this value in Hydrozoa, I think we don't want to
+    // bother about TTL for the initialization tx. As George said, this might be
+    // useful for users since that TTL is a point before which the initialization
+    // should be submitted. But the whole idea of making the init sequence exogenous
+    // serves exactly that goal - the way to give the users ability to do what they want to.
+    // Then why do we want to make an exception for TTL?
+    // However, I am keeping it for now and we can consider it later on.
+    override val ttl: Slot,
     treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction
 ) extends Tx,
-      HasResolvedUtxos
+      HasResolvedUtxos,
+      HasTtlSlot
 
 object InitializationTx {
 
@@ -114,6 +123,10 @@ object InitializationTx {
                 )
             )
 
+        // Not sure why we use Long in the builder step not Slot
+        val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toLong))
+        val setTtl = ValidityEndSlot(ttlSlot.slot)
+
         val steps = spendAllUtxos
             :+ mintTreasuryToken
             :+ mintMRToken
@@ -121,6 +134,7 @@ object InitializationTx {
             :+ Send(hmrwOutput)
             :+ createChangeOutput
             :+ modifyAuxiliaryData
+            :+ setTtl
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -143,6 +157,7 @@ object InitializationTx {
                 )
 
         } yield InitializationTx(
+          ttl = ttlSlot,
           treasuryProduced = MultisigTreasuryUtxo(
             treasuryTokenName = headTokenName,
             utxoId = TransactionInput(
@@ -209,6 +224,8 @@ object InitializationTx {
 
             actualTreasuryOutput = actualOutputs(imd.treasuryOutputIndex)
             actualMultisigRegimeOutput = actualOutputs(imd.multisigRegimeOutputIndex)
+
+            mbTtl = tx.body.value.ttl
 
             // ===================================
             // Validation
@@ -347,6 +364,9 @@ object InitializationTx {
                       )
                     )
 
+            // ttl should be present
+            ttl <- mbTtl.map(Slot.apply).toRight(TtlIsMissing)
+
             //////
             // Check mint coherence: only a single head token and MR token should be minted
             mintOuter <- tx.body.value.mint.toRight(InvalidTransactionError("Mints are empty"))
@@ -379,6 +399,7 @@ object InitializationTx {
             )
 
         } yield InitializationTx(
+          ttl = ttl,
           treasuryProduced = treasury,
           multisigRegimeWitness = MultisigRegimeUtxo(
             multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
@@ -399,7 +420,11 @@ object InitializationTx {
 
     case class InvalidTransactionError(msg: String) extends ParseError
 
+    case object TtlIsMissing extends ParseError
+
+    // TODO: rename to Args for consistency?
     final case class Recipe(
+        ttl: PosixTime,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
         initialDeposit: Coin,

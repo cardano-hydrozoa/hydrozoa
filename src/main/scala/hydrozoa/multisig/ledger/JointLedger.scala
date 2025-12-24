@@ -112,7 +112,6 @@ final case class JointLedger(
             req.request match {
                 case r: GetState.type => r.handleSync(req, _ => state.get)
             }
-
     }
 
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits

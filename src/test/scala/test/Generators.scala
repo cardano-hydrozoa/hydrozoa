@@ -69,7 +69,7 @@ object Generators {
         def genTxBuilderConfigAndPeers(
             env: Environment = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSigningValidators
+            validators: Seq[Validator] = nonSingingNonValidityChecksValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
                 peers <- genTestPeers
@@ -188,11 +188,19 @@ object Generators {
 
         def genPayoutObligation(network: Network): Gen[Payout.Obligation] =
             for {
+                coin <- arbitrary[Coin]
+                res <- genKnownCoinPayoutObligation(network, coin)
+            } yield res
+
+        def genKnownCoinPayoutObligation(
+            network: Network,
+            coin: Coin
+        ): Gen[Payout.Obligation] =
+            for {
                 l2Input <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
                 address = address0.copy(network = network)
-                coin <- arbitrary[Coin]
                 datum <- arbitrary[ByteString]
                 output = Babbage(
                   address = address,

@@ -127,7 +127,10 @@ object DappLedgerM {
               depositsToSpend = Vector.from(validDeposits.map(_._2).toList),
               payoutObligationsRemaining = payoutObligations,
               tallyFeeAllowance = tallyFeeAllowance,
-              votingDuration = votingDuration
+              votingDuration = votingDuration,
+              competingFallbackValidityStart = ???,
+              blockCreatedOn = ???,
+              txTiming = ???
             )
 
             settlementTxSeqRes <- lift(
@@ -186,7 +189,10 @@ object DappLedgerM {
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
-              equityShares = equityShares
+              equityShares = equityShares,
+              competingFallbackValidityStart = ???,
+              blockCreatedOn = ???,
+              txTiming = ???
             )
             ftxSeq <- lift(
               FinalizationTxSeq
