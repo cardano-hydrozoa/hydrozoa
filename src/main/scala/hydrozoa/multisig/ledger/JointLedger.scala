@@ -2,35 +2,29 @@ package hydrozoa.multisig.ledger
 
 import cats.data.*
 import cats.effect.{IO, Ref}
-import hydrozoa.multisig.ledger.dapp.tx.Tx
 import com.suprnation.actor.Actor.{Actor, Receive}
-
-import scala.collection.immutable.Queue
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
-import hydrozoa.multisig.ledger.DappLedgerM.{runDappLedgerM, settleLedger}
+import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
-import hydrozoa.multisig.ledger.JointLedger.Requests.{ApplyInternalTxL2, CompleteBlockFinal, CompleteBlockRegular, GetState, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.RolloutTx
-import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputs
+import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.Block.Version.Full
-
 import java.util.concurrent.TimeUnit
-import monocle.syntax.all.*
-import scalus.builtin.{ByteString, platform}
-
+import monocle.Focus.focus
+import scala.collection.immutable.Queue
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 import scalus.ledger.api.v3.PosixTime
 
@@ -53,26 +47,25 @@ final case class JointLedger(
     initialBlockTime: FiniteDuration,
     initialBlockKzg: KzgCommitment,
     //// Static config fields
-    config : Tx.Builder.Config,
+    config: Tx.Builder.Config,
     tallyFeeAllowance: Coin,
     equityShares: EquityShares,
     multisigRegimeUtxo: MultisigRegimeUtxo,
     votingDuration: PosixTime,
     treasuryTokenName: AssetName,
-    initialTreasury : MultisigTreasuryUtxo
+    initialTreasury: MultisigTreasuryUtxo
 ) extends Actor[IO, Requests.Request] {
 
-
     val state: Ref[IO, JointLedger.State] =
-      Ref.unsafe[IO, JointLedger.State](
-        Done(
-          producedBlock = Block.Initial(
-            Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
-          ),
-          dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
-          virtualLedgerState = VirtualLedgerM.State.empty
+        Ref.unsafe[IO, JointLedger.State](
+          Done(
+            producedBlock = Block.Initial(
+              Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
+            ),
+            dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
+            virtualLedgerState = VirtualLedgerM.State.empty
+          )
         )
-      )
 
     // TODO: Refactor to use "become" and use different receive functions
 
@@ -110,14 +103,14 @@ final case class JointLedger(
     } yield p
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
-        case d : JointLedger.Requests.RegisterDeposit => registerDeposit(d)
-        case a: ApplyInternalTxL2    => applyInternalTxL2(a)
-        case s: StartBlock           => startBlock(s)
-        case c: CompleteBlockRegular => completeBlockRegular(c)
-        case f: CompleteBlockFinal   => completeBlockFinal(f)
+        case d: JointLedger.Requests.RegisterDeposit => registerDeposit(d)
+        case a: ApplyInternalTxL2                    => applyInternalTxL2(a)
+        case s: StartBlock                           => startBlock(s)
+        case c: CompleteBlockRegular                 => completeBlockRegular(c)
+        case f: CompleteBlockFinal                   => completeBlockFinal(f)
         case req: SyncRequest.Any =>
             req.request match {
-              case r: GetState.type => r.handleSync(req, _ => state.get)
+                case r: GetState.type => r.handleSync(req, _ => state.get)
             }
 
     }
@@ -125,32 +118,38 @@ final case class JointLedger(
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerDeposit(req : JointLedger.Requests.RegisterDeposit): 
-        IO[Unit] = {
+    private def registerDeposit(req: JointLedger.Requests.RegisterDeposit): IO[Unit] = {
         import req.*
         for {
-            oldState <- unsafeGetProducing
+
             _ <- this.runDappLedgerM(
               action = DappLedgerM.registerDeposit(serializedDeposit, eventId, virtualOutputs),
               // Left == deposit rejected
               // FIXME: This should probably be returned as  sum type in the Right
-              onFailure = _ => {
-                val newState = oldState
-                  .focus(_.nextBlockData.depositsRejected).modify(_.appended(eventId))
-                  .focus(_.nextBlockData.ledgerEventsRequired)
-                  .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                    m.updated(eventId.peerNum, eventId.eventNum)
-                  )
-                state.set(newState)
-              },
-              onSuccess = _ => {
-                val newState = oldState
-                  .focus(_.nextBlockData.depositsRegistered).modify(_.appended(eventId))
-                  .focus(_.nextBlockData.ledgerEventsRequired)
-                  .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                    m.updated(eventId.peerNum, eventId.eventNum))
-                state.set(newState)
-              }
+              onFailure = _ =>
+                  for {
+                      oldState <- unsafeGetProducing
+                      newState = oldState
+                          .focus(_.nextBlockData.depositsRejected)
+                          .modify(_.appended(eventId))
+                          .focus(_.nextBlockData.ledgerEventsRequired)
+                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
+                              m.updated(eventId.peerNum, eventId.eventNum)
+                          )
+                      _ <- state.set(newState)
+                  } yield (),
+              onSuccess = _ =>
+                  for {
+                      oldState <- unsafeGetProducing
+                      newState = oldState
+                          .focus(_.nextBlockData.depositsRegistered)
+                          .modify(_.appended(eventId))
+                          .focus(_.nextBlockData.ledgerEventsRequired)
+                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
+                              m.updated(eventId.peerNum, eventId.eventNum)
+                          )
+                      _ <- state.set(newState)
+                  } yield ()
             )
         } yield ()
     }
@@ -164,29 +163,34 @@ final case class JointLedger(
         import args.*
 
         for {
-            p <- unsafeGetProducing
-            _ <- this.runVirtualLedgerM (
+
+            _ <- this.runVirtualLedgerM(
               action = VirtualLedgerM.applyInternalTx(tx),
               // Invalid transaction continuation
-              onFailure = _ => {
-                val newState = p
-                  .focus(_.nextBlockData.transactionsInvalid)
-                  .modify(_.appended(id))
-                  .focus(_.nextBlockData.ledgerEventsRequired)
-                  .modify(m => m.updated(id.peerNum, id.eventNum))
-                state.set(newState)
-              },
+              onFailure = _ =>
+                  for {
+                      p <- unsafeGetProducing
+                      newState = p
+                          .focus(_.nextBlockData.transactionsInvalid)
+                          .modify(_.appended(id))
+                          .focus(_.nextBlockData.ledgerEventsRequired)
+                          .modify(m => m.updated(id.peerNum, id.eventNum))
+                      _ <- state.set(newState)
+                  } yield (),
               // Valid transaction continuation
-              onSuccess = payoutObligations => {
-                val newState = p
-                  .focus(_.nextBlockData.transactionsValid)
-                  .modify(_.appended(id))
-                  .focus(_.nextBlockData.ledgerEventsRequired)
-                  .modify(m => m.updated(id.peerNum, id.eventNum))
-                  .focus(_.nextBlockData.blockWithdrawnUtxos)
-                  .modify(v => v ++ payoutObligations)
-                state.set(newState)
-              })
+              onSuccess = payoutObligations =>
+                  for {
+                      p <- unsafeGetProducing
+                      newState = p
+                          .focus(_.nextBlockData.transactionsValid)
+                          .modify(_.appended(id))
+                          .focus(_.nextBlockData.ledgerEventsRequired)
+                          .modify(m => m.updated(id.peerNum, id.eventNum))
+                          .focus(_.nextBlockData.blockWithdrawnUtxos)
+                          .modify(v => v ++ payoutObligations)
+                      _ <- state.set(newState)
+                  } yield ()
+            )
         } yield ()
     }
 
@@ -220,9 +224,9 @@ final case class JointLedger(
                   depositsRegistered = List.empty,
                   depositsRejected = List.empty,
                   blockWithdrawnUtxos = Vector.empty
-                )
-                , dappLedgerState = d.dappLedgerState
-                , virtualLedgerState = d.virtualLedgerState
+                ),
+                dappLedgerState = d.dappLedgerState,
+                virtualLedgerState = d.virtualLedgerState
               )
             )
         } yield ()
@@ -236,7 +240,7 @@ final case class JointLedger(
 
         def augmentBlockMinor(
             p: Producing,
-            depositsRefunded : List[LedgerEvent.Id]
+            depositsRefunded: List[LedgerEvent.Id]
         ): AugmentedBlock.Minor = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Minor = Block.Body.Minor(
@@ -251,25 +255,25 @@ final case class JointLedger(
             val kzgCommit = p.virtualLedgerState.kzgCommitment
             val nextBlock: Block.Minor = p.previousBlock
                 .nextBlock(
-                    newBody = nextBlockBody,
-                    // FIXME: Conflicting types
-                    newTime = FiniteDuration(p.startTime.toLong, SECONDS),
-                    // FIXME: Conflicting types
-                    newCommitment = kzgCommit
+                  newBody = nextBlockBody,
+                  // FIXME: Conflicting types
+                  newTime = FiniteDuration(p.startTime.toLong, SECONDS),
+                  // FIXME: Conflicting types
+                  newCommitment = kzgCommit
                 )
                 .asInstanceOf[Block.Minor]
-         
+
             AugmentedBlock.Minor(
-                  nextBlock,
-                  BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
-                )
+              nextBlock,
+              BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
+            )
 
         }
         def augmentedBlockMajor(
             p: Producing,
             settleLedgerRes: DappLedgerM.SettleLedger.Result,
-            refundedDeposits : List[LedgerEvent.Id],
-            absorbedDeposits : List[LedgerEvent.Id]
+            refundedDeposits: List[LedgerEvent.Id],
+            absorbedDeposits: List[LedgerEvent.Id]
         ): AugmentedBlock.Major = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Major = Block.Body.Major(
@@ -313,42 +317,54 @@ final case class JointLedger(
         }
 
         // FIXME: placeholder
-        def isMature(deposit : DepositUtxo) : Boolean = true
+        def isMature(deposit: DepositUtxo): Boolean = true
 
-
-        def doSettlement(validDeposits : NonEmptyList[(LedgerEvent.Id, DepositUtxo)]
-                        , treasuryToSpend: MultisigTreasuryUtxo
-                        , payoutObligations: Vector[Payout.Obligation]
-                        , immatureDeposits : Queue[(LedgerEvent.Id, DepositUtxo)]) : IO[DappLedgerM.SettleLedger.Result] = {
-            val genesisObligations : NonEmptyList[GenesisObligation] = ???
+        def doSettlement(
+            validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+            treasuryToSpend: MultisigTreasuryUtxo,
+            payoutObligations: Vector[Payout.Obligation],
+            immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)]
+        ): IO[DappLedgerM.SettleLedger.Result] = {
+            val genesisObligations: Queue[GenesisObligation] =
+                validDeposits
+                    .map(_._2.virtualOutputs)
+                    .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
             val genesisEvent = L2EventGenesis(
-                genesisObligations,
-              TransactionHash.fromByteString(platform.blake2b_256(config.tokenNames.headTokenName.bytes ++
-                               ByteString.fromBigIntBigEndian(BigInt(treasuryToSpend.datum.versionMajor.toInt + 1))))
+              genesisObligations,
+              TransactionHash.fromByteString(
+                platform.blake2b_256(
+                  config.tokenNames.headTokenName.bytes ++
+                      ByteString.fromBigIntBigEndian(
+                        BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
+                      )
+                )
+              )
             )
             for {
-              nextKzg <- this.runVirtualLedgerM(VirtualLedgerM.mockApplyGenesis(genesisEvent))
-              
-              settleLedgerRes <- this.runDappLedgerM(DappLedgerM.settleLedger(
-                nextKzg = nextKzg, 
-                validDeposits = validDeposits, 
-                payoutObligations = payoutObligations, 
-                tallyFeeAllowance = this.tallyFeeAllowance,
-                votingDuration = this.votingDuration,
-                immatureDeposits = immatureDeposits
-              ),
-                onSuccess = IO.pure)
-              
-              // Is it safe to apply this now?
-              _ <- this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(genesisEvent))
+                nextKzg <- this.runVirtualLedgerM(VirtualLedgerM.mockApplyGenesis(genesisEvent))
+
+                settleLedgerRes <- this.runDappLedgerM(
+                  DappLedgerM.settleLedger(
+                    nextKzg = nextKzg,
+                    validDeposits = validDeposits,
+                    payoutObligations = payoutObligations,
+                    tallyFeeAllowance = this.tallyFeeAllowance,
+                    votingDuration = this.votingDuration,
+                    immatureDeposits = immatureDeposits
+                  ),
+                  onSuccess = IO.pure
+                )
+
+                // Is it safe to apply this now?
+                _ <- this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(genesisEvent))
             } yield settleLedgerRes
         }
 
         for {
             producing <- unsafeGetProducing
-            dappLedgerState : DappLedgerM.State <- this.runDappLedgerM(DappLedgerM.get, onSuccess = IO.pure)
+            dappLedgerState <- this.runDappLedgerM(DappLedgerM.get, onSuccess = IO.pure)
 
-            //===================================
+            // ===================================
             // Step 1: Figure out which deposits are valid and turn them into genesis obligations
             // ===================================
 
@@ -367,22 +383,38 @@ final case class JointLedger(
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
             depositsNotInPollResults = depositPartition._2
 
-            isMinorBlock : Boolean =
-              depositsInPollResults.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
+            isMinorBlock: Boolean =
+                depositsInPollResults.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
 
-            augmentedBlock <- if isMinorBlock 
-                 then IO.pure(augmentBlockMinor(producing, depositsRefunded = depositsNotInPollResults.toList.map(_._1)))
-            else {
-              for {
-                  settlementRes <- doSettlement(
-                    validDeposits = ???, //depositsInPollResults,
-                    treasuryToSpend = ???,
-                    payoutObligations = ???,
-                    immatureDeposits = ???
-                  )
-              } yield augmentedBlockMajor(producing, ???, ???, ???)
-            } 
-            
+            augmentedBlock <-
+                if isMinorBlock
+                then
+                    IO.pure(
+                      augmentBlockMinor(
+                        producing,
+                        depositsRefunded = depositsNotInPollResults.toList.map(_._1)
+                      )
+                    )
+                else {
+                    for {
+                        settlementRes <- doSettlement(
+                          validDeposits = depositsInPollResults,
+                          treasuryToSpend = dappLedgerState.treasury,
+                          payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
+                          immatureDeposits = immatureDeposits
+                        )
+                        absorbedDeposits = depositsInPollResults.filter(deposit =>
+                            settlementRes.settlementTxSeq.settlementTx.depositsSpent
+                                .contains(deposit._2)
+                        )
+                    } yield augmentedBlockMajor(
+                      producing,
+                      settlementRes,
+                      depositsNotInPollResults.toList.map(_._1),
+                      absorbedDeposits.toList.map(_._1)
+                    )
+                }
+
             _ <- checkReferenceBlock(referenceBlock, augmentedBlock.block)
             _ <- sendAugmentedBlock(augmentedBlock)
         } yield ()
@@ -403,11 +435,14 @@ final case class JointLedger(
         for {
             p <- unsafeGetProducing
 
-            finalizationTxSeq <- this.runDappLedgerM(DappLedgerM.finalizeLedger(
+            finalizationTxSeq <- this.runDappLedgerM(
+              DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = p.nextBlockData.blockWithdrawnUtxos,
                 multisigRegimeUtxoToSpend = multisigRegimeUtxo,
-                equityShares = equityShares),
-              onSuccess = IO.pure)
+                equityShares = equityShares
+              ),
+              onSuccess = IO.pure
+            )
 
             augmentedBlock: AugmentedBlock.Final = {
                 import p.nextBlockData.*
@@ -469,13 +504,14 @@ final case class JointLedger(
 
     private def checkReferenceBlock(expectedBlock: Option[Block], actualBlock: Block): IO[Unit] =
         expectedBlock match {
-            case Some(refBlock) if refBlock == actualBlock => state.update(s =>
-              Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
+            case Some(refBlock) if refBlock == actualBlock =>
+                state.update(s => Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
             case Some(_) =>
                 panic(
                   "Reference block didn't match actual block; consensus is broken."
                 ) >> context.self.stop
-            case None => state.update(s => Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
+            case None =>
+                state.update(s => Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
         }
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
@@ -491,8 +527,6 @@ final case class JointLedger(
   */
 object JointLedger {
 
-
-
     final case class CompleteBlockError() extends Throwable
     object Requests {
         type Request =
@@ -504,8 +538,9 @@ object JointLedger {
         // FIXME: This should include the refundTxBytes
         // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
         final case class RegisterDeposit(
-                                        serializedDeposit : Array[Byte],
-                                         eventId : LedgerEvent.Id, virtualOutputs : NonEmptyList[GenesisObligation]
+            serializedDeposit: Array[Byte],
+            eventId: LedgerEvent.Id,
+            virtualOutputs: NonEmptyList[GenesisObligation]
         )
 
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
@@ -528,21 +563,23 @@ object JointLedger {
         }
     }
 
-    sealed trait State{
-      val dappLedgerState: DappLedgerM.State
-      val virtualLedgerState : VirtualLedgerM.State
+    sealed trait State {
+        val dappLedgerState: DappLedgerM.State
+        val virtualLedgerState: VirtualLedgerM.State
     }
 
-    final case class Done(producedBlock: Block,
-                          override val dappLedgerState: DappLedgerM.State,
-                          override val virtualLedgerState: VirtualLedgerM.State) extends State
+    final case class Done(
+        producedBlock: Block,
+        override val dappLedgerState: DappLedgerM.State,
+        override val virtualLedgerState: VirtualLedgerM.State
+    ) extends State
 
     final case class Producing(
-                                override val dappLedgerState: DappLedgerM.State,
-                                override val virtualLedgerState : VirtualLedgerM.State,
-                                previousBlock: Block,
-                                startTime: PosixTime,
-                                pollResults: Set[LedgerEvent.Id],
-                                nextBlockData: TransientFields
+        override val dappLedgerState: DappLedgerM.State,
+        override val virtualLedgerState: VirtualLedgerM.State,
+        previousBlock: Block,
+        startTime: PosixTime,
+        pollResults: Set[LedgerEvent.Id],
+        nextBlockData: TransientFields
     ) extends State
 }

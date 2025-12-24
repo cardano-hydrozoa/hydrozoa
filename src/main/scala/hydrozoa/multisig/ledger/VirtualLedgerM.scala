@@ -15,7 +15,7 @@ import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.rules.{Context, UtxoEnv, State as ScalusState}
+import scalus.cardano.ledger.rules.{Context, State as ScalusState, UtxoEnv}
 
 private type EV[A] = Either[VirtualLedgerM.Error, A]
 private type SV[A] = cats.data.StateT[EV, VirtualLedgerM.State, A]
@@ -53,25 +53,25 @@ object VirtualLedgerM {
             _ <- set(newState)
         } yield ()
 
-    /**
-     * Applies a genesis event to the current virtual ledger state and returns the resulting KZG commitment. 
-     * We need this because we need to know the "new" KzgCommit prior to settling the ledger, but we don't (maybe?)
-     * actually want to apply the genesis event until we know that the settlement tx is valid.
+    /** Applies a genesis event to the current virtual ledger state and returns the resulting KZG
+      * commitment. We need this because we need to know the "new" KzgCommit prior to settling the
+      * ledger, but we don't (maybe?) actually want to apply the genesis event until we know that
+      * the settlement tx is valid.
       * @param genesisEvent
-     * @return
-     */
+      * @return
+      */
     // QUESTION: Do we even need this? If we commit and the settlement tx fails and we go to rollback, we don't really
     // care. The rollback will just work autonomously based on whatever KZG commit the treasury utxo has, right?
     //
     // NOTE: there are probably other ways to achieve this -- in particular, I think CPS would allow use to achieve the
     // control flow we need. But I think this is the clearest way to go, and since its cheaper to just compute a hash
-    // twice, compared to building a "mock tx" and then adding the real Kzg commit, and more clear than using CPS, 
+    // twice, compared to building a "mock tx" and then adding the real Kzg commit, and more clear than using CPS,
     // I think this is the way to go for now.
-     def mockApplyGenesis(genesisEvent : L2EventGenesis) : VirtualLedgerM[KzgCommitment] =
-         for {
-             s <- get
-             newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
-         } yield newState.kzgCommitment
+    def mockApplyGenesis(genesisEvent: L2EventGenesis): VirtualLedgerM[KzgCommitment] =
+        for {
+            s <- get
+            newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
+        } yield newState.kzgCommitment
 
     def applyInternalTx(tx: Tx.Serialized): VirtualLedgerM[Vector[Payout.Obligation]] =
         given OriginalCborByteArray = OriginalCborByteArray(tx)
@@ -151,7 +151,7 @@ object VirtualLedgerM {
 
         def fromTxBuilderConfig(txbc: Tx.Builder.Config): Config = Config(
           slotConfig = txbc.env.slotConfig,
-          slot = ???,
+          slot = 0, // FIXME
           protocolParams = txbc.env.protocolParams,
           network = txbc.env.network
         )
@@ -183,18 +183,20 @@ object VirtualLedgerM {
     }
 
     extension (jl: JointLedger) {
-        /**
-         * Run a VirtualLedgerM action within a JointLedger.
-         * If the action is successful (returns `Right`), the state of the JointLedger is updated.
-         * Because the state update within JointLedger must happen within [[IO]], this takes
-         * two continuations (one for success, one for failure) and returns in [[IO]].
-         *
-         * @param action
-         * @param onFailure continuation if an error is raised. Defaults to throwing an exception.
-         * @param onSuccess continuation if a value is returned. Defaults to IO.pure
-         * @tparam A
-         * @return
-         */
+
+        /** Run a VirtualLedgerM action within a JointLedger. If the action is successful (returns
+          * `Right`), the state of the JointLedger is updated. Because the state update within
+          * JointLedger must happen within [[IO]], this takes two continuations (one for success,
+          * one for failure) and returns in [[IO]].
+          *
+          * @param action
+          * @param onFailure
+          *   continuation if an error is raised. Defaults to throwing an exception.
+          * @param onSuccess
+          *   continuation if a value is returned. Defaults to IO.pure
+          * @tparam A
+          * @return
+          */
         def runVirtualLedgerM[A, B](
             action: VirtualLedgerM[A],
             onFailure: VirtualLedgerM.Error => IO[B] = e =>

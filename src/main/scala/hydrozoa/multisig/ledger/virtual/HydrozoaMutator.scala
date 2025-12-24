@@ -7,7 +7,7 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.{State as L1State, Context as _, *}
+import scalus.cardano.ledger.rules.{Context as _, State as L1State, *}
 import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, TransactionInput, TransactionOutput, Word64}
 
 // FIXME: This is heavily inherited from the scalus STS. We don't really follow it too closely any more, so it

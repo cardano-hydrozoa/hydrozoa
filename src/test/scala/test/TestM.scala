@@ -44,11 +44,11 @@ import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
 // This helps a lot with mocks. I'm not going to worry about it for now, because its both pretty noisy to do in scala
 // (compared to purescript using row types or haskell using labelled optics), and we probably won't need it for an MVP.
 case class TestR(
-                  peers: NonEmptyList[TestPeer],
-                  actorSystem: ActorSystem[IO],
-                  initTx: InitializationTxSeq, // Move to HeadConfig
-                  config: Tx.Builder.Config, // Move to HeadConfig
-                  jointLedger: ActorRef[IO, JointLedger.Requests.Request],
+    peers: NonEmptyList[TestPeer],
+    actorSystem: ActorSystem[IO],
+    initTx: InitializationTxSeq, // Move to HeadConfig
+    config: Tx.Builder.Config, // Move to HeadConfig
+    jointLedger: ActorRef[IO, JointLedger.Requests.Request],
 )
 
 type TestError =
@@ -153,7 +153,7 @@ object TestM {
               evaluator = testEvaluator,
               validators = nonSigningValidators
             )
-            
+
             equityShares <- PropertyM.pick[ET, EquityShares](
               genEquityShares(peers).label("Equity shares")
             )
@@ -195,7 +195,7 @@ object TestM {
 
     def pure[A](a: A): TestM[A] = TestM(Kleisli.pure(a))
 
-    def fail(msg: String): TestM[Unit] = TestM(Kleisli.liftF(PropertyM.fail_(msg)))
+    def fail[A](msg: String): TestM[A] = TestM(Kleisli.liftF(PropertyM.fail_(msg)))
 
     def assertWith(condition: Boolean, msg: String): TestM[Unit] =
         TestM(Kleisli.liftF(PropertyM.assertWith(condition, msg)))
