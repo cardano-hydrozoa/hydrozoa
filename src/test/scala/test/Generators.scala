@@ -1,8 +1,8 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
-import hydrozoa.multisig.ledger.VirtualLedger
-import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
+import hydrozoa.multisig.ledger.VirtualLedgerM
+import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -415,14 +415,14 @@ object Generators {
           * actual context of the errors raised.
           */
         def genL2EventTransactionAttack: Gen[
-          (VirtualLedger.Config, State, L2EventTransaction) => (
+          (VirtualLedgerM.Config, State, L2EventTransaction) => (
               L2EventTransaction,
               (String | TransactionException)
           )
         ] = {
 
             // Violates "AllInputsMustBeInUtxoValidator" ledger rule
-            def inputsNotInUtxoAttack: (VirtualLedger.Config, State, L2EventTransaction) => (
+            def inputsNotInUtxoAttack: (VirtualLedgerM.Config, State, L2EventTransaction) => (
                 L2EventTransaction,
                 (String | TransactionException)
             ) =
