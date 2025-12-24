@@ -361,7 +361,6 @@ final case class JointLedger(
 
         for {
             producing <- unsafeGetProducing
-            dappLedgerState <- this.runDappLedgerM(DappLedgerM.get, onSuccess = IO.pure)
 
             // ===================================
             // Step 1: Figure out which deposits are valid and turn them into genesis obligations
@@ -371,7 +370,7 @@ final case class JointLedger(
             // element of the queue. But I don't recall if we assume the queue is sorted according to
             // maturity time, so I'll go with this for now. If it is sorted, there's almost certainly
             // a more efficient function.
-            depositsPartition = dappLedgerState.deposits.partition(x => isMature(x._2))
+            depositsPartition = producing.dappLedgerState.deposits.partition(x => isMature(x._2))
             matureDeposits = depositsPartition._1
             immatureDeposits = depositsPartition._2
 
@@ -398,7 +397,7 @@ final case class JointLedger(
                     for {
                         settlementRes <- doSettlement(
                           validDeposits = depositsInPollResults,
-                          treasuryToSpend = dappLedgerState.treasury,
+                          treasuryToSpend = producing.dappLedgerState.treasury,
                           payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
                           immatureDeposits = immatureDeposits
                         )

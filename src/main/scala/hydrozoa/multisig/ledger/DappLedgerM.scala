@@ -23,13 +23,19 @@ private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
 private type RT[A] = ReaderT[S, Tx.Builder.Config, A]
 
-case class DappLedgerM[A] private (unDappLedger: RT[A]) {
+/** DappLedgerM defines an opaque monad stack for manipulating the [[State]] of the dApp ledger.
+  * It's constructor and eliminator methods are private so that it cannot be used in unintended
+  * ways.
+  *
+  * See the companion object for details on allowed operations.
+  */
+case class DappLedgerM[A] private (private val unDappLedger: RT[A]) {
 
     import DappLedgerM.*
 
-    def map[B](f: A => B): DappLedgerM[B] = DappLedgerM(this.unDappLedger.map(f))
+    private def map[B](f: A => B): DappLedgerM[B] = DappLedgerM(this.unDappLedger.map(f))
 
-    def flatMap[B](f: A => DappLedgerM[B]): DappLedgerM[B] =
+    private def flatMap[B](f: A => DappLedgerM[B]): DappLedgerM[B] =
         DappLedgerM(this.unDappLedger.flatMap(a => f(a).unDappLedger))
 
     /** Use [[runDappLedgerM()]] instead
@@ -45,37 +51,31 @@ case class DappLedgerM[A] private (unDappLedger: RT[A]) {
 
 }
 
-//
-///** ==Hydrozoa's detached dapp ledger on Cardano in the multisig regime==
-//  *
-//  * '''Dapp ledger on Cardano''' means that the ledger is domain-specific to a single decentralized
-//  * application (dApp), and that its state corresponds to a subset of the utxos in the general
-//  * Cardano ledger. Every state transition of the dapp ledger corresponds to a sequence of one or
-//  * more Cardano transactions.
-//  *
-//  * '''Detached dapp ledger''' means that the ledger's state can be evolved without waiting to
-//  * synchronize each state transition with Cardano. Instead, the Cardano transactions can be
-//  * asynchronously submitted to drive Cardano toward the state corresponding to the dapp ledger,
-//  * repeatedly re-submitting transactions as necessary until they are confirmed on Cardano.
-//  *
-//  * Hydrozoa's consensus protocol makes it possible for its dapp ledger to be detached by mitigating
-//  * the sources of contention that might interfere with the Cardano transactions corresponding to
-//  * the dapp ledger's transitions.
-//  */
 object DappLedgerM {
-    val ask: DappLedgerM[Tx.Builder.Config] =
+
+    /** Extract the transaction builder configuration from a [[DappLedgerM]]
+      */
+    private val ask: DappLedgerM[Tx.Builder.Config] =
         DappLedgerM(Kleisli.ask)
-    val get: DappLedgerM[DappLedgerM.State] =
+
+    /** Obtain the current state from a [[DappLedgerM]]
+      */
+    private val get: DappLedgerM[DappLedgerM.State] =
         DappLedgerM(Kleisli.liftF(cats.data.StateT.get))
-    def pure[A](a: A): DappLedgerM[A] = DappLedgerM(Kleisli.pure(a))
+
+    /** Set the state of the [[DappLedgerM]] state machine
+      */
     private def set(newState: ledger.DappLedgerM.State): DappLedgerM[Unit] =
         DappLedgerM(Kleisli.liftF(cats.data.StateT.set(newState)))
-    def lift[A](e: Either[DappLedgerM.Error, A]): DappLedgerM[A] =
+
+    /** Lift an [[Either]] into a [[DappLedgerM]].
+      */
+    private def lift[A](e: Either[DappLedgerM.Error, A]): DappLedgerM[A] =
         DappLedgerM(Kleisli.liftF(StateT.liftF(e)))
 
     /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
-      * Return the produced deposit utxo and a post-dated refund transaction for it.
       */
+    // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
     def registerDeposit(
         serializedDeposit: Array[Byte],
         eventId: LedgerEvent.Id,
@@ -105,7 +105,6 @@ object DappLedgerM {
       *
       * The collective value of the [[payouts]] must '''not''' exceed the [[treasury]] value.
       */
-
     def settleLedger(
         nextKzg: KzgCommitment,
         validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
@@ -242,9 +241,9 @@ object DappLedgerM {
     extension (jl: JointLedger) {
 
         /** Run a DappLedgerM action within a JointLedger. If the action is successful (returns
-          * `Right`), the state of the JointLedger is updated. Because the state update within
-          * JointLedger must happen within [[IO]], this takes two continuations (one for success,
-          * one for failure) and returns in [[IO]].
+          * `Right`), the state of the JointLedger is (unconditionally) updated. Because the state
+          * update within JointLedger must happen within [[IO]], this takes two continuations (one
+          * for success, one for failure) and returns in [[IO]].
           *
           * @param action
           * @param onFailure

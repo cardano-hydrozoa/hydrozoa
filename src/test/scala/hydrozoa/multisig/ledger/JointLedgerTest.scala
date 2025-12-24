@@ -14,7 +14,6 @@ import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.Version.Full
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.rng.Seed
 import scala.collection.immutable.Queue
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, *}
@@ -237,4 +236,3 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         } yield true)
 }
-//State(Map(TransactionInput("1d66222ef9bcfc39e4929d9299167b1c0cb7bc22640423ecf3cbc75d774b43e4",0) -> Babbage(ShelleyAddress(Mainnet,Key("c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8"),Null),Value(3091486534.609394 ADA),Some(Inline(<1, []>)),None)))

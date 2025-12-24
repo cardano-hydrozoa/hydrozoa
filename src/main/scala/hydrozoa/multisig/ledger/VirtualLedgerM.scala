@@ -21,13 +21,19 @@ private type EV[A] = Either[VirtualLedgerM.Error, A]
 private type SV[A] = cats.data.StateT[EV, VirtualLedgerM.State, A]
 private type RTV[A] = ReaderT[SV, VirtualLedgerM.Config, A]
 
-case class VirtualLedgerM[A] private (unVirtualLedger: RTV[A]) {
+/** VirtualLedgerM defines an opaque monad stack for manipulating the [[State]] of the virtual
+  * ledger. It's constructor and eliminator methods are private so that it cannot be used in
+  * unintended ways.
+  *
+  * See the companion object for details on allowed operations
+  */
+case class VirtualLedgerM[A] private (private val unVirtualLedger: RTV[A]) {
 
     import VirtualLedgerM.*
 
-    def map[B](f: A => B): VirtualLedgerM[B] = VirtualLedgerM(this.unVirtualLedger.map(f))
+    private def map[B](f: A => B): VirtualLedgerM[B] = VirtualLedgerM(this.unVirtualLedger.map(f))
 
-    def flatMap[B](f: A => VirtualLedgerM[B]): VirtualLedgerM[B] =
+    private def flatMap[B](f: A => VirtualLedgerM[B]): VirtualLedgerM[B] =
         VirtualLedgerM(this.unVirtualLedger.flatMap(a => f(a).unVirtualLedger))
 
     private def run(
@@ -39,9 +45,9 @@ case class VirtualLedgerM[A] private (unVirtualLedger: RTV[A]) {
 }
 
 object VirtualLedgerM {
-    val ask: VirtualLedgerM[Config] =
+    private val ask: VirtualLedgerM[Config] =
         VirtualLedgerM(Kleisli.ask)
-    val get: VirtualLedgerM[VirtualLedgerM.State] =
+    private val get: VirtualLedgerM[VirtualLedgerM.State] =
         VirtualLedgerM(Kleisli.liftF(cats.data.StateT.get))
 
     /** Applies a genesis event, fully updating the VirtualLedger's state */
@@ -113,7 +119,7 @@ object VirtualLedgerM {
             )
         } yield payoutObligations
 
-    def lift[A](e: Either[VirtualLedgerM.Error, A]): VirtualLedgerM[A] =
+    private def lift[A](e: Either[VirtualLedgerM.Error, A]): VirtualLedgerM[A] =
         VirtualLedgerM(Kleisli.liftF(StateT.liftF(e)))
 
     private def set(newState: VirtualLedgerM.State): VirtualLedgerM[Unit] =
