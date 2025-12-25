@@ -27,7 +27,7 @@ object PeerLiaison {
     )
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducer.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Ref],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
@@ -48,14 +48,14 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
 
     override def preStart: IO[Unit] =
         for {
-            blockProducer <- connections.blockProducer.get
+            blockProducer <- connections.blockWeaver.get
             // This means that the comm actor will not start receiving until it is connected to its
             // remote counterpart:
             remotePeerLiaison <- connections.remotePeerLiaison.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  ackBlock = blockProducer,
+                  ackBlock = ???, // blockProducer,
                   newBlock = blockProducer,
                   newLedgerEvent = blockProducer,
                   remotePeerLiaison = remotePeerLiaison
@@ -141,11 +141,12 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         _ <- this.nEvent.update(_.increment)
                         _ <- this.qEvent.update(_ :+ y)
                     } yield ()
-                case y: AckBlock =>
-                    for {
-                        _ <- this.nAck.update(_.increment)
-                        _ <- this.qAck.update(_ :+ y)
-                    } yield ()
+                // FIXME:
+                // case y: AckBlock =>
+                //    for {
+                //        _ <- this.nAck.update(_.increment)
+                //        _ <- this.qAck.update(_ :+ y)
+                //    } yield ()
                 case y: Block =>
                     for {
                         _ <- this.nBlock.update(_.increment)
@@ -186,18 +187,19 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                         for {
                             nEventsNew <- this.nEvent.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
-                    case y: AckBlock =>
-                        for {
-                            nAckNew <- this.nAck.updateAndGet(_.increment)
-                        } yield NewMsgBatch(
-                          batchId,
-                          nAckNew,
-                          nBlock,
-                          nEvents,
-                          Some(y),
-                          None,
-                          List()
-                        )
+                    // FIXME:
+                    // case y: AckBlock =>
+                    //    for {
+                    //        nAckNew <- this.nAck.updateAndGet(_.increment)
+                    //    } yield NewMsgBatch(
+                    //      batchId,
+                    //      nAckNew,
+                    //      nBlock,
+                    //      nEvents,
+                    //      Some(y),
+                    //      None,
+                    //      List()
+                    //    )
                     case y: Block =>
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
@@ -253,13 +255,13 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     dropped.dequeueOption.fold((dropped, None))((x, xs) => (xs, Some(x)))
                 )
                 events <- this.qEvent.modify(q =>
-                    val dropped = q.dropWhile(_.id._2 <= batchReq.eventNum)
+                    val dropped = q.dropWhile(_.event.eventId._2 <= batchReq.eventNum)
                     dropped.splitAt(maxEvents).swap
                 )
 
                 ackNum = mAck.fold(nAck)(_.id.ackNum)
                 blockNum = mBlock.fold(nBlock)(_.id)
-                eventNum = events.lastOption.fold(nEvents)(_.id.eventNum)
+                eventNum = events.lastOption.fold(nEvents)(_.event.eventId.eventNum)
             } yield NewMsgBatch(
               id = batchReq.id,
               ackNum = ackNum,

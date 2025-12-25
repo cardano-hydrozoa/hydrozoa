@@ -442,7 +442,11 @@ final case class JointLedger(
   * them to keep them aligned.
   */
 object JointLedger {
+
+    type Ref = ActorRef[IO, Requests.Request]
+
     final case class CompleteBlockError() extends Throwable
+
     object Requests {
         type Request = RegisterLedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal
 
@@ -460,6 +464,7 @@ object JointLedger {
         case class CompleteBlockFinal(referenceBlock: Option[Block])
 
         // TODO: make it sealed maybe when we combine ledger actors
+        // TODO: this is a bad name since it combines the event and the msg for now
         trait RegisterLedgerEvent {
             def eventId: LedgerEvent.Id
         }

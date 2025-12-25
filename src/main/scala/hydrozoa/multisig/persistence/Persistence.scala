@@ -56,7 +56,7 @@ trait Persistence extends Actor[IO, Request] {
     def handlePersistRequest(req: PersistRequest): IO[PutResponse] = for {
         _ <- req.data match {
             case x: NewLedgerEvent =>
-                events.update(m => m + (x.id -> x))
+                events.update(m => m + (x.event.eventId -> x))
             case x: Block =>
                 blocks.update(m => m + (x.id -> x))
             case x: AckBlock =>
@@ -67,7 +67,7 @@ trait Persistence extends Actor[IO, Request] {
                 batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
                     x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
                     x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
-                    events.update(m => m ++ x.events.map(y => y.id -> y))
+                    events.update(m => m ++ x.events.map(y => y.event.eventId -> y))
         }
     } yield PutSucceeded
 }

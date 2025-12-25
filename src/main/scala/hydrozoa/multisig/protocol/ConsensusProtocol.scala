@@ -2,6 +2,8 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.PosixTime
+import hydrozoa.multisig.ledger.JointLedger.Requests.RegisterLedgerEvent
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
@@ -18,11 +20,16 @@ object ConsensusProtocol {
     enum Actors:
         case BlockProducer, CardanoLiaison, PeerLiaison, TransactionSequencer
 
-    object BlockProducer {
+    object BlockWeaver {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
-        type Request =
-            NewLedgerEvent | Block | AckBlock
+        type Request = NewLedgerEvent | Block | BlockConfirmed
+
+        /** Simple confirmation, doesn't need to contain full [[AckBlock]].
+          *
+          * @param blockNumber
+          */
+        final case class BlockConfirmed(blockNumber: Block.Number)
     }
 
     /** TODO: I would like to have it in the CardanoLiaison.scala and not here.
@@ -56,7 +63,7 @@ object ConsensusProtocol {
 
     object RemoteBroadcast {
         type Request =
-            BlockProducer.Request
+            BlockWeaver.Request
     }
 
     /** Submit a new ledger event to the head via a peer's ledger event actor. */
@@ -81,20 +88,19 @@ object ConsensusProtocol {
             } yield SubmitLedgerEvent(time, event, eventOutcome)
     }
 
-    /** The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a
+    /** TODO: update
+      *
+      * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a
       * LedgerEventId.
       */
     final case class NewLedgerEvent(
-        id: LedgerEvent.Id,
-        time: FiniteDuration,
-        event: Unit // FIXME LedgerEvent
+        timeStamp: PosixTime,
+        event: RegisterLedgerEvent
     )
 
     object NewLedgerEvent {
         type Subscriber = ActorRef[IO, NewLedgerEvent]
     }
-
-    // TODO: trait BlockEffectsSigned ???
 
     /** L2 block confirmations (local-only signal) */
     sealed trait ConfirmBlock {

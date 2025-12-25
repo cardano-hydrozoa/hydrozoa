@@ -19,7 +19,7 @@ object TransactionSequencer {
     final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducer.Ref],
+        blockProducer: Deferred[IO, BlockWeaver.Ref],
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
@@ -67,7 +67,9 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
                 for {
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
                     newId = LedgerEvent.Id(config.peerId, newNum)
-                    newEvent = NewLedgerEvent(newId, x.time, x.event)
+                    // FIXME:
+                    // newEvent = NewLedgerEvent(newId, x.time, x.event)
+                    newEvent = NewLedgerEvent(???, ???)
                     _ <- config.persistence ?: Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()

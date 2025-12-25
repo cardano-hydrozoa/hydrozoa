@@ -56,16 +56,23 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
               TerminatedDependency(Dependencies.Persistence, config.persistence)
             )
 
-            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockProducer.Ref]
+            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockWeaver.Ref]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
             pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
             pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
 
             blockProducer <- {
-                import BlockProducer.{Config, ConnectionsPending}
+                import BlockWeaver.{Config, ConnectionsPending}
                 context.actorOf(
-                  BlockProducer(
-                    Config(peerId = config.peerId, persistence = config.persistence),
+                  BlockWeaver(
+                    Config(
+                      initialBlock = ???,
+                      peerId = config.peerId,
+                      numberOfPeers = ???,
+                      blockLeadTurn = ???,
+                      jointLedger = ???,
+                      persistence = config.persistence
+                    ),
                     ConnectionsPending(
                       cardanoLiaison = pendingCardanoLiaison,
                       peerLiaisons = pendingLocalPeerLiaisons,
@@ -93,7 +100,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                                   persistence = config.persistence
                                 ),
                                 ConnectionsPending(
-                                  blockProducer = pendingBlockProducer,
+                                  blockWeaver = pendingBlockProducer,
                                   remotePeerLiaison = pendingRemotePeerLiaison
                                 )
                               )

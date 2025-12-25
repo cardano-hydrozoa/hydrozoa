@@ -54,6 +54,7 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
+            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: FiniteDuration,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
@@ -77,6 +78,13 @@ object Block {
             override val blockVersion: Version.Full,
             override val timeCreation: FiniteDuration
         ) extends Header(Type.Final)
+
+        def nextBlockNumber: Block.Number = this match {
+            case Header.Initial(timeCreation, commitment) => Number(1)
+            case Header.Minor(blockNum, _, _, _)          => blockNum.increment
+            case Header.Major(blockNum, _, _, _)          => blockNum.increment
+            case Header.Final(blockNum, _, _)             => blockNum.increment
+        }
 
         def nextHeader(
             newBlockType: Type.Next,
@@ -220,6 +228,9 @@ object Block {
         opaque type Number = Int
 
         def apply(i: Int): Number = i
+
+        /** Number of the first (non-initialization) block, i.e. 1. */
+        def firstBlockNumber: Number = apply(1)
 
         given Conversion[Number, Int] = identity
 
