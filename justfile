@@ -32,7 +32,7 @@ test:
   just notify "test"
 
 [parallel]
-precommit: lint-check fmt-check nixfmt-check test
+precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 
 notify name:

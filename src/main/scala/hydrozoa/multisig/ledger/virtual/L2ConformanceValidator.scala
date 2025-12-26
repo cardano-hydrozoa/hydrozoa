@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
 
-import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
+import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*

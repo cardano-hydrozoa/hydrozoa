@@ -15,9 +15,6 @@
         jdk = pkgs.openjdk25;
         # GraalVM is an advanced JDK. We use it for  metals and bloop only.
         # https://www.graalvm.org/
-        graalvm = pkgs.graalvmPackages.graalvm-ce;
-        metals0 = pkgs.metals.override { jre = graalvm; };
-        bloop0 = pkgs.bloop.override { jre = graalvm; };
         sbt0 = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
@@ -34,18 +31,15 @@
         };
       in rec {
         devShell = pkgs.mkShell {
-          JAVA_HOME = "${graalvm}";
           JAVA_OPTS = "-Xmx4g -Xss512m -XX:+UseG1GC";
           # This fixes bash prompt/autocomplete issues with subshells (i.e. in VSCode) under `nix develop`/direnv
           buildInputs = [ pkgs.bashInteractive ];
           packages = with pkgs; [
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
-            bloop0 # scala build tool (@Ilia how does this compare with sbt/bsp? Where do we use it?)
             jdk
             just # command runner, similar to `make`
             ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
-            metals0 # Scala language server: https://scalameta.org/metals/
             nixfmt
             sbt0
             scala-cli

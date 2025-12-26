@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.virtual
-import hydrozoa.multisig.ledger.VirtualLedger
-import hydrozoa.multisig.ledger.VirtualLedger.{Config, State}
+import hydrozoa.multisig.ledger.VirtualLedgerM
+import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -10,23 +10,8 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{Context as _, State as L1State, *}
 import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, TransactionInput, TransactionOutput, Word64}
 
-/*
-We define three mutators for the two L2 event types (Genesis, Transaction).
-
-Then, finally, we define a mutator that both validates and processes any L2Event
- */
-
-object HydrozoaGenesisMutator {
-    // Fold over utxos passed in the genesis event, adding them to the UtxoSet with the same txId and an incrementing
-    // index
-    def addGenesisUtxosToState(
-        g: L2EventGenesis,
-        state: State
-    ): State = {
-        state.copy(state.activeUtxos ++ g.asUtxos)
-    }
-}
-
+// FIXME: This is heavily inherited from the scalus STS. We don't really follow it too closely any more, so it
+// could probably just be folded into VirtualLedger
 object HydrozoaTransactionMutator {
     def transit(
         context: Config,
@@ -158,11 +143,3 @@ object AddOutputsToUtxoL2Mutator:
 
             l2UtxosToAdd = p._2
         } yield state.copy(state.activeUtxos ++ l2UtxosToAdd)
-
-//////////////////
-// Helper
-
-private def mapLeft[A, B, C](f: A => C)(e: Either[A, B]): Either[C, B] = e match {
-    case Left(a)  => Left(f(a))
-    case Right(b) => Right(b)
-}

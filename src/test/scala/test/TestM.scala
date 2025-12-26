@@ -48,14 +48,12 @@ case class TestR(
     actorSystem: ActorSystem[IO],
     initTx: InitializationTxSeq, // Move to HeadConfig
     config: Tx.Builder.Config, // Move to HeadConfig
-    virtualLedger: ActorRef[IO, VirtualLedger.Request],
-    dappLedger: ActorRef[IO, DappLedger.Requests.Request],
     jointLedger: ActorRef[IO, JointLedger.Requests.Request],
 )
 
 type TestError =
     InitializationTxSeq.Builder.Error | DepositRefundTxSeq.Builder.Error |
-        DappLedger.Errors.RegisterDepositError
+        DappLedgerM.Error.RegisterDepositError
 
 private type ET[A] = EitherT[IO, TestError, A]
 private type PT[A] = PropertyM[ET, A]
@@ -133,7 +131,9 @@ object TestM {
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
-                  votingDuration = 100
+                  votingDuration = 100,
+                  txTiming = ???,
+                  initializedOn = ???
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -156,24 +156,6 @@ object TestM {
               validators = nonSigningValidators
             )
 
-            virtualLedgerConfig = VirtualLedger.Config(
-              slotConfig = config.env.slotConfig,
-              slot = 0,
-              protocolParams = config.env.protocolParams,
-              network = testNetwork
-            )
-            virtualLedger <- PropertyM.run(
-              EitherT.right[TestError](system.actorOf(VirtualLedger(virtualLedgerConfig)))
-            )
-
-            dappLedger <- PropertyM.run(
-              EitherT.right[TestError](
-                system.actorOf(
-                  DappLedger.create(initTx.initializationTx, config, virtualLedger)
-                )
-              )
-            )
-
             equityShares <- PropertyM.pick[ET, EquityShares](
               genEquityShares(peers).label("Equity shares")
             )
@@ -182,8 +164,6 @@ object TestM {
               EitherT.right[TestError](
                 system.actorOf(
                   JointLedger(
-                    dappLedger = dappLedger,
-                    virtualLedger = virtualLedger,
                     peerLiaisons = Seq.empty,
                     tallyFeeAllowance = Coin.ada(2),
                     initialBlockTime = FiniteDuration(0, SECONDS), // FIXME: Generate
@@ -191,7 +171,9 @@ object TestM {
                     equityShares = equityShares,
                     multisigRegimeUtxo = config.multisigRegimeUtxo,
                     votingDuration = 0,
-                    treasuryTokenName = config.tokenNames.headTokenName
+                    treasuryTokenName = config.tokenNames.headTokenName,
+                    initialTreasury = initTx.initializationTx.treasuryProduced,
+                    config = config
                   )
                 )
               )
@@ -202,8 +184,6 @@ object TestM {
           system,
           initTx,
           config,
-          virtualLedger,
-          dappLedger,
           jointLedger
         )
     }
@@ -217,7 +197,7 @@ object TestM {
 
     def pure[A](a: A): TestM[A] = TestM(Kleisli.pure(a))
 
-    def fail(msg: String): TestM[Unit] = TestM(Kleisli.liftF(PropertyM.fail_(msg)))
+    def fail[A](msg: String): TestM[A] = TestM(Kleisli.liftF(PropertyM.fail_(msg)))
 
     def assertWith(condition: Boolean, msg: String): TestM[Unit] =
         TestM(Kleisli.liftF(PropertyM.assertWith(condition, msg)))

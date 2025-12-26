@@ -5,14 +5,17 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import com.suprnation.actor.test as _
-import hydrozoa.multisig.ledger.DappLedger.Requests.{GetState, RegisterDeposit}
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, RegisterDeposit, StartBlock}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
+import hydrozoa.multisig.protocol.types.Block.Version.Full
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
+import scala.collection.immutable.Queue
+import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, *}
 import scalus.ledger.api.v3.PosixTime
 import scalus.prelude.Option as SOption
@@ -25,7 +28,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
-            .withMinSuccessfulTests(1)
+            .withMinSuccessfulTests(100)
     }
 
     /** Helper utilities to send actor Requests to the JointLedger
@@ -157,51 +160,79 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             (depositRefundTxSeq, depositReq) = seqAndReq
 
             env <- ask
-            s <- liftR(env.dappLedger ?: GetState)
+            // Putting state access in a for block just so that it doesn't accidentally get reused
+            _ <- for {
+                jlState <- getState
+                dlState = jlState.dappLedgerState
 
-            _ <- assertWith(
-              msg = s"We should only have 1 deposit in the state. We have ${s.deposits.length}",
-              condition = s.deposits.length == 1
-            )
-            _ <- assertWith(
-              msg = "Correct deposit(s) in state",
-              condition = s.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
-            )
-            _ <- assertWith(
-              msg = "Correct treasury in state",
-              condition = s.treasury == env.initTx.initializationTx.treasuryProduced
-            )
+                _ <- assertWith(
+                  msg =
+                      s"We should only have 1 deposit in the state. We have ${dlState.deposits.length}",
+                  condition = dlState.deposits.length == 1
+                )
+                _ <- assertWith(
+                  msg = "Correct deposit(s) in state",
+                  condition =
+                      dlState.deposits.head._2 == depositRefundTxSeq.depositTx.depositProduced
+                )
+                _ <- assertWith(
+                  msg = "Correct treasury in state",
+                  condition = dlState.treasury == env.initTx.initializationTx.treasuryProduced
+                )
+            } yield ()
 
             // Step 3: Complete a block
             _ <- completeBlockRegular(None)
-            jointLedgerState <- getState
-            _ <- assertWith(
-              msg = "Finished block should be minor",
-              condition = jointLedgerState match {
-                  case JointLedger.Done(block: Block.Minor) => true
-                  case _                                    => false
-              }
-            )
+            _ <-
+                for {
+                    jointLedgerState <- getState
+                    _ <- assertWith(
+                      msg = "Finished block should be minor",
+                      condition = jointLedgerState match {
+                          case JointLedger.Done(block: Block.Minor, _, _) => true
+                          case _                                          => false
+                      }
+                    )
+                } yield ()
 
             // Step 4: Complete another block.
             _ <- startBlock(2, Set(depositReq.eventId))
             _ <- completeBlockRegular(None)
 
-            jointLedgerState <- getState
-            majorBlock <- jointLedgerState match {
-                case JointLedger.Done(block: Block.Major) => pure(block)
-                case _                                    => fail("finished block should be major")
-            }
+            _ <- for {
+                jlState <- getState
+                majorBlock <- jlState match {
+                    case JointLedger.Done(block: Block.Major, _, _) => pure(block)
+                    case _ => fail("finished block should be major")
+                }
+                kzgCommit = IArray
+                    .genericWrapArray(jlState.virtualLedgerState.kzgCommitment)
+                    .toArray
+                expectedUtxos = L2EventGenesis(
+                  Queue.from(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs.toList),
+                  TransactionHash.fromByteString(
+                    scalus.builtin.platform.blake2b_256(
+                      env.config.tokenNames.headTokenName.bytes ++
+                          ByteString.fromBigIntBigEndian(
+                            BigInt(Full.unapply(majorBlock.header.blockVersion)._1)
+                          )
+                    )
+                  )
+                ).asUtxos
 
-//      kzgCommit <- run(EitherT.right(initTestEnv.virtualLedger ?: VirtualLedger.GetCurrentKzgCommitment))
-//      expectedUtxos = L2EventGenesis(depositRefundTxSeq.depositTx.depositProduced.virtualOutputs,
-//          TransactionHash.fromByteString(platform.blake2b_256(initTestEnv.config.tokenNames.headTokenName.bytes ++
-//            ByteString.fromBigIntBigEndian(BigInt(Full.unapply(majorBlock.header.blockVersion)._1))))).asUtxos
-//
-//      _ <- assertWith[ET](
-//        msg = "KZG Commitment is correct",
-//        condition = kzgCommit == KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(expectedUtxos))
-//      )
+                expectedKzg = IArray
+                    .genericWrapArray(
+                      KzgCommitment.calculateCommitment(KzgCommitment.hashToScalar(expectedUtxos))
+                    )
+                    .toArray
+
+                _ <- assertWith(
+                  msg =
+                      s"KZG Commitment is correct.\n\tObtained: ${kzgCommit.mkString("Array(", ", ", ")")}\n\tExpected: ${expectedKzg.mkString("Array(", ", ", ")")}",
+                  condition = kzgCommit.sameElements(expectedKzg)
+                )
+
+            } yield ()
 
         } yield true)
 }
