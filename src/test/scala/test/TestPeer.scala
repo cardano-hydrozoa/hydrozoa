@@ -5,9 +5,6 @@ import com.bloxbean.cardano.client.account.Account
 import com.bloxbean.cardano.client.common.model.Network as BBNetwork
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath
 import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalAddressDerivationPathForAccount
-import hydrozoa.*
-import hydrozoa.multisig.ledger.dapp.token.CIP67
-import hydrozoa.multisig.ledger.virtual.L2EventTransaction
 import org.scalacheck.Gen
 import scala.collection.mutable
 import scalus.builtin.Builtins.blake2b_224
@@ -16,9 +13,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.*
-import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Metadatum, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Word64}
+import scalus.cardano.ledger.{Hash, Transaction as STransaction}
 
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
@@ -103,50 +98,6 @@ extension [K, V](map: mutable.Map[K, V])
 def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
     val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
     addWitness(txUnsigned, keyWitness)
-
-/** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
-def l2EventTransactionFromInputsAndPeer(
-    inputs: TaggedSortedSet[TransactionInput],
-    utxoSet: Map[TransactionInput, TransactionOutput],
-    inPeer: TestPeer,
-    outPeer: TestPeer,
-    network: Network = testNetwork
-): L2EventTransaction = {
-
-    val totalVal: Value = inputs.toSeq.foldLeft(Value.zero)((v, ti) => v + utxoSet(ti).value)
-
-    val txBody: TransactionBody = TransactionBody(
-      inputs = inputs,
-      outputs = IndexedSeq(
-        Babbage(
-          address = TestPeer.address(outPeer, network),
-          value = totalVal,
-          datumOption = None,
-          scriptRef = None
-        )
-      ).map(b => Sized(b.asInstanceOf[TransactionOutput])),
-      fee = Coin(0L)
-    )
-
-    val txUnsigned: STransaction =
-        STransaction(
-          body = KeepRaw(txBody),
-          witnessSet = TransactionWitnessSet.empty,
-          isValid = false,
-          auxiliaryData = Some(
-            KeepRaw(
-              Metadata(
-                Map(
-                  Word64(CIP67.Tags.head) ->
-                      Metadatum.List(IndexedSeq(Metadatum.Int(2)))
-                )
-              )
-            )
-          )
-        )
-
-    L2EventTransaction(signTx(inPeer, txUnsigned))
-}
 
 /////////////////////////////
 // Generators
