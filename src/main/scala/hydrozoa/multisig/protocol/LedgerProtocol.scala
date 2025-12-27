@@ -78,8 +78,8 @@ object LedgerProtocol {
             payoutObligations: List[Unit] // ledger.JointLedger.PayoutObligation]
         )
 
-        type Error = ledger.VirtualLedger.CborParseError |
-            ledger.VirtualLedger.TransactionInvalidError
+        type Error = ledger.VirtualLedgerM.Error.CborParseError |
+            ledger.VirtualLedgerM.Error.TransactionInvalidError
     }
 
     final case class CompleteBlock(

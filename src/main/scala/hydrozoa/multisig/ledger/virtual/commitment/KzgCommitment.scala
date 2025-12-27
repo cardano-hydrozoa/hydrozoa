@@ -13,8 +13,8 @@ import supranational.blst.{P1, Scalar}
 
 object KzgCommitment {
 
-    def empty: KzgCommitment = calculateCommitment(hashToScalar(Map.empty))
 
+    // WARNING: you can't just `==` IArray, because it doesn't compare on the value of the elements.
     type KzgCommitment = IArray[Byte]
 
     def hashToScalar(utxo: Utxos): SList[Scalar] =
@@ -66,7 +66,7 @@ object KzgCommitment {
 
         val commitment = evalFinalPoly(srs, finalPoly).compress()
 //        println(s"UTxO set commitment is: ${HexUtil.encodeHexString(commitment)}")
-        IArray.unsafeFromArray(commitment)
+        IArray.from(commitment)
     }
 
     /** Multiply normalized N binomials represented by their only coeeficients to get a final

@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.virtual
 
-import cats.data.NonEmptyList
 import cats.syntax.all.*
 import hydrozoa.*
+import scala.collection.immutable.Queue
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -27,7 +27,8 @@ object L2EventGenesis:
         case EmptyInputs
 
 final case class L2EventGenesis(
-    genesisObligations: NonEmptyList[GenesisObligation],
+    // We allow  this to be empty so that we can do the "push the fallback forward" tx
+    genesisObligations: Queue[GenesisObligation],
     // blake2b_256(treasuryTokenName.bytestring ++ nextBlockVersion)
     // TODO: Type this better? It shouldn't really be a TransactionHash, because it's
     // preimage is not a [[Transaction]]
