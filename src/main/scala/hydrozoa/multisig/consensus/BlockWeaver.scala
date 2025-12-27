@@ -223,8 +223,9 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
                         // Finish the current block immediately
                         _ <- config.jointLedger !
                             (if isFinal
-                             // TODO: add pollResults thingy
-                             then CompleteBlockRegular(pollResults = ???, None)
+                             // TODO: add pollResults thingy, which is gone now
+                             // then CompleteBlockRegular(pollResults = ???, None)
+                             then CompleteBlockRegular(None)
                              else CompleteBlockFinal(None))
                         // Switch to Idle
                         _ <- switchToIdle(blockNumber.increment)
@@ -323,7 +324,10 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
             for {
                 now <- IO.monotonic
                 // TODO: revert FiniteDuration, now I see why we had it there before
-                _ <- config.jointLedger ! StartBlock(now.toMillis)
+                // pollResults now live here though George's intent was to send them in the finish block event
+                // besides they are not needed when we commence building/checking a block another thing is
+                // that there is a chance results are fresher by the time we finish a block
+                _ <- config.jointLedger ! StartBlock(now.toMillis, ???)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     config.jointLedger ! mempool.findById(event).get
                 )

@@ -14,7 +14,6 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.{Tx, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
-import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.{monadForPropM, monadic}
@@ -167,7 +166,8 @@ object TestM {
                     peerLiaisons = Seq.empty,
                     tallyFeeAllowance = Coin.ada(2),
                     initialBlockTime = FiniteDuration(0, SECONDS), // FIXME: Generate
-                    initialBlockKzg = KzgCommitment.empty,
+                    // initialBlockKzg = KzgCommitment.empty,
+                    initialBlockKzg = ???,
                     equityShares = equityShares,
                     multisigRegimeUtxo = config.multisigRegimeUtxo,
                     votingDuration = 0,

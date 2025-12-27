@@ -8,7 +8,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
-import hydrozoa.multisig.ledger.JointLedger.Requests.{RegisterLedgerEvent, *}
+import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
@@ -19,11 +19,8 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
-import hydrozoa.multisig.protocol.types.Block.*
-
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
 import scalus.builtin.{ByteString, platform}
@@ -101,11 +98,10 @@ final case class JointLedger(
     } yield p
 
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
-        case d: JointLedger.Requests.RegisterDeposit => registerDeposit(d)
-        case a: ApplyInternalTxL2                    => applyInternalTxL2(a)
-        case s: StartBlock                           => startBlock(s)
-        case c: CompleteBlockRegular                 => completeBlockRegular(c)
-        case f: CompleteBlockFinal                   => completeBlockFinal(f)
+        case e: RegisterLedgerEvent  => registerLedgerEvent(e)
+        case s: StartBlock           => startBlock(s)
+        case c: CompleteBlockRegular => completeBlockRegular(c)
+        case f: CompleteBlockFinal   => completeBlockFinal(f)
         case req: SyncRequest.Any =>
             req.request match {
                 case r: GetState.type => r.handleSync(req, _ => state.get)
@@ -114,9 +110,8 @@ final case class JointLedger(
 
     private def registerLedgerEvent(e: RegisterLedgerEvent): IO[Unit] = {
         e match {
-            case req: DappLedger.Requests.RegisterDeposit => registerDeposit(req)
-            case tx: TxL2Event                            => applyInternalTxL2(tx)
-            case _                                        => ??? // TODO: should be sealed
+            case req: JointLedger.Requests.RegisterDeposit => registerDeposit(req)
+            case tx: JointLedger.Requests.TxL2Event        => applyInternalTxL2(tx)
         }
     }
 
@@ -135,24 +130,16 @@ final case class JointLedger(
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
-                          .focus(_.nextBlockData.depositsRejected)
-                          .modify(_.appended(eventId))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                              m.updated(eventId.peerNum, eventId.eventNum)
-                          )
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, false)))
                       _ <- state.set(newState)
                   } yield (),
               onSuccess = _ =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
-                          .focus(_.nextBlockData.depositsRegistered)
-                          .modify(_.appended(eventId))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                              m.updated(eventId.peerNum, eventId.eventNum)
-                          )
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, true)))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -176,10 +163,8 @@ final case class JointLedger(
                   for {
                       p <- unsafeGetProducing
                       newState = p
-                          .focus(_.nextBlockData.transactionsInvalid)
-                          .modify(_.appended(id))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify(m => m.updated(id.peerNum, id.eventNum))
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, true)))
                       _ <- state.set(newState)
                   } yield (),
               // Valid transaction continuation
@@ -187,12 +172,8 @@ final case class JointLedger(
                   for {
                       p <- unsafeGetProducing
                       newState = p
-                          .focus(_.nextBlockData.transactionsValid)
-                          .modify(_.appended(id))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify(m => m.updated(id.peerNum, id.eventNum))
-                          .focus(_.nextBlockData.blockWithdrawnUtxos)
-                          .modify(v => v ++ payoutObligations)
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, false)))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -247,7 +228,7 @@ final case class JointLedger(
         ): AugmentedBlock.Minor = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Minor = Block.Body.Minor(
-              events = ???,
+              events = events,
               depositsRefunded = depositsRefunded
             )
 
@@ -276,7 +257,7 @@ final case class JointLedger(
         ): AugmentedBlock.Major = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Major = Block.Body.Major(
-              events = ???,
+              events = events,
               depositsAbsorbed = absorbedDeposits,
               depositsRefunded = refundedDeposits
             )
@@ -528,16 +509,8 @@ object JointLedger {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
             // Does this mean we should wrap it?
-            RegisterLedgerEvent | StartBlock | CompleteBlockRegular |
-                CompleteBlockFinal | GetState.Sync
-
-        // FIXME: This should include the refundTxBytes
-        // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
-        final case class RegisterDeposit(
-            serializedDeposit: Array[Byte],
-            eventId: LedgerEvent.Id,
-            virtualOutputs: NonEmptyList[GenesisObligation]
-        )
+            RegisterLedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal |
+                GetState.Sync
 
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
 
@@ -558,17 +531,23 @@ object JointLedger {
             def ?: : this.Send = SyncRequest.send(_, this)
         }
 
-        // TODO: make it sealed maybe when we combine ledger actors
         // TODO: this is a bad name since it combines the event and the msg for now
-        trait RegisterLedgerEvent {
+        sealed trait RegisterLedgerEvent {
             def eventId: LedgerEvent.Id
         }
 
-        object RegisterLedgerEvent:
-            final case class TxL2Event(
-                override val eventId: LedgerEvent.Id,
-                tx: Array[Byte]
-            ) extends RegisterLedgerEvent
+        final case class TxL2Event(
+            override val eventId: LedgerEvent.Id,
+            tx: Array[Byte]
+        ) extends RegisterLedgerEvent
+
+        // FIXME: This should include the refundTxBytes
+        // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
+        final case class RegisterDeposit(
+            serializedDeposit: Array[Byte],
+            override val eventId: LedgerEvent.Id,
+            virtualOutputs: NonEmptyList[GenesisObligation]
+        ) extends RegisterLedgerEvent
     }
 
     sealed trait State {
