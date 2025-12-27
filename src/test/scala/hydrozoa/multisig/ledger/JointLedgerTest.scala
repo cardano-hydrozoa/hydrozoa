@@ -5,7 +5,8 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import com.suprnation.actor.test as _
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, RegisterDeposit, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent.RegisterDeposit
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -43,10 +44,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         def registerDeposit(
             serializedDeposit: Array[Byte],
-            eventId: LedgerEvent.Id,
+            eventId: LedgerEventId,
             virtualOutputs: NonEmptyList[GenesisObligation]
         ): TestM[Unit] =
-            registerDeposit(RegisterDeposit(serializedDeposit, eventId, virtualOutputs))
+            registerDeposit(RegisterDeposit(eventId, serializedDeposit, virtualOutputs))
 
         def registerDeposit(req: RegisterDeposit): TestM[Unit] = {
             for {
@@ -60,7 +61,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         def startBlock(
             blockCreationTime: PosixTime,
-            pollResults: Set[LedgerEvent.Id]
+            pollResults: Set[LedgerEventId]
         ): TestM[Unit] =
             startBlock(StartBlock(blockCreationTime, pollResults))
 
@@ -140,7 +141,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     RegisterDeposit(
                       serializedDeposit = serializedDeposit,
                       virtualOutputs = virtualOutputs,
-                      eventId = LedgerEvent.Id(0, 1)
+                      eventId = LedgerEventId(0, 1)
                     )
 
                 _ <- registerDeposit(req)

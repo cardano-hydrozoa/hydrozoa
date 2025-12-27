@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import scala.util.Try
 import scalus.*
@@ -69,9 +70,7 @@ object MultisigTreasuryUtxo {
     // TODO: implement root hash
     def mkInitMultisigTreasuryDatum: Datum =
         Datum(
-          // TODO: I see empty was removed, but somehow it's still here for me
-          // ByteString.fromArray(IArray.genericWrapArray(commitment.KzgCommitment.empty).toArray),
-          ByteString.fromArray(???),
+          ByteString.fromArray(IArray.genericWrapArray(KzgCommitment.empty).toArray),
           BigInt(Block.Version.Major(0).toLong),
           ByteString.empty
         )

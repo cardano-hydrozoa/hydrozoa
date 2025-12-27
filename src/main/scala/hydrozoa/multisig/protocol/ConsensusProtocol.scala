@@ -3,11 +3,11 @@ package hydrozoa.multisig.protocol
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.PosixTime
-import hydrozoa.multisig.ledger.JointLedger.Requests.RegisterLedgerEvent
+import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEventId}
 import scala.concurrent.duration.FiniteDuration
 
 object ConsensusProtocol {
@@ -95,7 +95,7 @@ object ConsensusProtocol {
       */
     final case class NewLedgerEvent(
         timeStamp: PosixTime,
-        event: RegisterLedgerEvent
+        event: LedgerEvent
     )
 
     object NewLedgerEvent {
@@ -156,7 +156,7 @@ object ConsensusProtocol {
         id: Batch.Id,
         ackNum: AckBlock.Number,
         blockNum: Block.Number,
-        eventNum: LedgerEvent.Number
+        eventNum: LedgerEventId.Number
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -182,7 +182,7 @@ object ConsensusProtocol {
         id: Batch.Id,
         ackNum: AckBlock.Number,
         blockNum: Block.Number,
-        eventNum: LedgerEvent.Number,
+        eventNum: LedgerEventId.Number,
         ack: Option[AckBlock],
         block: Option[Block],
         events: List[NewLedgerEvent]

@@ -171,19 +171,19 @@ object Block {
         case Initial extends Body
 
         case Minor(
-            override val events: List[(LedgerEvent.Id, Boolean)],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Minor
 
         case Major(
-            override val events: List[(LedgerEvent.Id, Boolean)],
-            override val depositsAbsorbed: List[LedgerEvent.Id],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsAbsorbed: List[LedgerEventId],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Major
 
         case Final(
-            override val events: List[(LedgerEvent.Id, Boolean)],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Final
     }
 
@@ -210,16 +210,16 @@ object Block {
               *
               * TODO: invariant: the list should be unique
               */
-            def events: List[(LedgerEvent.Id, Boolean)]
+            def events: List[(LedgerEventId, Boolean)]
         }
 
         object Deposits {
             sealed trait Absorbed {
-                def depositsAbsorbed: List[LedgerEvent.Id]
+                def depositsAbsorbed: List[LedgerEventId]
             }
 
             sealed trait Refunded {
-                def depositsRefunded: List[LedgerEvent.Id]
+                def depositsRefunded: List[LedgerEventId]
             }
         }
     }

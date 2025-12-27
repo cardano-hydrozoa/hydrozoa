@@ -6,13 +6,13 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.consensus.BlockWeaver.{Config, ConnectionsPending}
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, RegisterLedgerEvent, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, LedgerEvent, StartBlock}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.Block.Header
 import hydrozoa.multisig.protocol.types.Block.Number.firstBlockNumber
-import hydrozoa.multisig.protocol.types.{AckBlock, Block, LedgerEvent, Peer}
+import hydrozoa.multisig.protocol.types.{AckBlock, Block, LedgerEventId, Peer}
 import scala.collection.immutable.SortedSet
 
 /** Block weaver actor:
@@ -126,7 +126,7 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
 
     private final case class Awaiting(
         block: Block,
-        eventIdAwaited: LedgerEvent.Id,
+        eventIdAwaited: LedgerEventId,
         mempool: Mempool
     ) extends State
 
@@ -242,12 +242,12 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
 
     private enum FeedResult:
         case Done(mempool: Mempool)
-        case EventMissing(eventId: LedgerEvent.Id, mempool: Mempool)
+        case EventMissing(eventId: LedgerEventId, mempool: Mempool)
 
     private def tryFeedBlock(
         block: Block,
         initialMempool: Mempool,
-        startWith: Option[LedgerEvent.Id] = None
+        startWith: Option[LedgerEventId] = None
     ): IO[FeedResult] = {
         import FeedResult.*
 
@@ -365,9 +365,9 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
     // ===================================
 
     case class Mempool(
-        events: Map[LedgerEvent.Id, RegisterLedgerEvent] = Map.empty,
+        events: Map[LedgerEventId, LedgerEvent] = Map.empty,
         numbersByPeer: Map[Peer.Number, SortedSet[Int]] = Map.empty,
-        receivingOrder: Vector[LedgerEvent.Id] = Vector.empty
+        receivingOrder: Vector[LedgerEventId] = Vector.empty
     )
 
     object Mempool {
@@ -378,8 +378,8 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
 
             // Add event - returns new state
             def add(
-                eventId: LedgerEvent.Id,
-                event: RegisterLedgerEvent
+                eventId: LedgerEventId,
+                event: LedgerEvent
             ): Mempool = {
                 val newNumbers = mempool.numbersByPeer
                     .getOrElse(eventId.peerNum, SortedSet.empty[Int]) + eventId.eventNum
@@ -392,7 +392,7 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
             }
 
             // Remove event - returns new state
-            def remove(id: LedgerEvent.Id): Mempool = {
+            def remove(id: LedgerEventId): Mempool = {
                 mempool.events.get(id) match {
                     // TODO: shall we raise here?
                     case None => mempool // Not found, no change
@@ -418,11 +418,11 @@ trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor
                 mempool.numbersByPeer.get(peer).flatMap(_.lastOption)
 
             // Find by ID
-            def findById(id: LedgerEvent.Id): Option[RegisterLedgerEvent] =
+            def findById(id: LedgerEventId): Option[LedgerEvent] =
                 mempool.events.get(id)
 
             // Iterate in insertion order
-            def inOrder: Iterator[RegisterLedgerEvent] =
+            def inOrder: Iterator[LedgerEvent] =
                 mempool.receivingOrder.iterator.flatMap(mempool.events.get)
     }
 }

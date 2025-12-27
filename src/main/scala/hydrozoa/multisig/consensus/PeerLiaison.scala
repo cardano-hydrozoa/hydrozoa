@@ -119,7 +119,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
     private final class State {
         private val nAck = Ref.unsafe[IO, AckBlock.Number](AckBlock.Number(0))
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
-        private val nEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
+        private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
