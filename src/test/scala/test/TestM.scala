@@ -12,13 +12,14 @@ import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.{Tx, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.{monadForPropM, monadic}
 import org.scalacheck.{Gen, Prop, PropertyM}
+
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
@@ -132,8 +133,8 @@ object TestM {
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
                   votingDuration = 100,
-                  txTiming = ???,
-                  initializedOn = ???
+                  txTiming = TxTiming.default,
+                  initializedOn = 0 // FIXME
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

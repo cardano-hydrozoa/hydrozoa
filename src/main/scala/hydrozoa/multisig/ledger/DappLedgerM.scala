@@ -127,9 +127,9 @@ object DappLedgerM {
               payoutObligationsRemaining = payoutObligations,
               tallyFeeAllowance = tallyFeeAllowance,
               votingDuration = votingDuration,
-              competingFallbackValidityStart = ???,
-              blockCreatedOn = ???,
-              txTiming = ???
+              competingFallbackValidityStart = 0, // FIXME
+              blockCreatedOn = 0, // FIXME
+              txTiming = TxTiming.default // FIXME
             )
 
             settlementTxSeqRes <- lift(

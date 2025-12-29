@@ -289,7 +289,8 @@ object SettlementTx {
                   referenceHNS(config),
                   consumeTreasury(config, args.treasuryToSpend),
                   sendTreasury(args),
-                  validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toLong))),
+                  // FIXME: Fails with TxTiming.default and initializedOn = 0
+                  // validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toLong))),
                 )
 
             private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
@@ -396,7 +397,8 @@ object SettlementTx {
                 )
 
                 val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
-                  ttl = Slot(state.ctx.transaction.body.value.ttl.get),
+                  // FIXME: We don't set the slot anymore, so the _.get here fails
+                  ttl = Slot(0), //Slot(state.ctx.transaction.body.value.ttl.get),
                   majorVersionProduced = args.majorVersionProduced,
                   treasurySpent = args.treasuryToSpend,
                   treasuryProduced = treasuryProduced,

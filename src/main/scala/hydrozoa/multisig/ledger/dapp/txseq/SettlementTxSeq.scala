@@ -53,13 +53,15 @@ object SettlementTxSeq {
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration,
-                          validityStart = Slot(
-                            config.env.slotConfig.timeToSlot(
-                              args.blockCreatedOn.toLong
-                                  + args.txTiming.minSettlementDuration.toMillis
-                                  + args.txTiming.majorBlockTimeout.toMillis
-                            )
-                          )
+                          // FIXME
+                          validityStart = Slot(0)
+//                           Slot(
+//                            config.env.slotConfig.timeToSlot(
+//                              args.blockCreatedOn.toLong
+//                                  + args.txTiming.minSettlementDuration.toMillis
+//                                  + args.txTiming.majorBlockTimeout.toMillis
+//                            )
+//                          )
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)

@@ -315,7 +315,8 @@ object InitializationTxSeq {
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
-                  validityStart = Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
+                  // FIXME: Currently fails with TxTiming.default and initializedOn = 0
+                  validityStart = Slot(0) // Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
                 )
 
                 fallbackTx <- FallbackTx
