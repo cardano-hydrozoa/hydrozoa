@@ -46,7 +46,9 @@ object MultisigTreasuryUtxo {
         final def mbTreasuryProduced: Option[MultisigTreasuryUtxo] = this match
             case produced: (this.type & Produced) => Some(produced.treasuryProduced)
             case _                                => None
-    }/** If some args extend this, it means that args contain it. */
+    }
+
+    /** If some args extend this, it means that args contain it. */
     trait ToSpend {
         def treasuryToSpend: MultisigTreasuryUtxo
     }

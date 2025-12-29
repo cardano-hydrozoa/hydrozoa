@@ -268,11 +268,10 @@ object InitializationTxSeq {
             //   0 < zeroSlot + ( args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
             //                    args.txTiming.majorBlockTimeout.toMillis - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength
             // -1 * zeroSlot * slotLength + zeroTime + args.TxTiming.silPeriod.toMilis - args.txTiming.majorBlockTimeout.toMilis - args.TxTiming.minSettlementDuration.toMilis < initializedOn
-          val fallbackTxValidityStart =
+            val fallbackTxValidityStart =
                 args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
                     args.txTiming.majorBlockTimeout.toMillis
-                    
-                
+
             // TODO: this is a bit far-fetched, is there better options?
             // NOTE: this will fail if
             //   0 > zeroSlot + (fallbackTxValidityStart - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength

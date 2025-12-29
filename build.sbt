@@ -5,7 +5,7 @@
 
 // Locally-built scalus version with the fix from https://github.com/scalus3/scalus/pull/172 applied.
 // Previous version tracking scalus:main was "0.13.0+387-8e7c3b8e-SNAPSHOT" 
-val scalusVersion = "0.13.0+395-5a38e805-SNAPSHOT" 
+val scalusVersion = "0.14.1+87-ffd710a6-SNAPSHOT" 
 val bloxbeanVersion = "0.7.0"
 
 Compile / mainClass := Some("hydrozoa.HydrozoaNode")

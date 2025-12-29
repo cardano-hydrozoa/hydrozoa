@@ -19,7 +19,6 @@ import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.{monadForPropM, monadic}
 import org.scalacheck.{Gen, Prop, PropertyM}
-
 import scala.concurrent.duration.{FiniteDuration, SECONDS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
@@ -125,17 +124,18 @@ object TestM {
             // This should be roughly correct. Its derived from tracing the value through
             // InitializationTxSeq to InitializationTx and determining what the timeToSlot
             // conversion will be.
-            // 
+            //
             // FIXME: I don't account for integer division causing some potential error here
             // because I have the flu and I don't want to think about it right now
             minimumStartTime = {
-              import txTiming.*
-              import testTxBuilderEnvironment.slotConfig.*
-              -1 * zeroSlot * slotLength + zeroTime + txTiming.silencePeriod.toMillis
-                - txTiming.majorBlockTimeout.toMillis
-                - txTiming.minSettlementDuration.toMillis
+                import testTxBuilderEnvironment.slotConfig.*
+                -1 * zeroSlot * slotLength + zeroTime + txTiming.silencePeriod.toMillis
+                    - txTiming.majorBlockTimeout.toMillis
+                    - txTiming.minSettlementDuration.toMillis
             }
-            initializedOn <- PropertyM.pick[ET, BigInt](Gen.posNum[BigInt].map(_ + minimumStartTime))
+            initializedOn <- PropertyM.pick[ET, BigInt](
+              Gen.posNum[BigInt].map(_ + minimumStartTime)
+            )
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -150,7 +150,7 @@ object TestM {
                   tallyFeeAllowance = Coin.ada(2),
                   votingDuration = 100,
                   txTiming = txTiming,
-                  initializedOn = initializedOn 
+                  initializedOn = initializedOn
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

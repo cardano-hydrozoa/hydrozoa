@@ -134,7 +134,7 @@ object InitializationTx {
             :+ Send(hmrwOutput)
             :+ createChangeOutput
             :+ modifyAuxiliaryData
-             :+ setTtl 
+            :+ setTtl
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -424,14 +424,13 @@ object InitializationTx {
 
     // TODO: rename to Args for consistency?
     final case class Recipe(
-
-           // NOTE: `Slot.apply` is partial. This will throw an error if
-           //   0 > zeroSlot + (ttl - zeroTime) / slotLength
-           //
-           // Or, roughly, if
-           //   
-           // (disregarding truncating integer division)
-           //
+        // NOTE: `Slot.apply` is partial. This will throw an error if
+        //   0 > zeroSlot + (ttl - zeroTime) / slotLength
+        //
+        // Or, roughly, if
+        //
+        // (disregarding truncating integer division)
+        //
         ttl: PosixTime,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,

@@ -134,7 +134,7 @@ object DeinitTx {
         })
 
     private def minAda(params: ProtocolParams)(output: TransactionOutput) =
-        MinCoinSizedTransactionOutput(Sized(output), params)
+        MinCoinSizedTransactionOutput.ensureMinAda(Sized(output), params)
 
     private def extractHeadTokens(
         policyId: PolicyId,

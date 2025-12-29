@@ -398,7 +398,7 @@ object SettlementTx {
 
                 val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
                   // FIXME: We don't set the slot anymore, so the _.get here fails
-                  ttl = Slot(0), //Slot(state.ctx.transaction.body.value.ttl.get),
+                  ttl = Slot(0), // Slot(state.ctx.transaction.body.value.ttl.get),
                   majorVersionProduced = args.majorVersionProduced,
                   treasurySpent = args.treasuryToSpend,
                   treasuryProduced = treasuryProduced,
