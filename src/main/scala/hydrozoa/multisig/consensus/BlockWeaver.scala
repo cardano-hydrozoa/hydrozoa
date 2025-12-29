@@ -4,7 +4,6 @@ import cats.Monad
 import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.multisig.consensus.BlockWeaver.{Config, Mempool}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, LedgerEvent, StartBlock}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
@@ -48,9 +47,10 @@ object BlockWeaver {
           */
         blockLeadTurn: Int,
 
-        /** Recovered mempool, i.e., all ledger events that outstand the indices of the last known
-          * block. Upon initialization is always an empty set by definition. TODO: shall we use just
-          * Seq[LedgerEvent here]?
+        /** Recovered mempool, i.e., all ledger events outstanding the indices of the last known
+          * block. Upon initialization is always an empty set by definition.
+          *
+          * TODO: shall we use just Seq[LedgerEvent here]?
           */
         recoveredMempool: Mempool,
         jointLedger: JointLedger.Ref,
@@ -68,9 +68,41 @@ object BlockWeaver {
         // IO(new BlockWeaver(config = config, connections = connections) {})
         IO(new BlockWeaver(config = config) {})
 
-        // ===================================
-        // Immutable mempool state
-        // ===================================
+    //// TODO: shall we use a separate package?
+    //// This is useful fot testing purposes
+    // private [consensus] def applyWithState(config: Config, someState: State): IO[BlockWeaver] = for {
+    //    weaver <- IO(new BlockWeaver(config = config) {})
+    //    _ <- weaver.stateRef.set(someState)
+    // } yield weaver
+
+    // ===================================
+    // Actor internal state
+    // ===================================
+
+    sealed trait State
+
+    final case class Idle(
+        mempool: Mempool
+    ) extends State
+
+    final case class Leader(
+        blockNumber: Block.Number,
+        isFinal: Boolean
+    ) extends State {
+        def isFirstLeader: Boolean = blockNumber == firstBlockNumber
+    }
+
+    final case class Awaiting(
+        block: Block,
+        eventIdAwaited: LedgerEventId,
+        mempool: Mempool
+    ) extends State
+
+    private def mkInitialState: Idle = Idle(Mempool.empty)
+
+    // ===================================
+    // Immutable mempool state
+    // ===================================
 
     case class Mempool(
         events: Map[LedgerEventId, LedgerEvent] = Map.empty,
@@ -141,6 +173,10 @@ object BlockWeaver {
 //trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
 trait BlockWeaver(config: Config) extends Actor[IO, Request] {
 
+    import hydrozoa.multisig.consensus.BlockWeaver.*
+
+    private val stateRef: Ref[IO, State] = Ref.unsafe(mkInitialState)
+
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
 
     private final case class Subscribers(
@@ -172,49 +208,25 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap {
-                case Some(subs) =>
-                    this.receiveTotal(req, subs)
-                case _ =>
-                    Error(
-                      "Impossible: Block actor is receiving before its preStart provided subscribers."
-                    ).raiseError
-            }
+            this.receiveTotal(req)
+            // TODO: revert back
+            // subscribers.get.flatMap {
+            //    case Some(subs) =>
+            //        this.receiveTotal(req, subs)
+            //    case _ =>
+            //        Error(
+            //          "Impossible: Block actor is receiving before its preStart provided subscribers."
+            //        ).raiseError
+            // }
         )
 
-    private def receiveTotal(req: Request, _subs: Subscribers): IO[Unit] =
+    // private def receiveTotal(req: Request, _subs: Subscribers): IO[Unit] =
+    private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case msg: NewLedgerEvent => handleNewLedgerEvent(msg)
             case b: Block            => handleNewBlock(b)
             case bc: BlockConfirmed  => handleBlockConfirmed(bc)
         }
-
-    // ===================================
-    // Actor internal state
-    // ===================================
-
-    private val stateRef: Ref[IO, State] = Ref.unsafe(mkInitialState)
-
-    private sealed trait State
-
-    private final case class Idle(
-        mempool: Mempool
-    ) extends State
-
-    private final case class Leader(
-        blockNumber: Block.Number,
-        isFinal: Boolean
-    ) extends State {
-        def isFirstLeader: Boolean = blockNumber == firstBlockNumber
-    }
-
-    private final case class Awaiting(
-        block: Block,
-        eventIdAwaited: LedgerEventId,
-        mempool: Mempool
-    ) extends State
-
-    private def mkInitialState: Idle = Idle(Mempool.empty)
 
     // ===================================
     // Mailbox message handlers
