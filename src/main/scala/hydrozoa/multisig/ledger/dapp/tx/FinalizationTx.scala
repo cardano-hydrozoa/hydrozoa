@@ -356,7 +356,7 @@ object FinalizationTx {
                     FinalizationTx.NoPayouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      ttl = Slot(0), //ctx.transaction.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -369,7 +369,7 @@ object FinalizationTx {
                     FinalizationTx.NoPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      ttl = Slot(0), // mergedFinalizationTx.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -389,7 +389,7 @@ object FinalizationTx {
                     FinalizationTx.WithOnlyDirectPayouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      ttl = Slot(0), // ctx.transaction.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -402,7 +402,7 @@ object FinalizationTx {
                     FinalizationTx.WithOnlyDirectPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      ttl = Slot(0), // mergedFinalizationTx.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -426,7 +426,7 @@ object FinalizationTx {
                     FinalizationTx.WithRollouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      ttl = Slot(0), //ctx.transaction.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       rolloutProduced = rolloutProduced,
@@ -440,7 +440,7 @@ object FinalizationTx {
                     FinalizationTx.WithRolloutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      ttl = Slot(0), // mergedFinalizationTx.body.value.ttl.get),
                       treasurySpent = treasurySpent,
                       rolloutProduced = rolloutProduced,
                       resolvedUtxos = ctx.resolvedUtxos

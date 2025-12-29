@@ -449,7 +449,7 @@ object SettlementTx {
                         depositsSpent = state.depositsSpent,
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(tx.body.value.ttl.get),
+                        ttl = Slot(0), //tx.body.value.ttl.get),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
@@ -469,7 +469,7 @@ object SettlementTx {
                         rolloutProduced = unsafeGetRolloutProduced(state.ctx),
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(tx.body.value.ttl.get),
+                        ttl = Slot(0), //tx.body.value.ttl.get),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
