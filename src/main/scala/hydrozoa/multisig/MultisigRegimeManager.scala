@@ -62,22 +62,23 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
 
             blockProducer <- {
-                import BlockWeaver.{Config, ConnectionsPending}
+                import BlockWeaver.Config
                 context.actorOf(
                   BlockWeaver(
                     Config(
-                      initialBlock = ???,
+                      lastKnownBlock = ???,
                       peerId = config.peerId,
                       numberOfPeers = ???,
                       blockLeadTurn = ???,
+                      recoveredMempool = BlockWeaver.Mempool.empty,
                       jointLedger = ???,
-                      persistence = config.persistence
+                      // persistence = config.persistence
                     ),
-                    ConnectionsPending(
-                      cardanoLiaison = pendingCardanoLiaison,
-                      peerLiaisons = pendingLocalPeerLiaisons,
-                      transactionSequencer = pendingTransactionSequencer
-                    )
+                    // ConnectionsPending(
+                    //  cardanoLiaison = pendingCardanoLiaison,
+                    //  peerLiaisons = pendingLocalPeerLiaisons,
+                    //  transactionSequencer = pendingTransactionSequencer
+                    // )
                   )
                 )
             }

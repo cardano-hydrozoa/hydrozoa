@@ -70,7 +70,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 .map(Coin(_))
 
             // Use [Preview.zeroTime..now] as the initialization timestamp
-            initializedOn <- Gen.choose(SlotConfig.Preview.zeroTime, System.currentTimeMillis())
+            initializedOn <- genInitializedOn
 
         } yield (
           InitializationTxSeq.Builder.Args(

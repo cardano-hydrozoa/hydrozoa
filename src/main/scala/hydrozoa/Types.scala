@@ -283,6 +283,7 @@ object UDiffTimeMilli:
     inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
 extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x
 
+// TODO: replace with FiniteDuration
 type PosixTime = BigInt
 
 // FIXME: move to another module

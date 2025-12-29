@@ -98,6 +98,7 @@ final case class JointLedger(
         }
     } yield p
 
+    // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
         case e: LedgerEvent          => registerLedgerEvent(e)
         case s: StartBlock           => startBlock(s)
