@@ -121,6 +121,22 @@ object TestM {
                   .label("Initializtion: initial deposit")
             )
 
+            txTiming = TxTiming.default
+            // This should be roughly correct. Its derived from tracing the value through
+            // InitializationTxSeq to InitializationTx and determining what the timeToSlot
+            // conversion will be.
+            // 
+            // FIXME: I don't account for integer division causing some potential error here
+            // because I have the flu and I don't want to think about it right now
+            minimumStartTime = {
+              import txTiming.*
+              import testTxBuilderEnvironment.slotConfig.*
+              -1 * zeroSlot * slotLength + zeroTime + txTiming.silencePeriod.toMillis
+                - txTiming.majorBlockTimeout.toMillis
+                - txTiming.minSettlementDuration.toMillis
+            }
+            initializedOn <- PropertyM.pick[ET, BigInt](Gen.posNum[BigInt].map(_ + minimumStartTime))
+
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
                   spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
@@ -133,8 +149,8 @@ object TestM {
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
                   votingDuration = 100,
-                  txTiming = TxTiming.default,
-                  initializedOn = 0 // FIXME
+                  txTiming = txTiming,
+                  initializedOn = initializedOn 
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))

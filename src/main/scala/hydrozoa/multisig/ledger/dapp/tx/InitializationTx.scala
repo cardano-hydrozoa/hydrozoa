@@ -124,9 +124,8 @@ object InitializationTx {
             )
 
         // Not sure why we use Long in the builder step not Slot
-        // FIXME: Currently this throw in the JointLedgerTest with TxTiming.default and initializedOn = 0 in TestM
-        // val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toLong))
-        // val setTtl = ValidityEndSlot(ttlSlot.slot)
+        val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toLong))
+        val setTtl = ValidityEndSlot(ttlSlot.slot)
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -135,7 +134,7 @@ object InitializationTx {
             :+ Send(hmrwOutput)
             :+ createChangeOutput
             :+ modifyAuxiliaryData
-            // :+ setTtl // FIXME
+             :+ setTtl 
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -158,8 +157,7 @@ object InitializationTx {
                 )
 
         } yield InitializationTx(
-          // FIXME: currently fails the JointLedgerTest with TxTiming.default and initializedOn = 0
-          ttl = Slot(0), // ttlSlot,
+          ttl = ttlSlot,
           treasuryProduced = MultisigTreasuryUtxo(
             treasuryTokenName = headTokenName,
             utxoId = TransactionInput(
@@ -426,6 +424,14 @@ object InitializationTx {
 
     // TODO: rename to Args for consistency?
     final case class Recipe(
+
+           // NOTE: `Slot.apply` is partial. This will throw an error if
+           //   0 > zeroSlot + (ttl - zeroTime) / slotLength
+           //
+           // Or, roughly, if
+           //   
+           // (disregarding truncating integer division)
+           //
         ttl: PosixTime,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,

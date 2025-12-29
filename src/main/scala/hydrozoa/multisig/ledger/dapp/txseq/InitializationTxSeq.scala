@@ -264,10 +264,18 @@ object InitializationTxSeq {
             // ===================================
             // Validity ranges
             // ===================================
-            val fallbackTxValidityStart =
+            // NOTE: must have
+            //   0 < zeroSlot + ( args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
+            //                    args.txTiming.majorBlockTimeout.toMillis - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength
+            // -1 * zeroSlot * slotLength + zeroTime + args.TxTiming.silPeriod.toMilis - args.txTiming.majorBlockTimeout.toMilis - args.TxTiming.minSettlementDuration.toMilis < initializedOn
+          val fallbackTxValidityStart =
                 args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
                     args.txTiming.majorBlockTimeout.toMillis
+                    
+                
             // TODO: this is a bit far-fetched, is there better options?
+            // NOTE: this will fail if
+            //   0 > zeroSlot + (fallbackTxValidityStart - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength
             val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod.toMillis
 
             // ===================================
@@ -283,6 +291,9 @@ object InitializationTxSeq {
                 )
 
             val initializationTxRecipe = InitializationTx.Recipe(
+              // NOTE: We must have
+              //  0 > zeroSlot + (ttl - zeroTime) / slotLength
+              // Otherwise slot conversion will fail
               ttl = initializationTxTtl,
               spentUtxos = args.spentUtxos,
               headNativeScript = hns,
@@ -316,7 +327,7 @@ object InitializationTxSeq {
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
                   // FIXME: Currently fails with TxTiming.default and initializedOn = 0
-                  validityStart = Slot(0) // Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
+                  validityStart = Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
                 )
 
                 fallbackTx <- FallbackTx
