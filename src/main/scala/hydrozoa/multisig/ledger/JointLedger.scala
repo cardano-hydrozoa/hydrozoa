@@ -204,7 +204,6 @@ final case class JointLedger(
               Producing(
                 previousBlock = d.producedBlock,
                 startTime = blockCreationTime,
-                pollResults = args.pollResults,
                 TransientFields(
                   ledgerEventsRequired = d.producedBlock match {
                       case i: Initial   => Map.empty
@@ -382,7 +381,7 @@ final case class JointLedger(
             immatureDeposits = depositsPartition._2
 
             // Tuple containing (depositsInPollResults, depositsNotInPollResults)
-            depositPartition = matureDeposits.partition(x => producing.pollResults.contains(x._1))
+            depositPartition = matureDeposits.partition(x => pollResults.contains(x._1))
             depositsInPollResults = depositPartition._1
 
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
@@ -446,7 +445,13 @@ final case class JointLedger(
               DappLedgerM.finalizeLedger(
                 payoutObligationsRemaining = p.nextBlockData.blockWithdrawnUtxos,
                 multisigRegimeUtxoToSpend = multisigRegimeUtxo,
-                equityShares = equityShares
+                equityShares = equityShares,
+                blockCreatedOn = p.startTime,
+                competingFallbackValidityStart = p.startTime
+                    + txTiming.minSettlementDuration
+                    + txTiming.majorBlockTimeout
+                    + txTiming.silencePeriod,
+                txTiming = txTiming
               ),
               onSuccess = IO.pure
             )
@@ -553,15 +558,19 @@ object JointLedger {
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
 
         // FIXME: Make this take a pollResults: Utxos of all utxos present at the treasury address
-        case class StartBlock(blockCreationTime: FiniteDuration, pollResults: Set[LedgerEvent.Id])
+        case class StartBlock(blockCreationTime: FiniteDuration)
 
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
+            pollResults: Set[LedgerEvent.Id]
             // Make this block Major in order to circumvent a fallback tx becoming valid
             // forceMajor : Boolean
         )
 
-        case class CompleteBlockFinal(referenceBlock: Option[Block])
+        case class CompleteBlockFinal(
+            referenceBlock: Option[Block],
+            pollResults: Set[LedgerEvent.Id]
+        )
 
         case object GetState extends SyncRequest[IO, GetState.type, State] {
             type Sync = SyncRequest.Envelope[IO, GetState.type, State]
@@ -586,7 +595,6 @@ object JointLedger {
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
         startTime: FiniteDuration,
-        pollResults: Set[LedgerEvent.Id],
         nextBlockData: TransientFields
     ) extends State
 }

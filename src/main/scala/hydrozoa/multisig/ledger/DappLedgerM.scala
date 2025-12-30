@@ -179,25 +179,23 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-//        blockCreatedOn : PosixTime,
-//        competingFallbackValidityStart : PosixTime,
-//        txTiming: TxTiming
+        blockCreatedOn: FiniteDuration,
+        competingFallbackValidityStart: FiniteDuration,
+        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get
             config <- ask
-//            kzg: KzgCommitment <- DappLedger.(???)
             args = FinalizationTxSeq.Builder.Args(
-              kzgCommitment = ???,
               majorVersionProduced =
                   Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
               equityShares = equityShares,
-              competingFallbackValidityStart = ???,
-              blockCreatedOn = ???,
-              txTiming = ???
+              competingFallbackValidityStart = competingFallbackValidityStart,
+              blockCreatedOn = blockCreatedOn,
+              txTiming = txTiming
             )
             ftxSeq <- lift(
               FinalizationTxSeq

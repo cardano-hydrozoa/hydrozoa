@@ -115,7 +115,6 @@ def genStandaloneFinalizationTxSeqBuilder(
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
-        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryUtxo,
         payoutObligationsRemaining = payouts,
@@ -175,7 +174,6 @@ def genFinalizationTxSeqBuilder(
     } yield (
       FinalizationTxSeq.Builder(config = config),
       FinalizationTxSeq.Builder.Args(
-        kzgCommitment = kzg,
         majorVersionProduced = HBlock.Version.Major(majorVersion),
         treasuryToSpend = treasuryToSpend,
         payoutObligationsRemaining = payouts.asScala.toVector,
