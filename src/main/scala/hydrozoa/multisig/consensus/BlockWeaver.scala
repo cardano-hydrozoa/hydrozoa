@@ -86,7 +86,7 @@ object BlockWeaver {
         blockNumber: Block.Number,
         isFinal: Boolean
     ) extends State {
-        def isFirstLeader: Boolean = blockNumber == firstBlockNumber
+        def isFirstBlock: Boolean = blockNumber == firstBlockNumber
     }
 
     final case class Awaiting(
@@ -103,7 +103,7 @@ object BlockWeaver {
 
     /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowe and a
       * runtime exception is thrown since this should never happen. Other components, particularly
-      * the peer liaison is in charge or maintaining the integrtiry of the stream of messages.
+      * the peer liaison is in charge or maintaining the integrity of the stream of messages.
       *
       * @param events
       * @param numbersByPeer
@@ -190,7 +190,7 @@ object BlockWeaver {
     }
 }
 
-trait BlockWeaver(config: Config) extends Actor[IO, Request] {
+trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
     import hydrozoa.multisig.consensus.BlockWeaver.*
 
@@ -239,9 +239,19 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
                 case Idle(mempool) =>
                     // Just add event to the mempool
                     stateRef.set(Idle(mempool.add(msg.event)))
-                case _: Leader =>
-                    // Pass-through to the joint ledger
-                    config.jointLedger ! msg.event
+                case leader @ Leader(blockNumber, _) =>
+                    for {
+                        // Pass-through to the joint ledger
+                        _ <- config.jointLedger ! msg.event
+                        // Complete the first block immediately
+                        _ <- IO.whenA(leader.isFirstBlock) {
+                            // It's always CompleteBlockRegular since we haven't
+                            // seen any confirmations so far.
+                            (config.jointLedger ! CompleteBlockRegular(None))
+                                >> switchToIdle(blockNumber.increment)
+                        }
+                    } yield ()
+
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
                     if msg.event.eventId == eventIdAwaited
                     then {
@@ -284,13 +294,36 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
                 case Idle(mempool) =>
                     for {
                         // This is sort of ephemeral Follower state
+                        // TODO: I don't think that this is what we want in terms of time
+                        _ <- config.jointLedger ! StartBlock(
+                          block.header.timeCreation.toMillis,
+                          Set.empty
+                        )
                         result <- tryFeedBlock(block, mempool)
                         _ <- result match {
                             case Done(residualMempool) =>
-                                // We are done with the block
-                                switchToIdle(block.id.increment, residualMempool)
+                                for {
+                                    _ <- IO.println("Done")
+                                    // We are done with the block
+                                    completeBlock <- block match {
+                                        case _: Block.Initial => ??? // TODO: Impossible
+                                        case _: Block.Minor =>
+                                            IO.pure(CompleteBlockRegular(Some(block)))
+                                        case _: Block.Major =>
+                                            IO.pure(CompleteBlockRegular(Some(block)))
+                                        case _: Block.Final =>
+                                            IO.pure(CompleteBlockFinal(Some(block)))
+                                    }
+                                    _ <- config.jointLedger ! completeBlock
+                                    _ <- switchToIdle(block.id.increment, residualMempool)
+                                } yield ()
                             case EventMissing(eventIdAwaited, residualMempool) =>
-                                stateRef.set(Awaiting(block, eventIdAwaited, residualMempool))
+                                for {
+                                    _ <- IO.println(s"EventMissing: ${eventIdAwaited}")
+                                    _ <- stateRef.set(
+                                      Awaiting(block, eventIdAwaited, residualMempool)
+                                    )
+                                } yield ()
                         }
                     } yield ()
                 case _: Leader   => IO.raiseError(UnexpectedBlockAnnouncement)

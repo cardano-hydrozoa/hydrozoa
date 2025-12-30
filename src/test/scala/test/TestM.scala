@@ -84,7 +84,7 @@ object TestM {
     // or generate otherwise. This goes along with the comment on [[run]] for passing initializers directly to run
     private val defaultInitializer: PropertyM[ET, TestR] = {
         for {
-            peers <- PropertyM.pick[ET, NonEmptyList[TestPeer]](genTestPeers.label("Test Peers"))
+            peers <- PropertyM.pick[ET, NonEmptyList[TestPeer]](genTestPeers().label("Test Peers"))
 
             // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
             // a max non-plutus fee

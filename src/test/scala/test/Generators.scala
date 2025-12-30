@@ -76,7 +76,7 @@ object Generators {
             validators: Seq[Validator] = nonSingingNonValidityChecksValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
-                peers <- genTestPeers
+                peers <- genTestPeers()
                 hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
                 seedUtxo <- arbitrary[TransactionInput]
                 tokenNames = TokenNames(seedUtxo)

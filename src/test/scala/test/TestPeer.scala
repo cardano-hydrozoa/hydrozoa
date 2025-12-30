@@ -166,10 +166,10 @@ val genTestPeer: Gen[TestPeer] =
       TestPeer.Julia
     )
 
-/** Choose betweeen 2 and 10 peers */
-val genTestPeers: Gen[NonEmptyList[TestPeer]] =
+/** Choose between 2 and 10 peers */
+def genTestPeers(minPeers: Int = 2): Gen[NonEmptyList[TestPeer]] =
     for {
-        numPeers <- Gen.choose(2, 10)
+        numPeers <- Gen.choose(minPeers, 10)
         peersList = List(
           TestPeer.Alice,
           TestPeer.Bob,
