@@ -17,7 +17,6 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
-import scalus.cardano.txbuilder.TxBalancingError.CantBalance
 import scalus.ledger.api.v3.PosixTime
 
 sealed trait RefundTx extends Tx {
@@ -165,7 +164,7 @@ object RefundTx {
                     .build(config.env.network, steps)
                     .explainConst("adding base refund steps failed")
 
-                valueNeeded = Placeholder.inputValueNeeded(ctx)
+                valueNeeded = Placeholder.inputValueNeeded(ctx, config.env.protocolParams)
 
                 valueNeededWithFee <- trialFinishLoop(ctx, valueNeeded)
             } yield mkPartialResult(ctx, valueNeededWithFee)
@@ -218,7 +217,12 @@ object RefundTx {
                     ) =>
                     Left(SomeBuildError.ValidationError(e, errorCtx))
                         .explainConst("trial to add placeholder spend deposit failed")
-                case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
+                case Left(
+                      SomeBuildError.BalancingError(
+                        TxBalancingError.Failed(WrappedCoin(Coin(diff))),
+                        _errorCtx
+                      )
+                    ) =>
                     trialFinishLoop(ctx, trialValue - Value(Coin(diff)))
                 case Right(_) => Right(trialValue)
                 case e =>
@@ -243,8 +247,8 @@ object RefundTx {
               index = 0
             )
 
-            def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
-                TxBalance.produced(ctx.transaction)
+            def inputValueNeeded(ctx: TransactionBuilder.Context, params: ProtocolParams): Value =
+                TxBalance.produced(ctx.transaction, params)
         }
     }
 

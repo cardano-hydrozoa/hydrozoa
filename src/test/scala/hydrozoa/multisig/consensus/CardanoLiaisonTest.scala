@@ -26,7 +26,7 @@ import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
 import scala.collection.JavaConverters.asScalaBufferConverter
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration, MILLISECONDS}
 import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
@@ -98,7 +98,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             settlements <- tailRecM(
               (
                 initializationTreasuryProduced,
-                args.initializedOn.toLong,
+                args.initializedOn,
                 initializationFallbackValidityStart,
                 List.empty: List[SettlementTxSeq.Builder.Result],
                 1
@@ -119,12 +119,15 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     else
                         for {
                             blockCreatedOn <- Gen.choose(
-                              previousBlockTimestamp + 10.seconds.toMillis,
-                              fallbackValidityStart - (txTiming.silencePeriod.toMillis + 10.seconds.toMillis)
+                              previousBlockTimestamp + 10.seconds,
+                              FiniteDuration(
+                                fallbackValidityStart,
+                                MILLISECONDS
+                              ) - (txTiming.silencePeriod + 10.seconds)
                             )
                             settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
                               treasuryToSpend,
-                              fallbackValidityStart,
+                              FiniteDuration(fallbackValidityStart, MILLISECONDS),
                               blockCreatedOn,
                               settlementNum,
                               hns,
@@ -157,14 +160,17 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 settlementTxSeqs.last.settlementTxSeq.settlementTx.treasuryProduced
 
             finalizationBlockCreatedOn <- Gen.choose(
-              lastSettlementBlockTimestamp + 10.seconds.toMillis,
-              fallbackValidityStart - (txTiming.silencePeriod.toMillis + 10.seconds.toMillis)
+              lastSettlementBlockTimestamp + 10.seconds,
+              FiniteDuration(
+                fallbackValidityStart,
+                MILLISECONDS
+              ) - (txTiming.silencePeriod + 10.seconds)
             )
 
             finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(
               lastSettlementTreasury,
               numOfSettlements + 1,
-              fallbackValidityStart,
+              FiniteDuration(fallbackValidityStart, MILLISECONDS),
               finalizationBlockCreatedOn,
               txTiming,
               config,

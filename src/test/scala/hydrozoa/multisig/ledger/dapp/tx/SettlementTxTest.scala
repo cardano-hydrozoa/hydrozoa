@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.concurrent.duration.{FiniteDuration, HOURS, MILLISECONDS}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -97,8 +98,9 @@ def genSettlementTxSeqBuilder(
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None,
-    fallbackValidityStart: PosixTime = System.currentTimeMillis() + 3_600_000,
-    blockCreatedOn: PosixTime = System.currentTimeMillis(),
+    fallbackValidityStart: FiniteDuration =
+        FiniteDuration(System.currentTimeMillis() + 3_600_000, MILLISECONDS),
+    blockCreatedOn: FiniteDuration = FiniteDuration(System.currentTimeMillis(), MILLISECONDS),
     txTiming: TxTiming = TxTiming.default
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
@@ -146,7 +148,7 @@ def genSettlementTxSeqBuilder(
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100,
+        votingDuration = FiniteDuration(24, HOURS),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
         txTiming = txTiming
@@ -164,8 +166,8 @@ def genSettlementTxSeqBuilder(
   */
 def genNextSettlementTxSeqBuilder(
     treasuryToSpend: MultisigTreasuryUtxo,
-    fallbackValidityStart: PosixTime,
-    blockCreatedOn: PosixTime,
+    fallbackValidityStart: FiniteDuration,
+    blockCreatedOn: FiniteDuration,
     majorVersion: Int,
     headNativeScript: HeadMultisigScript,
     builderConfig: Tx.Builder.Config,
@@ -222,7 +224,7 @@ def genNextSettlementTxSeqBuilder(
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = 100,
+        votingDuration = FiniteDuration(24, HOURS),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
         txTiming = txTiming

@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -20,13 +20,11 @@ import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
-import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
-import scalus.ledger.api.v3.PosixTime
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -48,10 +46,11 @@ final case class JointLedger(
     initialBlockKzg: KzgCommitment,
     //// Static config fields
     config: Tx.Builder.Config,
+    txTiming: TxTiming,
     tallyFeeAllowance: Coin,
     equityShares: EquityShares,
     multisigRegimeUtxo: MultisigRegimeUtxo,
-    votingDuration: PosixTime,
+    votingDuration: FiniteDuration,
     treasuryTokenName: AssetName,
     initialTreasury: MultisigTreasuryUtxo
 ) extends Actor[IO, Requests.Request] {
@@ -256,7 +255,7 @@ final case class JointLedger(
                 .nextBlock(
                   newBody = nextBlockBody,
                   // FIXME: Conflicting types
-                  newTime = FiniteDuration(p.startTime.toLong, SECONDS),
+                  newTime = p.startTime,
                   // FIXME: Conflicting types
                   newCommitment = kzgCommit
                 )
@@ -289,7 +288,7 @@ final case class JointLedger(
             val nextBlock: Block.Major = p.previousBlock
                 .nextBlock(
                   newBody = nextBlockBody,
-                  newTime = FiniteDuration(p.startTime.toLong, TimeUnit.SECONDS),
+                  newTime = p.startTime,
                   // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
                   // calling out to the virtual ledger
                   newCommitment = IArray.unsafeFromArray(
@@ -322,7 +321,9 @@ final case class JointLedger(
             validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligations: Vector[Payout.Obligation],
-            immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)]
+            immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+            blockCreatedOn: FiniteDuration,
+            txTiming: TxTiming
         ): IO[DappLedgerM.SettleLedger.Result] = {
             val genesisObligations: Queue[GenesisObligation] =
                 validDeposits
@@ -349,7 +350,13 @@ final case class JointLedger(
                     payoutObligations = payoutObligations,
                     tallyFeeAllowance = this.tallyFeeAllowance,
                     votingDuration = this.votingDuration,
-                    immatureDeposits = immatureDeposits
+                    immatureDeposits = immatureDeposits,
+                    blockCreatedOn = blockCreatedOn,
+                    competingFallbackValidityStart = blockCreatedOn
+                        + txTiming.minSettlementDuration
+                        + txTiming.majorBlockTimeout
+                        + txTiming.silencePeriod,
+                    txTiming = txTiming
                   ),
                   onSuccess = IO.pure
                 )
@@ -399,7 +406,9 @@ final case class JointLedger(
                           validDeposits = depositsInPollResults,
                           treasuryToSpend = producing.dappLedgerState.treasury,
                           payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
-                          immatureDeposits = immatureDeposits
+                          immatureDeposits = immatureDeposits,
+                          blockCreatedOn = producing.startTime,
+                          txTiming = txTiming
                         )
                         absorbedDeposits = depositsInPollResults.filter(deposit =>
                             settlementRes.settlementTxSeq.settlementTx.depositsSpent
@@ -456,7 +465,7 @@ final case class JointLedger(
                 val nextBlock: Block.Final = p.previousBlock
                     .nextBlock(
                       nextBlockBody,
-                      FiniteDuration(p.startTime.toLong, TimeUnit.SECONDS),
+                      p.startTime,
                       IArray.empty[Byte]
                     )
                     .asInstanceOf[Block.Final]
@@ -544,7 +553,7 @@ object JointLedger {
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
 
         // FIXME: Make this take a pollResults: Utxos of all utxos present at the treasury address
-        case class StartBlock(blockCreationTime: PosixTime, pollResults: Set[LedgerEvent.Id])
+        case class StartBlock(blockCreationTime: FiniteDuration, pollResults: Set[LedgerEvent.Id])
 
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
@@ -576,7 +585,7 @@ object JointLedger {
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
-        startTime: PosixTime,
+        startTime: FiniteDuration,
         pollResults: Set[LedgerEvent.Id],
         nextBlockData: TransientFields
     ) extends State

@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.PosixTime
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
@@ -10,6 +9,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
@@ -163,7 +163,7 @@ object SettlementTx {
                 // reset the fallback timer.
                 // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: PosixTime
+                override val ttl: FiniteDuration
             ) extends Args(kzgCommitment)
 
             final case class WithPayouts(
@@ -171,7 +171,7 @@ object SettlementTx {
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: PosixTime,
+                override val ttl: FiniteDuration,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Args(kzgCommitment)
 
@@ -289,7 +289,7 @@ object SettlementTx {
                   referenceHNS(config),
                   consumeTreasury(config, args.treasuryToSpend),
                   sendTreasury(args),
-                  validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toLong))),
+                  validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toMillis))),
                 )
 
             private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =

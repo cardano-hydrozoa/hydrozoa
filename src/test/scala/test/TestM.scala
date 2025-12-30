@@ -12,19 +12,20 @@ import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
-import hydrozoa.multisig.ledger.dapp.tx.{Tx, minInitTreasuryAda}
+import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.{monadForPropM, monadic}
 import org.scalacheck.{Gen, Prop, PropertyM}
-import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo}
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
+import test.nonSigningNonValidityChecksValidators
 
 /** The "environment" that is contained in the ReaderT of the TestM
   * @param peers
@@ -120,6 +121,9 @@ object TestM {
                   .label("Initializtion: initial deposit")
             )
 
+            txTiming = TxTiming.default
+            initializedOn <- PropertyM.run(EitherT.right[TestError](IO.realTime))
+
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
                   spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
@@ -127,13 +131,13 @@ object TestM {
                   peers = peers.map(_.wallet.exportVerificationKeyBytes),
                   env = testTxBuilderEnvironment,
                   evaluator = testEvaluator,
-                  validators = nonSigningValidators,
+                  validators = nonSigningNonValidityChecksValidators,
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
-                  votingDuration = 100,
-                  txTiming = ???,
-                  initializedOn = ???
+                  votingDuration = FiniteDuration(24, HOURS),
+                  txTiming = txTiming,
+                  initializedOn = initializedOn
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -153,7 +157,7 @@ object TestM {
               tokenNames = initTx.initializationTx.tokenNames,
               env = TestUtil.testEnvironment,
               evaluator = testEvaluator,
-              validators = nonSigningValidators
+              validators = nonSigningNonValidityChecksValidators
             )
 
             equityShares <- PropertyM.pick[ET, EquityShares](
@@ -166,14 +170,15 @@ object TestM {
                   JointLedger(
                     peerLiaisons = Seq.empty,
                     tallyFeeAllowance = Coin.ada(2),
-                    initialBlockTime = FiniteDuration(0, SECONDS), // FIXME: Generate
+                    initialBlockTime = initializedOn,
                     initialBlockKzg = KzgCommitment.empty,
                     equityShares = equityShares,
                     multisigRegimeUtxo = config.multisigRegimeUtxo,
-                    votingDuration = 0,
+                    votingDuration = FiniteDuration(24, HOURS),
                     treasuryTokenName = config.tokenNames.headTokenName,
                     initialTreasury = initTx.initializationTx.treasuryProduced,
-                    config = config
+                    config = config,
+                    txTiming = txTiming
                   )
                 )
               )
