@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
@@ -124,7 +125,7 @@ object InitializationTx {
             )
 
         // Not sure why we use Long in the builder step not Slot
-        val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toLong))
+        val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toMillis))
         val setTtl = ValidityEndSlot(ttlSlot.slot)
 
         val steps = spendAllUtxos
@@ -424,9 +425,7 @@ object InitializationTx {
 
     // TODO: rename to Args for consistency?
     final case class Recipe(
-        // NOTE: `Slot.apply` is partial. This will throw an error if
-        //   0 > zeroSlot + (ttl - zeroTime) / slotLength
-        ttl: PosixTime,
+        ttl: FiniteDuration,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
         initialDeposit: Coin,
@@ -434,7 +433,7 @@ object InitializationTx {
         // The amount of coin to cover the minAda for the vote UTxOs and collateral
         // utxos in the fallback transaction (inclusive of the max fallback tx fee)
         hmrwCoin: Coin,
-        env: Environment,
+        env: CardanoInfo,
         validators: Seq[Validator],
         changePP: ShelleyPaymentPart,
         evaluator: PlutusScriptEvaluator

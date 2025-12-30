@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.PosixTime
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
@@ -10,6 +9,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
@@ -163,7 +163,7 @@ object SettlementTx {
                 // reset the fallback timer.
                 // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: PosixTime
+                override val ttl: FiniteDuration
             ) extends Args(kzgCommitment)
 
             final case class WithPayouts(
@@ -171,7 +171,7 @@ object SettlementTx {
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: PosixTime,
+                override val ttl: FiniteDuration,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Args(kzgCommitment)
 
@@ -289,8 +289,7 @@ object SettlementTx {
                   referenceHNS(config),
                   consumeTreasury(config, args.treasuryToSpend),
                   sendTreasury(args),
-                  // FIXME: Fails with TxTiming.default and initializedOn = 0
-                  // validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toLong))),
+                  validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toMillis))),
                 )
 
             private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
@@ -397,8 +396,7 @@ object SettlementTx {
                 )
 
                 val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
-                  // FIXME: We don't set the slot anymore, so the _.get here fails
-                  ttl = Slot(0), // Slot(state.ctx.transaction.body.value.ttl.get),
+                  ttl = Slot(state.ctx.transaction.body.value.ttl.get),
                   majorVersionProduced = args.majorVersionProduced,
                   treasurySpent = args.treasuryToSpend,
                   treasuryProduced = treasuryProduced,
@@ -449,7 +447,7 @@ object SettlementTx {
                         depositsSpent = state.depositsSpent,
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(0), //tx.body.value.ttl.get),
+                        ttl = Slot(tx.body.value.ttl.get),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
@@ -469,7 +467,7 @@ object SettlementTx {
                         rolloutProduced = unsafeGetRolloutProduced(state.ctx),
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(0), //tx.body.value.ttl.get),
+                        ttl = Slot(tx.body.value.ttl.get),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,

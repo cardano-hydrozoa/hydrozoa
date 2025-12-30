@@ -19,7 +19,7 @@ import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.{monadForPropM, monadic}
 import org.scalacheck.{Gen, Prop, PropertyM}
-import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo}
@@ -135,9 +135,9 @@ object TestM {
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
-                  votingDuration = 100,
+                  votingDuration = FiniteDuration(24, HOURS),
                   txTiming = txTiming,
-                  initializedOn = initializedOn.toMillis
+                  initializedOn = initializedOn
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -170,14 +170,15 @@ object TestM {
                   JointLedger(
                     peerLiaisons = Seq.empty,
                     tallyFeeAllowance = Coin.ada(2),
-                    initialBlockTime = FiniteDuration(0, SECONDS), // FIXME: Generate
+                    initialBlockTime = initializedOn,
                     initialBlockKzg = KzgCommitment.empty,
                     equityShares = equityShares,
                     multisigRegimeUtxo = config.multisigRegimeUtxo,
-                    votingDuration = 0,
+                    votingDuration = FiniteDuration(24, HOURS),
                     treasuryTokenName = config.tokenNames.headTokenName,
                     initialTreasury = initTx.initializationTx.treasuryProduced,
-                    config = config
+                    config = config,
+                    txTiming = txTiming
                   )
                 )
               )

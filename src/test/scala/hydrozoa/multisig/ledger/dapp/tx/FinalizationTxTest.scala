@@ -11,6 +11,7 @@ import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.jdk.CollectionConverters.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -125,8 +126,9 @@ def genStandaloneFinalizationTxSeqBuilder(
           config.headNativeScript
         ),
         equityShares = shares,
-        competingFallbackValidityStart = System.currentTimeMillis() + 3_600_000,
-        blockCreatedOn = System.currentTimeMillis(),
+        competingFallbackValidityStart =
+            FiniteDuration(System.currentTimeMillis() + 3_600_000, MILLISECONDS),
+        blockCreatedOn = FiniteDuration(System.currentTimeMillis(), MILLISECONDS),
         txTiming = TxTiming.default
       ),
       peers
@@ -136,8 +138,8 @@ def genStandaloneFinalizationTxSeqBuilder(
 def genFinalizationTxSeqBuilder(
     treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
-    fallbackValidityStart: PosixTime,
-    blockCreatedOn: PosixTime,
+    fallbackValidityStart: FiniteDuration,
+    blockCreatedOn: FiniteDuration,
     txTiming: TxTiming,
     config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],

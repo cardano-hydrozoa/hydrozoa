@@ -15,9 +15,9 @@ import hydrozoa.multisig.protocol.types.Block.Version.Full
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import scala.collection.immutable.Queue
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, *}
-import scalus.ledger.api.v3.PosixTime
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
@@ -59,10 +59,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             ask.flatMap(env => liftR(env.jointLedger ! req))
 
         def startBlock(
-            blockCreationTime: PosixTime,
+            blockCreationTime: FiniteDuration,
             pollResults: Set[LedgerEvent.Id]
         ): TestM[Unit] =
             startBlock(StartBlock(blockCreationTime, pollResults))
+
+        /** Start the block at the current real time */
+        def startBlockNow(pollResults: Set[LedgerEvent.Id]): TestM[Unit] =
+            for {
+                startTime <- liftR(IO.realTime)
+                _ <- startBlock(startTime, pollResults)
+            } yield ()
 
         def completeBlockRegular(req: CompleteBlockRegular): TestM[Unit] =
             for {
@@ -153,7 +160,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         import Scenarios.*
         run(for {
             // Step 1: Put the joint ledger in producing mode
-            _ <- startBlock(1, Set.empty)
+            _ <- startBlockNow(Set.empty)
 
             // Step 2: generate a deposit and observe that it appears in the dapp ledger correctly
             seqAndReq <- deposit
@@ -196,7 +203,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 } yield ()
 
             // Step 4: Complete another block.
-            _ <- startBlock(2, Set(depositReq.eventId))
+
+            _ <- startBlockNow(Set(depositReq.eventId))
             _ <- completeBlockRegular(None)
 
             _ <- for {

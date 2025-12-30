@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import hydrozoa.PosixTime
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
@@ -29,7 +28,7 @@ trait HasTtlSlot {
 // TODO: Find a better place for it.
 // TODO: Check whether we need it.
 trait HasTtlTime {
-    def ttl: PosixTime
+    def ttl: FiniteDuration
 }
 
 object Tx {
@@ -198,4 +197,4 @@ final case class TxTiming(
 )
 
 object TxTiming:
-    val default = TxTiming(1.day, 2.hours, 5.minutes, 10.minutes)
+    val default = TxTiming(12.hours, 24.hours, 5.minutes, 10.minutes)

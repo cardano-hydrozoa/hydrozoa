@@ -10,6 +10,7 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -20,7 +21,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
+import scalus.ledger.api.v1.PubKeyHash
 
 final case class InitializationTxSeq(initializationTx: InitializationTx, fallbackTx: FallbackTx)
 
@@ -62,12 +63,12 @@ object InitializationTxSeq {
         expectedNetwork: Network,
         peerKeys: NonEmptyList[VerificationKeyBytes],
         expectedTallyFeeAllowance: Coin,
-        expectedVotingDuration: PosixTime,
-        env: Environment,
+        expectedVotingDuration: FiniteDuration,
+        env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator],
         resolver: Seq[TransactionInput] => ResolvedUtxos,
-        initializationRequestTimestamp: PosixTime,
+        initializationRequestTimestamp: FiniteDuration,
         txTiming: TxTiming
     ): Either[ParseError, InitializationTxSeq] = {
 
@@ -120,13 +121,17 @@ object InitializationTxSeq {
             // Check validity ranges are correct and match each other
             // 1. Fallback starts in a reasonable slot
             preciseFallbackValidityStart =
-                initializationRequestTimestamp.toLong + txTiming.minSettlementDuration.toMillis +
-                    txTiming.majorBlockTimeout.toMillis
-            devMillis = txTiming.initializationFallbackDeviation.toMillis
+                initializationRequestTimestamp + txTiming.minSettlementDuration +
+                    txTiming.majorBlockTimeout
+
             toSlot = env.slotConfig.timeToSlot
             possibleRange = (
-              toSlot(preciseFallbackValidityStart - devMillis),
-              toSlot(preciseFallbackValidityStart + devMillis)
+              toSlot(
+                (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toMillis
+              ),
+              toSlot(
+                (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toMillis
+              )
             )
 
             _ <-
@@ -264,18 +269,12 @@ object InitializationTxSeq {
             // ===================================
             // Validity ranges
             // ===================================
-            // NOTE: must have
-            //   0 < zeroSlot + ( args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
-            //                    args.txTiming.majorBlockTimeout.toMillis - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength
-            // -1 * zeroSlot * slotLength + zeroTime + args.TxTiming.silPeriod.toMilis - args.txTiming.majorBlockTimeout.toMilis - args.TxTiming.minSettlementDuration.toMilis < initializedOn
             val fallbackTxValidityStart =
-                args.initializedOn.toLong + args.txTiming.minSettlementDuration.toMillis +
-                    args.txTiming.majorBlockTimeout.toMillis
+                args.initializedOn + args.txTiming.minSettlementDuration +
+                    args.txTiming.majorBlockTimeout
 
             // TODO: this is a bit far-fetched, is there better options?
-            // NOTE: this will fail if
-            //   0 > zeroSlot + (fallbackTxValidityStart - argsTxTiming.silencePeriod.toMilis - zeroTime) / slotLength
-            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod.toMillis
+            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod
 
             // ===================================
             // Init Tx
@@ -325,8 +324,8 @@ object InitializationTxSeq {
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
-                  // FIXME: Currently fails with TxTiming.default and initializedOn = 0
-                  validityStart = Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart))
+                  validityStart =
+                      Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart.toMillis))
                 )
 
                 fallbackTx <- FallbackTx
@@ -348,19 +347,19 @@ object InitializationTxSeq {
             spentUtxos: InitializationTx.SpentUtxos,
             initialDeposit: Coin,
             peers: NonEmptyList[VerificationKeyBytes],
-            env: Environment,
+            env: CardanoInfo,
             evaluator: PlutusScriptEvaluator,
             validators: Seq[Validator],
             initializationTxChangePP: ShelleyPaymentPart,
             tallyFeeAllowance: Coin,
             // TODO: use FiniteDuration?
             // TODO: move to TxTiming?
-            votingDuration: PosixTime,
+            votingDuration: FiniteDuration,
             txTiming: TxTiming,
             // This is the zero point against which we calculate validity
             // ranges. For initialization tx it corresponds to the time
             // an initialization request was received.
-            initializedOn: PosixTime
+            initializedOn: FiniteDuration
         )
     }
 }
