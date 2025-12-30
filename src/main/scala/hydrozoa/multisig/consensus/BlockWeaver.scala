@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.Monad
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.ledger.JointLedger
@@ -38,12 +38,16 @@ object BlockWeaver {
         /** This is needed for [[isLeaderForBlock]] function, the total number of peers in the head.
           *
           * Invariant: >= 1
+          *
+          * TODO: likely we are going to move it to the head config
           */
         numberOfPeers: Int,
 
         /** Round-robin peer's turn. see [[isLeaderForBlock]] function.
           *
           * Invariant: blockLeadTurn ∈ [1, numberOfPeers]
+          *
+          * TODO: likely we are going to move it to the head config
           */
         blockLeadTurn: Int,
 
@@ -58,14 +62,7 @@ object BlockWeaver {
         // persistence: Persistence.Ref
     )
 
-    final case class ConnectionsPending(
-        cardanoLiaison: Deferred[IO, CardanoLiaison.Ref],
-        peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]],
-        transactionSequencer: Deferred[IO, TransactionSequencer.Ref]
-    )
-
     def apply(config: Config): IO[BlockWeaver] =
-        // IO(new BlockWeaver(config = config, connections = connections) {})
         IO(new BlockWeaver(config = config) {})
 
     //// TODO: shall we use a separate package?
@@ -76,7 +73,7 @@ object BlockWeaver {
     // } yield weaver
 
     // ===================================
-    // Actor internal state
+    // Weaver internal state
     // ===================================
 
     sealed trait State
@@ -104,6 +101,14 @@ object BlockWeaver {
     // Immutable mempool state
     // ===================================
 
+    /** Simple immutable mempool implementation. Duplicate ledger events IDs are NOT allowe and a
+      * runtime exception is thrown since this should never happen. Other components, particularly
+      * the peer liaison is in charge or maintaining the integrtiry of the stream of messages.
+      *
+      * @param events
+      * @param numbersByPeer
+      * @param receivingOrder
+      */
     case class Mempool(
         events: Map[LedgerEventId, LedgerEvent] = Map.empty,
         numbersByPeer: Map[Peer.Number, SortedSet[Int]] = Map.empty,
@@ -114,16 +119,29 @@ object BlockWeaver {
         val empty: Mempool = Mempool()
 
         def apply(events: Seq[LedgerEvent]): Mempool =
-            events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event.eventId, event))
+            events.foldLeft(Mempool.empty)((mempool, event) => mempool.add(event))
 
         // Extension methods
         extension (mempool: Mempool)
-            // TODO: event is enough
+
             // Add event - returns new state
+            /** Throws if a duplicate is detected.
+              * @param event
+              *   an event to add
+              * @return
+              *   an updated mempool
+              */
             def add(
-                eventId: LedgerEventId,
                 event: LedgerEvent
             ): Mempool = {
+
+                val eventId = event.eventId
+
+                require(
+                  !mempool.events.contains(eventId),
+                  s"panic - duplicate event id in the pool: $eventId"
+                )
+
                 val newNumbers = mempool.numbersByPeer
                     .getOrElse(eventId.peerNum, SortedSet.empty[Int]) + eventId.eventNum
 
@@ -167,10 +185,11 @@ object BlockWeaver {
             // Iterate in insertion order
             def inOrder: Iterator[LedgerEvent] =
                 mempool.receivingOrder.iterator.flatMap(mempool.events.get)
+
+            def isEmpty: Boolean = mempool.events.isEmpty
     }
 }
 
-//trait BlockWeaver(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
 trait BlockWeaver(config: Config) extends Actor[IO, Request] {
 
     import hydrozoa.multisig.consensus.BlockWeaver.*
@@ -187,38 +206,15 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
     )
 
     override def preStart: IO[Unit] =
-        for {
-            // cardanoLiaison <- connections.cardanoLiaison.get
-            // peerLiaisons <- connections.peerLiaisons.get
-            //// transactionSequencer <- connections.transactionSequencer.get
-            // _ <- subscribers.set(
-            //  Some(
-            //    Subscribers(
-            //      ackBlock = List.empty, // peerLiaisons,
-            //      newBlock = peerLiaisons,
-            //      confirmBlock = List(transactionSequencer),
-            //      confirmMajorFinalBlock = cardanoLiaison
-            //    )
-            //  )
-            // )
-            // Is initialization code supposed to be here?
-            // TODO: enforce invariant: recovery mempool is always empty for the initialization block
-            _ <- switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
-        } yield ()
+        if config.lastKnownBlock.toInt == 0 then
+            require(
+              config.recoveredMempool.isEmpty,
+              "panic: recovered mempool should be empty before the first block"
+            )
+        switchToIdle(config.lastKnownBlock.increment, config.recoveredMempool)
 
     override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req =>
-            this.receiveTotal(req)
-            // TODO: revert back
-            // subscribers.get.flatMap {
-            //    case Some(subs) =>
-            //        this.receiveTotal(req, subs)
-            //    case _ =>
-            //        Error(
-            //          "Impossible: Block actor is receiving before its preStart provided subscribers."
-            //        ).raiseError
-            // }
-        )
+        PartialFunction.fromFunction(receiveTotal)
 
     // private def receiveTotal(req: Request, _subs: Subscribers): IO[Unit] =
     private def receiveTotal(req: Request): IO[Unit] =
@@ -242,7 +238,7 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
             _ <- state match {
                 case Idle(mempool) =>
                     // Just add event to the mempool
-                    stateRef.set(Idle(mempool.add(msg.event.eventId, msg.event)))
+                    stateRef.set(Idle(mempool.add(msg.event)))
                 case _: Leader =>
                     // Pass-through to the joint ledger
                     config.jointLedger ! msg.event
@@ -269,7 +265,7 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
                     } else {
                         // This is not an event we are waiting for, just add it to the mempool and keep going
                         stateRef.set(
-                          awaiting.copy(mempool = mempool.add(msg.event.eventId, msg.event))
+                          awaiting.copy(mempool = mempool.add(msg.event))
                         )
                     }
             }
@@ -395,7 +391,7 @@ trait BlockWeaver(config: Config) extends Actor[IO, Request] {
         msg: NewLedgerEvent,
         mempool: Mempool
     ): IO[FeedResult] =
-        tryFeedBlock(block, mempool.add(msg.event.eventId, msg.event), Some(msg.event.eventId))
+        tryFeedBlock(block, mempool.add(msg.event), Some(msg.event.eventId))
 
     // ===================================
     // Switch to Idle

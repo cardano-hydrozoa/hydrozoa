@@ -305,14 +305,14 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
 
     // Example 3: Debugging with trace
     property("trace example") = PropertyBuilder
-        .propertyWithSeed(Seed.fromBase64("TLR5sUXoUagIGs_9G_A6QLTLVqwAb5RJrH_EeGwc1eM=").get) {
-            p =>
-                val x = p.pick(Gen.choose(1, 100), "x")
-                val y = p.pick(Gen.choose(1, 100), "y")
+        // .propertyWithSeed(Seed.fromBase64("TLR5sUXoUagIGs_9G_A6QLTLVqwAb5RJrH_EeGwc1eM=").get) {
+        .property { p =>
+            val x = p.pick(Gen.choose(1, 100), "x")
+            val y = p.pick(Gen.choose(1, 100), "y")
 
-                // On failure, you can inspect p.getTrace to see what was generated
-                p.assert(x + y < 0)
-                true
+            // On failure, you can inspect p.getTrace to see what was generated
+            p.assert(x + y < 0)
+            true
         }
 
     // Example 4: Using labels and collect

@@ -45,8 +45,19 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val jointLedgerMockActor =
             p.runIO(system.actorOf(jointLedgerMock.trackWithCache("joint-ledger-mock")))
 
-        // Random ledger events for the recovery pool
-        val events: Seq[LedgerEvent] = p.pick(Gen.nonEmptyListOf(Arbitrary.arbitrary[LedgerEvent]))
+        // Random ledger events for the recovery pool for non-initial block
+        val events: Seq[LedgerEvent] = p.pick(
+          if lastKnownBlock > 0 then Gen.nonEmptyListOf(Arbitrary.arbitrary[LedgerEvent])
+          else Gen.const(Seq.empty)
+        )
+
+        // Discard samples with duplicates. So far we decided not to have a separate test
+        // for duplicates in the residual/recovered mempool, since it will always make
+        // the mempool panic.
+        p.pre {
+            val ids = events.map(_.eventId)
+            ids.distinct == events
+        }
 
         // Weaver's config
         val config = BlockWeaver.Config(
@@ -81,8 +92,6 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           "weaver should start the block with sensible creation time"
         )
 
-        // TODO: This fails now, since we don't check ledger event uniqueness and if we get two
-        // events with the same is, mempool starts to evict previous instances silently.
         p.assert(
           jointLedgerMock.events.toSeq == events,
           "feed all residual/recovered mempool events"
@@ -104,6 +113,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
             val peers = p.pick(genTestPeers, "test peers")
             val peer = p.pick(Gen.oneOf(peers.toList))
+
             // See comment in the BlockWeaver.Config
             val turn = p.pick(Gen.choose(1, peers.size), "block lead turn")
 
@@ -113,7 +123,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             val jointLedgerMockActor =
                 p.runIO(system.actorOf(jointLedgerMock.trackWithCache("joint-ledger-mock")))
 
-            // Weaver's config such that the peer is goinf to be the leader of the next non-first block
+            // Weaver's config such that the peer is goin to be the leader of the next non-first block
             val roundsCompleted = p.pick(Gen.choose(100, 1000))
             val config = BlockWeaver.Config(
               lastKnownBlock = Block.Number(turn + roundsCompleted * peers.size - 1),
@@ -154,7 +164,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
     // val _ = property("Knowing all events, new block is fed immediately") = Prop.falsified
     //
-    // val _ = property("Awaits till all events are known and finishes block") = Prop.falsified
+    // val _ = property("W/aits till all events are known and finishes block") = Prop.falsified
 
     class JointLedgerMock extends Actor[IO, JointLedger.Requests.Request]:
 

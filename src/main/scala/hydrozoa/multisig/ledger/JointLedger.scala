@@ -532,8 +532,16 @@ object JointLedger {
             ) extends LedgerEvent
         }
 
+        // TODO: move pollResults to CompleteBlockRegular see comments there
         case class StartBlock(blockCreationTime: PosixTime, pollResults: Set[LedgerEventId])
 
+        /** @param referenceBlock
+          * @param pollResaults
+          *   there are two reasons to have it here:
+          *   - pollResults are always absent upon weaver's start time. Passing it here may improve
+          *     things.
+          *   - pollResults are needed only when we are finishing a regular (non-final) block.
+          */
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
             // Make this block Major in order to circumvent a fallback tx becoming valid
