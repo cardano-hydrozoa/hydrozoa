@@ -67,9 +67,9 @@ object Generators {
           * the set of peers to use for signing.
           */
         def genTxBuilderConfigAndPeers(
-            env: Environment = testTxBuilderEnvironment,
+            env: CardanoInfo = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
-            validators: Seq[Validator] = nonSingingNonValidityChecksValidators
+            validators: Seq[Validator] = nonSigningNonValidityChecksValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
                 peers <- genTestPeers
@@ -94,7 +94,7 @@ object Generators {
             )
 
         def genTxConfig(
-            env: Environment = testTxBuilderEnvironment,
+            env: CardanoInfo = testTxBuilderEnvironment,
             evaluator: PlutusScriptEvaluator = testEvaluator,
             validators: Seq[Validator] = nonSigningValidators
         ): Gen[Tx.Builder.Config] = genTxBuilderConfigAndPeers(env, evaluator, validators).map(_._1)

@@ -25,6 +25,7 @@ import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.{AddrKeyHash, Coin, Utxo}
 import scalus.testing.kit.TestUtil
 import test.Generators.Hydrozoa.genAdaOnlyPubKeyUtxo
+import test.nonSigningNonValidityChecksValidators
 
 /** The "environment" that is contained in the ReaderT of the TestM
   * @param peers
@@ -121,21 +122,7 @@ object TestM {
             )
 
             txTiming = TxTiming.default
-            // This should be roughly correct. Its derived from tracing the value through
-            // InitializationTxSeq to InitializationTx and determining what the timeToSlot
-            // conversion will be.
-            //
-            // FIXME: I don't account for integer division causing some potential error here
-            // because I have the flu and I don't want to think about it right now
-            minimumStartTime = {
-                import testTxBuilderEnvironment.slotConfig.*
-                -1 * zeroSlot * slotLength + zeroTime + txTiming.silencePeriod.toMillis
-                    - txTiming.majorBlockTimeout.toMillis
-                    - txTiming.minSettlementDuration.toMillis
-            }
-            initializedOn <- PropertyM.pick[ET, BigInt](
-              Gen.posNum[BigInt].map(_ + minimumStartTime)
-            )
+            initializedOn <- PropertyM.run(EitherT.right[TestError](IO.realTime))
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -144,13 +131,13 @@ object TestM {
                   peers = peers.map(_.wallet.exportVerificationKeyBytes),
                   env = testTxBuilderEnvironment,
                   evaluator = testEvaluator,
-                  validators = nonSigningValidators,
+                  validators = nonSigningNonValidityChecksValidators,
                   initializationTxChangePP =
                       Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
                   tallyFeeAllowance = Coin.ada(2),
                   votingDuration = 100,
                   txTiming = txTiming,
-                  initializedOn = initializedOn
+                  initializedOn = initializedOn.toMillis
                 )
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
@@ -170,7 +157,7 @@ object TestM {
               tokenNames = initTx.initializationTx.tokenNames,
               env = TestUtil.testEnvironment,
               evaluator = testEvaluator,
-              validators = nonSigningValidators
+              validators = nonSigningNonValidityChecksValidators
             )
 
             equityShares <- PropertyM.pick[ET, EquityShares](

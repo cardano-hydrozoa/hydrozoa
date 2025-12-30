@@ -223,10 +223,9 @@ object PropertyMTest extends Properties("PropertyM") {
               int2 <- pick[IO, Int](Arbitrary.arbitrary[Int])
               int3 <- pick[IO, Int](Arbitrary.arbitrary[Int])
               _ <- run(IO.println(s"$int1 $int2 $int3"))
-          } yield true
+          } yield (int1 != int2) //but we still want to check that different values are generated!
         )
         prop
-
 }
 
 object PropertyM:

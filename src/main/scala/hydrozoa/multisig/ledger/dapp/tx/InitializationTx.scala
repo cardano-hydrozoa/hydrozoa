@@ -426,11 +426,6 @@ object InitializationTx {
     final case class Recipe(
         // NOTE: `Slot.apply` is partial. This will throw an error if
         //   0 > zeroSlot + (ttl - zeroTime) / slotLength
-        //
-        // Or, roughly, if
-        //
-        // (disregarding truncating integer division)
-        //
         ttl: PosixTime,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,

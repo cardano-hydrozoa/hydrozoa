@@ -79,7 +79,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             peers = peers.map(_.wallet.exportVerificationKeyBytes),
             env = testTxBuilderEnvironment,
             evaluator = testEvaluator,
-            validators = nonSingingNonValidityChecksValidators, // nonSigningValidators,
+            validators = nonSigningNonValidityChecksValidators,
             initializationTxChangePP =
                 Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
             tallyFeeAllowance = Coin.ada(2),
