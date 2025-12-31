@@ -212,7 +212,7 @@ object FinalizationTxSeq {
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silencePeriod,
+                  ttl = competingFallbackValidityStart - txTiming.silenceDuration,
                   kzgCommitment = KzgCommitment.empty
                 )
 
@@ -222,7 +222,7 @@ object FinalizationTxSeq {
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
-              ttl = competingFallbackValidityStart - txTiming.silencePeriod,
+              ttl = competingFallbackValidityStart - txTiming.silenceDuration,
               rolloutTxSeqPartial = rolloutTxSeqPartial,
               kzgCommitment = KzgCommitment.empty
             )

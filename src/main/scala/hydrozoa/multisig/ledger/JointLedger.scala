@@ -353,8 +353,8 @@ final case class JointLedger(
                     blockCreatedOn = blockCreatedOn,
                     competingFallbackValidityStart = blockCreatedOn
                         + txTiming.minSettlementDuration
-                        + txTiming.majorBlockTimeout
-                        + txTiming.silencePeriod,
+                        + txTiming.inactivityMarginDuration
+                        + txTiming.silenceDuration,
                     txTiming = txTiming
                   ),
                   onSuccess = IO.pure
@@ -449,8 +449,8 @@ final case class JointLedger(
                 blockCreatedOn = p.startTime,
                 competingFallbackValidityStart = p.startTime
                     + txTiming.minSettlementDuration
-                    + txTiming.majorBlockTimeout
-                    + txTiming.silencePeriod,
+                    + txTiming.inactivityMarginDuration
+                    + txTiming.silenceDuration,
                 txTiming = txTiming
               ),
               onSuccess = IO.pure

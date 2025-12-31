@@ -123,7 +123,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                               FiniteDuration(
                                 fallbackValidityStart,
                                 MILLISECONDS
-                              ) - (txTiming.silencePeriod + 10.seconds)
+                              ) - (txTiming.silenceDuration + 10.seconds)
                             )
                             settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
                               treasuryToSpend,
@@ -164,7 +164,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
               FiniteDuration(
                 fallbackValidityStart,
                 MILLISECONDS
-              ) - (txTiming.silencePeriod + 10.seconds)
+              ) - (txTiming.silenceDuration + 10.seconds)
             )
 
             finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(

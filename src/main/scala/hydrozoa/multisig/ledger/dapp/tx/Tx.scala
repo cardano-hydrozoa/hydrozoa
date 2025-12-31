@@ -177,9 +177,9 @@ trait HasResolvedUtxos {
   *
   * @param minSettlementDuration
   *   Minimal length of a settlement (finalization) tx's validity range.
-  * @param majorBlockTimeout
+  * @param inactivityMarginDuration
   *   The minimal frequency of major blocks (in case no activity happens).
-  * @param silencePeriod
+  * @param silenceDuration
   *   A fixed-time gap between concurrent txs (i.e. fallback N and settlement/finalization N+1) to
   *   prevent contention, typically a small value like 5 min.
   * @param initializationFallbackDeviation
@@ -191,10 +191,19 @@ trait HasResolvedUtxos {
   */
 final case class TxTiming(
     minSettlementDuration: FiniteDuration,
-    majorBlockTimeout: FiniteDuration,
-    silencePeriod: FiniteDuration,
+    inactivityMarginDuration: FiniteDuration,
+    silenceDuration: FiniteDuration,
+    depositMaturityDuration: FiniteDuration,
+    depositAbsorptionDuration: FiniteDuration,
     initializationFallbackDeviation: FiniteDuration
 )
 
 object TxTiming:
-    val default = TxTiming(12.hours, 24.hours, 5.minutes, 10.minutes)
+    val default = TxTiming(
+      minSettlementDuration = 12.hours,
+      inactivityMarginDuration = 24.hours,
+      silenceDuration = 5.minutes,
+      depositMaturityDuration = 1.hours,
+      depositAbsorptionDuration = 48.hours,
+      initializationFallbackDeviation = 10.minutes
+    )

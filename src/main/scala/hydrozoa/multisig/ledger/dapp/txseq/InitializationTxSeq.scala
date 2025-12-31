@@ -122,7 +122,7 @@ object InitializationTxSeq {
             // 1. Fallback starts in a reasonable slot
             preciseFallbackValidityStart =
                 initializationRequestTimestamp + txTiming.minSettlementDuration +
-                    txTiming.majorBlockTimeout
+                    txTiming.inactivityMarginDuration
 
             toSlot = env.slotConfig.timeToSlot
             possibleRange = (
@@ -151,7 +151,7 @@ object InitializationTxSeq {
 
             // TODO: Do we need a tolerance window here as well?
             expectedFallbackValidityStart = toSlot(
-              toTime(iTx.ttl.slot) + txTiming.silencePeriod.toMillis
+              toTime(iTx.ttl.slot) + txTiming.silenceDuration.toMillis
             )
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
@@ -271,10 +271,10 @@ object InitializationTxSeq {
             // ===================================
             val fallbackTxValidityStart =
                 args.initializedOn + args.txTiming.minSettlementDuration +
-                    args.txTiming.majorBlockTimeout
+                    args.txTiming.inactivityMarginDuration
 
             // TODO: this is a bit far-fetched, is there better options?
-            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silencePeriod
+            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silenceDuration
 
             // ===================================
             // Init Tx

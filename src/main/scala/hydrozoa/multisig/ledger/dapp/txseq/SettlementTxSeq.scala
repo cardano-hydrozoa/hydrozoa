@@ -57,7 +57,7 @@ object SettlementTxSeq {
                             config.env.slotConfig.timeToSlot(
                               (args.blockCreatedOn
                                   + args.txTiming.minSettlementDuration
-                                  + args.txTiming.majorBlockTimeout).toMillis
+                                  + args.txTiming.inactivityMarginDuration).toMillis
                             )
                           )
                         )
@@ -108,7 +108,7 @@ object SettlementTxSeq {
                             config.env.slotConfig.timeToSlot(
                               (args.blockCreatedOn
                                   + args.txTiming.minSettlementDuration
-                                  + args.txTiming.majorBlockTimeout).toMillis
+                                  + args.txTiming.inactivityMarginDuration).toMillis
                             )
                           )
                         )
@@ -162,7 +162,7 @@ object SettlementTxSeq {
                   kzgCommitment = kzgCommitment,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silencePeriod
+                  ttl = competingFallbackValidityStart - txTiming.silenceDuration
                 )
 
             def toArgsWithPayouts(
@@ -173,7 +173,7 @@ object SettlementTxSeq {
               kzgCommitment = kzgCommitment,
               depositsToSpend = depositsToSpend,
               rolloutTxSeqPartial = rolloutTxSeqPartial,
-              ttl = competingFallbackValidityStart - txTiming.silencePeriod
+              ttl = competingFallbackValidityStart - txTiming.silenceDuration
             )
         }
     }
