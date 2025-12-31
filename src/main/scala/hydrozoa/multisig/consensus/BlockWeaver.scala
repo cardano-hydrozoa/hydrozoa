@@ -260,8 +260,13 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                             result <- continueFeedBlock(block, msg, mempool)
                             _ <- result match {
                                 case Done(residualMempool) =>
-                                    // Switch to Idle with the residual of mempool
-                                    switchToIdle(block.id.increment, residualMempool)
+                                    for {
+                                        // We are done with the block
+                                        _ <- IO.println("Done after awaiting for missing events")
+                                        _ <- completeBlock(block)
+                                        // Switch to Idle with the residual of mempool
+                                        _ <- switchToIdle(block.id.increment, residualMempool)
+                                    } yield ()
                                 case EventMissing(newEventIdAwaited, newMempool) =>
                                     // Stay in Awaiting with new eventIdAwaited and new mempool
                                     stateRef.set(
@@ -302,18 +307,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                         _ <- result match {
                             case Done(residualMempool) =>
                                 for {
-                                    _ <- IO.println("Done")
                                     // We are done with the block
-                                    completeBlock <- block match {
-                                        case _: Block.Initial => ??? // TODO: Impossible
-                                        case _: Block.Minor =>
-                                            IO.pure(CompleteBlockRegular(Some(block)))
-                                        case _: Block.Major =>
-                                            IO.pure(CompleteBlockRegular(Some(block)))
-                                        case _: Block.Final =>
-                                            IO.pure(CompleteBlockFinal(Some(block)))
-                                    }
-                                    _ <- config.jointLedger ! completeBlock
+                                    _ <- IO.println("Done")
+                                    _ <- completeBlock(block)
                                     _ <- switchToIdle(block.id.increment, residualMempool)
                                 } yield ()
                             case EventMissing(eventIdAwaited, residualMempool) =>
@@ -331,17 +327,25 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         } yield ()
     }
 
+    private def completeBlock(block: Block): IO[Unit] = for {
+        completeBlock <- block match {
+            case _: Block.Initial => ??? // TODO: Impossible
+            case _: Block.Minor =>
+                IO.pure(CompleteBlockRegular(Some(block)))
+            case _: Block.Major =>
+                IO.pure(CompleteBlockRegular(Some(block)))
+            case _: Block.Final =>
+                IO.pure(CompleteBlockFinal(Some(block)))
+        }
+        _ <- config.jointLedger ! completeBlock
+    } yield ()
+
     private def handleBlockConfirmed(confirmation: BlockConfirmed): IO[Unit] = {
-        import WeaverError.*
 
         for {
             _ <- IO.println("handleBlockConfirmed")
             state <- stateRef.get
             _ <- state match {
-                case Idle(_) =>
-                    // This may happen, but we should ignore it since that signal is useless for the weaver
-                    // when the node is node a leader.
-                    IO.pure(())
                 case Leader(blockNumber, isFinal) =>
                     for {
                         // Finish the current block immediately
@@ -353,8 +357,10 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                         // Switch to Idle
                         _ <- switchToIdle(blockNumber.increment)
                     } yield ()
-                case Awaiting(block, eventIdAwaited, mempool) =>
-                    IO.raiseError(UnexpectedBlockConfirmation)
+                case _ =>
+                    // This may happen, but we should ignore it since that signal is useless for the weaver
+                    // when the node is node a leader.
+                    IO.pure(())
             }
         } yield ()
     }
@@ -376,9 +382,12 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
         for {
 
+            _ <- IO.println(s"tryFeedBlock: start with: $startWith")
+
             // TODO fix inference, see the first case match
             _ <- IO.whenA(block.isInstanceOf[Block.Initial])(
-              IO.raiseError(WeaverError.InitialBlockAnnouncement)
+              IO.println("!!!1") >>
+                  IO.raiseError(WeaverError.InitialBlockAnnouncement)
             )
 
             blockEvents <- IO.pure(block match {
@@ -389,10 +398,12 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
             })
 
             eventsToFeed = startWith match {
-                // TODO: check indexOf/splitAt word as expected
-                case Some(eventId) => blockEvents.splitAt(blockEvents.indexOf(eventId))._1
+                case Some(eventId) => blockEvents.splitAt(blockEvents.indexOf(eventId))._2
                 case None          => blockEvents
             }
+
+            _ <- IO.println(s"events to feed: ${eventsToFeed}")
+            _ <- IO.println(s"initial mempool: ${initialMempool}")
 
             // Tries to feed block events, until it's over or an event is missing.
             mbFirstEventIdMissingAndResidualMempool <- Monad[IO].tailRecM(
@@ -404,7 +415,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                     mempool.findById(e) match {
                         case Some(event) =>
                             (config.jointLedger ! event) >> IO.pure(Left(es, mempool.remove(e)))
-                        case None => IO.pure(Right(Some(e), mempool))
+                        case None =>
+                            IO.println(s"new missing event: $e") >>
+                                IO.pure(Right(Some(e), mempool))
                     }
             }
 
@@ -481,11 +494,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
     private enum WeaverError extends Throwable:
         case InitialBlockAnnouncement
         case UnexpectedBlockAnnouncement
-        case UnexpectedBlockConfirmation
 
         def msg: String = this match {
             case InitialBlockAnnouncement    => "The initial block is not expected to be broadcast"
             case UnexpectedBlockAnnouncement => "Weaver got an unexpected new block announcement"
-            case UnexpectedBlockConfirmation => "Weaver got an unexpected block confirmation"
         }
 }
