@@ -108,7 +108,8 @@ object SettlementTxSeq {
                             config.env.slotConfig.timeToSlot(
                               (args.blockCreatedOn
                                   + args.txTiming.minSettlementDuration
-                                  + args.txTiming.inactivityMarginDuration).toMillis
+                                  + args.txTiming.inactivityMarginDuration
+                                  + args.txTiming.silenceDuration).toMillis
                             )
                           )
                         )

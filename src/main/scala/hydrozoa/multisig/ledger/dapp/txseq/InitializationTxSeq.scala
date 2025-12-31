@@ -269,12 +269,10 @@ object InitializationTxSeq {
             // ===================================
             // Validity ranges
             // ===================================
-            val fallbackTxValidityStart =
-                args.initializedOn + args.txTiming.minSettlementDuration +
-                    args.txTiming.inactivityMarginDuration
+            val initializationTxTtl = args.initializedOn + args.txTiming.minSettlementDuration +
+                args.txTiming.inactivityMarginDuration
 
-            // TODO: this is a bit far-fetched, is there better options?
-            val initializationTxTtl = fallbackTxValidityStart - args.txTiming.silenceDuration
+            val fallbackTxValidityStart = initializationTxTtl + args.txTiming.silenceDuration
 
             // ===================================
             // Init Tx
