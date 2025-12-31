@@ -4,7 +4,6 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import scala.concurrent.duration.FiniteDuration
 
 enum Block {
     def id: Block.Number = this.header.blockNum
@@ -33,7 +32,7 @@ enum Block {
 
     def nextBlock(
         newBody: Block.Body.Next,
-        newTime: FiniteDuration,
+        newTime: java.time.Instant,
         newCommitment: KzgCommitment
     ): Block =
         header.nextBlock(newBody, newTime, newCommitment)
@@ -54,33 +53,33 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
-            override val timeCreation: FiniteDuration,
+            override val timeCreation: java.time.Instant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
 
         case Minor(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: FiniteDuration,
+            override val timeCreation: java.time.Instant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Minor), HeaderFields.Commitment
 
         case Major(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: FiniteDuration,
+            override val timeCreation: java.time.Instant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Major), HeaderFields.Commitment
 
         case Final(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: FiniteDuration
+            override val timeCreation: java.time.Instant
         ) extends Header(Type.Final)
 
         def nextHeader(
             newBlockType: Type.Next,
-            newTime: FiniteDuration,
+            newTime: java.time.Instant,
             newCommitment: KzgCommitment
         ): Header = newBlockType match {
             case Type.Minor => nextHeaderMinor(newTime, newCommitment)
@@ -90,7 +89,7 @@ object Block {
 
         def nextBlock(
             body: Body.Next,
-            newTime: FiniteDuration,
+            newTime: java.time.Instant,
             newCommitment: KzgCommitment
         ): Block =
             body match {
@@ -103,7 +102,7 @@ object Block {
             }
 
         private def nextHeaderMinor(
-            newTime: FiniteDuration,
+            newTime: java.time.Instant,
             newCommitment: KzgCommitment
         ): Header.Minor =
             Header.Minor(
@@ -114,7 +113,7 @@ object Block {
             )
 
         private def nextHeaderMajor(
-            newTime: FiniteDuration,
+            newTime: java.time.Instant,
             newCommitment: KzgCommitment
         ): Header.Major =
             Header.Major(
@@ -125,7 +124,7 @@ object Block {
             )
 
         private def nextHeaderFinal(
-            newTime: FiniteDuration
+            newTime: java.time.Instant
         ): Header.Final =
             Header.Final(
               blockNum = blockNum.increment,
@@ -138,7 +137,7 @@ object Block {
         sealed trait Mandatory {
             def blockNum: Number
             def blockVersion: Version.Full
-            def timeCreation: FiniteDuration
+            def timeCreation: java.time.Instant
         }
 
         sealed trait Commitment {

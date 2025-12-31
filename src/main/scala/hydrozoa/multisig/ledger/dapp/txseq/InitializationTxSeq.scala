@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
 import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
@@ -68,7 +69,7 @@ object InitializationTxSeq {
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator],
         resolver: Seq[TransactionInput] => ResolvedUtxos,
-        initializationRequestTimestamp: FiniteDuration,
+        initializationRequestTimestamp: java.time.Instant,
         txTiming: TxTiming
     ): Either[ParseError, InitializationTxSeq] = {
 
@@ -81,7 +82,8 @@ object InitializationTxSeq {
                   peerKeys,
                   expectedNetwork = expectedNetwork,
                   tx = initializationTx,
-                  resolver = resolver
+                  resolver = resolver,
+                  slotConfig = env.slotConfig
                 )
                 .left
                 .map(InitializationTxParseError(_))
@@ -97,6 +99,7 @@ object InitializationTxSeq {
 
             fallbackValidityStartSlot <- fallbackTx.body.value.validityStartSlot
                 .toRight(FallbackTxValidityStartIsMissing)
+                .map(Slot.apply)
 
             ftxRecipe = FallbackTx.Recipe(
               config = config,
@@ -104,7 +107,7 @@ object InitializationTxSeq {
               tallyFeeAllowance = expectedTallyFeeAllowance,
               votingDuration = expectedVotingDuration,
               // Time checks are done for the whole sequence later on, see down below.
-              validityStart = Slot(fallbackValidityStartSlot)
+              validityStart = fallbackValidityStartSlot
             )
             expectedFallbackTx <- FallbackTx.build(ftxRecipe).left.map(FallbackTxBuildError(_))
 
@@ -124,13 +127,12 @@ object InitializationTxSeq {
                 initializationRequestTimestamp + txTiming.minSettlementDuration +
                     txTiming.inactivityMarginDuration
 
-            toSlot = env.slotConfig.timeToSlot
             possibleRange = (
-              toSlot(
-                (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toMillis
+              (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toSlot(
+                env.slotConfig
               ),
-              toSlot(
-                (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toMillis
+              (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toSlot(
+                env.slotConfig
               )
             )
 
@@ -139,28 +141,26 @@ object InitializationTxSeq {
                 then
                     Left(
                       FallbackTxValidityStartError(
-                        Slot(possibleRange._1),
-                        Slot(possibleRange._2),
-                        Slot(fallbackValidityStartSlot)
+                        possibleRange._1,
+                        possibleRange._2,
+                        fallbackValidityStartSlot
                       )
                     )
                 else Right(())
 
             // 2. Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
-            toTime = env.slotConfig.slotToTime
-
             // TODO: Do we need a tolerance window here as well?
-            expectedFallbackValidityStart = toSlot(
-              toTime(iTx.ttl.slot) + txTiming.silenceDuration.toMillis
-            )
+            expectedFallbackValidityStart: Slot =
+                (iTx.validityEnd + txTiming.silenceDuration).toSlot(slotConfig = env.slotConfig)
+
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
                 then Right(())
                 else
                     Left(
                       TTLValidityStartGapError(
-                        Slot(expectedFallbackValidityStart),
-                        Slot(fallbackValidityStartSlot)
+                        expectedFallbackValidityStart,
+                        fallbackValidityStartSlot
                       )
                     )
 
@@ -269,10 +269,12 @@ object InitializationTxSeq {
             // ===================================
             // Validity ranges
             // ===================================
-            val initializationTxTtl = args.initializedOn + args.txTiming.minSettlementDuration +
-                args.txTiming.inactivityMarginDuration
+            val initializationTxValidityEnd =
+                args.initializedOn + args.txTiming.minSettlementDuration +
+                    args.txTiming.inactivityMarginDuration
 
-            val fallbackTxValidityStart = initializationTxTtl + args.txTiming.silenceDuration
+            val fallbackTxValidityStart =
+                initializationTxValidityEnd + args.txTiming.silenceDuration
 
             // ===================================
             // Init Tx
@@ -290,7 +292,7 @@ object InitializationTxSeq {
               // NOTE: We must have
               //  0 > zeroSlot + (ttl - zeroTime) / slotLength
               // Otherwise slot conversion will fail
-              ttl = initializationTxTtl,
+              validityEnd = initializationTxValidityEnd,
               spentUtxos = args.spentUtxos,
               headNativeScript = hns,
               initialDeposit = args.initialDeposit,
@@ -322,8 +324,7 @@ object InitializationTxSeq {
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
-                  validityStart =
-                      Slot(args.env.slotConfig.timeToSlot(fallbackTxValidityStart.toMillis))
+                  validityStart = fallbackTxValidityStart.toSlot(config.env.slotConfig)
                 )
 
                 fallbackTx <- FallbackTx
@@ -357,7 +358,7 @@ object InitializationTxSeq {
             // This is the zero point against which we calculate validity
             // ranges. For initialization tx it corresponds to the time
             // an initialization request was received.
-            initializedOn: FiniteDuration
+            initializedOn: java.time.Instant
         )
     }
 }

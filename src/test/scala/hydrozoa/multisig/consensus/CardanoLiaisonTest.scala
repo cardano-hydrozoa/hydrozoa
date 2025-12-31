@@ -17,6 +17,7 @@ import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{CardanoBackendError, GetCardanoHeadState, GetTxInfo, Request, SubmitL1Effects}
@@ -26,7 +27,7 @@ import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
 import scala.collection.JavaConverters.asScalaBufferConverter
-import scala.concurrent.duration.{DurationInt, FiniteDuration, MILLISECONDS}
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
@@ -79,9 +80,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
             // Settlements
             initializationTx = initializationTxSeq.initializationTx
             initializationTreasuryProduced = initializationTx.treasuryProduced
-            initializationFallbackValidityStart = testTxBuilderEnvironment.slotConfig.slotToTime(
-              initializationTxSeq.fallbackTx.validityStart.slot
-            )
+            initializationFallbackValidityStart = initializationTxSeq.fallbackTx.validityStart
 
             // This config is used in the settlement and finalization builders
             config = Config(
@@ -118,16 +117,14 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                         )
                     else
                         for {
+                            // TODO: Implement Gen.Choose[Instant]
                             blockCreatedOn <- Gen.choose(
                               previousBlockTimestamp + 10.seconds,
-                              FiniteDuration(
-                                fallbackValidityStart,
-                                MILLISECONDS
-                              ) - (txTiming.silenceDuration + 10.seconds)
+                              fallbackValidityStart - (txTiming.silenceDuration + 10.seconds)
                             )
                             settlementBuilderAndArgs <- genNextSettlementTxSeqBuilder(
                               treasuryToSpend,
-                              FiniteDuration(fallbackValidityStart, MILLISECONDS),
+                              fallbackValidityStart,
                               blockCreatedOn,
                               settlementNum,
                               hns,
@@ -139,9 +136,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                 .build(args)
                                 .fold(e => throw RuntimeException(e.toString), x => x)
                             nextTreasuryToSpend = seq.settlementTxSeq.settlementTx.treasuryProduced
-                            fallbackValidityStart = testTxBuilderEnvironment.slotConfig.slotToTime(
-                              seq.fallbackTx.validityStart.slot
-                            )
+                            fallbackValidityStart = seq.fallbackTx.validityStart
+
                         } yield Left(
                           (
                             nextTreasuryToSpend,
@@ -161,16 +157,13 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             finalizationBlockCreatedOn <- Gen.choose(
               lastSettlementBlockTimestamp + 10.seconds,
-              FiniteDuration(
-                fallbackValidityStart,
-                MILLISECONDS
-              ) - (txTiming.silenceDuration + 10.seconds)
+              fallbackValidityStart - (txTiming.silenceDuration + 10.seconds)
             )
 
             finalizationTxSeqBuilderAndArgs <- genFinalizationTxSeqBuilder(
               lastSettlementTreasury,
               numOfSettlements + 1,
-              FiniteDuration(fallbackValidityStart, MILLISECONDS),
+              fallbackValidityStart,
               finalizationBlockCreatedOn,
               txTiming,
               config,
@@ -299,7 +292,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
 
             def earliestTtl: Slot =
                 // TODO: for now we use initialization tx ttl, see the comment on `ttl` field
-                skeleton._1.initializationTx.ttl
+                skeleton._1.initializationTx.validityEnd.toSlot(testTxBuilderEnvironment.slotConfig)
 
             def dumpSkeletonInfo: Unit =
 
@@ -308,7 +301,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 val initSeq = skeleton._1
                 val initTx = initSeq.initializationTx
 
-                println(s"Initialization  tx: ${initTx.tx.id}, TTL: ${initTx.ttl}")
+                println(s"Initialization  tx: ${initTx.tx.id}, TTL: ${initTx.validityEnd}")
 
                 val fallbackTx = initSeq.fallbackTx
                 println(
@@ -322,7 +315,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                         case SettlementTxSeq.NoRollouts(settlementTx) => {
                             println(
                               s"Settlement ${settlementTx.majorVersionProduced}: " +
-                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.ttl}"
+                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.validityEnd}"
                             )
                             println(
                               s"\t=> Fallback ${settlementTx.majorVersionProduced}: " +
@@ -332,7 +325,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                         case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
                             println(
                               s"Settlement ${settlementTx.majorVersionProduced}: " +
-                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.ttl}, " +
+                                  s"${settlementTx.tx.id}, TTL: ${settlementTx.validityEnd}, " +
                                   s"deposits: ${settlementTx.depositsSpent.length}, " +
                                   s"rollouts: ${rolloutTxSeq.notLast.length + 1}"
                             )
@@ -349,16 +342,16 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 skeleton._3 match {
                     case FinalizationTxSeq.Monolithic(finalizationTx) =>
                         println(
-                          s"Monolithic finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.ttl}"
+                          s"Monolithic finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}"
                         )
                     case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
                         println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.ttl}"
+                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}"
                         )
                         println(s"Deinit: ${deinitTx.tx.id}")
                     case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
                         println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.ttl}" +
+                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
                               s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
                         )
                         val rollouts = rolloutTxSeq.notLast :+ rolloutTxSeq.last
@@ -369,7 +362,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                           rolloutTxSeq
                         ) =>
                         println(
-                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.ttl}" +
+                          s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
                               s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
                         )
                         val rollouts = rolloutTxSeq.notLast :+ rolloutTxSeq.last
@@ -456,13 +449,17 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                         )
                                 case WithinSilencePeriod =>
                                     val ttl = backboneTx.body.value.ttl.get
-                                    val fallbackValidityStart = fallbackTx.validityStart.slot
+                                    val fallbackValidityStart = fallbackTx.validityStart
+                                        .toSlot(testTxBuilderEnvironment.slotConfig)
+                                        .slot
                                     Gen.choose(ttl, fallbackValidityStart)
                                         .flatMap(slot =>
                                             (slot, Some(fallbackTx.tx.id, WithinSilencePeriod))
                                         )
                                 case AfterFallbackBecomesValid =>
-                                    val fallbackValidityStart = fallbackTx.validityStart.slot
+                                    val fallbackValidityStart = fallbackTx.validityStart
+                                        .toSlot(testTxBuilderEnvironment.slotConfig)
+                                        .slot
                                     Gen.choose(fallbackValidityStart, fallbackValidityStart + 1000)
                                         .flatMap(slot =>
                                             (
@@ -588,7 +585,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   cardanoBackendMockActor,
                   skeleton._1.initializationTx,
                   skeleton._1.fallbackTx,
-                  100.millis
+                  100.millis,
+                  slotConfig = testTxBuilderEnvironment.slotConfig
                 )
 
                 cardanoLiaison = new CardanoLiaison(config) {}

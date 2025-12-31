@@ -50,6 +50,7 @@ case class TestR(
     initTx: InitializationTxSeq, // Move to HeadConfig
     config: Tx.Builder.Config, // Move to HeadConfig
     jointLedger: ActorRef[IO, JointLedger.Requests.Request],
+    txTiming: TxTiming // Move to HeadConfig
 )
 
 type TestError =
@@ -122,7 +123,7 @@ object TestM {
             )
 
             txTiming = TxTiming.default
-            initializedOn <- PropertyM.run(EitherT.right[TestError](IO.realTime))
+            initializedOn <- monadForPropM[ET].pure(java.time.Instant.now())
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -189,7 +190,8 @@ object TestM {
           system,
           initTx,
           config,
-          jointLedger
+          jointLedger,
+          txTiming
         )
     }
 

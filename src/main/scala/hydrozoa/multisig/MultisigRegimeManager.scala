@@ -17,6 +17,7 @@ import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
+import scalus.cardano.ledger.SlotConfig
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
@@ -27,7 +28,8 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend.Ref,
         persistence: Persistence.Ref,
         initializationTx: InitializationTx,
-        fallbackTx: FallbackTx
+        fallbackTx: FallbackTx,
+        slotConfig: SlotConfig
     )
 
     def apply(config: Config): IO[MultisigRegimeManager] =
@@ -113,7 +115,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       cardanoBackend = config.cardanoBackend,
                       initializationTx = config.initializationTx,
                       initializationFallbackTx = config.fallbackTx,
-                      receiveTimeout = 10.seconds
+                      receiveTimeout = 10.seconds,
+                      slotConfig = config.slotConfig
                     ),
                     // ConnectionsPending(
                     // )

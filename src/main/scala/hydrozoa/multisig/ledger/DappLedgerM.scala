@@ -112,8 +112,8 @@ object DappLedgerM {
         tallyFeeAllowance: Coin,
         votingDuration: FiniteDuration,
         immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
-        blockCreatedOn: FiniteDuration,
-        competingFallbackValidityStart: FiniteDuration,
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
         txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
@@ -179,8 +179,8 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-        blockCreatedOn: FiniteDuration,
-        competingFallbackValidityStart: FiniteDuration,
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
         txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {

@@ -9,9 +9,9 @@ import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryU
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block as HBlock
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
+import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 import scala.jdk.CollectionConverters.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -126,8 +126,8 @@ def genStandaloneFinalizationTxSeqBuilder(
         ),
         equityShares = shares,
         competingFallbackValidityStart =
-            FiniteDuration(System.currentTimeMillis() + 3_600_000, MILLISECONDS),
-        blockCreatedOn = FiniteDuration(System.currentTimeMillis(), MILLISECONDS),
+            Instant.ofEpochMilli(System.currentTimeMillis() + 3_600_000),
+        blockCreatedOn = Instant.ofEpochMilli(System.currentTimeMillis()),
         txTiming = TxTiming.default
       ),
       peers
@@ -137,8 +137,8 @@ def genStandaloneFinalizationTxSeqBuilder(
 def genFinalizationTxSeqBuilder(
     treasuryToSpend: MultisigTreasuryUtxo,
     majorVersion: Int,
-    fallbackValidityStart: FiniteDuration,
-    blockCreatedOn: FiniteDuration,
+    fallbackValidityStart: Instant,
+    blockCreatedOn: Instant,
     txTiming: TxTiming,
     config: Tx.Builder.Config,
     peers: NonEmptyList[TestPeer],

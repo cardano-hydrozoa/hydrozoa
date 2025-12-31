@@ -2,13 +2,14 @@ package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import scala.concurrent.duration.FiniteDuration
-import scalus.cardano.ledger.{Coin, Slot}
+import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum SettlementTxSeq {
@@ -52,14 +53,10 @@ object SettlementTxSeq {
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration,
-                          // FIXME
-                          validityStart = Slot(
-                            config.env.slotConfig.timeToSlot(
-                              (args.blockCreatedOn
-                                  + args.txTiming.minSettlementDuration
-                                  + args.txTiming.inactivityMarginDuration).toMillis
-                            )
-                          )
+                          validityStart = (args.blockCreatedOn
+                              + args.txTiming.minSettlementDuration
+                              + args.txTiming.inactivityMarginDuration)
+                              .toSlot(config.env.slotConfig)
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -104,14 +101,11 @@ object SettlementTxSeq {
                           treasuryUtxoSpent = settlementTxRes.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration,
-                          validityStart = Slot(
-                            config.env.slotConfig.timeToSlot(
-                              (args.blockCreatedOn
-                                  + args.txTiming.minSettlementDuration
-                                  + args.txTiming.inactivityMarginDuration
-                                  + args.txTiming.silenceDuration).toMillis
-                            )
-                          )
+                          validityStart = (args.blockCreatedOn
+                              + args.txTiming.minSettlementDuration
+                              + args.txTiming.inactivityMarginDuration
+                              + args.txTiming.silenceDuration)
+                              .toSlot(config.env.slotConfig)
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -150,8 +144,8 @@ object SettlementTxSeq {
             kzgCommitment: KzgCommitment,
             tallyFeeAllowance: Coin,
             votingDuration: FiniteDuration,
-            competingFallbackValidityStart: FiniteDuration,
-            blockCreatedOn: FiniteDuration,
+            competingFallbackValidityStart: java.time.Instant,
+            blockCreatedOn: java.time.Instant,
             txTiming: TxTiming
         )
         // TODO: confirm: this one is not needed
@@ -163,7 +157,7 @@ object SettlementTxSeq {
                   kzgCommitment = kzgCommitment,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silenceDuration
+                  validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
                 )
 
             def toArgsWithPayouts(
@@ -174,7 +168,7 @@ object SettlementTxSeq {
               kzgCommitment = kzgCommitment,
               depositsToSpend = depositsToSpend,
               rolloutTxSeqPartial = rolloutTxSeqPartial,
-              ttl = competingFallbackValidityStart - txTiming.silenceDuration
+              validityEnd = competingFallbackValidityStart - txTiming.silenceDuration
             )
         }
     }

@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
@@ -17,9 +18,9 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
-import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
+import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -42,7 +43,7 @@ final case class JointLedger(
     peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
     // private val cardanoLiaison
     // private val blockSigner
-    initialBlockTime: FiniteDuration,
+    initialBlockTime: java.time.Instant,
     initialBlockKzg: KzgCommitment,
     //// Static config fields
     config: Tx.Builder.Config,
@@ -61,6 +62,7 @@ final case class JointLedger(
             producedBlock = Block.Initial(
               Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
             ),
+            lastFallbackValidityStart = None,
             dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
             virtualLedgerState = VirtualLedgerM.State.empty
           )
@@ -161,9 +163,9 @@ final case class JointLedger(
         import args.*
 
         for {
-
+            p <- unsafeGetProducing
             _ <- this.runVirtualLedgerM(
-              action = VirtualLedgerM.applyInternalTx(tx),
+              action = VirtualLedgerM.applyInternalTx(tx, p.startTime),
               // Invalid transaction continuation
               onFailure = _ =>
                   for {
@@ -203,6 +205,7 @@ final case class JointLedger(
             _ <- state.set(
               Producing(
                 previousBlock = d.producedBlock,
+                competingFallbackValidityStart = d.lastFallbackValidityStart,
                 startTime = blockCreationTime,
                 TransientFields(
                   ledgerEventsRequired = d.producedBlock match {
@@ -313,7 +316,6 @@ final case class JointLedger(
             )
         }
 
-        // FIXME: placeholder
         def isMature(deposit: DepositUtxo): Boolean = true
 
         def doSettlement(
@@ -321,7 +323,7 @@ final case class JointLedger(
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligations: Vector[Payout.Obligation],
             immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
-            blockCreatedOn: FiniteDuration,
+            blockCreatedOn: java.time.Instant,
             txTiming: TxTiming
         ): IO[DappLedgerM.SettleLedger.Result] = {
             val genesisObligations: Queue[GenesisObligation] =
@@ -387,8 +389,20 @@ final case class JointLedger(
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
             depositsNotInPollResults = depositPartition._2
 
+            // For a description of timing, see GitHub issue #296
+            forceUpgradeToMajor: Boolean =
+                if producing.competingFallbackValidityStart.isEmpty
+                then true
+                else
+                    txTiming.minSettlementDuration.toMillis >=
+                        // FIXME: This time handling is a bit wonky because of the java <> scala mix
+                        producing.competingFallbackValidityStart.get.toEpochMilli
+                        - txTiming.silenceDuration.toMillis
+                        - producing.startTime.toEpochMilli
+
             isMinorBlock: Boolean =
-                depositsInPollResults.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty
+                (depositsInPollResults.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
+                    && (!forceUpgradeToMajor)
 
             augmentedBlock <-
                 if isMinorBlock
@@ -421,7 +435,7 @@ final case class JointLedger(
                     )
                 }
 
-            _ <- checkReferenceBlock(referenceBlock, augmentedBlock.block)
+            _ <- checkReferenceBlock(producing, referenceBlock, augmentedBlock)
             _ <- sendAugmentedBlock(augmentedBlock)
         } yield ()
     }
@@ -496,7 +510,7 @@ final case class JointLedger(
                 AugmentedBlock.Final(nextBlock, blockEffects)
             }
 
-            _ <- checkReferenceBlock(referenceBlock, augmentedBlock.block)
+            _ <- checkReferenceBlock(p, referenceBlock, augmentedBlock)
             _ <- sendAugmentedBlock(augmentedBlock)
 
         } yield ()
@@ -514,17 +528,43 @@ final case class JointLedger(
             // _ <- cardanoLiaison ! augmentedBlock._2
         } yield ()
 
-    private def checkReferenceBlock(expectedBlock: Option[Block], actualBlock: Block): IO[Unit] =
+    private def checkReferenceBlock(
+        p: Producing,
+        expectedBlock: Option[Block],
+        actualBlock: AugmentedBlock
+    ): IO[Unit] = {
+        val fallbackValidityStart: Option[java.time.Instant] =
+            actualBlock match {
+                case major: types.AugmentedBlock.Major =>
+                    Some(major.effects.fallback.validityStart)
+                case _ => p.competingFallbackValidityStart
+            }
+
         expectedBlock match {
             case Some(refBlock) if refBlock == actualBlock =>
-                state.update(s => Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
+                state.set(
+                  Done(
+                    actualBlock.block,
+                    fallbackValidityStart,
+                    p.dappLedgerState,
+                    p.virtualLedgerState
+                  )
+                )
             case Some(_) =>
                 panic(
                   "Reference block didn't match actual block; consensus is broken."
                 ) >> context.self.stop
             case None =>
-                state.update(s => Done(actualBlock, s.dappLedgerState, s.virtualLedgerState))
+                state.set(
+                  Done(
+                    actualBlock.block,
+                    fallbackValidityStart,
+                    p.dappLedgerState,
+                    p.virtualLedgerState
+                  )
+                )
         }
+    }
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
@@ -558,7 +598,7 @@ object JointLedger {
         case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
 
         // FIXME: Make this take a pollResults: Utxos of all utxos present at the treasury address
-        case class StartBlock(blockCreationTime: FiniteDuration)
+        case class StartBlock(blockCreationTime: java.time.Instant)
 
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
@@ -586,6 +626,8 @@ object JointLedger {
 
     final case class Done(
         producedBlock: Block,
+        // None for the first block
+        lastFallbackValidityStart: Option[java.time.Instant],
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State
     ) extends State
@@ -594,7 +636,9 @@ object JointLedger {
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
-        startTime: FiniteDuration,
+        // None for the first block
+        competingFallbackValidityStart: Option[java.time.Instant],
+        startTime: java.time.Instant,
         nextBlockData: TransientFields
     ) extends State
 }

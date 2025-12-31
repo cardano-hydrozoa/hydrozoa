@@ -38,7 +38,8 @@ object DepositRefundTxSeq {
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
-        changeAddress: ShelleyAddress
+        changeAddress: ShelleyAddress,
+        validityEnd: java.time.Instant
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
             partialRefundTx <- RefundTx.Builder
@@ -54,7 +55,8 @@ object DepositRefundTxSeq {
                   utxosFunding,
                   virtualOutputs,
                   donationToTreasury,
-                  changeAddress
+                  changeAddress,
+                  validityEnd
                 )
                 .build()
                 .left

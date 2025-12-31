@@ -12,12 +12,11 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum
 import hydrozoa.{ensureMinAda, maxNonPlutusTxFee, given}
 import io.bullet.borer.Cbor
-import java.util.concurrent.TimeUnit
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties, Test}
 import scala.collection.immutable.SortedMap
 import scala.collection.mutable
-import scala.concurrent.duration.{FiniteDuration, HOURS, MILLISECONDS}
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -73,8 +72,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             // Use [Preview.zeroTime..now] as the initialization timestamp
             initializedOn <- Gen.choose(
-              FiniteDuration(SlotConfig.Preview.zeroTime, MILLISECONDS),
-              FiniteDuration(System.currentTimeMillis(), TimeUnit.MILLISECONDS)
+              java.time.Instant.ofEpochMilli(SlotConfig.Preview.zeroTime),
+              java.time.Instant.now()
             )
 
         } yield (
@@ -302,7 +301,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 // Semantic parsing
                 props.append {
                     val expectedTx: InitializationTx = InitializationTx(
-                      ttl = iTx.ttl,
+                      validityEnd = iTx.validityEnd,
                       treasuryProduced = MultisigTreasuryUtxo(
                         treasuryTokenName = expectedHeadTokenName,
                         utxoId = TransactionInput(iTx.tx.id, 0),
@@ -334,7 +333,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       peerKeys = peers,
                       expectedNetwork = testNetwork,
                       tx = iTx.tx,
-                      resolver = mockResolver
+                      resolver = mockResolver,
+                      slotConfig = config.env.slotConfig
                     )
 
                     "Semantic transaction parsed from generic transaction in unexpected way." +
