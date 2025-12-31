@@ -262,11 +262,11 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                                 case Done(residualMempool) =>
                                     // Switch to Idle with the residual of mempool
                                     switchToIdle(block.id.increment, residualMempool)
-                                case EventMissing(neweventIdAwaited, newMempool) =>
+                                case EventMissing(newEventIdAwaited, newMempool) =>
                                     // Stay in Awaiting with new eventIdAwaited and new mempool
                                     stateRef.set(
                                       awaiting.copy(
-                                        eventIdAwaited = neweventIdAwaited,
+                                        eventIdAwaited = newEventIdAwaited,
                                         mempool = newMempool
                                       )
                                     )
@@ -294,7 +294,6 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                 case Idle(mempool) =>
                     for {
                         // This is sort of ephemeral Follower state
-                        // TODO: I don't think that this is what we want in terms of time
                         _ <- config.jointLedger ! StartBlock(
                           block.header.timeCreation.toMillis,
                           Set.empty
@@ -348,8 +347,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                         // Finish the current block immediately
                         _ <- config.jointLedger !
                             (if isFinal
-                             // TODO: add pollResults thingy, which is gone now
-                             // then CompleteBlockRegular(pollResults = ???, None)
+                             // TODO: add pollResults thingy
                              then CompleteBlockRegular(None)
                              else CompleteBlockFinal(None))
                         // Switch to Idle
