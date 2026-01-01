@@ -9,7 +9,7 @@ import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
-import hydrozoa.multisig.protocol.types.{LedgerEventId, Peer}
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
 
 /** Transaction sequencer receives local submissions of new ledger events and emits them
@@ -33,7 +33,7 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
     private val state = State()
 
     private final case class Subscribers(
-        newLedgerEvent: List[NewLedgerEvent.Subscriber]
+        newLedgerEvent: List[LedgerEvent.Subscriber]
     )
 
     override def preStart: IO[Unit] =
@@ -67,9 +67,8 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
                 for {
                     newNum <- state.enqueueDeferredEventOutcome(x.deferredEventOutcome)
                     newId = LedgerEventId(config.peerId, newNum)
-                    // FIXME:
-                    // newEvent = NewLedgerEvent(newId, x.time, x.event)
-                    newEvent = NewLedgerEvent(???, ???)
+                    // FIXME: fill in
+                    newEvent: LedgerEvent = ???
                     _ <- config.persistence ?: Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()

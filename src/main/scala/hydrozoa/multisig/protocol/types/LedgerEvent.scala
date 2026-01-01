@@ -1,6 +1,10 @@
 package hydrozoa.multisig.protocol.types
 
+import cats.data.NonEmptyList
+import cats.effect.IO
 import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 
 type LedgerEventId = LedgerEventId.Id
 
@@ -40,4 +44,29 @@ object LedgerEventId {
 
         extension (self: Number) def increment: Number = Number(self + 1)
     }
+}
+
+sealed trait LedgerEvent {
+    def eventId: LedgerEventId
+}
+
+object LedgerEvent {
+
+    final case class TxL2Event(
+        override val eventId: LedgerEventId,
+        tx: Array[Byte]
+    ) extends LedgerEvent
+
+    // FIXME: This should include the refundTxBytes
+    // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
+    final case class RegisterDeposit(
+        override val eventId: LedgerEventId,
+        serializedDeposit: Array[Byte],
+        // TODO: Pop up [[GenesisObligation]]?
+        virtualOutputs: NonEmptyList[GenesisObligation]
+    ) extends LedgerEvent
+
+    // TODO: do we still need it?
+    type Subscriber = ActorRef[IO, LedgerEvent]
+
 }

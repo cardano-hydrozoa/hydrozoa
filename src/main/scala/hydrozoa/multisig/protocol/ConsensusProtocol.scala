@@ -2,12 +2,10 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.PosixTime
-import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEventId}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, LedgerEventId}
 import scala.concurrent.duration.FiniteDuration
 
 object ConsensusProtocol {
@@ -24,7 +22,7 @@ object ConsensusProtocol {
     object BlockWeaver {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
-        type Request = NewLedgerEvent | Block | BlockConfirmed // TODO: add PollResults
+        type Request = LedgerEvent | Block | BlockConfirmed // TODO: add PollResults
 
         /** Simple confirmation, doesn't need to contain full [[AckBlock]]. TODO: add the
           * finalization flag
@@ -60,7 +58,7 @@ object ConsensusProtocol {
 
     object Persisted {
         type Request =
-            NewLedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
+            LedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
     }
 
     object RemoteBroadcast {
@@ -88,20 +86,6 @@ object ConsensusProtocol {
                 time <- IO.monotonic
                 eventOutcome <- Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
             } yield SubmitLedgerEvent(time, event, eventOutcome)
-    }
-
-    /** TODO: update - we don't need the timestamp here anymore
-      *
-      * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a
-      * LedgerEventId.
-      */
-    final case class NewLedgerEvent(
-        timeStamp: PosixTime,
-        event: LedgerEvent
-    )
-
-    object NewLedgerEvent {
-        type Subscriber = ActorRef[IO, NewLedgerEvent]
     }
 
     /** L2 block confirmations (local-only signal) */
@@ -187,7 +171,7 @@ object ConsensusProtocol {
         eventNum: LedgerEventId.Number,
         ack: Option[AckBlock],
         block: Option[Block],
-        events: List[NewLedgerEvent]
+        events: List[LedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
           id.increment,

@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger
 
-import cats.data.*
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -9,7 +8,6 @@ import hydrozoa.lib.actor.*
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
@@ -20,6 +18,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
+import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
@@ -512,25 +511,6 @@ object JointLedger {
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
             // Does this mean we should wrap it?
             LedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal | GetState.Sync
-
-        sealed trait LedgerEvent {
-            def eventId: LedgerEventId
-        }
-
-        object LedgerEvent {
-            final case class TxL2Event(
-                override val eventId: LedgerEventId,
-                tx: Array[Byte]
-            ) extends LedgerEvent
-
-            // FIXME: This should include the refundTxBytes
-            // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
-            final case class RegisterDeposit(
-                override val eventId: LedgerEventId,
-                serializedDeposit: Array[Byte],
-                virtualOutputs: NonEmptyList[GenesisObligation]
-            ) extends LedgerEvent
-        }
 
         // TODO: move pollResults to CompleteBlockRegular see comments there
         case class StartBlock(blockCreationTime: PosixTime, pollResults: Set[LedgerEventId])

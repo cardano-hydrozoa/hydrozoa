@@ -5,12 +5,12 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, LedgerEvent, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
-import hydrozoa.multisig.protocol.types.Block.Header
 import hydrozoa.multisig.protocol.types.Block.Number.firstBlockNumber
-import hydrozoa.multisig.protocol.types.{Block, LedgerEventId, Peer}
+import hydrozoa.multisig.protocol.types.Block.blockEvents
+import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
 
 /** Block weaver actor.
   *   - When the node is leading a block, packages known unprocessed and incoming events, i.e., L1
@@ -82,7 +82,7 @@ object BlockWeaver {
     }
 
     final case class Awaiting(
-        block: Block,
+        block: Block.Next,
         eventIdAwaited: LedgerEventId,
         mempool: Mempool
     ) extends State
@@ -183,30 +183,30 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
-            case msg: NewLedgerEvent => handleNewLedgerEvent(msg)
-            case b: Block            => handleNewBlock(b)
-            case bc: BlockConfirmed  => handleBlockConfirmed(bc)
+            case msg: LedgerEvent   => handleLedgerEvent(msg)
+            case b: Block.Next      => handleNewBlock(b)
+            case bc: BlockConfirmed => handleBlockConfirmed(bc)
         }
 
     // ===================================
     // Mailbox message handlers
     // ===================================
 
-    private def handleNewLedgerEvent(msg: NewLedgerEvent): IO[Unit] = {
+    private def handleLedgerEvent(event: LedgerEvent): IO[Unit] = {
         import FeedResult.*
 
         for {
-            _ <- IO.println("handleNewLedgerEvent")
+            _ <- IO.println("handleLedgerEvent")
             state <- stateRef.get
 
             _ <- state match {
                 case Idle(mempool) =>
                     // Just add event to the mempool
-                    stateRef.set(Idle(mempool.add(msg.event)))
+                    stateRef.set(Idle(mempool.add(event)))
                 case leader @ Leader(blockNumber, _) =>
                     for {
                         // Pass-through to the joint ledger
-                        _ <- config.jointLedger ! msg.event
+                        _ <- config.jointLedger ! event
                         // Complete the first block immediately
                         _ <- IO.whenA(leader.isFirstBlock) {
                             // It's always CompleteBlockRegular since we haven't
@@ -217,11 +217,11 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                     } yield ()
 
                 case awaiting @ Awaiting(block, eventIdAwaited, mempool) =>
-                    if msg.event.eventId == eventIdAwaited
+                    if event.eventId == eventIdAwaited
                     then {
                         // We got the event we waited for, try to finish the block
                         for {
-                            result <- continueFeedBlock(block, msg, mempool)
+                            result <- continueFeedBlock(block, event, mempool)
                             _ <- result match {
                                 case Done(residualMempool) =>
                                     for {
@@ -244,14 +244,14 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                     } else {
                         // This is not an event we are waiting for, just add it to the mempool and keep going
                         stateRef.set(
-                          awaiting.copy(mempool = mempool.add(msg.event))
+                          awaiting.copy(mempool = mempool.add(event))
                         )
                     }
             }
         } yield ()
     }
 
-    private def handleNewBlock(block: Block): IO[Unit] = {
+    private def handleNewBlock(block: Block.Next): IO[Unit] = {
         import FeedResult.*
         import WeaverError.*
 
@@ -290,9 +290,8 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         } yield ()
     }
 
-    private def completeBlock(block: Block): IO[Unit] = for {
+    private def completeBlock(block: Block.Next): IO[Unit] = for {
         completeBlock <- block match {
-            case _: Block.Initial => ??? // TODO: Impossible
             case _: Block.Minor =>
                 IO.pure(CompleteBlockRegular(Some(block)))
             case _: Block.Major =>
@@ -338,8 +337,17 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         case Done(mempool: Mempool)
         case EventMissing(eventId: LedgerEventId, mempool: Mempool)
 
+    /** Make an attempt to feed the whole block to the joint ledger
+      * @param block
+      *   the next block to handle
+      * @param initialMempool
+      *   the current state of mempool
+      * @param startWith
+      * @return
+      *   [[FeedResult]]
+      */
     private def tryFeedBlock(
-        block: Block,
+        block: Block.Next,
         initialMempool: Mempool,
         startWith: Option[LedgerEventId] = None
     ): IO[FeedResult] = {
@@ -349,18 +357,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
             _ <- IO.println(s"tryFeedBlock: start with: $startWith")
 
-            // TODO fix inference, see the first case match
-            _ <- IO.whenA(block.isInstanceOf[Block.Initial])(
-              IO.println("!!!1") >>
-                  IO.raiseError(WeaverError.InitialBlockAnnouncement)
-            )
-
-            blockEvents <- IO.pure(block match {
-                // case Block.Initial(_)     => IO.raiseError(WeaverError.InitialBlockAnnouncement)
-                case Block.Minor(_, body) => body.events.map(_._1)
-                case Block.Major(_, body) => body.events.map(_._1)
-                case Block.Final(_, body) => body.events.map(_._1)
-            })
+            blockEvents = block.blockEvents
 
             eventsToFeed = startWith match {
                 case Some(eventId) => blockEvents.splitAt(blockEvents.indexOf(eventId))._2
@@ -396,11 +393,11 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
     }
 
     private def continueFeedBlock(
-        block: Block,
-        msg: NewLedgerEvent,
+        block: Block.Next,
+        event: LedgerEvent,
         mempool: Mempool
     ): IO[FeedResult] =
-        tryFeedBlock(block, mempool.add(msg.event), Some(msg.event.eventId))
+        tryFeedBlock(block, mempool.add(event), Some(event.eventId))
 
     // ===================================
     // Switch to Idle
@@ -454,11 +451,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         blockNumber % config.numberOfPeers == config.blockLeadTurn % config.numberOfPeers
 
     private enum WeaverError extends Throwable:
-        case InitialBlockAnnouncement
         case UnexpectedBlockAnnouncement
 
         def msg: String = this match {
-            case InitialBlockAnnouncement    => "The initial block is not expected to be broadcast"
             case UnexpectedBlockAnnouncement => "Weaver got an unexpected new block announcement"
         }
 }

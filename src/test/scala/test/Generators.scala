@@ -2,8 +2,6 @@ package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
 import hydrozoa.PosixTime
-import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent
-import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent.TxL2Event
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -13,7 +11,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
-import hydrozoa.multisig.protocol.types.LedgerEventId
+import hydrozoa.multisig.protocol.types.LedgerEvent.TxL2Event
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*

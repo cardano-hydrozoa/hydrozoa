@@ -7,10 +7,9 @@ import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.multisig.ledger.JointLedger
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, LedgerEvent, StartBlock}
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
-import hydrozoa.multisig.protocol.ConsensusProtocol.NewLedgerEvent
-import hydrozoa.multisig.protocol.types.{Block, Peer}
+import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 import java.util.concurrent.TimeUnit
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
@@ -141,7 +140,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             p.assert(
               p.runIO(
                 handleBoolean(for {
-                    _ <- weaverActor ! NewLedgerEvent(0, anyLedgerEvent)
+                    _ <- weaverActor ! anyLedgerEvent
                     _ <- system.waitForIdle()
                     _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
                         // The first block cannot be final
@@ -193,7 +192,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   .map { e =>
                       p.runIO(
                         handleBoolean(for {
-                            _ <- weaverActor ! NewLedgerEvent(0, e)
+                            _ <- weaverActor ! e
                             _ <- system.waitForIdle()
                         } yield ())
                       ) &&
@@ -277,7 +276,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             handleBoolean(
               for {
                   // Pass all immediate events
-                  _ <- IO.traverse_(immediateEvents)(weaverActor ! NewLedgerEvent(0, _))
+                  _ <- IO.traverse_(immediateEvents)(weaverActor ! _)
 
                   // First block
                   now <- IO.monotonic
@@ -309,7 +308,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                       _ <- IO.sleep(50.millis)
                       _ <- weaverActor ! firstBlock
                       _ <- IO.whenA(eventsDelayed.nonEmpty)(
-                        IO.traverse_(eventsDelayed)(weaverActor ! NewLedgerEvent(0, _))
+                        IO.traverse_(eventsDelayed)(weaverActor ! _)
                       )
                       _ <- weaverActor ! secondBlock
                   } yield ()).start.void

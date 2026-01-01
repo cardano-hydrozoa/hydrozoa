@@ -44,6 +44,13 @@ object Block {
 
     type Next = Block.Minor | Block.Major | Block.Final
 
+    extension (next: Next)
+        def blockEvents: List[LedgerEventId] = next match {
+            case Block.Minor(_, body) => body.events.map(_._1)
+            case Block.Major(_, body) => body.events.map(_._1)
+            case Block.Final(_, body) => body.events.map(_._1)
+        }
+
     type Number = Number.Number
     enum Type:
         case Initial, Minor, Major, Final

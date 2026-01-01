@@ -42,7 +42,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
     private final case class Subscribers(
         ackBlock: AckBlock.Subscriber,
         newBlock: Block.Subscriber,
-        newLedgerEvent: NewLedgerEvent.Subscriber,
+        newLedgerEvent: LedgerEvent.Subscriber,
         remotePeerLiaison: PeerLiaisonRef
     )
 
@@ -122,7 +122,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
@@ -136,7 +136,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         @targetName("append")
         infix def :+(x: RemoteBroadcast.Request): IO[Unit] =
             x match {
-                case y: NewLedgerEvent =>
+                case y: LedgerEvent =>
                     for {
                         _ <- this.nEvent.update(_.increment)
                         _ <- this.qEvent.update(_ :+ y)
@@ -183,7 +183,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 nBlock <- this.nBlock.get
                 nEvents <- this.nEvent.get
                 newBatch <- x match {
-                    case y: NewLedgerEvent =>
+                    case y: LedgerEvent =>
                         for {
                             nEventsNew <- this.nEvent.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
@@ -255,13 +255,13 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     dropped.dequeueOption.fold((dropped, None))((x, xs) => (xs, Some(x)))
                 )
                 events <- this.qEvent.modify(q =>
-                    val dropped = q.dropWhile(_.event.eventId._2 <= batchReq.eventNum)
+                    val dropped = q.dropWhile(_.eventId._2 <= batchReq.eventNum)
                     dropped.splitAt(maxEvents).swap
                 )
 
                 ackNum = mAck.fold(nAck)(_.id.ackNum)
                 blockNum = mBlock.fold(nBlock)(_.id)
-                eventNum = events.lastOption.fold(nEvents)(_.event.eventId.eventNum)
+                eventNum = events.lastOption.fold(nEvents)(_.eventId.eventNum)
             } yield NewMsgBatch(
               id = batchReq.id,
               ackNum = ackNum,

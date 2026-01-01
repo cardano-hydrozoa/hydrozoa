@@ -9,7 +9,7 @@ import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.Persistence.PutResponse.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEventId}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, LedgerEventId}
 import scala.collection.immutable.TreeMap
 
 /** Persistence actor is a mock interface to a key-value store (e.g. RocksDB):
@@ -26,7 +26,7 @@ trait Persistence extends Actor[IO, Request] {
     private val acks = Ref.unsafe[IO, TreeMap[AckBlock.Id, AckBlock]](TreeMap())
     private val batches = Ref.unsafe[IO, TreeMap[Batch.Id, GetMsgBatch]](TreeMap())
     private val blocks = Ref.unsafe[IO, TreeMap[Block.Number, Block]](TreeMap())
-    private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, NewLedgerEvent]](TreeMap())
+    private val events = Ref.unsafe[IO, TreeMap[LedgerEventId, LedgerEvent]](TreeMap())
     private val confirmedBlock = Ref.unsafe[IO, Option[Block.Number]](None)
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
@@ -55,8 +55,8 @@ trait Persistence extends Actor[IO, Request] {
 
     def handlePersistRequest(req: PersistRequest): IO[PutResponse] = for {
         _ <- req.data match {
-            case x: NewLedgerEvent =>
-                events.update(m => m + (x.event.eventId -> x))
+            case x: LedgerEvent =>
+                events.update(m => m + (x.eventId -> x))
             case x: Block =>
                 blocks.update(m => m + (x.id -> x))
             case x: AckBlock =>
@@ -67,7 +67,7 @@ trait Persistence extends Actor[IO, Request] {
                 batches.update(m => m + (x.id -> x.nextGetMsgBatch)) >>
                     x.ack.traverse_(y => acks.update(m => m + (y.id -> y))) >>
                     x.block.traverse_(y => blocks.update(m => m + (y.id -> y))) >>
-                    events.update(m => m ++ x.events.map(y => y.event.eventId -> y))
+                    events.update(m => m ++ x.events.map(y => y.eventId -> y))
         }
     } yield PutSucceeded
 }

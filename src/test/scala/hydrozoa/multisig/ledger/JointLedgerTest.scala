@@ -5,7 +5,6 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import com.suprnation.actor.test as _
-import hydrozoa.multisig.ledger.JointLedger.Requests.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -13,6 +12,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.Version.Full
+import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import scala.collection.immutable.Queue
