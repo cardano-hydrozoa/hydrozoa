@@ -20,12 +20,14 @@ object ConsensusProtocol {
     enum Actors:
         case BlockProducer, CardanoLiaison, PeerLiaison, TransactionSequencer
 
+    // TODO: move to the weaver sources
     object BlockWeaver {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
-        type Request = NewLedgerEvent | Block | BlockConfirmed
+        type Request = NewLedgerEvent | Block | BlockConfirmed // TODO: add PollResults
 
-        /** Simple confirmation, doesn't need to contain full [[AckBlock]].
+        /** Simple confirmation, doesn't need to contain full [[AckBlock]]. TODO: add the
+          * finalization flag
           *
           * @param blockNumber
           */
@@ -88,7 +90,7 @@ object ConsensusProtocol {
             } yield SubmitLedgerEvent(time, event, eventOutcome)
     }
 
-    /** TODO: update
+    /** TODO: update - we don't need the timestamp here anymore
       *
       * The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a
       * LedgerEventId.

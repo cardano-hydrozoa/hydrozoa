@@ -101,6 +101,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         true
     }
 
+    // TODO: check that assertion labels are printed
     // TODO: move to PropertyBuilder
     def handleBoolean(comp: IO[Unit]): IO[Boolean] =
         (comp >> IO.pure(true)).handleErrorWith(e => IO.println(s"exception: $e") >> IO.pure(false))

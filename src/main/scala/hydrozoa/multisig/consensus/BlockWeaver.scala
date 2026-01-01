@@ -10,18 +10,17 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
 import hydrozoa.multisig.protocol.types.Block.Header
 import hydrozoa.multisig.protocol.types.Block.Number.firstBlockNumber
-import hydrozoa.multisig.protocol.types.{AckBlock, Block, LedgerEventId, Peer}
-import scala.collection.immutable.SortedSet
+import hydrozoa.multisig.protocol.types.{Block, LedgerEventId, Peer}
 
-/** Block weaver actor:
+/** Block weaver actor.
+  *   - When the node is leading a block, packages known unprocessed and incoming events, i.e., L1
+  *     deposits and L2 txs into a new block.
+  *   - When follower, before any block arrives, simply store incoming events in the mempool,
+  *     keeping their order or arrival.
+  *   - When a block arrives, feeds all the block to the joint ledger or uses Awaiting mode to wait
+  *     till all events get through.
   *
-  * TODO: update the description
-  *
-  *   - When leader, receives L1 deposits + L2 txs and packages them into a new block.
-  *   - When follower, before any block arrives, simply store incoming events in their corresponding
-  *     queues in the mempool.
-  *   - When leader or follower, collects L2 block acks to confirm block effects and trigger
-  *     leader/follower switch.
+  * There are several diagrams in the Hydrozoa docs that illustrate the work of the weaver.
   */
 object BlockWeaver {
 
@@ -54,7 +53,7 @@ object BlockWeaver {
         /** Recovered mempool, i.e., all ledger events outstanding the indices of the last known
           * block. Upon initialization is always an empty set by definition.
           *
-          * TODO: shall we use just Seq[LedgerEvent here]?
+          * TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
           */
         recoveredMempool: Mempool,
         jointLedger: JointLedger.Ref,
@@ -64,13 +63,6 @@ object BlockWeaver {
 
     def apply(config: Config): IO[BlockWeaver] =
         IO(new BlockWeaver(config = config) {})
-
-    //// TODO: shall we use a separate package?
-    //// This is useful fot testing purposes
-    // private [consensus] def applyWithState(config: Config, someState: State): IO[BlockWeaver] = for {
-    //    weaver <- IO(new BlockWeaver(config = config) {})
-    //    _ <- weaver.stateRef.set(someState)
-    // } yield weaver
 
     // ===================================
     // Weaver internal state
@@ -106,12 +98,12 @@ object BlockWeaver {
       * the peer liaison is in charge or maintaining the integrity of the stream of messages.
       *
       * @param events
-      * @param numbersByPeer
+      *   map to srtore events
       * @param receivingOrder
+      *   vector to store order of event ids
       */
     case class Mempool(
         events: Map[LedgerEventId, LedgerEvent] = Map.empty,
-        numbersByPeer: Map[Peer.Number, SortedSet[Int]] = Map.empty,
         receivingOrder: Vector[LedgerEventId] = Vector.empty
     )
 
@@ -142,41 +134,23 @@ object BlockWeaver {
                   s"panic - duplicate event id in the pool: $eventId"
                 )
 
-                val newNumbers = mempool.numbersByPeer
-                    .getOrElse(eventId.peerNum, SortedSet.empty[Int]) + eventId.eventNum
-
                 mempool.copy(
                   events = mempool.events + (eventId -> event),
-                  numbersByPeer = mempool.numbersByPeer + (eventId.peerNum -> newNumbers),
                   receivingOrder = mempool.receivingOrder :+ eventId
                 )
             }
 
             // Remove event - returns new state
             def remove(id: LedgerEventId): Mempool = {
-                mempool.events.get(id) match {
-                    // TODO: shall we raise here?
-                    case None => mempool // Not found, no change
-                    case Some(_) =>
-                        val newNumbersByPeer = mempool.numbersByPeer.get(id.peerNum) match {
-                            case None => mempool.numbersByPeer
-                            case Some(eventNums) =>
-                                val updatedNums = eventNums - id.eventNum
-                                if updatedNums.isEmpty then mempool.numbersByPeer - id.peerNum
-                                else mempool.numbersByPeer + (id.peerNum -> updatedNums)
-                        }
-
-                        mempool.copy(
-                          events = mempool.events - id,
-                          numbersByPeer = newNumbersByPeer,
-                          receivingOrder = mempool.receivingOrder.filterNot(_ == id)
-                        )
-                }
+                require(
+                  mempool.events.contains(id),
+                  "panic - an attempt to remove a missing event from the mempool"
+                )
+                mempool.copy(
+                  events = mempool.events - id,
+                  receivingOrder = mempool.receivingOrder.filterNot(_ == id)
+                )
             }
-
-            // Query max number for peer
-            def getMaxNumber(peer: Peer.Number): Option[Int] =
-                mempool.numbersByPeer.get(peer).flatMap(_.lastOption)
 
             // Find by ID
             def findById(id: LedgerEventId): Option[LedgerEvent] =
@@ -196,15 +170,6 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
     private val stateRef: Ref[IO, State] = Ref.unsafe(mkInitialState)
 
-    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
-
-    private final case class Subscribers(
-        ackBlock: List[AckBlock.Subscriber],
-        newBlock: List[Block.Subscriber],
-        confirmBlock: List[ConfirmBlock.Subscriber],
-        confirmMajorFinalBlock: ConfirmMajorFinalBlock.Subscriber
-    )
-
     override def preStart: IO[Unit] =
         if config.lastKnownBlock.toInt == 0 then
             require(
@@ -216,7 +181,6 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(receiveTotal)
 
-    // private def receiveTotal(req: Request, _subs: Subscribers): IO[Unit] =
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
             case msg: NewLedgerEvent => handleNewLedgerEvent(msg)
@@ -321,8 +285,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                                 } yield ()
                         }
                     } yield ()
-                case _: Leader   => IO.raiseError(UnexpectedBlockAnnouncement)
-                case _: Awaiting => IO.raiseError(UnexpectedBlockAnnouncement)
+                case _ => IO.raiseError(UnexpectedBlockAnnouncement)
             }
         } yield ()
     }
@@ -340,13 +303,15 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         _ <- config.jointLedger ! completeBlock
     } yield ()
 
-    private def handleBlockConfirmed(confirmation: BlockConfirmed): IO[Unit] = {
+    private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
 
         for {
             _ <- IO.println("handleBlockConfirmed")
             state <- stateRef.get
             _ <- state match {
                 case Leader(blockNumber, isFinal) =>
+                    // Iff the block confirmed is the previous block
+                    IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
                     for {
                         // Finish the current block immediately
                         _ <- config.jointLedger !
@@ -410,7 +375,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
               (eventsToFeed, initialMempool)
             ) {
                 case (Nil, mempool) => IO.pure(Right(None, mempool))
-                // TODO add tryRemove
+                // TODO maybe add tryRemove later on
                 case (e :: es, mempool) =>
                     mempool.findById(e) match {
                         case Some(event) =>
@@ -464,9 +429,6 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                 // pollResults now live here though George's intent was to send them in the finish block event
                 // besides they are not needed when we commence building/checking a block another thing is
                 // that there is a chance results are fresher by the time we finish a block
-                // TODO: personally I see this as mingling in two separate things together
-                // This function is supposed to be called in preStart as well,
-                // and we only can pass empty Set
                 // TODO: don't we need to pass the number of the block?
                 _ <- config.jointLedger ! StartBlock(now.toMillis, Set.empty)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
