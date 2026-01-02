@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
@@ -19,10 +20,9 @@ import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
-import java.util.concurrent.TimeUnit
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.{FiniteDuration, SECONDS}
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 import scalus.ledger.api.v3.PosixTime
@@ -193,7 +193,6 @@ final case class JointLedger(
               Producing(
                 previousBlock = d.producedBlock,
                 startTime = blockCreationTime,
-                pollResults = args.pollResults,
                 TransientFields(
                   // TODO: Peter please confirm we can remove it
                   // ledgerEventsRequired = d.producedBlock match {
@@ -233,14 +232,11 @@ final case class JointLedger(
               depositsRefunded = depositsRefunded
             )
 
-            val kzgCommit = p.virtualLedgerState.kzgCommitment
             val nextBlock: Block.Minor = p.previousBlock
                 .nextBlock(
                   newBody = nextBlockBody,
-                  // FIXME: Conflicting types
-                  newTime = FiniteDuration(p.startTime.toLong, SECONDS),
-                  // FIXME: Conflicting types
-                  newCommitment = kzgCommit
+                  newTime = p.startTime,
+                  newCommitment = p.virtualLedgerState.kzgCommitment
                 )
                 .asInstanceOf[Block.Minor]
 
@@ -267,7 +263,7 @@ final case class JointLedger(
             val nextBlock: Block.Major = p.previousBlock
                 .nextBlock(
                   newBody = nextBlockBody,
-                  newTime = FiniteDuration(p.startTime.toLong, TimeUnit.SECONDS),
+                  newTime = p.startTime,
                   // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
                   // calling out to the virtual ledger
                   newCommitment = IArray.unsafeFromArray(
@@ -353,9 +349,11 @@ final case class JointLedger(
             immatureDeposits = depositsPartition._2
 
             // Tuple containing (depositsInPollResults, depositsNotInPollResults)
-            depositPartition = matureDeposits.partition(x => producing.pollResults.contains(x._1))
-            depositsInPollResults = depositPartition._1
+            depositPartition = matureDeposits.partition(x =>
+                pollResults.contains(UtxoIdL1(x._2.toUtxo.input))
+            )
 
+            depositsInPollResults = depositPartition._1
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
             depositsNotInPollResults = depositPartition._2
 
@@ -433,7 +431,7 @@ final case class JointLedger(
                 val nextBlock: Block.Final = p.previousBlock
                     .nextBlock(
                       nextBlockBody,
-                      FiniteDuration(p.startTime.toLong, TimeUnit.SECONDS),
+                      p.startTime,
                       IArray.empty[Byte]
                     )
                     .asInstanceOf[Block.Final]
@@ -512,11 +510,13 @@ object JointLedger {
             // Does this mean we should wrap it?
             LedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal | GetState.Sync
 
-        // TODO: move pollResults to CompleteBlockRegular see comments there
-        case class StartBlock(blockCreationTime: PosixTime, pollResults: Set[LedgerEventId])
+        case class StartBlock(
+            blockNum: Block.Number,
+            blockCreationTime: FiniteDuration
+        )
 
         /** @param referenceBlock
-          * @param pollResaults
+          * @param pollResults
           *   there are two reasons to have it here:
           *   - pollResults are always absent upon weaver's start time. Passing it here may improve
           *     things.
@@ -524,8 +524,10 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
+            // TODO: is it still actual?
             // Make this block Major in order to circumvent a fallback tx becoming valid
             // forceMajor : Boolean
+            pollResults: Set[UtxoIdL1]
         )
 
         case class CompleteBlockFinal(referenceBlock: Option[Block])
@@ -553,8 +555,7 @@ object JointLedger {
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
-        startTime: PosixTime,
-        pollResults: Set[LedgerEventId],
+        startTime: FiniteDuration,
         nextBlockData: TransientFields
     ) extends State
 }

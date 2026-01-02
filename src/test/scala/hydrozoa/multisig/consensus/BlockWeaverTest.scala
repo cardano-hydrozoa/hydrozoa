@@ -11,7 +11,6 @@ import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, Comple
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
-import java.util.concurrent.TimeUnit
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
 import scala.collection.mutable
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -80,11 +79,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // then ...
         p.assert(
           p.runIO(handleBoolean(expectMsgPF(jointLedgerMockActor, 5.second) {
-              case s: StartBlock
-                  if aroundNow(
-                    FiniteDuration.apply(s.blockCreationTime.toLong, TimeUnit.MILLISECONDS)
-                  ) =>
-                  ()
+              case s: StartBlock if aroundNow(s.blockCreationTime) => ()
           })),
           "weaver should start the block with sensible creation time"
         )
@@ -144,7 +139,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                     _ <- system.waitForIdle()
                     _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
                         // The first block cannot be final
-                        case CompleteBlockRegular(None) => ()
+                        case CompleteBlockRegular(None, _) => ()
                     }
                 } yield ())
               )
@@ -314,12 +309,21 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   } yield ()).start.void
 
                   _ <- expectMsgs(jointLedgerMockActor, 10.seconds)(
-                    (List(StartBlock(firstBlock.header.timeCreation.toMillis, Set.empty))
+                    (List(
+                      StartBlock(firstBlock.header.nextBlockNumber, firstBlock.header.timeCreation)
+                    )
                         ++ firstBlockEvents
-                        ++ List(CompleteBlockRegular(Some(firstBlock)))
-                        ++ List(StartBlock(secondBlock.header.timeCreation.toMillis, Set.empty))
+                        ++ List(
+                          CompleteBlockRegular(Some(firstBlock), Set.empty)
+                        ) // TODO: pollResults
+                        ++ List(
+                          StartBlock(
+                            firstBlock.header.nextBlockNumber,
+                            secondBlock.header.timeCreation
+                          )
+                        )
                         ++ secondBlockEvents
-                        ++ List(CompleteBlockRegular(Some(secondBlock))))*
+                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty)))* // TODO: pollResults
                   )
               } yield ()
             )

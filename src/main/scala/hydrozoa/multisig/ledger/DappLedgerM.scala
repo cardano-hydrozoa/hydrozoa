@@ -210,6 +210,8 @@ object DappLedgerM {
     ) {
         def appendToQueue(t: (LedgerEventId, DepositUtxo)): State =
             this.copy(treasury, deposits.appended(t))
+
+        def depositUtxoByEventId(ledgerEventId: LedgerEventId): Option[DepositUtxo] = ???
     }
 
     object SettleLedger {

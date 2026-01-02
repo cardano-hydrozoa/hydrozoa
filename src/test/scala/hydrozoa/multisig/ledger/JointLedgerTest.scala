@@ -5,6 +5,7 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import com.suprnation.actor.test as _
+import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -16,9 +17,9 @@ import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import scala.collection.immutable.Queue
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{Block as _, *}
-import scalus.ledger.api.v3.PosixTime
 import scalus.prelude.Option as SOption
 import test.*
 import test.Generators.Hydrozoa.*
@@ -60,10 +61,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             ask.flatMap(env => liftR(env.jointLedger ! req))
 
         def startBlock(
-            blockCreationTime: PosixTime,
-            pollResults: Set[LedgerEventId]
+            blockNum: Block.Number,
+            blockCreationTime: FiniteDuration
         ): TestM[Unit] =
-            startBlock(StartBlock(blockCreationTime, pollResults))
+            startBlock(StartBlock(blockNum, blockCreationTime))
 
         def completeBlockRegular(req: CompleteBlockRegular): TestM[Unit] =
             for {
@@ -71,8 +72,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 _ <- liftR(jl ! req)
             } yield ()
 
-        def completeBlockRegular(referenceBlock: Option[Block]): TestM[Unit] =
-            completeBlockRegular(CompleteBlockRegular(referenceBlock))
+        def completeBlockRegular(
+            referenceBlock: Option[Block],
+            pollResults: Set[UtxoIdL1]
+        ): TestM[Unit] =
+            completeBlockRegular(CompleteBlockRegular(referenceBlock, pollResults))
 
     }
 
@@ -154,7 +158,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         import Scenarios.*
         run(for {
             // Step 1: Put the joint ledger in producing mode
-            _ <- startBlock(1, Set.empty)
+            now1 <- liftR(IO.monotonic)
+            _ <- startBlock(Block.Number(1), now1)
 
             // Step 2: generate a deposit and observe that it appears in the dapp ledger correctly
             seqAndReq <- deposit
@@ -183,7 +188,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             } yield ()
 
             // Step 3: Complete a block
-            _ <- completeBlockRegular(None)
+            _ <- completeBlockRegular(None, Set.empty)
             _ <-
                 for {
                     jointLedgerState <- getState
@@ -197,8 +202,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 } yield ()
 
             // Step 4: Complete another block.
-            _ <- startBlock(2, Set(depositReq.eventId))
-            _ <- completeBlockRegular(None)
+            now2 <- liftR(IO.monotonic)
+            _ <- startBlock(Block.Number(2), now2)
+            _ <- completeBlockRegular(
+              None,
+              Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+            )
 
             _ <- for {
                 jlState <- getState

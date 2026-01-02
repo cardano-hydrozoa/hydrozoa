@@ -2,6 +2,7 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
@@ -22,14 +23,25 @@ object ConsensusProtocol {
     object BlockWeaver {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
-        type Request = LedgerEvent | Block | BlockConfirmed // TODO: add PollResults
+        // TODO: use Block.Next not Block here
+        type Request = LedgerEvent | Block | BlockConfirmed | PollResults
 
-        /** Simple confirmation, doesn't need to contain full [[AckBlock]]. TODO: add the
-          * finalization flag
+        /** Block confirmation.
           *
           * @param blockNumber
           */
-        final case class BlockConfirmed(blockNumber: Block.Number)
+        final case class BlockConfirmed(
+            blockNumber: Block.Number,
+            finalizationRequested: Boolean = false
+        )
+
+        /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at
+          * the multisig head address.
+          *
+          * @param utxos
+          *   all utxos found
+          */
+        final case class PollResults(utxos: Set[UtxoIdL1])
     }
 
     /** TODO: I would like to have it in the CardanoLiaison.scala and not here.

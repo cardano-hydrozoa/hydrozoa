@@ -75,8 +75,7 @@ object BlockWeaver {
     ) extends State
 
     final case class Leader(
-        blockNumber: Block.Number,
-        isFinal: Boolean
+        blockNumber: Block.Number
     ) extends State {
         def isFirstBlock: Boolean = blockNumber == firstBlockNumber
     }
@@ -170,6 +169,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
 
     private val stateRef: Ref[IO, State] = Ref.unsafe(mkInitialState)
 
+    // Having this field separately rids of the need to weave it through state changes.
+    private val pollResultsRef: Ref[IO, PollResults] = Ref.unsafe(PollResults(Set.empty))
+
     override def preStart: IO[Unit] =
         if config.lastKnownBlock.toInt == 0 then
             require(
@@ -186,6 +188,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
             case msg: LedgerEvent   => handleLedgerEvent(msg)
             case b: Block.Next      => handleNewBlock(b)
             case bc: BlockConfirmed => handleBlockConfirmed(bc)
+            case pr: PollResults    => handlePollResults(pr)
         }
 
     // ===================================
@@ -203,15 +206,16 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                 case Idle(mempool) =>
                     // Just add event to the mempool
                     stateRef.set(Idle(mempool.add(event)))
-                case leader @ Leader(blockNumber, _) =>
+                case leader @ Leader(blockNumber) =>
                     for {
                         // Pass-through to the joint ledger
                         _ <- config.jointLedger ! event
                         // Complete the first block immediately
+                        pollResults <- pollResultsRef.get
                         _ <- IO.whenA(leader.isFirstBlock) {
                             // It's always CompleteBlockRegular since we haven't
                             // seen any confirmations so far.
-                            (config.jointLedger ! CompleteBlockRegular(None))
+                            (config.jointLedger ! CompleteBlockRegular(None, pollResults.utxos))
                                 >> switchToIdle(blockNumber.increment)
                         }
                     } yield ()
@@ -227,7 +231,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                                     for {
                                         // We are done with the block
                                         _ <- IO.println("Done after awaiting for missing events")
-                                        _ <- completeBlock(block)
+                                        _ <- completeReferenceBlock(block)
                                         // Switch to Idle with the residual of mempool
                                         _ <- switchToIdle(block.id.increment, residualMempool)
                                     } yield ()
@@ -264,8 +268,8 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                     for {
                         // This is sort of ephemeral Follower state
                         _ <- config.jointLedger ! StartBlock(
-                          block.header.timeCreation.toMillis,
-                          Set.empty
+                          block.header.blockNum,
+                          block.header.timeCreation
                         )
                         result <- tryFeedBlock(block, mempool)
                         _ <- result match {
@@ -273,7 +277,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
                                 for {
                                     // We are done with the block
                                     _ <- IO.println("Done")
-                                    _ <- completeBlock(block)
+                                    _ <- completeReferenceBlock(block)
                                     _ <- switchToIdle(block.id.increment, residualMempool)
                                 } yield ()
                             case EventMissing(eventIdAwaited, residualMempool) =>
@@ -290,12 +294,13 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         } yield ()
     }
 
-    private def completeBlock(block: Block.Next): IO[Unit] = for {
+    private def completeReferenceBlock(block: Block.Next): IO[Unit] = for {
+        pollResults <- pollResultsRef.get
         completeBlock <- block match {
             case _: Block.Minor =>
-                IO.pure(CompleteBlockRegular(Some(block)))
+                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
             case _: Block.Major =>
-                IO.pure(CompleteBlockRegular(Some(block)))
+                IO.pure(CompleteBlockRegular(Some(block), pollResults.utxos))
             case _: Block.Final =>
                 IO.pure(CompleteBlockFinal(Some(block)))
         }
@@ -303,21 +308,20 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
     } yield ()
 
     private def handleBlockConfirmed(blockConfirmed: BlockConfirmed): IO[Unit] = {
-
         for {
             _ <- IO.println("handleBlockConfirmed")
             state <- stateRef.get
             _ <- state match {
-                case Leader(blockNumber, isFinal) =>
+                case Leader(blockNumber) =>
                     // Iff the block confirmed is the previous block
                     IO.whenA(blockConfirmed.blockNumber.increment == blockNumber)
                     for {
+                        pollResults <- pollResultsRef.get
                         // Finish the current block immediately
                         _ <- config.jointLedger !
-                            (if isFinal
-                             // TODO: add pollResults thingy
-                             then CompleteBlockRegular(None)
-                             else CompleteBlockFinal(None))
+                            (if blockConfirmed.finalizationRequested
+                             then CompleteBlockFinal(None)
+                             else CompleteBlockRegular(None, pollResults.utxos))
                         // Switch to Idle
                         _ <- switchToIdle(blockNumber.increment)
                     } yield ()
@@ -407,33 +411,26 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
       * all events existing in the mempool to the joint ledger and immediately switches to the
       * Leader state. If not, stays in Idle until we see the next block announcement.
       *
-      * @param nextBlock
+      * @param nextBlockNum
       *   the next block number
       * @param mempool
       *   if we are switching from follower/awaiting there may be the rest of mempool
       * @return
       */
     private def switchToIdle(
-        nextBlock: Block.Number,
+        nextBlockNum: Block.Number,
         mempool: Mempool = Mempool.empty
     ): IO[Unit] =
-        if isLeaderForBlock(nextBlock)
+        if isLeaderForBlock(nextBlockNum)
         then
             for {
-                _ <- IO.println(s"becoming leader for block: $nextBlock")
+                _ <- IO.println(s"becoming leader for block: $nextBlockNum")
                 now <- IO.monotonic
-                // TODO: revert FiniteDuration, now I see why we had it there before
-                // pollResults now live here though George's intent was to send them in the finish block event
-                // besides they are not needed when we commence building/checking a block another thing is
-                // that there is a chance results are fresher by the time we finish a block
-                // TODO: don't we need to pass the number of the block?
-                _ <- config.jointLedger ! StartBlock(now.toMillis, Set.empty)
+                _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     config.jointLedger ! mempool.findById(event).get
                 )
-                // TODO: add isFinal to BlockConfirmed or use AckBlock as it was done before
-                // TODO: this is always false for the initialization block
-                _ <- stateRef.set(Leader(nextBlock, false))
+                _ <- stateRef.set(Leader(nextBlockNum))
             } yield ()
         else stateRef.set(Idle(mempool))
 
@@ -449,6 +446,9 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
       */
     private def isLeaderForBlock(blockNumber: Block.Number): Boolean =
         blockNumber % config.numberOfPeers == config.blockLeadTurn % config.numberOfPeers
+
+    private def handlePollResults(pollResults: PollResults): IO[Unit] =
+        pollResultsRef.set(pollResults)
 
     private enum WeaverError extends Throwable:
         case UnexpectedBlockAnnouncement
