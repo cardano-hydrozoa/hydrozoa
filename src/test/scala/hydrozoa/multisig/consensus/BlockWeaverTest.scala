@@ -310,20 +310,17 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   _ <- expectMsgs(jointLedgerMockActor, 10.seconds)(
                     (List(
-                      StartBlock(firstBlock.header.nextBlockNumber, firstBlock.header.timeCreation)
+                      StartBlock(firstBlock.header.blockNum, firstBlock.header.timeCreation)
                     )
                         ++ firstBlockEvents
                         ++ List(
                           CompleteBlockRegular(Some(firstBlock), Set.empty)
-                        ) // TODO: pollResults
+                        )
                         ++ List(
-                          StartBlock(
-                            firstBlock.header.nextBlockNumber,
-                            secondBlock.header.timeCreation
-                          )
+                          StartBlock(secondBlock.header.blockNum, secondBlock.header.timeCreation)
                         )
                         ++ secondBlockEvents
-                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty)))* // TODO: pollResults
+                        ++ List(CompleteBlockRegular(Some(secondBlock), Set.empty)))*
                   )
               } yield ()
             )
@@ -339,16 +336,16 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         override def receive: Receive[IO, JointLedger.Requests.Request] = {
             case e: LedgerEvent =>
-                // IO.println(s"mock: LedgerEvent: $e") >>
-                IO { events.append(e) }
+                IO.println(s"mock: LedgerEvent: $e") >>
+                    IO { events.append(e) }
             case s: StartBlock =>
-                // IO.println(s"mock: StartBlock: $s") >>
-                IO.pure(())
+                IO.println(s"mock: StartBlock: $s") >>
+                    IO.pure(())
             case c: CompleteBlockRegular =>
-                // IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}") >>
-                IO.pure(())
+                IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}") >>
+                    IO.pure(())
             case f: CompleteBlockFinal =>
-                // IO.println("mock:CompleteBlockFinal") >>
-                IO.pure(())
+                IO.println("mock:CompleteBlockFinal") >>
+                    IO.pure(())
         }
 }
