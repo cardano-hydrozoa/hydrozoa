@@ -339,11 +339,16 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         override def receive: Receive[IO, JointLedger.Requests.Request] = {
             case e: LedgerEvent =>
-                IO.println(s"mock: LedgerEvent: $e") >>
-                    IO { events.append(e) }
-            case s: StartBlock => IO.println(s"mock: StartBlock: $s")
+                // IO.println(s"mock: LedgerEvent: $e") >>
+                IO { events.append(e) }
+            case s: StartBlock =>
+                // IO.println(s"mock: StartBlock: $s") >>
+                IO.pure(())
             case c: CompleteBlockRegular =>
-                IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}")
-            case f: CompleteBlockFinal => IO.println("mock:CompleteBlockFinal")
+                // IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}") >>
+                IO.pure(())
+            case f: CompleteBlockFinal =>
+                // IO.println("mock:CompleteBlockFinal") >>
+                IO.pure(())
         }
 }

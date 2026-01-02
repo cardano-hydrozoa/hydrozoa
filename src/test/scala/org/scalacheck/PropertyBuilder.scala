@@ -287,7 +287,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
 
         val list = p.pick(Gen.listOfN(size, Arbitrary.arbitrary[Int]), "list")
 
-        p.assert(list.length == size + 1, s"Expected $size elements")
+        p.assert(list.length == size, s"Expected $size elements")
         true
     }
 
@@ -311,7 +311,7 @@ object PropertyBuilderTest extends Properties("PropertyBuilderTest") {
             val y = p.pick(Gen.choose(1, 100), "y")
 
             // On failure, you can inspect p.getTrace to see what was generated
-            p.assert(x + y < 0)
+            p.assert(x + y > 0)
             true
         }
 
