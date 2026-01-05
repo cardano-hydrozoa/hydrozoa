@@ -85,12 +85,13 @@ object DappLedgerM {
             config <- ask
             // FIXME: DepositTx's parser does not check all the invariants.
             //  Use DepositRefundTxSeq's parser, instead.
-            depositTx <- lift(
-              DepositTx
-                  .parse(serializedDeposit, config, virtualOutputs)
-                  .left
-                  .map(ParseDepositError(_))
-            )
+            parseRes =
+                DepositTx
+                    .parse(serializedDeposit, config, virtualOutputs)
+                    .left
+                    .map(ParseDepositError(_))
+            depositTx <- lift(parseRes)
+
             // _ <- EitherT(validateTimeBounds(depositTx))
             s <- get
             newState = s.appendToQueue((eventId, depositTx.depositProduced))

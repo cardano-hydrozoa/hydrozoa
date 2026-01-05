@@ -239,21 +239,23 @@ final case class JointLedger(
         import args.*
 
         def augmentBlockMinor(
-            p: Producing,
             depositsRefunded: List[LedgerEvent.Id]
-        ): AugmentedBlock.Minor = {
-            import p.nextBlockData.*
-            val nextBlockBody: Block.Body.Minor = Block.Body.Minor(
-              ledgerEventsRequired = ledgerEventsRequired,
-              transactionsValid = transactionsValid,
-              transactionsInvalid = transactionsInvalid,
-              depositsRegistered = depositsRegistered,
-              depositsRejected = depositsRejected,
-              depositsRefunded = depositsRefunded
-            )
+        ): IO[AugmentedBlock.Minor] = for {
+            p <- unsafeGetProducing
+            nextBlockBody: Block.Body.Minor = {
+                import p.nextBlockData.*
+                Block.Body.Minor(
+                  ledgerEventsRequired = ledgerEventsRequired,
+                  transactionsValid = transactionsValid,
+                  transactionsInvalid = transactionsInvalid,
+                  depositsRegistered = depositsRegistered,
+                  depositsRejected = depositsRejected,
+                  depositsRefunded = depositsRefunded
+                )
+            }
 
-            val kzgCommit = p.virtualLedgerState.kzgCommitment
-            val nextBlock: Block.Minor = p.previousBlock
+            kzgCommit = p.virtualLedgerState.kzgCommitment
+            nextBlock: Block.Minor = p.previousBlock
                 .nextBlock(
                   newBody = nextBlockBody,
                   // FIXME: Conflicting types
@@ -263,43 +265,46 @@ final case class JointLedger(
                 )
                 .asInstanceOf[Block.Minor]
 
-            AugmentedBlock.Minor(
-              nextBlock,
-              BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
-            )
+        } yield AugmentedBlock.Minor(
+          nextBlock,
+          BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
+        )
 
-        }
         def augmentedBlockMajor(
-            p: Producing,
             settleLedgerRes: DappLedgerM.SettleLedger.Result,
             refundedDeposits: List[LedgerEvent.Id],
             absorbedDeposits: List[LedgerEvent.Id]
-        ): AugmentedBlock.Major = {
-            import p.nextBlockData.*
-            val nextBlockBody: Block.Body.Major = Block.Body.Major(
-              ledgerEventsRequired = ledgerEventsRequired,
-              transactionsValid = transactionsValid,
-              transactionsInvalid = transactionsInvalid,
-              depositsRegistered = depositsRegistered,
-              depositsRejected = depositsRejected,
-              depositsAbsorbed = absorbedDeposits,
-              depositsRefunded = refundedDeposits
-            )
+        ): IO[AugmentedBlock.Major] =
+            for {
+                p <- unsafeGetProducing
+                nextBlockBody: Block.Body.Major = {
+                    import p.nextBlockData.*
 
-            // FIXME: unsafe cast
-            val nextBlock: Block.Major = p.previousBlock
-                .nextBlock(
-                  newBody = nextBlockBody,
-                  newTime = p.startTime,
-                  // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
-                  // calling out to the virtual ledger
-                  newCommitment = IArray.unsafeFromArray(
-                    settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.datum.commit.bytes
-                  )
-                )
-                .asInstanceOf[Block.Major]
+                    Block.Body.Major(
+                      ledgerEventsRequired = ledgerEventsRequired,
+                      transactionsValid = transactionsValid,
+                      transactionsInvalid = transactionsInvalid,
+                      depositsRegistered = depositsRegistered,
+                      depositsRejected = depositsRejected,
+                      depositsAbsorbed = absorbedDeposits,
+                      depositsRefunded = refundedDeposits
+                    )
+                }
 
-            AugmentedBlock.Major(
+                // FIXME: unsafe cast
+                nextBlock: Block.Major = p.previousBlock
+                    .nextBlock(
+                      newBody = nextBlockBody,
+                      newTime = p.startTime,
+                      // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
+                      // calling out to the virtual ledger
+                      newCommitment = IArray.unsafeFromArray(
+                        settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.datum.commit.bytes
+                      )
+                    )
+                    .asInstanceOf[Block.Major]
+
+            } yield AugmentedBlock.Major(
               nextBlock,
               BlockEffects.Major(
                 nextBlock.id,
@@ -314,35 +319,36 @@ final case class JointLedger(
                 postDatedRefunds = List.empty
               )
             )
-        }
-
-        def isMature(deposit: DepositUtxo): Boolean = true
 
         def doSettlement(
             validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
-            treasuryToSpend: MultisigTreasuryUtxo,
-            payoutObligations: Vector[Payout.Obligation],
             immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
-            blockCreatedOn: java.time.Instant,
-            txTiming: TxTiming
-        ): IO[DappLedgerM.SettleLedger.Result] = {
-            val genesisObligations: Queue[GenesisObligation] =
-                validDeposits
-                    .map(_._2.virtualOutputs)
-                    .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
-            val genesisEvent = L2EventGenesis(
-              genesisObligations,
-              TransactionHash.fromByteString(
-                platform.blake2b_256(
-                  config.tokenNames.headTokenName.bytes ++
-                      ByteString.fromBigIntBigEndian(
-                        BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
-                      )
-                )
-              )
-            )
+        ): IO[DappLedgerM.SettleLedger.Result] =
             for {
-                nextKzg <- this.runVirtualLedgerM(VirtualLedgerM.mockApplyGenesis(genesisEvent))
+                p <- unsafeGetProducing
+                treasuryToSpend = p.dappLedgerState.treasury
+                payoutObligations = p.nextBlockData.blockWithdrawnUtxos
+                blockCreatedOn = p.startTime
+
+                genesisObligations: Queue[GenesisObligation] =
+                    validDeposits
+                        .map(_._2.virtualOutputs)
+                        .foldLeft(Queue.empty)((acc, ob) => acc.appendedAll(ob.toList))
+                genesisEvent = L2EventGenesis(
+                  genesisObligations,
+                  TransactionHash.fromByteString(
+                    platform.blake2b_256(
+                      config.tokenNames.headTokenName.bytes ++
+                          ByteString.fromBigIntBigEndian(
+                            BigInt(treasuryToSpend.datum.versionMajor.toInt + 1)
+                          )
+                    )
+                  )
+                )
+
+                nextKzg: KzgCommitment <- this.runVirtualLedgerM(
+                  VirtualLedgerM.mockApplyGenesis(genesisEvent)
+                )
 
                 settleLedgerRes <- this.runDappLedgerM(
                   DappLedgerM.settleLedger(
@@ -365,7 +371,6 @@ final case class JointLedger(
                 // Is it safe to apply this now?
                 _ <- this.runVirtualLedgerM(VirtualLedgerM.applyGenesisEvent(genesisEvent))
             } yield settleLedgerRes
-        }
 
         for {
             producing <- unsafeGetProducing
@@ -378,16 +383,55 @@ final case class JointLedger(
             // element of the queue. But I don't recall if we assume the queue is sorted according to
             // maturity time, so I'll go with this for now. If it is sorted, there's almost certainly
             // a more efficient function.
-            depositsPartition = producing.dappLedgerState.deposits.partition(x => isMature(x._2))
-            matureDeposits = depositsPartition._1
-            immatureDeposits = depositsPartition._2
-
-            // Tuple containing (depositsInPollResults, depositsNotInPollResults)
-            depositPartition = matureDeposits.partition(x => pollResults.contains(x._1))
-            depositsInPollResults = depositPartition._1
-
-            // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
-            depositsNotInPollResults = depositPartition._2
+            // TODO: Factor out
+            depositsPartition = producing.dappLedgerState.deposits
+                // Queue order: not yet mature, eligible for absorption, not eligible for absorption
+                .foldLeft(
+                  (
+                    Queue.empty[(LedgerEvent.Id, DepositUtxo)],
+                    Queue.empty[(LedgerEvent.Id, DepositUtxo)],
+                    Queue.empty[(LedgerEvent.Id, DepositUtxo)]
+                  )
+                )((acc, deposit) =>
+                    val depositValidityEnd =
+                        java.time.Instant.ofEpochMilli(
+                          deposit._2.datum.refundInstructions.startTime.toLong
+                        ) - txTiming.silenceDuration
+                    val depositAbsorptionStart: java.time.Instant =
+                        depositValidityEnd + txTiming.depositMaturityDuration
+                    val depositAbsorptionEnd: java.time.Instant =
+                        depositAbsorptionStart + txTiming.depositAbsorptionDuration
+                    // FIXME: This is partial and will probably crash on the initial block
+                    val settlementValidityEnd: Option[java.time.Instant] =
+                        producing.competingFallbackValidityStart.map(_ - txTiming.silenceDuration)
+                    {
+                        if depositAbsorptionStart.isAfter(producing.startTime)
+                        // Not yet mature
+                        then acc.focus(_._1).modify(_.appended(deposit))
+                        else if pollResults.contains(deposit._1) &&
+                        (depositAbsorptionStart.isBefore(
+                          producing.startTime
+                        ) || depositAbsorptionStart == producing.startTime) &&
+                        (settlementValidityEnd.isEmpty || settlementValidityEnd.get.isBefore(
+                          depositAbsorptionEnd
+                        ) || settlementValidityEnd.get == depositAbsorptionEnd)
+                        // Eligible for absorption
+                        then acc.focus(_._2).modify(_.appended(deposit))
+                        else if ((depositAbsorptionStart.isBefore(
+                          producing.startTime
+                        ) || depositAbsorptionStart == producing.startTime)
+                            && !pollResults.contains(deposit._1)) ||
+                        (settlementValidityEnd.isEmpty || settlementValidityEnd.get
+                            .isAfter(depositAbsorptionEnd))
+                        // Never eligible for absorption
+                        then acc.focus(_._3).modify(_.appended(deposit))
+                        // TODO: Is this total?
+                        else throw RuntimeException("Don't know what to do with this deposit")
+                    }
+                )
+            notYetMature = depositsPartition._1
+            eligibleForAbsorption = depositsPartition._2
+            neverEligibleForAbsorption = depositsPartition._3
 
             // For a description of timing, see GitHub issue #296
             forceUpgradeToMajor: Boolean =
@@ -401,41 +445,34 @@ final case class JointLedger(
                         - producing.startTime.toEpochMilli
 
             isMinorBlock: Boolean =
-                (depositsInPollResults.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
+                (eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
                     && (!forceUpgradeToMajor)
 
             augmentedBlock <-
                 if isMinorBlock
                 then
-                    IO.pure(
-                      augmentBlockMinor(
-                        producing,
-                        depositsRefunded = depositsNotInPollResults.toList.map(_._1)
-                      )
+                    augmentBlockMinor(
+                      depositsRefunded = neverEligibleForAbsorption.toList.map(_._1)
                     )
                 else {
                     for {
                         settlementRes <- doSettlement(
-                          validDeposits = depositsInPollResults,
-                          treasuryToSpend = producing.dappLedgerState.treasury,
-                          payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
-                          immatureDeposits = immatureDeposits,
-                          blockCreatedOn = producing.startTime,
-                          txTiming = txTiming
+                          validDeposits = eligibleForAbsorption,
+                          immatureDeposits = notYetMature,
                         )
-                        absorbedDeposits = depositsInPollResults.filter(deposit =>
+                        absorbedDeposits = eligibleForAbsorption.filter(deposit =>
                             settlementRes.settlementTxSeq.settlementTx.depositsSpent
                                 .contains(deposit._2)
                         )
-                    } yield augmentedBlockMajor(
-                      producing,
-                      settlementRes,
-                      depositsNotInPollResults.toList.map(_._1),
-                      absorbedDeposits.toList.map(_._1)
-                    )
+                        augBlockMajor <- augmentedBlockMajor(
+                          settleLedgerRes = settlementRes,
+                          refundedDeposits = neverEligibleForAbsorption.toList.map(_._1),
+                          absorbedDeposits = absorbedDeposits.toList.map(_._1)
+                        )
+                    } yield augBlockMajor
                 }
 
-            _ <- checkReferenceBlock(producing, referenceBlock, augmentedBlock)
+            _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
             _ <- sendAugmentedBlock(augmentedBlock)
         } yield ()
     }
@@ -510,7 +547,7 @@ final case class JointLedger(
                 AugmentedBlock.Final(nextBlock, blockEffects)
             }
 
-            _ <- checkReferenceBlock(p, referenceBlock, augmentedBlock)
+            _ <- checkReferenceBlock(referenceBlock, augmentedBlock)
             _ <- sendAugmentedBlock(augmentedBlock)
 
         } yield ()
@@ -529,18 +566,18 @@ final case class JointLedger(
         } yield ()
 
     private def checkReferenceBlock(
-        p: Producing,
         expectedBlock: Option[Block],
         actualBlock: AugmentedBlock
-    ): IO[Unit] = {
-        val fallbackValidityStart: Option[java.time.Instant] =
+    ): IO[Unit] = for {
+        p <- unsafeGetProducing
+        fallbackValidityStart: Option[java.time.Instant] =
             actualBlock match {
                 case major: types.AugmentedBlock.Major =>
                     Some(major.effects.fallback.validityStart)
                 case _ => p.competingFallbackValidityStart
             }
 
-        expectedBlock match {
+        _ <- expectedBlock match {
             case Some(refBlock) if refBlock == actualBlock =>
                 state.set(
                   Done(
@@ -564,7 +601,7 @@ final case class JointLedger(
                   )
                 )
         }
-    }
+    } yield ()
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match

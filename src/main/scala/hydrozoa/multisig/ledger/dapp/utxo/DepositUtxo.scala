@@ -19,7 +19,7 @@ final case class DepositUtxo(
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
     l1OutputValue: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation]
+    virtualOutputs: NonEmptyList[GenesisObligation],
 ) {
     def toUtxo: Utxo =
         Utxo(

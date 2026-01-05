@@ -19,7 +19,6 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 final case class DepositTx private (
     depositProduced: DepositUtxo,
     override val tx: Transaction,
-    depositValidityEnd: java.time.Instant
 ) extends Tx
 
 object DepositTx {
@@ -85,7 +84,7 @@ object DepositTx {
                 ctx <- TransactionBuilder
                     .build(
                       config.env.network,
-                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange)
+                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange, ttl)
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
@@ -110,7 +109,7 @@ object DepositTx {
                   rawDepositProduced.value,
                   virtualOutputs
                 )
-            } yield DepositTx(depositProduced, tx, validityEnd)
+            } yield DepositTx(depositProduced, tx)
         }
     }
 
@@ -191,7 +190,7 @@ object DepositTx {
                         case Success(v)         => Right(v)
                     }
 
-                } yield DepositTx(depositUtxo, tx, validityEnd)
+                } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 
