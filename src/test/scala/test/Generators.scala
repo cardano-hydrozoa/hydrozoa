@@ -1,7 +1,6 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
-import hydrozoa.PosixTime
 import hydrozoa.multisig.ledger.VirtualLedgerM
 import hydrozoa.multisig.ledger.VirtualLedgerM.{Config, State}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -487,9 +486,6 @@ object Generators {
 
             Gen.oneOf(Seq(inputsNotInUtxoAttack))
         }
-        // TODO: use FiniteDuration
-        def genInitializedOn: Gen[PosixTime] =
-            Gen.choose(SlotConfig.Preview.zeroTime, System.currentTimeMillis())
 
         // TODO: improve
         def genEventId: Gen[LedgerEventId] = for {
