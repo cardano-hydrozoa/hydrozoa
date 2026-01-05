@@ -1,16 +1,15 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.PosixTime as HPosixTime
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Coin, Slot}
 import scalus.cardano.txbuilder.SomeBuildError
-import scalus.ledger.api.v3.PosixTime
 
 enum SettlementTxSeq {
     def settlementTx: SettlementTx
@@ -53,11 +52,12 @@ object SettlementTxSeq {
                           treasuryUtxoSpent = settlementTx.transaction.treasuryProduced,
                           tallyFeeAllowance = args.tallyFeeAllowance,
                           votingDuration = args.votingDuration,
+                          // FIXME
                           validityStart = Slot(
                             config.env.slotConfig.timeToSlot(
-                              args.blockCreatedOn.toLong
-                                  + args.txTiming.minSettlementDuration.toMillis
-                                  + args.txTiming.majorBlockTimeout.toMillis
+                              (args.blockCreatedOn
+                                  + args.txTiming.minSettlementDuration
+                                  + args.txTiming.majorBlockTimeout).toMillis
                             )
                           )
                         )
@@ -106,9 +106,9 @@ object SettlementTxSeq {
                           votingDuration = args.votingDuration,
                           validityStart = Slot(
                             config.env.slotConfig.timeToSlot(
-                              args.blockCreatedOn.toLong
-                                  + args.txTiming.minSettlementDuration.toMillis
-                                  + args.txTiming.majorBlockTimeout.toMillis
+                              (args.blockCreatedOn
+                                  + args.txTiming.minSettlementDuration
+                                  + args.txTiming.majorBlockTimeout).toMillis
                             )
                           )
                         )
@@ -148,9 +148,9 @@ object SettlementTxSeq {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             kzgCommitment: KzgCommitment,
             tallyFeeAllowance: Coin,
-            votingDuration: PosixTime,
-            competingFallbackValidityStart: HPosixTime,
-            blockCreatedOn: HPosixTime,
+            votingDuration: FiniteDuration,
+            competingFallbackValidityStart: FiniteDuration,
+            blockCreatedOn: FiniteDuration,
             txTiming: TxTiming
         )
         // TODO: confirm: this one is not needed
@@ -162,7 +162,7 @@ object SettlementTxSeq {
                   kzgCommitment = kzgCommitment,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod
                 )
 
             def toArgsWithPayouts(
@@ -173,7 +173,7 @@ object SettlementTxSeq {
               kzgCommitment = kzgCommitment,
               depositsToSpend = depositsToSpend,
               rolloutTxSeqPartial = rolloutTxSeqPartial,
-              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod
             )
         }
     }

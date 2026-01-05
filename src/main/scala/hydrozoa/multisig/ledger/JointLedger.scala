@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -19,13 +19,13 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
+import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
-import scalus.ledger.api.v3.PosixTime
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
@@ -43,10 +43,11 @@ final case class JointLedger(
     initialBlockKzg: KzgCommitment,
     //// Static config fields
     config: Tx.Builder.Config,
+    txTiming: TxTiming,
     tallyFeeAllowance: Coin,
     equityShares: EquityShares,
     multisigRegimeUtxo: MultisigRegimeUtxo,
-    votingDuration: PosixTime,
+    votingDuration: FiniteDuration,
     treasuryTokenName: AssetName,
     initialTreasury: MultisigTreasuryUtxo
 ) extends Actor[IO, Requests.Request] {
@@ -296,7 +297,9 @@ final case class JointLedger(
             validDeposits: Queue[(LedgerEventId, DepositUtxo)],
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligations: Vector[Payout.Obligation],
-            immatureDeposits: Queue[(LedgerEventId, DepositUtxo)]
+            immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
+            blockCreatedOn: FiniteDuration,
+            txTiming: TxTiming
         ): IO[DappLedgerM.SettleLedger.Result] = {
             val genesisObligations: Queue[GenesisObligation] =
                 validDeposits
@@ -323,7 +326,13 @@ final case class JointLedger(
                     payoutObligations = payoutObligations,
                     tallyFeeAllowance = this.tallyFeeAllowance,
                     votingDuration = this.votingDuration,
-                    immatureDeposits = immatureDeposits
+                    immatureDeposits = immatureDeposits,
+                    blockCreatedOn = blockCreatedOn,
+                    competingFallbackValidityStart = blockCreatedOn
+                        + txTiming.minSettlementDuration
+                        + txTiming.majorBlockTimeout
+                        + txTiming.silencePeriod,
+                    txTiming = txTiming
                   ),
                   onSuccess = IO.pure
                 )
@@ -375,7 +384,9 @@ final case class JointLedger(
                           validDeposits = depositsInPollResults,
                           treasuryToSpend = producing.dappLedgerState.treasury,
                           payoutObligations = producing.nextBlockData.blockWithdrawnUtxos,
-                          immatureDeposits = immatureDeposits
+                          immatureDeposits = immatureDeposits,
+                          blockCreatedOn = producing.startTime,
+                          txTiming = txTiming
                         )
                         absorbedDeposits = depositsInPollResults.filter(deposit =>
                             settlementRes.settlementTxSeq.settlementTx.depositsSpent

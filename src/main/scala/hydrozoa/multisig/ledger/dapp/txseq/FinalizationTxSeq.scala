@@ -1,7 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
-import hydrozoa.PosixTime
 import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger.dapp
 import hydrozoa.multisig.ledger.dapp.tx
@@ -14,6 +13,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum FinalizationTxSeq {
@@ -202,8 +202,8 @@ object FinalizationTxSeq {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
-            competingFallbackValidityStart: PosixTime,
-            blockCreatedOn: PosixTime,
+            competingFallbackValidityStart: FiniteDuration,
+            blockCreatedOn: FiniteDuration,
             txTiming: TxTiming
         ) extends
             // TODO: confirm: this is not needed
@@ -216,7 +216,7 @@ object FinalizationTxSeq {
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis
+                  ttl = competingFallbackValidityStart - txTiming.silencePeriod
                 )
 
             def toArgsWithPayouts(
@@ -226,7 +226,7 @@ object FinalizationTxSeq {
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
-              ttl = competingFallbackValidityStart - txTiming.silencePeriod.toMillis,
+              ttl = competingFallbackValidityStart - txTiming.silencePeriod,
               rolloutTxSeqPartial = rolloutTxSeqPartial
             )
 

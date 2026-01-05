@@ -48,7 +48,7 @@ object HydrozoaTransactionMutator {
             state <- AddOutputsToUtxoL2Mutator.transit(context, state, l2Event)
             // Upstream mutators
             state <-
-                RemoveInputsFromUtxoMutator.transit(
+                PlutusScriptsTransactionMutator.transit(
                   context.toL1Context,
                   state.toScalusState,
                   event

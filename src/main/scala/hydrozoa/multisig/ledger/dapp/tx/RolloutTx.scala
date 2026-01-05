@@ -5,17 +5,16 @@ import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.dapp.utxo.RolloutUtxo
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.prebalancedLovelaceDiffHandler
+import hydrozoa.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import scala.Function.const
 import scala.annotation.tailrec
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.TransactionSizeValidator
 import scalus.cardano.ledger.utils.TxBalance
-import scalus.cardano.ledger.{Coin, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import scalus.cardano.txbuilder.TxBalancingError.CantBalance
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 
 enum RolloutTx extends Tx, RolloutUtxo.Spent, RolloutUtxo.MbProduced {
 
@@ -366,7 +365,8 @@ object RolloutTx {
                 ctx: TransactionBuilder.Context
             ): BuildErrorOr[Value] = {
                 // The deficit in the inputs to the transaction prior to adding the placeholder
-                val valueNeeded = Placeholder.inputValueNeeded(ctx)
+                val valueNeeded =
+                    Placeholder.inputValueNeeded(ctx, builder.config.env.protocolParams)
                 trialFinishLoop(builder, ctx, valueNeeded)
             }
 
@@ -397,7 +397,12 @@ object RolloutTx {
                         ) =>
                         Left(SomeBuildError.ValidationError(e, errorCtx))
                             .explainConst("trial to add payout failed")
-                    case Left(SomeBuildError.BalancingError(CantBalance(diff), _errorCtx)) =>
+                    case Left(
+                          SomeBuildError.BalancingError(
+                            TxBalancingError.Failed(WrappedCoin(Coin(diff))),
+                            _errorCtx
+                          )
+                        ) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))
                     case Right(_) => Right(trialValue)
                     case e =>
@@ -434,8 +439,11 @@ object RolloutTx {
               index = 0
             )
 
-            private def inputValueNeeded(ctx: TransactionBuilder.Context): Value =
-                TxBalance.produced(ctx.transaction)
+            private def inputValueNeeded(
+                ctx: TransactionBuilder.Context,
+                params: ProtocolParams
+            ): Value =
+                TxBalance.produced(ctx.transaction, params)
         }
 
         object PostProcess {

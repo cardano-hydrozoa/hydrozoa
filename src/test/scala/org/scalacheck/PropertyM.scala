@@ -226,7 +226,6 @@ object PropertyMTest extends Properties("PropertyM") {
           } yield true
         )
         prop
-
 }
 
 object PropertyM:

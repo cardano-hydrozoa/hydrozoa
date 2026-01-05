@@ -15,9 +15,9 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
+import scala.concurrent.duration.FiniteDuration
 import scala.language.implicitConversions
 import scalus.cardano.ledger.*
-import scalus.ledger.api.v3.PosixTime
 
 private type E[A] = Either[DappLedgerM.Error, A]
 private type S[A] = cats.data.StateT[E, DappLedgerM.State, A]
@@ -110,8 +110,11 @@ object DappLedgerM {
         validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         tallyFeeAllowance: Coin,
-        votingDuration: PosixTime,
-        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)]
+        votingDuration: FiniteDuration,
+        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        blockCreatedOn: FiniteDuration,
+        competingFallbackValidityStart: FiniteDuration,
+        txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
         for {
@@ -127,9 +130,9 @@ object DappLedgerM {
               payoutObligationsRemaining = payoutObligations,
               tallyFeeAllowance = tallyFeeAllowance,
               votingDuration = votingDuration,
-              competingFallbackValidityStart = ???,
-              blockCreatedOn = ???,
-              txTiming = ???
+              competingFallbackValidityStart = competingFallbackValidityStart,
+              blockCreatedOn = blockCreatedOn,
+              txTiming = txTiming
             )
 
             settlementTxSeqRes <- lift(
@@ -175,7 +178,10 @@ object DappLedgerM {
     def finalizeLedger(
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
-        equityShares: EquityShares
+        equityShares: EquityShares,
+//        blockCreatedOn : PosixTime,
+//        competingFallbackValidityStart : PosixTime,
+//        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get

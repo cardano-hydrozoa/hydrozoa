@@ -63,7 +63,11 @@ class FinalizationTxSeqBuilderTest extends AnyFunSuite with ScalaCheckPropertyCh
                                 txsToSign.map(tx => signTx(peer, tx))
                             )
 
-                        observeTxChain(signedTxs)(initialState, CardanoMutator, Context()) match {
+                        observeTxChain(signedTxs)(
+                          initialState,
+                          CardanoMutator,
+                          Context.testMainnet()
+                        ) match {
                             case Left(e) =>
                                 throw new RuntimeException(
                                   s"\nFailed: ${e._1}"

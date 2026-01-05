@@ -66,6 +66,13 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         ): TestM[Unit] =
             startBlock(StartBlock(blockNum, blockCreationTime))
 
+        /** Start the block at the current real time */
+        def startBlockNow(pollResults: Set[LedgerEvent.Id]): TestM[Unit] =
+            for {
+                startTime <- liftR(IO.realTime)
+                _ <- startBlock(startTime, pollResults)
+            } yield ()
+
         def completeBlockRegular(req: CompleteBlockRegular): TestM[Unit] =
             for {
                 jl <- asks(_.jointLedger)

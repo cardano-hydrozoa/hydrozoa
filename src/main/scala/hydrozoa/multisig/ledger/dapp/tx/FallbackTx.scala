@@ -11,6 +11,7 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.Data
 import scalus.builtin.Data.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -21,7 +22,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, *}
-import scalus.ledger.api.v1.{PosixTime, PubKeyHash}
+import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
@@ -84,7 +85,7 @@ object FallbackTx {
           disputeId = voteTokenName.bytes,
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
-          deadlineVoting = recipe.votingDuration,
+          deadlineVoting = recipe.votingDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
@@ -263,7 +264,7 @@ object FallbackTx {
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
-        votingDuration: PosixTime,
+        votingDuration: FiniteDuration,
         // This is specified in slots rather than in the millis, since the builder
         // is used in fallback tx parsing, and we have to be able to specify precisely
         // the slot we see in the incoming exogenous fallback tx.
