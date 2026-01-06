@@ -56,21 +56,29 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
               TerminatedDependency(Dependencies.Persistence, config.persistence)
             )
 
-            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockProducer.Ref]
+            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockWeaver.Ref]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
             pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
             pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
 
             blockProducer <- {
-                import BlockProducer.{Config, ConnectionsPending}
+                import BlockWeaver.Config
                 context.actorOf(
-                  BlockProducer(
-                    Config(peerId = config.peerId, persistence = config.persistence),
-                    ConnectionsPending(
-                      cardanoLiaison = pendingCardanoLiaison,
-                      peerLiaisons = pendingLocalPeerLiaisons,
-                      transactionSequencer = pendingTransactionSequencer
-                    )
+                  BlockWeaver(
+                    Config(
+                      lastKnownBlock = ???,
+                      peerId = config.peerId,
+                      numberOfPeers = ???,
+                      blockLeadTurn = ???,
+                      recoveredMempool = BlockWeaver.Mempool.empty,
+                      jointLedger = ???,
+                      // persistence = config.persistence
+                    ),
+                    // ConnectionsPending(
+                    //  cardanoLiaison = pendingCardanoLiaison,
+                    //  peerLiaisons = pendingLocalPeerLiaisons,
+                    //  transactionSequencer = pendingTransactionSequencer
+                    // )
                   )
                 )
             }
@@ -93,7 +101,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                                   persistence = config.persistence
                                 ),
                                 ConnectionsPending(
-                                  blockProducer = pendingBlockProducer,
+                                  blockWeaver = pendingBlockProducer,
                                   remotePeerLiaison = pendingRemotePeerLiaison
                                 )
                               )

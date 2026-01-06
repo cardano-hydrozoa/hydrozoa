@@ -27,7 +27,7 @@ object PeerLiaison {
     )
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockProducer.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Ref],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
@@ -42,20 +42,25 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
     private final case class Subscribers(
         ackBlock: AckBlock.Subscriber,
         newBlock: Block.Subscriber,
-        newLedgerEvent: NewLedgerEvent.Subscriber,
+        newLedgerEvent: LedgerEvent.Subscriber,
         remotePeerLiaison: PeerLiaisonRef
     )
 
     override def preStart: IO[Unit] =
         for {
-            blockProducer <- connections.blockProducer.get
+            blockProducer <- connections.blockWeaver.get
             // This means that the comm actor will not start receiving until it is connected to its
             // remote counterpart:
             remotePeerLiaison <- connections.remotePeerLiaison.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  ackBlock = blockProducer,
+                  /*
+                    AckBlock -> Consensus
+                    Block -> Weaver
+                    LedgerEvent -> Weaver
+                   */
+                  ackBlock = ???, // blockProducer,
                   newBlock = blockProducer,
                   newLedgerEvent = blockProducer,
                   remotePeerLiaison = remotePeerLiaison
@@ -119,10 +124,10 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
     private final class State {
         private val nAck = Ref.unsafe[IO, AckBlock.Number](AckBlock.Number(0))
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
-        private val nEvent = Ref.unsafe[IO, LedgerEvent.Number](LedgerEvent.Number(0))
+        private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
-        private val qEvent = Ref.unsafe[IO, Queue[NewLedgerEvent]](Queue())
+        private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
         /** Check whether there are no acks, blocks, or events queued-up to be sent out. */
@@ -136,16 +141,17 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         @targetName("append")
         infix def :+(x: RemoteBroadcast.Request): IO[Unit] =
             x match {
-                case y: NewLedgerEvent =>
+                case y: LedgerEvent =>
                     for {
                         _ <- this.nEvent.update(_.increment)
                         _ <- this.qEvent.update(_ :+ y)
                     } yield ()
-                case y: AckBlock =>
-                    for {
-                        _ <- this.nAck.update(_.increment)
-                        _ <- this.qAck.update(_ :+ y)
-                    } yield ()
+                // FIXME:
+                // case y: AckBlock =>
+                //    for {
+                //        _ <- this.nAck.update(_.increment)
+                //        _ <- this.qAck.update(_ :+ y)
+                //    } yield ()
                 case y: Block =>
                     for {
                         _ <- this.nBlock.update(_.increment)
@@ -182,22 +188,23 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 nBlock <- this.nBlock.get
                 nEvents <- this.nEvent.get
                 newBatch <- x match {
-                    case y: NewLedgerEvent =>
+                    case y: LedgerEvent =>
                         for {
                             nEventsNew <- this.nEvent.updateAndGet(_.increment)
                         } yield NewMsgBatch(batchId, nAck, nBlock, nEventsNew, None, None, List(y))
-                    case y: AckBlock =>
-                        for {
-                            nAckNew <- this.nAck.updateAndGet(_.increment)
-                        } yield NewMsgBatch(
-                          batchId,
-                          nAckNew,
-                          nBlock,
-                          nEvents,
-                          Some(y),
-                          None,
-                          List()
-                        )
+                    // FIXME:
+                    // case y: AckBlock =>
+                    //    for {
+                    //        nAckNew <- this.nAck.updateAndGet(_.increment)
+                    //    } yield NewMsgBatch(
+                    //      batchId,
+                    //      nAckNew,
+                    //      nBlock,
+                    //      nEvents,
+                    //      Some(y),
+                    //      None,
+                    //      List()
+                    //    )
                     case y: Block =>
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
@@ -253,13 +260,13 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     dropped.dequeueOption.fold((dropped, None))((x, xs) => (xs, Some(x)))
                 )
                 events <- this.qEvent.modify(q =>
-                    val dropped = q.dropWhile(_.id._2 <= batchReq.eventNum)
+                    val dropped = q.dropWhile(_.eventId._2 <= batchReq.eventNum)
                     dropped.splitAt(maxEvents).swap
                 )
 
                 ackNum = mAck.fold(nAck)(_.id.ackNum)
                 blockNum = mBlock.fold(nBlock)(_.id)
-                eventNum = events.lastOption.fold(nEvents)(_.id.eventNum)
+                eventNum = events.lastOption.fold(nEvents)(_.eventId.eventNum)
             } yield NewMsgBatch(
               id = batchReq.id,
               ackNum = ackNum,

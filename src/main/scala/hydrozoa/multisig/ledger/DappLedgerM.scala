@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -78,7 +78,7 @@ object DappLedgerM {
     // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
     def registerDeposit(
         serializedDeposit: Array[Byte],
-        eventId: LedgerEvent.Id,
+        eventId: LedgerEventId,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): DappLedgerM[Unit] = {
         for {
@@ -107,11 +107,11 @@ object DappLedgerM {
       */
     def settleLedger(
         nextKzg: KzgCommitment,
-        validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+        validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         tallyFeeAllowance: Coin,
         votingDuration: FiniteDuration,
-        immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
         blockCreatedOn: FiniteDuration,
         competingFallbackValidityStart: FiniteDuration,
         txTiming: TxTiming
@@ -212,10 +212,12 @@ object DappLedgerM {
     final case class State(
         treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
-        deposits: Queue[(LedgerEvent.Id, DepositUtxo)] = Queue()
+        deposits: Queue[(LedgerEventId, DepositUtxo)] = Queue()
     ) {
-        def appendToQueue(t: (LedgerEvent.Id, DepositUtxo)): State =
+        def appendToQueue(t: (LedgerEventId, DepositUtxo)): State =
             this.copy(treasury, deposits.appended(t))
+
+        def depositUtxoByEventId(ledgerEventId: LedgerEventId): Option[DepositUtxo] = ???
     }
 
     object SettleLedger {

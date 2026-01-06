@@ -1,30 +1,34 @@
 package hydrozoa.multisig.protocol.types
 
+import cats.data.NonEmptyList
+import cats.effect.IO
 import cats.syntax.all.*
+import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.multisig.ledger.virtual.GenesisObligation
 
-object LedgerEvent {
-    type Id = Id.Id
-    type Number = Number.Number
+type LedgerEventId = LedgerEventId.Id
 
-    object Id {
-        opaque type Id = (Int, Int)
+object LedgerEventId {
 
-        def apply(peerId: Int, eventNum: Int): Id = (peerId, eventNum)
+    opaque type Id = (Int, Int)
 
-        def unapply(self: Id): (Peer.Number, Number) = (Peer.Number(self._1), Number(self._2))
+    def apply(peerId: Int, eventNum: Int): Id = (peerId, eventNum)
 
-        given Conversion[Id, (Int, Int)] = identity
+    def unapply(self: Id): (Peer.Number, Number) = (Peer.Number(self._1), Number(self._2))
 
-        given Ordering[Id] with {
-            override def compare(x: Id, y: Id): Int =
-                x.compare(y)
-        }
+    given Conversion[Id, (Int, Int)] = identity
 
-        extension (self: Id)
-            def increment: Id = Id(self._1, self._2 + 1)
-            def peerNum: Peer.Number = Peer.Number(self._1)
-            def eventNum: Number = Number(self._2)
+    given Ordering[Id] with {
+        override def compare(x: Id, y: Id): Int =
+            x.compare(y)
     }
+
+    extension (self: Id)
+        def increment: Id = LedgerEventId(self._1, self._2 + 1)
+        def peerNum: Peer.Number = Peer.Number(self._1)
+        def eventNum: Number = Number(self._2)
+
+    type Number = Number.Number
 
     object Number {
         opaque type Number = Int
@@ -40,4 +44,29 @@ object LedgerEvent {
 
         extension (self: Number) def increment: Number = Number(self + 1)
     }
+}
+
+sealed trait LedgerEvent {
+    def eventId: LedgerEventId
+}
+
+object LedgerEvent {
+
+    final case class TxL2Event(
+        override val eventId: LedgerEventId,
+        tx: Array[Byte]
+    ) extends LedgerEvent
+
+    // FIXME: This should include the refundTxBytes
+    // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
+    final case class RegisterDeposit(
+        override val eventId: LedgerEventId,
+        serializedDeposit: Array[Byte],
+        // TODO: Pop up [[GenesisObligation]]?
+        virtualOutputs: NonEmptyList[GenesisObligation]
+    ) extends LedgerEvent
+
+    // TODO: do we still need it?
+    type Subscriber = ActorRef[IO, LedgerEvent]
+
 }

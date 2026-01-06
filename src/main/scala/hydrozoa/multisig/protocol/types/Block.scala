@@ -44,6 +44,13 @@ object Block {
 
     type Next = Block.Minor | Block.Major | Block.Final
 
+    extension (next: Next)
+        def blockEvents: List[LedgerEventId] = next match {
+            case Block.Minor(_, body) => body.events.map(_._1)
+            case Block.Major(_, body) => body.events.map(_._1)
+            case Block.Final(_, body) => body.events.map(_._1)
+        }
+
     type Number = Number.Number
     enum Type:
         case Initial, Minor, Major, Final
@@ -54,6 +61,7 @@ object Block {
 
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
+            // TODO: this seems to be the same as `initializedOn`
             override val timeCreation: FiniteDuration,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
@@ -77,6 +85,13 @@ object Block {
             override val blockVersion: Version.Full,
             override val timeCreation: FiniteDuration
         ) extends Header(Type.Final)
+
+        def nextBlockNumber: Block.Number = this match {
+            case Header.Initial(timeCreation, commitment) => Number.first
+            case Header.Minor(blockNum, _, _, _)          => blockNum.increment
+            case Header.Major(blockNum, _, _, _)          => blockNum.increment
+            case Header.Final(blockNum, _, _)             => blockNum.increment
+        }
 
         def nextHeader(
             newBlockType: Type.Next,
@@ -146,8 +161,8 @@ object Block {
         }
 
         sealed trait InitialHeaderFields extends Mandatory {
-            override def blockNum: Number = Number(0)
-            override def blockVersion: Version.Full = Version.Full(0, 0)
+            final override def blockNum: Number = Number.zero
+            final override def blockVersion: Version.Full = Version.Full.zero
         }
     }
 
@@ -163,30 +178,19 @@ object Block {
         case Initial extends Body
 
         case Minor(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRegistered: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Minor
 
         case Major(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRegistered: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
-            override val depositsAbsorbed: List[LedgerEvent.Id],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsAbsorbed: List[LedgerEventId],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Major
 
         case Final(
-            override val ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-            override val transactionsValid: List[LedgerEvent.Id],
-            override val transactionsInvalid: List[LedgerEvent.Id],
-            override val depositsRejected: List[LedgerEvent.Id],
-            override val depositsRefunded: List[LedgerEvent.Id]
+            override val events: List[(LedgerEventId, Boolean)],
+            override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Final
     }
 
@@ -197,52 +201,32 @@ object Block {
         }
     }
 
-    object BodyFields {
-        sealed trait Minor
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Registered,
-              Deposits.Rejected,
-              Deposits.Refunded
+    private object BodyFields {
+        sealed trait Minor extends Events, Deposits.Refunded
 
-        sealed trait Major
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Registered,
-              Deposits.Rejected,
-              Deposits.Absorbed,
-              Deposits.Refunded
+        sealed trait Major extends Events, Deposits.Absorbed, Deposits.Refunded
 
-        sealed trait Final
-            extends LedgerEventsRequired,
-              Transactions,
-              Deposits.Rejected,
-              Deposits.Refunded
+        sealed trait Final extends Events, Deposits.Refunded
 
-        sealed trait LedgerEventsRequired {
-            def ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number]
-        }
+        sealed trait Events {
 
-        sealed trait Transactions {
-            def transactionsValid: List[LedgerEvent.Id]
-            def transactionsInvalid: List[LedgerEvent.Id]
+            /** All the ledger events included in the block, i.e. L2 txs and deposit requests along
+              * with the validity flag. The reason we have this one list is that the fact that
+              * followers need to know the global order to replay the events in exactly the same
+              * order to get the same result.
+              *
+              * TODO: invariant: the list should be unique
+              */
+            def events: List[(LedgerEventId, Boolean)]
         }
 
         object Deposits {
-            sealed trait Registered {
-                def depositsRegistered: List[LedgerEvent.Id]
-            }
-
-            sealed trait Rejected {
-                def depositsRejected: List[LedgerEvent.Id]
-            }
-
             sealed trait Absorbed {
-                def depositsAbsorbed: List[LedgerEvent.Id]
+                def depositsAbsorbed: List[LedgerEventId]
             }
 
             sealed trait Refunded {
-                def depositsRefunded: List[LedgerEvent.Id]
+                def depositsRefunded: List[LedgerEventId]
             }
         }
     }
@@ -251,6 +235,11 @@ object Block {
         opaque type Number = Int
 
         def apply(i: Int): Number = i
+
+        val zero: Number = apply(0)
+
+        /** Number of the first (non-initial) block, i.e. 1. */
+        val first: Number = zero.increment
 
         given Conversion[Number, Int] = identity
 
@@ -273,6 +262,8 @@ object Block {
 
             def apply(i: Int, j: Int): Full = (i, j)
 
+            val zero: Full = apply(0, 0)
+
             def unapply(self: Full): (Major, Minor) = (Major(self._1), Minor(self._2))
 
             given Conversion[Full, (Int, Int)] = identity
@@ -294,6 +285,8 @@ object Block {
 
             def apply(i: Int): Major = i
 
+            val zero: Major = apply(0)
+
             given Conversion[Major, Int] = identity
 
             given Ordering[Major] with {
@@ -312,6 +305,8 @@ object Block {
             opaque type Minor = Int
 
             def apply(i: Int): Minor = i
+
+            val zero: Minor = apply(0)
 
             given Conversion[Minor, Int] = identity
 

@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger
 
-import cats.data.*
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
+import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -28,11 +29,7 @@ import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
-    ledgerEventsRequired: Map[Peer.Number, LedgerEvent.Number],
-    transactionsValid: List[LedgerEvent.Id],
-    transactionsInvalid: List[LedgerEvent.Id],
-    depositsRegistered: List[LedgerEvent.Id],
-    depositsRejected: List[LedgerEvent.Id],
+    events: List[(LedgerEventId, Boolean)],
     blockWithdrawnUtxos: Vector[Payout.Obligation]
 )
 
@@ -101,22 +98,29 @@ final case class JointLedger(
         }
     } yield p
 
+    // TODO: PartialFunction.fromFunction is a noop here
     override def receive: Receive[IO, Requests.Request] = PartialFunction.fromFunction {
-        case d: JointLedger.Requests.RegisterDeposit => registerDeposit(d)
-        case a: ApplyInternalTxL2                    => applyInternalTxL2(a)
-        case s: StartBlock                           => startBlock(s)
-        case c: CompleteBlockRegular                 => completeBlockRegular(c)
-        case f: CompleteBlockFinal                   => completeBlockFinal(f)
+        case e: LedgerEvent          => registerLedgerEvent(e)
+        case s: StartBlock           => startBlock(s)
+        case c: CompleteBlockRegular => completeBlockRegular(c)
+        case f: CompleteBlockFinal   => completeBlockFinal(f)
         case req: SyncRequest.Any =>
             req.request match {
                 case r: GetState.type => r.handleSync(req, _ => state.get)
             }
     }
 
+    private def registerLedgerEvent(e: LedgerEvent): IO[Unit] = {
+        e match {
+            case req: RegisterDeposit => registerDeposit(req)
+            case tx: TxL2Event        => applyInternalTxL2(tx)
+        }
+    }
+
     /** Update the JointLedger's state -- the work-in-progress block -- to accept or reject deposits
       * depending on whether the [[dappLedger]] Actor can successfully register the deposit,
       */
-    private def registerDeposit(req: JointLedger.Requests.RegisterDeposit): IO[Unit] = {
+    private def registerDeposit(req: RegisterDeposit): IO[Unit] = {
         import req.*
         for {
 
@@ -128,24 +132,16 @@ final case class JointLedger(
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
-                          .focus(_.nextBlockData.depositsRejected)
-                          .modify(_.appended(eventId))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                              m.updated(eventId.peerNum, eventId.eventNum)
-                          )
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, false)))
                       _ <- state.set(newState)
                   } yield (),
               onSuccess = _ =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
-                          .focus(_.nextBlockData.depositsRegistered)
-                          .modify(_.appended(eventId))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify((m: Map[Peer.Number, LedgerEvent.Number]) =>
-                              m.updated(eventId.peerNum, eventId.eventNum)
-                          )
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, true)))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -156,9 +152,9 @@ final case class JointLedger(
       * updating ledgerEventsRequired
       */
     private def applyInternalTxL2(
-        args: ApplyInternalTxL2
+        txEvent: TxL2Event
     ): IO[Unit] = {
-        import args.*
+        import txEvent.*
 
         for {
 
@@ -169,10 +165,8 @@ final case class JointLedger(
                   for {
                       p <- unsafeGetProducing
                       newState = p
-                          .focus(_.nextBlockData.transactionsInvalid)
-                          .modify(_.appended(id))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify(m => m.updated(id.peerNum, id.eventNum))
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, true)))
                       _ <- state.set(newState)
                   } yield (),
               // Valid transaction continuation
@@ -180,10 +174,8 @@ final case class JointLedger(
                   for {
                       p <- unsafeGetProducing
                       newState = p
-                          .focus(_.nextBlockData.transactionsValid)
-                          .modify(_.appended(id))
-                          .focus(_.nextBlockData.ledgerEventsRequired)
-                          .modify(m => m.updated(id.peerNum, id.eventNum))
+                          .focus(_.nextBlockData.events)
+                          .modify(_.appended((eventId, false)))
                           .focus(_.nextBlockData.blockWithdrawnUtxos)
                           .modify(v => v ++ payoutObligations)
                       _ <- state.set(newState)
@@ -204,23 +196,8 @@ final case class JointLedger(
               Producing(
                 previousBlock = d.producedBlock,
                 startTime = blockCreationTime,
-                pollResults = args.pollResults,
                 TransientFields(
-                  ledgerEventsRequired = d.producedBlock match {
-                      case i: Initial   => Map.empty
-                      case minor: Minor => minor.body.ledgerEventsRequired
-                      case major: Major => major.body.ledgerEventsRequired
-                      // TODO: type better
-                      case f: Final =>
-                          throw new RuntimeException(
-                            "JointLedger called startBlock when the previous" +
-                                " block was a final block"
-                          )
-                  },
-                  transactionsValid = List.empty,
-                  transactionsInvalid = List.empty,
-                  depositsRegistered = List.empty,
-                  depositsRejected = List.empty,
+                  events = List.empty,
                   blockWithdrawnUtxos = Vector.empty
                 ),
                 dappLedgerState = d.dappLedgerState,
@@ -238,26 +215,19 @@ final case class JointLedger(
 
         def augmentBlockMinor(
             p: Producing,
-            depositsRefunded: List[LedgerEvent.Id]
+            depositsRefunded: List[LedgerEventId]
         ): AugmentedBlock.Minor = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Minor = Block.Body.Minor(
-              ledgerEventsRequired = ledgerEventsRequired,
-              transactionsValid = transactionsValid,
-              transactionsInvalid = transactionsInvalid,
-              depositsRegistered = depositsRegistered,
-              depositsRejected = depositsRejected,
+              events = events,
               depositsRefunded = depositsRefunded
             )
 
-            val kzgCommit = p.virtualLedgerState.kzgCommitment
             val nextBlock: Block.Minor = p.previousBlock
                 .nextBlock(
                   newBody = nextBlockBody,
-                  // FIXME: Conflicting types
                   newTime = p.startTime,
-                  // FIXME: Conflicting types
-                  newCommitment = kzgCommit
+                  newCommitment = p.virtualLedgerState.kzgCommitment
                 )
                 .asInstanceOf[Block.Minor]
 
@@ -270,16 +240,12 @@ final case class JointLedger(
         def augmentedBlockMajor(
             p: Producing,
             settleLedgerRes: DappLedgerM.SettleLedger.Result,
-            refundedDeposits: List[LedgerEvent.Id],
-            absorbedDeposits: List[LedgerEvent.Id]
+            refundedDeposits: List[LedgerEventId],
+            absorbedDeposits: List[LedgerEventId]
         ): AugmentedBlock.Major = {
             import p.nextBlockData.*
             val nextBlockBody: Block.Body.Major = Block.Body.Major(
-              ledgerEventsRequired = ledgerEventsRequired,
-              transactionsValid = transactionsValid,
-              transactionsInvalid = transactionsInvalid,
-              depositsRegistered = depositsRegistered,
-              depositsRejected = depositsRejected,
+              events = events,
               depositsAbsorbed = absorbedDeposits,
               depositsRefunded = refundedDeposits
             )
@@ -318,10 +284,10 @@ final case class JointLedger(
         def isMature(deposit: DepositUtxo): Boolean = true
 
         def doSettlement(
-            validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+            validDeposits: Queue[(LedgerEventId, DepositUtxo)],
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligations: Vector[Payout.Obligation],
-            immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+            immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
             blockCreatedOn: FiniteDuration,
             txTiming: TxTiming
         ): IO[DappLedgerM.SettleLedger.Result] = {
@@ -382,7 +348,10 @@ final case class JointLedger(
             immatureDeposits = depositsPartition._2
 
             // Tuple containing (depositsInPollResults, depositsNotInPollResults)
-            depositPartition = matureDeposits.partition(x => producing.pollResults.contains(x._1))
+            depositPartition = matureDeposits.partition(x =>
+                pollResults.contains(UtxoIdL1(x._2.l1Input))
+            )
+
             depositsInPollResults = depositPartition._1
 
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
@@ -454,10 +423,9 @@ final case class JointLedger(
             augmentedBlock: AugmentedBlock.Final = {
                 import p.nextBlockData.*
                 val nextBlockBody: Block.Body.Final = Block.Body.Final(
-                  ledgerEventsRequired = ledgerEventsRequired,
-                  transactionsValid = transactionsValid,
-                  transactionsInvalid = transactionsInvalid,
-                  depositsRejected = depositsRejected ++ depositsRegistered,
+                  events = events,
+                  // TODO: see comment in registerDeposit
+                  // depositsRejected = depositsRejected ++ depositsRegistered,
                   depositsRefunded = List.empty // FIXME: currently not handling refunds
                 )
 
@@ -534,31 +502,31 @@ final case class JointLedger(
   */
 object JointLedger {
 
+    type Ref = ActorRef[IO, Requests.Request]
+
     final case class CompleteBlockError() extends Throwable
+
     object Requests {
         type Request =
             // RegisterDeposit is exactly the DappLedger type, we're simply forwarding it through.
             // Does this mean we should wrap it?
-            RegisterDeposit | ApplyInternalTxL2 | StartBlock | CompleteBlockRegular |
-                CompleteBlockFinal | GetState.Sync
+            LedgerEvent | StartBlock | CompleteBlockRegular | CompleteBlockFinal | GetState.Sync
 
-        // FIXME: This should include the refundTxBytes
-        // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
-        final case class RegisterDeposit(
-            serializedDeposit: Array[Byte],
-            eventId: LedgerEvent.Id,
-            virtualOutputs: NonEmptyList[GenesisObligation]
+        case class StartBlock(
+            blockNum: Block.Number,
+            blockCreationTime: FiniteDuration
         )
 
-        case class ApplyInternalTxL2(id: LedgerEvent.Id, tx: Array[Byte])
-
-        // FIXME: Make this take a pollResults: Utxos of all utxos present at the treasury address
-        case class StartBlock(blockCreationTime: FiniteDuration, pollResults: Set[LedgerEvent.Id])
-
+        /** @param referenceBlock
+          * @param pollResults
+          *   there are two reasons to have it here:
+          *   - pollResults are always absent upon weaver's start time. Passing it here may improve
+          *     things.
+          *   - pollResults are needed only when we are finishing a regular (non-final) block.
+          */
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
-            // Make this block Major in order to circumvent a fallback tx becoming valid
-            // forceMajor : Boolean
+            pollResults: Set[UtxoIdL1]
         )
 
         case class CompleteBlockFinal(referenceBlock: Option[Block])
@@ -568,6 +536,7 @@ object JointLedger {
 
             def ?: : this.Send = SyncRequest.send(_, this)
         }
+
     }
 
     sealed trait State {
@@ -586,7 +555,6 @@ object JointLedger {
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
         startTime: FiniteDuration,
-        pollResults: Set[LedgerEvent.Id],
         nextBlockData: TransientFields
     ) extends State
 }
