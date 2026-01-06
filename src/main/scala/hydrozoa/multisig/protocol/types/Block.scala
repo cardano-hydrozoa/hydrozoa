@@ -87,7 +87,7 @@ object Block {
         ) extends Header(Type.Final)
 
         def nextBlockNumber: Block.Number = this match {
-            case Header.Initial(timeCreation, commitment) => Number(1)
+            case Header.Initial(timeCreation, commitment) => Number.first
             case Header.Minor(blockNum, _, _, _)          => blockNum.increment
             case Header.Major(blockNum, _, _, _)          => blockNum.increment
             case Header.Final(blockNum, _, _)             => blockNum.increment
@@ -161,8 +161,8 @@ object Block {
         }
 
         sealed trait InitialHeaderFields extends Mandatory {
-            override def blockNum: Number = Number(0)
-            override def blockVersion: Version.Full = Version.Full(0, 0)
+            final override def blockNum: Number = Number.zero
+            final override def blockVersion: Version.Full = Version.Full.zero
         }
     }
 
@@ -236,9 +236,10 @@ object Block {
 
         def apply(i: Int): Number = i
 
-        /** Number of the first (non-initialization) block, i.e. 1. */
-        def firstBlockNumber: Number = apply(1)
-        // def firstBlockNumber: Number = Block.HeaderFields.InitialHeaderFields.blockNum.increment
+        val zero: Number = apply(0)
+
+        /** Number of the first (non-initial) block, i.e. 1. */
+        val first: Number = zero.increment
 
         given Conversion[Number, Int] = identity
 
@@ -261,6 +262,8 @@ object Block {
 
             def apply(i: Int, j: Int): Full = (i, j)
 
+            val zero: Full = apply(0, 0)
+
             def unapply(self: Full): (Major, Minor) = (Major(self._1), Minor(self._2))
 
             given Conversion[Full, (Int, Int)] = identity
@@ -282,6 +285,8 @@ object Block {
 
             def apply(i: Int): Major = i
 
+            val zero: Major = apply(0)
+
             given Conversion[Major, Int] = identity
 
             given Ordering[Major] with {
@@ -300,6 +305,8 @@ object Block {
             opaque type Minor = Int
 
             def apply(i: Int): Minor = i
+
+            val zero: Minor = apply(0)
 
             given Conversion[Minor, Int] = identity
 

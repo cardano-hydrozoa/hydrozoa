@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
-import hydrozoa.multisig.protocol.types.Block.Number.firstBlockNumber
+import hydrozoa.multisig.protocol.types.Block.Number.first
 import hydrozoa.multisig.protocol.types.Block.blockEvents
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
 
@@ -77,7 +77,7 @@ object BlockWeaver {
     final case class Leader(
         blockNumber: Block.Number
     ) extends State {
-        def isFirstBlock: Boolean = blockNumber == firstBlockNumber
+        def isFirstBlock: Boolean = blockNumber == first
     }
 
     final case class Awaiting(
