@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.{DisputeResolutionScript, RuleBasedTreasuryScript}
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.{RuleBasedTreasuryDatum, UnresolvedDatum}
@@ -26,7 +27,7 @@ import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
-    override val validityStart: Slot,
+    override val validityStart: java.time.Instant,
     treasurySpent: MultisigTreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
@@ -38,7 +39,7 @@ final case class FallbackTx(
     producedPeerVoteUtxos: NonEmptyList[Utxo],
     producedCollateralUtxos: NonEmptyList[Utxo],
     override val tx: Transaction
-) extends HasValidityStartSlot,
+) extends HasValidityStart,
     // TODO: shall we add separate raw-type traits for that?
     Tx {
     def producedVoteUtxos: NonEmptyList[Utxo] =
@@ -212,7 +213,7 @@ object FallbackTx {
             val txId = finalized.transaction.id
             FallbackTx(
               // This is safe since we always set it
-              validityStart = Slot(finalized.transaction.body.value.validityStartSlot.get),
+              validityStart = Slot(setStartSlot.slot).toInstant(recipe.config.env.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
                 treasuryTokenName = recipe.config.tokenNames.headTokenName,

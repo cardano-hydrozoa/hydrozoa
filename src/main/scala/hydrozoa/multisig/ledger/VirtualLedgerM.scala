@@ -6,6 +6,7 @@ import cats.effect.IO
 import cats.implicits.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.Error.{CborParseError, TransactionInvalidError}
 import hydrozoa.multisig.ledger.dapp.tx.Tx
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -79,7 +80,10 @@ object VirtualLedgerM {
             newState = s.copy(s.activeUtxos ++ genesisEvent.asUtxos)
         } yield newState.kzgCommitment
 
-    def applyInternalTx(tx: Tx.Serialized): VirtualLedgerM[Vector[Payout.Obligation]] =
+    def applyInternalTx(
+        tx: Tx.Serialized,
+        time: java.time.Instant
+    ): VirtualLedgerM[Vector[Payout.Obligation]] =
         given OriginalCborByteArray = OriginalCborByteArray(tx)
         // NOTE: We can probably write a cbor deserialization directly to L2EventTransaction.
         // The question is what conditions we should check during deserialization -- our L2ConformanceValidator
@@ -99,6 +103,7 @@ object VirtualLedgerM {
             newState <- lift(
               HydrozoaTransactionMutator
                   .transit(
+                    time = time,
                     context = config,
                     state = s,
                     l2Event = l2EventTx
@@ -129,8 +134,6 @@ object VirtualLedgerM {
 
     final case class Config(
         slotConfig: SlotConfig = SlotConfig.Mainnet,
-        // FIXME: This should be passed where its needed, not in the config. (It's volatile)
-        slot: SlotNo,
         protocolParams: ProtocolParams,
         network: Network
     ) {
@@ -139,9 +142,9 @@ object VirtualLedgerM {
           *
           * @return
           */
-        def toL1Context: Context = Context(
+        def toL1Context(time: java.time.Instant, slotConfig: SlotConfig): Context = Context(
           fee = Coin(0),
-          env = UtxoEnv(slot, protocolParams, CertState.empty, network),
+          env = UtxoEnv(time.toSlot(slotConfig).slot, protocolParams, CertState.empty, network),
           slotConfig = slotConfig
         )
     }
@@ -157,7 +160,6 @@ object VirtualLedgerM {
 
         def fromTxBuilderConfig(txbc: Tx.Builder.Config): Config = Config(
           slotConfig = txbc.env.slotConfig,
-          slot = 0, // FIXME
           protocolParams = txbc.env.protocolParams,
           network = txbc.env.network
         )
@@ -166,7 +168,6 @@ object VirtualLedgerM {
           */
         private def fromL1Context(l1Context: Context): Config = Config(
           slotConfig = l1Context.slotConfig,
-          slot = l1Context.env.slot,
           protocolParams = l1Context.env.params,
           network = l1Context.env.network
         )

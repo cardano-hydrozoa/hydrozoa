@@ -3,17 +3,19 @@ package hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
+import hydrozoa.multisig.protocol.types.Block.Version.Major
+import java.time.Instant
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
-import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{Sized, Slot, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
+import scalus.cardano.ledger.{Sized, Slot, SlotConfig, Transaction, TransactionInput, TransactionOutput as TxOutput, Utxo, Value}
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -28,7 +30,7 @@ sealed trait SettlementTx
       DepositUtxo.Many.Spent,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
-      HasTtlSlot
+      HasValidityEnd
 
 object SettlementTx {
     import Builder.*
@@ -38,9 +40,9 @@ object SettlementTx {
     sealed trait NoRollouts extends SettlementTx
 
     case class NoPayouts(
-        override val ttl: Slot,
+        override val validityEnd: Instant,
         override val tx: Transaction,
-        override val majorVersionProduced: Block.Version.Major,
+        override val majorVersionProduced: Major,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
@@ -48,7 +50,7 @@ object SettlementTx {
     ) extends NoRollouts
 
     case class WithOnlyDirectPayouts(
-        override val ttl: Slot,
+        override val validityEnd: Instant,
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -59,7 +61,7 @@ object SettlementTx {
           NoRollouts
 
     case class WithRollouts(
-        override val ttl: Slot,
+        override val validityEnd: Instant,
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -80,7 +82,9 @@ object SettlementTx {
             override def complete(
                 args: ArgsType,
                 state: State[SettlementTx.NoPayouts]
-            ): BuildErrorOr[ResultType] = Right(Complete.completeNoPayouts(args, state))
+            ): BuildErrorOr[ResultType] = Right(
+              Complete.completeNoPayouts(args, state, config.env.slotConfig)
+            )
         }
 
         final case class WithPayouts(override val config: Tx.Builder.Config)
@@ -101,7 +105,7 @@ object SettlementTx {
                   args.rolloutTxSeqPartial
                 )
                 (finished, mergeResult) = mergeTrial
-            } yield Complete.completeWithPayouts(args, finished, mergeResult)
+            } yield Complete.completeWithPayouts(args, finished, mergeResult, config.env.slotConfig)
 
         }
 
@@ -144,7 +148,7 @@ object SettlementTx {
             extends Block.Version.Major.Produced,
               MultisigTreasuryUtxo.ToSpend,
               DepositUtxo.Many.ToSpend,
-              HasTtlTime {
+              HasValidityEnd {
             final def mbRolloutValue: Option[Value] =
                 this match {
                     case a: Args.WithPayouts =>
@@ -163,7 +167,7 @@ object SettlementTx {
                 // reset the fallback timer.
                 // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: FiniteDuration
+                override val validityEnd: java.time.Instant
             ) extends Args(kzgCommitment)
 
             final case class WithPayouts(
@@ -171,7 +175,7 @@ object SettlementTx {
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val ttl: FiniteDuration,
+                override val validityEnd: java.time.Instant,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Args(kzgCommitment)
 
@@ -289,7 +293,7 @@ object SettlementTx {
                   referenceHNS(config),
                   consumeTreasury(config, args.treasuryToSpend),
                   sendTreasury(args),
-                  validityEndSlot(Slot(config.env.slotConfig.timeToSlot(args.ttl.toMillis))),
+                  validityEndSlot(args.validityEnd.toSlot(config.env.slotConfig)),
                 )
 
             private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
@@ -298,8 +302,8 @@ object SettlementTx {
             private def referenceHNS(config: Tx.Builder.Config) =
                 ReferenceOutput(config.multisigRegimeUtxo.asUtxo)
 
-            private def validityEndSlot(ttl: Slot): ValidityEndSlot =
-                ValidityEndSlot(ttl.slot)
+            private def validityEndSlot(slot: Slot): ValidityEndSlot =
+                ValidityEndSlot(slot.slot)
 
             private def consumeTreasury(
                 config: Tx.Builder.Config,
@@ -387,7 +391,8 @@ object SettlementTx {
             @throws[AssertionError]
             def completeNoPayouts(
                 args: Args.NoPayouts,
-                state: State[SettlementTx.NoPayouts]
+                state: State[SettlementTx.NoPayouts],
+                slotConfig: SlotConfig
             ): Result.NoPayouts = {
                 val treasuryProduced = PostProcess.getTreasuryProduced(
                   args.majorVersionProduced,
@@ -396,12 +401,13 @@ object SettlementTx {
                 )
 
                 val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
-                  ttl = Slot(state.ctx.transaction.body.value.ttl.get),
+                  validityEnd =
+                      Slot(state.ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
+                  tx = state.ctx.transaction,
                   majorVersionProduced = args.majorVersionProduced,
                   treasurySpent = args.treasuryToSpend,
                   treasuryProduced = treasuryProduced,
                   depositsSpent = state.depositsSpent,
-                  tx = state.ctx.transaction,
                   resolvedUtxos = state.ctx.resolvedUtxos
                 )
                 Result.NoPayouts(
@@ -426,7 +432,8 @@ object SettlementTx {
             def completeWithPayouts(
                 args: Args.WithPayouts,
                 state: State[SettlementTx.WithPayouts],
-                mergeResult: Merge.Result
+                mergeResult: Merge.Result,
+                slotConfig: SlotConfig
             ): Result.WithOnlyDirectPayouts | Result.WithRollouts = {
                 import Merge.Result.*
 
@@ -447,7 +454,7 @@ object SettlementTx {
                         depositsSpent = state.depositsSpent,
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(tx.body.value.ttl.get),
+                        validityEnd = Slot(tx.body.value.ttl.get).toInstant(slotConfig),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
@@ -456,7 +463,8 @@ object SettlementTx {
                     )
 
                 def withRollouts(
-                    rollouts: RolloutTxSeq.Builder.PartialResult
+                    rollouts: RolloutTxSeq.Builder.PartialResult,
+                    slotConfig: SlotConfig
                 ): Result.WithRollouts =
                     Result.WithRollouts(
                       transaction = SettlementTx.WithRollouts(
@@ -467,7 +475,7 @@ object SettlementTx {
                         rolloutProduced = unsafeGetRolloutProduced(state.ctx),
                         tx = tx,
                         // this is safe since we always set ttl
-                        ttl = Slot(tx.body.value.ttl.get),
+                        validityEnd = Slot(tx.body.value.ttl.get).toInstant(slotConfig),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
@@ -477,12 +485,12 @@ object SettlementTx {
                     )
 
                 mergeResult match {
-                    case NotMerged => withRollouts(args.rolloutTxSeqPartial)
+                    case NotMerged => withRollouts(args.rolloutTxSeqPartial, slotConfig)
                     case Merged(mbFirstSkipped) =>
                         mbFirstSkipped match {
                             case None => withOnlyDirectPayouts
                             case Some(firstSkipped) =>
-                                withRollouts(firstSkipped.partialResult)
+                                withRollouts(firstSkipped.partialResult, slotConfig)
                         }
                 }
             }

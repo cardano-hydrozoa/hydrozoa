@@ -6,9 +6,11 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import org.scalacheck.{Arbitrary, Gen}
 import scala.collection.immutable.SortedMap
+import scala.concurrent.duration.DurationInt
 import scalus.builtin.ByteString
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -52,7 +54,7 @@ val minInitTreasuryAda: Coin = {
 // See InitializationTxSeqTest.scala
 val genInitTxRecipe: Gen[InitializationTx.Recipe] =
     for {
-        peers <- genTestPeers
+        peers <- genTestPeers()
 
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
 
@@ -86,7 +88,7 @@ val genInitTxRecipe: Gen[InitializationTx.Recipe] =
         hmrwCoin <- Arbitrary.arbitrary[Coin]
 
     } yield InitializationTx.Recipe(
-      ttl = ???,
+      validityEnd = java.time.Instant.now() + 10.minutes, // FIXEME: Generate
       spentUtxos = SpentUtxos(seedUtxo, otherSpentUtxos),
       headNativeScript = hns,
       initialDeposit = initialDeposit,

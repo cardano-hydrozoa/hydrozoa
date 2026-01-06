@@ -2,10 +2,11 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.types.Block.*
-import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, LedgerEventId}
 import scala.concurrent.duration.FiniteDuration
 
 object ConsensusProtocol {
@@ -18,11 +19,29 @@ object ConsensusProtocol {
     enum Actors:
         case BlockProducer, CardanoLiaison, PeerLiaison, TransactionSequencer
 
-    object BlockProducer {
+    // TODO: move to the weaver sources
+    object BlockWeaver {
         type BlockProducerRef = Ref
         type Ref = ActorRef[IO, Request]
-        type Request =
-            NewLedgerEvent | Block | AckBlock
+        // TODO: use Block.Next not Block here
+        type Request = LedgerEvent | Block | BlockConfirmed | PollResults
+
+        /** Block confirmation.
+          *
+          * @param blockNumber
+          */
+        final case class BlockConfirmed(
+            blockNumber: Block.Number,
+            finalizationRequested: Boolean = false
+        )
+
+        /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at
+          * the multisig head address.
+          *
+          * @param utxos
+          *   all utxos found
+          */
+        final case class PollResults(utxos: Set[UtxoIdL1])
     }
 
     /** TODO: I would like to have it in the CardanoLiaison.scala and not here.
@@ -51,12 +70,12 @@ object ConsensusProtocol {
 
     object Persisted {
         type Request =
-            NewLedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
+            LedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
     }
 
     object RemoteBroadcast {
         type Request =
-            BlockProducer.Request
+            BlockWeaver.Request
     }
 
     /** Submit a new ledger event to the head via a peer's ledger event actor. */
@@ -80,21 +99,6 @@ object ConsensusProtocol {
                 eventOutcome <- Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
             } yield SubmitLedgerEvent(time, event, eventOutcome)
     }
-
-    /** The ledger event actor announces a new multi-ledger ledger event, timestamped and assigned a
-      * LedgerEventId.
-      */
-    final case class NewLedgerEvent(
-        id: LedgerEvent.Id,
-        time: FiniteDuration,
-        event: Unit // FIXME LedgerEvent
-    )
-
-    object NewLedgerEvent {
-        type Subscriber = ActorRef[IO, NewLedgerEvent]
-    }
-
-    // TODO: trait BlockEffectsSigned ???
 
     /** L2 block confirmations (local-only signal) */
     sealed trait ConfirmBlock {
@@ -150,7 +154,7 @@ object ConsensusProtocol {
         id: Batch.Id,
         ackNum: AckBlock.Number,
         blockNum: Block.Number,
-        eventNum: LedgerEvent.Number
+        eventNum: LedgerEventId.Number
     )
 
     /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
@@ -176,10 +180,10 @@ object ConsensusProtocol {
         id: Batch.Id,
         ackNum: AckBlock.Number,
         blockNum: Block.Number,
-        eventNum: LedgerEvent.Number,
+        eventNum: LedgerEventId.Number,
         ack: Option[AckBlock],
         block: Option[Block],
-        events: List[NewLedgerEvent]
+        events: List[LedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(
           id.increment,

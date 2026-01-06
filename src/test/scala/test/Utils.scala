@@ -6,7 +6,6 @@ import scalus.cardano.address.Network.Mainnet
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.rules.*
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.txbuilder.Environment
 import scalus.cardano.txbuilder.TransactionBuilder.ensureMinAda
 import scalus.uplc.eval.ExBudget
 import test.TestPeer.Alice
@@ -59,7 +58,7 @@ val nonSigningValidators: Seq[Validator] =
 val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
     .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
 
-val testTxBuilderEnvironment: Environment = CardanoInfo(
+val testTxBuilderEnvironment: CardanoInfo = CardanoInfo(
   protocolParams = testProtocolParams,
   slotConfig = slotConfig(testNetwork),
   network = testNetwork
@@ -67,7 +66,6 @@ val testTxBuilderEnvironment: Environment = CardanoInfo(
 
 def testVirtualLedgerConfig(slot: SlotNo): VirtualLedgerM.Config = VirtualLedgerM.Config(
   slotConfig = testTxBuilderEnvironment.slotConfig,
-  slot = slot,
   protocolParams = testTxBuilderEnvironment.protocolParams,
   network = testNetwork
 )

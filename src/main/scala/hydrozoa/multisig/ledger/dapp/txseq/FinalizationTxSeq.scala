@@ -8,12 +8,13 @@ import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.Args.toArgs1
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.Builder.PartialResult
 import hydrozoa.multisig.ledger.dapp.tx.SettlementTx.Builder.Args as SingleArgs
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
-import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.txbuilder.SomeBuildError
 
 enum FinalizationTxSeq {
@@ -196,38 +197,34 @@ object FinalizationTxSeq {
             case RolloutSeqError(e: (SomeBuildError, String))
 
         final case class Args(
-            kzgCommitment: KzgCommitment,
             majorVersionProduced: Block.Version.Major,
             treasuryToSpend: MultisigTreasuryUtxo,
             payoutObligationsRemaining: Vector[Payout.Obligation],
             multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
             equityShares: EquityShares,
-            competingFallbackValidityStart: FiniteDuration,
-            blockCreatedOn: FiniteDuration,
+            competingFallbackValidityStart: java.time.Instant,
+            blockCreatedOn: java.time.Instant,
             txTiming: TxTiming
-        ) extends
-            // TODO: confirm: this is not needed
-            // SingleArgs(kzgCommitment),
-            Payout.Obligation.Many.Remaining {
+        ) extends Payout.Obligation.Many.Remaining {
 
             def toArgsNoPayouts: SingleArgs.NoPayouts =
                 SingleArgs.NoPayouts(
-                  kzgCommitment = kzgCommitment,
                   majorVersionProduced = majorVersionProduced,
                   treasuryToSpend = treasuryToSpend,
                   depositsToSpend = depositsToSpend,
-                  ttl = competingFallbackValidityStart - txTiming.silencePeriod
+                  validityEnd = competingFallbackValidityStart - txTiming.silenceDuration,
+                  kzgCommitment = KzgCommitment.empty
                 )
 
             def toArgsWithPayouts(
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ): SingleArgs.WithPayouts = SingleArgs.WithPayouts(
-              kzgCommitment = kzgCommitment,
               majorVersionProduced = majorVersionProduced,
               treasuryToSpend = treasuryToSpend,
               depositsToSpend = depositsToSpend,
-              ttl = competingFallbackValidityStart - txTiming.silencePeriod,
-              rolloutTxSeqPartial = rolloutTxSeqPartial
+              validityEnd = competingFallbackValidityStart - txTiming.silenceDuration,
+              rolloutTxSeqPartial = rolloutTxSeqPartial,
+              kzgCommitment = KzgCommitment.empty
             )
 
             // No deposits in finalization tx

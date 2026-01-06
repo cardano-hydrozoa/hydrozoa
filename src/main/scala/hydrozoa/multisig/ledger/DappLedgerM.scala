@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, Mult
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.protocol.types.{Block, LedgerEvent}
+import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
@@ -78,19 +78,20 @@ object DappLedgerM {
     // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
     def registerDeposit(
         serializedDeposit: Array[Byte],
-        eventId: LedgerEvent.Id,
+        eventId: LedgerEventId,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): DappLedgerM[Unit] = {
         for {
             config <- ask
             // FIXME: DepositTx's parser does not check all the invariants.
             //  Use DepositRefundTxSeq's parser, instead.
-            depositTx <- lift(
-              DepositTx
-                  .parse(serializedDeposit, config, virtualOutputs)
-                  .left
-                  .map(ParseDepositError(_))
-            )
+            parseRes =
+                DepositTx
+                    .parse(serializedDeposit, config, virtualOutputs)
+                    .left
+                    .map(ParseDepositError(_))
+            depositTx <- lift(parseRes)
+
             // _ <- EitherT(validateTimeBounds(depositTx))
             s <- get
             newState = s.appendToQueue((eventId, depositTx.depositProduced))
@@ -107,13 +108,13 @@ object DappLedgerM {
       */
     def settleLedger(
         nextKzg: KzgCommitment,
-        validDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
+        validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         tallyFeeAllowance: Coin,
         votingDuration: FiniteDuration,
-        immatureDeposits: Queue[(LedgerEvent.Id, DepositUtxo)],
-        blockCreatedOn: FiniteDuration,
-        competingFallbackValidityStart: FiniteDuration,
+        immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
         txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
@@ -179,25 +180,23 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-//        blockCreatedOn : PosixTime,
-//        competingFallbackValidityStart : PosixTime,
-//        txTiming: TxTiming
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
+        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get
             config <- ask
-//            kzg: KzgCommitment <- DappLedger.(???)
             args = FinalizationTxSeq.Builder.Args(
-              kzgCommitment = ???,
               majorVersionProduced =
                   Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
               equityShares = equityShares,
-              competingFallbackValidityStart = ???,
-              blockCreatedOn = ???,
-              txTiming = ???
+              competingFallbackValidityStart = competingFallbackValidityStart,
+              blockCreatedOn = blockCreatedOn,
+              txTiming = txTiming
             )
             ftxSeq <- lift(
               FinalizationTxSeq
@@ -212,10 +211,12 @@ object DappLedgerM {
     final case class State(
         treasury: MultisigTreasuryUtxo,
         // TODO: Queue[(EventId, DepositUtxo, RefundTx.PostDated)]
-        deposits: Queue[(LedgerEvent.Id, DepositUtxo)] = Queue()
+        deposits: Queue[(LedgerEventId, DepositUtxo)] = Queue()
     ) {
-        def appendToQueue(t: (LedgerEvent.Id, DepositUtxo)): State =
+        def appendToQueue(t: (LedgerEventId, DepositUtxo)): State =
             this.copy(treasury, deposits.appended(t))
+
+        def depositUtxoByEventId(ledgerEventId: LedgerEventId): Option[DepositUtxo] = ???
     }
 
     object SettleLedger {

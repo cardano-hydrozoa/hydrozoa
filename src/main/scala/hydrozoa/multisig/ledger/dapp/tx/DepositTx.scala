@@ -4,20 +4,21 @@ import cats.data.NonEmptyList
 import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
-final case class DepositTx(
+final case class DepositTx private (
     depositProduced: DepositUtxo,
-    override val tx: Transaction
+    override val tx: Transaction,
 ) extends Tx
 
 object DepositTx {
@@ -27,7 +28,8 @@ object DepositTx {
         utxosFunding: NonEmptyList[Utxo],
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
-        changeAddress: ShelleyAddress
+        changeAddress: ShelleyAddress,
+        validityEnd: java.time.Instant
     ) extends Tx.Builder {
         def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
@@ -76,11 +78,13 @@ object DepositTx {
               )
             )
 
+            val ttl = ValidityEndSlot(validityEnd.toSlot(config.env.slotConfig).slot)
+
             for {
                 ctx <- TransactionBuilder
                     .build(
                       config.env.network,
-                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange)
+                      spendUtxosFunding ++ List(stepRefundMetadata, sendDeposit, sendChange, ttl)
                     )
                     .explainConst("building unbalanced deposit tx failed")
 
@@ -123,6 +127,8 @@ object DepositTx {
     case class DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError) extends ParseError
 
     case class TxCborDeserializationFailed(e: Throwable) extends ParseError
+
+    case class ValidityEndParseError(e: Throwable) extends ParseError
 
     /** Parse a deposit transaction, ensuring that there is exactly one Babbage Utxo at the head
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
@@ -175,6 +181,14 @@ object DepositTx {
                         )
                         .left
                         .map(DepositUtxoError(_))
+
+                    validityEnd <- Try(
+                      java.time.Instant
+                          .ofEpochMilli(config.env.slotConfig.slotToTime(tx.body.value.ttl.get))
+                    ) match {
+                        case Failure(exception) => Left(ValidityEndParseError(exception))
+                        case Success(v)         => Right(v)
+                    }
 
                 } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))

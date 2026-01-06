@@ -20,6 +20,7 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, Hash, KeepRaw, Metadatum, Sized, TaggedSortedSet, Transaction as STransaction, TransactionBody, TransactionInput, TransactionOutput, TransactionWitnessSet, Value, Word64}
 
+// TODO: remove ix and use .ordinal
 enum TestPeer(@annotation.unused ix: Int) derives CanEqual:
     case Alice extends TestPeer(0)
     case Bob extends TestPeer(1)
@@ -165,10 +166,10 @@ val genTestPeer: Gen[TestPeer] =
       TestPeer.Julia
     )
 
-/** Choose betweeen 2 and 10 peers */
-val genTestPeers: Gen[NonEmptyList[TestPeer]] =
+/** Choose between 2 and 10 peers */
+def genTestPeers(minPeers: Int = 2): Gen[NonEmptyList[TestPeer]] =
     for {
-        numPeers <- Gen.choose(2, 10)
+        numPeers <- Gen.choose(minPeers, 10)
         peersList = List(
           TestPeer.Alice,
           TestPeer.Bob,

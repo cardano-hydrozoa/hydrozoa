@@ -6,10 +6,10 @@ import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Initialization
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
 import scalus.builtin.Data
 import scalus.builtin.ToData.toData
@@ -25,14 +25,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
 final case class InitializationTx(
-    // TODO: Since we don't use this value in Hydrozoa, I think we don't want to
-    // bother about TTL for the initialization tx. As George said, this might be
-    // useful for users since that TTL is a point before which the initialization
-    // should be submitted. But the whole idea of making the init sequence exogenous
-    // serves exactly that goal - the way to give the users ability to do what they want to.
-    // Then why do we want to make an exception for TTL?
-    // However, I am keeping it for now and we can consider it later on.
-    override val ttl: Slot,
+    override val validityEnd: java.time.Instant,
     treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
@@ -40,7 +33,7 @@ final case class InitializationTx(
     override val tx: Transaction
 ) extends Tx,
       HasResolvedUtxos,
-      HasTtlSlot
+      HasValidityEnd
 
 object InitializationTx {
 
@@ -125,8 +118,7 @@ object InitializationTx {
             )
 
         // Not sure why we use Long in the builder step not Slot
-        val ttlSlot = Slot(env.slotConfig.timeToSlot(ttl.toMillis))
-        val setTtl = ValidityEndSlot(ttlSlot.slot)
+        val validityEndSlot = ValidityEndSlot(validityEnd.toSlot(env.slotConfig).slot)
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -135,7 +127,7 @@ object InitializationTx {
             :+ Send(hmrwOutput)
             :+ createChangeOutput
             :+ modifyAuxiliaryData
-            :+ setTtl
+            :+ validityEndSlot
 
         ////////////////////////////////////////////////////////////
         // Build and finalize
@@ -158,7 +150,7 @@ object InitializationTx {
                 )
 
         } yield InitializationTx(
-          ttl = ttlSlot,
+          validityEnd = recipe.validityEnd,
           treasuryProduced = MultisigTreasuryUtxo(
             treasuryTokenName = headTokenName,
             utxoId = TransactionInput(
@@ -186,6 +178,7 @@ object InitializationTx {
         peerKeys: NonEmptyList[VerificationKeyBytes],
         expectedNetwork: Network,
         tx: Transaction,
+        slotConfig: SlotConfig,
         resolver: Seq[TransactionInput] => ResolvedUtxos
     )(using protocolVersion: ProtocolVersion): Either[ParseError, InitializationTx] =
         for {
@@ -366,7 +359,7 @@ object InitializationTx {
                     )
 
             // ttl should be present
-            ttl <- mbTtl.map(Slot.apply).toRight(TtlIsMissing)
+            validityEnd <- mbTtl.map(Slot.apply(_).toInstant(slotConfig)).toRight(TtlIsMissing)
 
             //////
             // Check mint coherence: only a single head token and MR token should be minted
@@ -400,7 +393,7 @@ object InitializationTx {
             )
 
         } yield InitializationTx(
-          ttl = ttl,
+          validityEnd = validityEnd,
           treasuryProduced = treasury,
           multisigRegimeWitness = MultisigRegimeUtxo(
             multisigRegimeTokenName = derivedTokenNames.multisigRegimeTokenName,
@@ -425,7 +418,7 @@ object InitializationTx {
 
     // TODO: rename to Args for consistency?
     final case class Recipe(
-        ttl: FiniteDuration,
+        validityEnd: java.time.Instant,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
         initialDeposit: Coin,

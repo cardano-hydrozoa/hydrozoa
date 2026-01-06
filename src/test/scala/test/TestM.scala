@@ -50,6 +50,7 @@ case class TestR(
     initTx: InitializationTxSeq, // Move to HeadConfig
     config: Tx.Builder.Config, // Move to HeadConfig
     jointLedger: ActorRef[IO, JointLedger.Requests.Request],
+    txTiming: TxTiming // Move to HeadConfig
 )
 
 type TestError =
@@ -85,7 +86,7 @@ object TestM {
     // or generate otherwise. This goes along with the comment on [[run]] for passing initializers directly to run
     private val defaultInitializer: PropertyM[ET, TestR] = {
         for {
-            peers <- PropertyM.pick[ET, NonEmptyList[TestPeer]](genTestPeers.label("Test Peers"))
+            peers <- PropertyM.pick[ET, NonEmptyList[TestPeer]](genTestPeers().label("Test Peers"))
 
             // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
             // a max non-plutus fee
@@ -122,7 +123,7 @@ object TestM {
             )
 
             txTiming = TxTiming.default
-            initializedOn <- PropertyM.run(EitherT.right[TestError](IO.realTime))
+            initializedOn <- monadForPropM[ET].pure(java.time.Instant.now())
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -189,7 +190,8 @@ object TestM {
           system,
           initTx,
           config,
-          jointLedger
+          jointLedger,
+          txTiming
         )
     }
 

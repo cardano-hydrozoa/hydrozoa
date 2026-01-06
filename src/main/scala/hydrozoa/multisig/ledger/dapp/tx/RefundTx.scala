@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.{Utxo as _, prebalancedLovelaceDiffHandler, *}
 import scala.annotation.tailrec
@@ -17,10 +18,9 @@ import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.ScriptSource.NativeScriptAttached
 import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
-import scalus.ledger.api.v3.PosixTime
 
 sealed trait RefundTx extends Tx {
-    def mStartTime: Option[PosixTime] = this match {
+    def mStartTime: Option[java.time.Instant] = this match {
         case self: RefundTx.PostDated => Some(self.startTime)
         case _                        => None
     }
@@ -28,7 +28,8 @@ sealed trait RefundTx extends Tx {
 
 object RefundTx {
     final case class Immediate(override val tx: Transaction) extends RefundTx
-    final case class PostDated(override val tx: Transaction, startTime: PosixTime) extends RefundTx
+    final case class PostDated(override val tx: Transaction, startTime: java.time.Instant)
+        extends RefundTx
 
     object Builder {
         final case class Immediate(
@@ -36,7 +37,7 @@ object RefundTx {
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value
         ) extends Builder[RefundTx.Immediate] {
-            override val mValidityStartSlot: None.type = None
+            override val mValidityStart: None.type = None
             override val stepRefundMetadata =
                 ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
@@ -52,7 +53,8 @@ object RefundTx {
             override val refundInstructions: DepositUtxo.Refund.Instructions,
             override val refundValue: Value
         ) extends Builder[RefundTx.PostDated] {
-            override val mValidityStartSlot: Some[PosixTime] = Some(refundInstructions.startTime)
+            override val mValidityStart: Some[java.time.Instant] =
+                Some(java.time.Instant.ofEpochMilli(refundInstructions.startTime.toLong))
             override val stepRefundMetadata =
                 ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
@@ -114,7 +116,10 @@ object RefundTx {
                 override val refundInstructions: DepositUtxo.Refund.Instructions
             ) extends PartialResult[RefundTx.PostDated] {
                 override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
-                    RefundTx.PostDated(ctx.transaction, refundInstructions.startTime)
+                    RefundTx.PostDated(
+                      ctx.transaction,
+                      java.time.Instant.ofEpochMilli(refundInstructions.startTime.toLong)
+                    )
             }
         }
 
@@ -133,7 +138,7 @@ object RefundTx {
         def refundInstructions: DepositUtxo.Refund.Instructions
         def refundValue: Value
 
-        def mValidityStartSlot: Option[PosixTime]
+        def mValidityStart: Option[java.time.Instant]
         def stepRefundMetadata: ModifyAuxiliaryData
 
         def mkPartialResult(
@@ -277,7 +282,7 @@ object RefundTx {
                     refundTx = tx.body.value.validityStartSlot match {
                         case None => RefundTx.Immediate(tx)
                         case Some(startSlot) =>
-                            RefundTx.PostDated(tx, env.slotConfig.slotToTime(startSlot))
+                            RefundTx.PostDated(tx, Slot(startSlot).toInstant(env.slotConfig))
                     }
                 } yield refundTx
             case Failure(e) => Left(TxCborDeserializationFailed(e))
