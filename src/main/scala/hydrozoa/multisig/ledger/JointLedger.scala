@@ -43,16 +43,26 @@ final case class JointLedger(
     peerLiaisons: Seq[ActorRef[IO, ConsensusProtocol.PeerLiaison.Request]],
     // private val cardanoLiaison
     // private val blockSigner
-    initialBlockTime: java.time.Instant,
-    initialBlockKzg: KzgCommitment,
     //// Static config fields
+    // in head config
+    initialBlockTime: java.time.Instant,
+    // derived
+    initialBlockKzg: KzgCommitment,
+    // derived
     config: Tx.Builder.Config,
+    // in head config
     txTiming: TxTiming,
+    // in head config
     tallyFeeAllowance: Coin,
+    // in head config
     equityShares: EquityShares,
+    // derived from init tx (which is in the config)
     multisigRegimeUtxo: MultisigRegimeUtxo,
+    // in head config (move into TxTiming)
     votingDuration: FiniteDuration,
+    // derived from init tx (which is in the config)
     treasuryTokenName: AssetName,
+    // derived from init tx (which is in the config)
     initialTreasury: MultisigTreasuryUtxo
 ) extends Actor[IO, Requests.Request] {
 
@@ -562,7 +572,6 @@ final case class JointLedger(
         for {
             // _ <- blockSigner ! augmentedBlock
             _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.block))
-            // _ <- cardanoLiaison ! augmentedBlock._2
         } yield ()
 
     private def checkReferenceBlock(
