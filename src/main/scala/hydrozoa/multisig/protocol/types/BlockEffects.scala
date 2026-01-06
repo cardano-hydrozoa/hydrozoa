@@ -7,7 +7,8 @@ enum BlockEffects(val blockType: Block.Type) {
 
     case Initial(
         override val id: Block.Number,
-        override val initialization: InitializationTx
+        override val initialization: InitializationTx,
+        override val fallback: FallbackTx
     ) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
 
     case Minor(
@@ -38,7 +39,7 @@ object BlockEffects {
     type Next = BlockEffects.Minor | BlockEffects.Major | BlockEffects.Final
 
     object Fields {
-        sealed trait Initial extends Initialization
+        sealed trait Initial extends Initialization, Fallback
 
         sealed trait Minor extends Refunds.Immediate, Refunds.PostDated
 
