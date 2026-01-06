@@ -122,34 +122,7 @@ object InitializationTxSeq {
                     )
 
             // Check validity ranges are correct and match each other
-            // 1. Fallback starts in a reasonable slot
-            preciseFallbackValidityStart =
-                initializationRequestTimestamp + txTiming.minSettlementDuration +
-                    txTiming.inactivityMarginDuration
-
-            possibleRange = (
-              (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              ),
-              (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              )
-            )
-
-            _ <-
-                if fallbackValidityStartSlot < possibleRange._1 || fallbackValidityStartSlot > possibleRange._2
-                then
-                    Left(
-                      FallbackTxValidityStartError(
-                        possibleRange._1,
-                        possibleRange._2,
-                        fallbackValidityStartSlot
-                      )
-                    )
-                else Right(())
-
-            // 2. Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
-            // TODO: Do we need a tolerance window here as well?
+            // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
                 (iTx.validityEnd + txTiming.silenceDuration).toSlot(slotConfig = env.slotConfig)
 

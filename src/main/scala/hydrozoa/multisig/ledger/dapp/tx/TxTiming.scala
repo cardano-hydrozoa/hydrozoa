@@ -46,7 +46,6 @@ final case class TxTiming(
     silenceDuration: FiniteDuration,
     depositMaturityDuration: FiniteDuration,
     depositAbsorptionDuration: FiniteDuration,
-    initializationFallbackDeviation: FiniteDuration
 )
 
 object TxTiming:
@@ -56,7 +55,6 @@ object TxTiming:
       silenceDuration = 5.minutes,
       depositMaturityDuration = 1.hours,
       depositAbsorptionDuration = 48.hours,
-      initializationFallbackDeviation = 10.minutes
     )
 
     extension (instant: java.time.Instant) {
