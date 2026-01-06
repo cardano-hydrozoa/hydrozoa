@@ -6,6 +6,8 @@ import com.suprnation.actor.ActorRef.ActorRef
 
 import AckBlock.Fields.*
 
+type AckBlockId = AckBlock.Id
+
 enum AckBlock:
     def id: AckBlock.Id
     def blockNum: Block.Number
