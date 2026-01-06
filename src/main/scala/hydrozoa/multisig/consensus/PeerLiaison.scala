@@ -55,6 +55,11 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
             _ <- subscribers.set(
               Some(
                 Subscribers(
+                  /*
+                    AckBlock -> Consensus
+                    Block -> Weaver
+                    LedgerEvent -> Weaver
+                   */
                   ackBlock = ???, // blockProducer,
                   newBlock = blockProducer,
                   newLedgerEvent = blockProducer,

@@ -176,6 +176,8 @@ final case class JointLedger(
                       newState = p
                           .focus(_.nextBlockData.events)
                           .modify(_.appended((eventId, false)))
+                          .focus(_.nextBlockData.blockWithdrawnUtxos)
+                          .modify(v => v ++ payoutObligations)
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -195,18 +197,6 @@ final case class JointLedger(
                 previousBlock = d.producedBlock,
                 startTime = blockCreationTime,
                 TransientFields(
-                  // TODO: Peter please confirm we can remove it
-                  // ledgerEventsRequired = d.producedBlock match {
-                  //    case i: Initial   => Map.empty
-                  //    case minor: Minor => minor.body.ledgerEventsRequired
-                  //    case major: Major => major.body.ledgerEventsRequired
-                  //    // TODO: type better
-                  //    case f: Final =>
-                  //        throw new RuntimeException(
-                  //          "JointLedger called startBlock when the previous" +
-                  //              " block was a final block"
-                  //        )
-                  // },
                   events = List.empty,
                   blockWithdrawnUtxos = Vector.empty
                 ),
@@ -359,10 +349,11 @@ final case class JointLedger(
 
             // Tuple containing (depositsInPollResults, depositsNotInPollResults)
             depositPartition = matureDeposits.partition(x =>
-                pollResults.contains(UtxoIdL1(x._2.toUtxo.input))
+                pollResults.contains(UtxoIdL1(x._2.l1Input))
             )
 
             depositsInPollResults = depositPartition._1
+
             // TODO: these just get ignored for now. In the future, we'd want to create a RefundImmediate
             depositsNotInPollResults = depositPartition._2
 
@@ -535,9 +526,6 @@ object JointLedger {
           */
         case class CompleteBlockRegular(
             referenceBlock: Option[Block],
-            // TODO: is it still actual?
-            // Make this block Major in order to circumvent a fallback tx becoming valid
-            // forceMajor : Boolean
             pollResults: Set[UtxoIdL1]
         )
 

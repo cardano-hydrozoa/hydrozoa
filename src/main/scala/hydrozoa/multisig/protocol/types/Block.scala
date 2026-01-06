@@ -238,6 +238,7 @@ object Block {
 
         /** Number of the first (non-initialization) block, i.e. 1. */
         def firstBlockNumber: Number = apply(1)
+        // def firstBlockNumber: Number = Block.HeaderFields.InitialHeaderFields.blockNum.increment
 
         given Conversion[Number, Int] = identity
 
