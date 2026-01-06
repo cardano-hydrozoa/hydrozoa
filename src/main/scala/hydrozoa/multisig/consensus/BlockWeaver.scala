@@ -6,6 +6,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.toEpochInstant
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
 import hydrozoa.multisig.protocol.types.Block.Number.first
@@ -425,7 +426,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         then
             for {
                 // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
-                now <- IO.monotonic
+                now <- IO.realTime.map(_.toEpochInstant)
                 _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     config.jointLedger ! mempool.findById(event).get

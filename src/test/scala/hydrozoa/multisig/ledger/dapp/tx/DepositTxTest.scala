@@ -2,12 +2,14 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.concurrent.duration.DurationInt
 import scalus.builtin.Data.toData
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -102,7 +104,8 @@ def genDepositRecipe(
       utxosFunding = fundingUtxos,
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
-      changeAddress = depositor.address(testNetwork)
+      changeAddress = depositor.address(testNetwork),
+      validityEnd = java.time.Instant.now() + 10.minutes // TODO: generate
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {

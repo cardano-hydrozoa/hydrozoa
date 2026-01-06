@@ -15,13 +15,18 @@ import scalus.cardano.ledger.{KeepRaw, Metadatum, TransactionException, Transact
 object HydrozoaTransactionMutator {
     def transit(
         context: Config,
+        time: java.time.Instant,
         state: State,
         l2Event: L2EventTransaction
     ): Either[String | TransactionException, State] = {
         val event = l2Event.transaction
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
-            v.validate(context.toL1Context, L1State(utxos = state.activeUtxos), event)
+            v.validate(
+              context.toL1Context(time, context.slotConfig),
+              L1State(utxos = state.activeUtxos),
+              event
+            )
         for
             _ <- L2ConformanceValidator.validate(context, state, l2Event)
             // Upstream validators (applied alphabetically for ease of comparison in a file browser
@@ -49,7 +54,7 @@ object HydrozoaTransactionMutator {
             // Upstream mutators
             state <-
                 PlutusScriptsTransactionMutator.transit(
-                  context.toL1Context,
+                  context.toL1Context(time, context.slotConfig),
                   state.toScalusState,
                   event
                 )

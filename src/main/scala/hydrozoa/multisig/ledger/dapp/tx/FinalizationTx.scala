@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import hydrozoa.multisig.ledger.dapp.tx.FinalizationTx.{MergedDeinit, WithDeinit}
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explain}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.toInstant
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, ResidualTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.protocol.types.Block
@@ -24,7 +25,7 @@ sealed trait FinalizationTx
       ResidualTreasuryUtxo.MbProduced,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
-      HasTtlSlot
+      HasValidityEnd
 
 object FinalizationTx {
 
@@ -37,7 +38,7 @@ object FinalizationTx {
     case class NoPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
@@ -47,7 +48,7 @@ object FinalizationTx {
     case class NoPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends Monolithic,
@@ -56,7 +57,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
@@ -65,7 +66,7 @@ object FinalizationTx {
     case class WithOnlyDirectPayoutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val resolvedUtxos: ResolvedUtxos
     ) extends Monolithic,
@@ -74,7 +75,7 @@ object FinalizationTx {
     case class WithRollouts(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
@@ -87,7 +88,7 @@ object FinalizationTx {
     case class WithRolloutsMerged(
         override val majorVersionProduced: Block.Version.Major,
         override val tx: Transaction,
-        override val ttl: Slot,
+        override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos
@@ -262,11 +263,15 @@ object FinalizationTx {
             type SeparateResult <: WithDeinit
             type MergedResult <: MergedDeinit
 
-            def mkSeparateResult(majorVersionProduced: Block.Version.Major): SeparateResult
+            def mkSeparateResult(
+                majorVersionProduced: Block.Version.Major,
+                slotConfig: SlotConfig
+            ): SeparateResult
 
             def mkMergedResult(
                 mergedFinalizationTx: Transaction,
-                majorVersionProduced: Block.Version.Major
+                majorVersionProduced: Block.Version.Major,
+                slotConfig: SlotConfig
             ): MergedResult
 
             /* Stage 2 of finalization tx building - an attempt to merge with a deinit tx.
@@ -274,7 +279,7 @@ object FinalizationTx {
             final def complete(
                 deinitTx: DeinitTx,
                 majorVersionProduced: Block.Version.Major,
-                config: Tx.Builder.Config
+                config: Tx.Builder.Config,
             ): BuildErrorOr[Result] =
 
                 /** TODO: update
@@ -325,11 +330,16 @@ object FinalizationTx {
                         )
                 } yield res
 
-                val separateResult = mkSeparateResult(majorVersionProduced)
+                val separateResult = mkSeparateResult(majorVersionProduced, config.env.slotConfig)
 
                 Right(
                   res match {
-                      case Right(ctx) => mkMergedResult(ctx.transaction, majorVersionProduced)
+                      case Right(ctx) =>
+                          mkMergedResult(
+                            ctx.transaction,
+                            majorVersionProduced,
+                            config.env.slotConfig
+                          )
                       case Left(
                             SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx)
                           ) =>
@@ -340,6 +350,8 @@ object FinalizationTx {
                 )
         }
 
+        // FIXME: There's a lot of duplication in here, especially with respect to
+        // passing the slotConfig and majorVersionProduced
         object PartialResult {
 
             case class NoPayouts(
@@ -351,12 +363,14 @@ object FinalizationTx {
                 type MergedResult = FinalizationTx.NoPayoutsMerged
 
                 override def mkSeparateResult(
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): SeparateResult =
                     FinalizationTx.NoPayouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      validityEnd = Slot(ctx.transaction.body.value.ttl.get)
+                          .toInstant(slotConfig = slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -364,12 +378,14 @@ object FinalizationTx {
 
                 override def mkMergedResult(
                     mergedFinalizationTx: Transaction,
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): MergedResult =
                     FinalizationTx.NoPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      validityEnd =
+                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -384,12 +400,13 @@ object FinalizationTx {
                 type MergedResult = FinalizationTx.WithOnlyDirectPayoutsMerged
 
                 override def mkSeparateResult(
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): SeparateResult =
                     FinalizationTx.WithOnlyDirectPayouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      validityEnd = Slot(ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       resolvedUtxos = ctx.resolvedUtxos
@@ -397,12 +414,14 @@ object FinalizationTx {
 
                 override def mkMergedResult(
                     mergedFinalizationTx: Transaction,
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): MergedResult =
                     FinalizationTx.WithOnlyDirectPayoutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      validityEnd =
+                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       resolvedUtxos = ctx.resolvedUtxos
                     )
@@ -421,12 +440,13 @@ object FinalizationTx {
                 type MergedResult = FinalizationTx.WithRolloutsMerged
 
                 override def mkSeparateResult(
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): SeparateResult =
                     FinalizationTx.WithRollouts(
                       majorVersionProduced = majorVersionProduced,
                       tx = ctx.transaction,
-                      ttl = Slot(ctx.transaction.body.value.ttl.get),
+                      validityEnd = Slot(ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       residualTreasuryProduced = residualTreasuryProduced,
                       rolloutProduced = rolloutProduced,
@@ -435,12 +455,14 @@ object FinalizationTx {
 
                 override def mkMergedResult(
                     mergedFinalizationTx: Transaction,
-                    majorVersionProduced: Block.Version.Major
+                    majorVersionProduced: Block.Version.Major,
+                    slotConfig: SlotConfig
                 ): MergedResult =
                     FinalizationTx.WithRolloutsMerged(
                       majorVersionProduced = majorVersionProduced,
                       tx = mergedFinalizationTx,
-                      ttl = Slot(mergedFinalizationTx.body.value.ttl.get),
+                      validityEnd =
+                          Slot(mergedFinalizationTx.body.value.ttl.get).toInstant(slotConfig),
                       treasurySpent = treasurySpent,
                       rolloutProduced = rolloutProduced,
                       resolvedUtxos = ctx.resolvedUtxos

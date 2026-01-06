@@ -8,12 +8,15 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
+import java.time.Instant
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
 import scala.collection.mutable
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.DurationInt
+import scala.math.Ordered.orderingToOrdered
 import scala.util.Random
 import test.Generators.Hydrozoa.ArbitraryInstances.given
 import test.genTestPeers
@@ -68,9 +71,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // Weaver
         val _ = p.runIO(system.actorOf(BlockWeaver(config)))
 
-        def aroundNow(other: FiniteDuration): Boolean = {
-            val now = p.runIO(IO.monotonic)
-            now.minus(1.second) < other && now.plus(1.second) > other
+        def aroundNow(other: Instant): Boolean = {
+            val now = p.runIO(IO.monotonic.map(_.toEpochInstant))
+            now - (1.second) < other && now + (1.second) > other
         }
 
         // If the next block is the peer's turn...
@@ -274,7 +277,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   _ <- IO.traverse_(immediateEvents)(weaverActor ! _)
 
                   // First block
-                  now <- IO.monotonic
+                  now <- IO.realTimeInstant
                   firstBlock: Block = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
@@ -289,7 +292,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   )
 
                   // Second block
-                  newTime <- IO.monotonic
+                  newTime <- IO.realTimeInstant
                   secondBlock: Block = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, true)).toList,

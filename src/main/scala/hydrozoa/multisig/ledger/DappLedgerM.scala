@@ -85,12 +85,13 @@ object DappLedgerM {
             config <- ask
             // FIXME: DepositTx's parser does not check all the invariants.
             //  Use DepositRefundTxSeq's parser, instead.
-            depositTx <- lift(
-              DepositTx
-                  .parse(serializedDeposit, config, virtualOutputs)
-                  .left
-                  .map(ParseDepositError(_))
-            )
+            parseRes =
+                DepositTx
+                    .parse(serializedDeposit, config, virtualOutputs)
+                    .left
+                    .map(ParseDepositError(_))
+            depositTx <- lift(parseRes)
+
             // _ <- EitherT(validateTimeBounds(depositTx))
             s <- get
             newState = s.appendToQueue((eventId, depositTx.depositProduced))
@@ -112,8 +113,8 @@ object DappLedgerM {
         tallyFeeAllowance: Coin,
         votingDuration: FiniteDuration,
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        blockCreatedOn: FiniteDuration,
-        competingFallbackValidityStart: FiniteDuration,
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
         txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
@@ -179,25 +180,23 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-//        blockCreatedOn : PosixTime,
-//        competingFallbackValidityStart : PosixTime,
-//        txTiming: TxTiming
+        blockCreatedOn: java.time.Instant,
+        competingFallbackValidityStart: java.time.Instant,
+        txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {
             s <- get
             config <- ask
-//            kzg: KzgCommitment <- DappLedger.(???)
             args = FinalizationTxSeq.Builder.Args(
-              kzgCommitment = ???,
               majorVersionProduced =
                   Block.Version.Major(s.treasury.datum.versionMajor.toInt).increment,
               treasuryToSpend = s.treasury,
               payoutObligationsRemaining = payoutObligationsRemaining,
               multisigRegimeUtxoToSpend = multisigRegimeUtxoToSpend,
               equityShares = equityShares,
-              competingFallbackValidityStart = ???,
-              blockCreatedOn = ???,
-              txTiming = ???
+              competingFallbackValidityStart = competingFallbackValidityStart,
+              blockCreatedOn = blockCreatedOn,
+              txTiming = txTiming
             )
             ftxSeq <- lift(
               FinalizationTxSeq

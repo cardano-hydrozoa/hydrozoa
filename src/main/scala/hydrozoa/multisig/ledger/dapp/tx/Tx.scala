@@ -4,11 +4,10 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigRegimeUtxo
 import scala.Function.const
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.{PlutusScriptEvaluator, Slot, Transaction}
+import scalus.cardano.ledger.{PlutusScriptEvaluator, Transaction}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
@@ -17,18 +16,11 @@ trait Tx {
     def tx: Transaction
 }
 
-trait HasValidityStartSlot:
-    def validityStart: Slot
+trait HasValidityStart:
+    def validityStart: java.time.Instant
 
-trait HasTtlSlot {
-    def ttl: Slot
-}
-
-// This is used for some Args.
-// TODO: Find a better place for it.
-// TODO: Check whether we need it.
-trait HasTtlTime {
-    def ttl: FiniteDuration
+trait HasValidityEnd {
+    def validityEnd: java.time.Instant
 }
 
 object Tx {
@@ -151,50 +143,3 @@ object Tx {
 trait HasResolvedUtxos {
     def resolvedUtxos: ResolvedUtxos
 }
-
-/** TODO: This should be derived from Hydrozoa parameters.
-  *
-  * TODO: move around?
-  *
-  * Peter and I determined that the settlement tx duration should be:
-  *   - Long enough that the settlement tx is still unexpired whenever we need to resubmit it due to
-  *     rollbacks.
-  *   - Short enough that: We don't need to push forward the fallback start too frequently with
-  *     empty major blocks.
-  *   - Whenever we have too many deposits and some get deferred for absorption in future blocks, we
-  *     aren't forced to decide to never-absorb them because they've been deferred for too long.
-  *
-  * Therefore, I think a reasonable settlement tx duration should be approximately the Cardano
-  * security parameter (~12h on average), and the deposit absorption window should be longer (~24h).
-  *
-  * Other parameter values:
-  *   - Deposit maturity duration ~= 30min to 1h,
-  *   - Deposit expiry margin ~= 5 min
-  *   - (Fallback N start - Settlement N TTL) ~= 24h
-  *
-  * The reason we measure time duration in real units is that slot length is different for different
-  * networks.
-  *
-  * @param minSettlementDuration
-  *   Minimal length of a settlement (finalization) tx's validity range.
-  * @param majorBlockTimeout
-  *   The minimal frequency of major blocks (in case no activity happens).
-  * @param silencePeriod
-  *   A fixed-time gap between concurrent txs (i.e. fallback N and settlement/finalization N+1) to
-  *   prevent contention, typically a small value like 5 min.
-  * @param initializationFallbackDeviation
-  *   Since it doesn't make sense to ask users to specify exact the same TTL/validity start slot for
-  *   txs in the initialization sequence that we may calculate based on the time the initialization
-  *   request was received, we need to allow some deviation which is defined by that parameter. The
-  *   rule is that the specified value in the txs should stay in the [calculatedTime -
-  *   initializationFallbackDeviation; calculatedTime + initializationFallbackDeviation].
-  */
-final case class TxTiming(
-    minSettlementDuration: FiniteDuration,
-    majorBlockTimeout: FiniteDuration,
-    silencePeriod: FiniteDuration,
-    initializationFallbackDeviation: FiniteDuration
-)
-
-object TxTiming:
-    val default = TxTiming(12.hours, 24.hours, 5.minutes, 10.minutes)
