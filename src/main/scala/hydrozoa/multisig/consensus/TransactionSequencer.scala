@@ -7,7 +7,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.consensus.TransactionSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.TransactionSequencer.*
+import hydrozoa.multisig.protocol.ConsensusProtocol.EventSequencer.*
 import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
@@ -19,7 +19,7 @@ object TransactionSequencer {
     final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
-        blockProducer: Deferred[IO, BlockWeaver.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Ref],
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
@@ -38,12 +38,12 @@ trait TransactionSequencer(config: Config, connections: ConnectionsPending)
 
     override def preStart: IO[Unit] =
         for {
-            blockProducer <- connections.blockProducer.get
+            blockWeaver <- connections.blockWeaver.get
             peerLiaisons <- connections.peerLiaisons.get
             _ <- subscribers.set(
               Some(
                 Subscribers(
-                  newLedgerEvent = blockProducer :: peerLiaisons
+                  newLedgerEvent = blockWeaver :: peerLiaisons
                 )
               )
             )

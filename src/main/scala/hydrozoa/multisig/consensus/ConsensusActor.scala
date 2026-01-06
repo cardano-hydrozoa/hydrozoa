@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import hydrozoa.VerificationKeyBytes
 import hydrozoa.multisig.consensus.ConsensusActor.{Config, Request}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
@@ -15,22 +16,18 @@ object ConsensusActor {
     final case class Config(
         /** Own peer number */
         peerId: Peer.Number,
-
-        /** This is needed for acks custom wrappers.
-          *
-          * Invariant: >= 1
-          *
-          * TODO: likely we are going to move it to the head config
-          */
+        // FIXME: remove
         numberOfPeers: Int,
+        /** The mapping from head's peers to their verification keys.
+          */
+        verificationKeys: Map[Peer.Number, VerificationKeyBytes],
 
         // Actors
-        // TODO: Should be a list ot peer liaisons?
         peerLiaison: PeerLiaison.PeerLiaisonRef,
-        blockWeaver: BlockProducer.BlockProducerRef,
+        blockWeaver: BlockWeaver.BlockWeaverRef,
         cardanoLiaison: CardanoLiaison.CardanoLiaisonRef,
         // TODO: rename to EventSequencer?
-        eventSequencer: TransactionSequencer.TransactionSequencerRef,
+        eventSequencer: EventSequencer.EventSequencerRef,
     )
 
     type Request =
