@@ -42,7 +42,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
         txTiming: TxTiming = default
     ): Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         for {
-            peers <- genTestPeers
+            peers <- genTestPeers()
 
             // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
             // a max non-plutus fee

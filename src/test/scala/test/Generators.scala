@@ -10,6 +10,8 @@ import hydrozoa.multisig.ledger.dapp.tx.Tx
 import hydrozoa.multisig.ledger.dapp.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventTransaction}
+import hydrozoa.multisig.protocol.types.LedgerEvent.TxL2Event
+import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genShelleyAddress
 import monocle.*
 import monocle.syntax.all.*
@@ -71,7 +73,7 @@ object Generators {
             validators: Seq[Validator] = nonSigningNonValidityChecksValidators
         ): Gen[(Tx.Builder.Config, NonEmptyList[TestPeer])] =
             for {
-                peers <- genTestPeers
+                peers <- genTestPeers()
                 hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
                 seedUtxo <- arbitrary[TransactionInput]
                 tokenNames = TokenNames(seedUtxo)
@@ -485,6 +487,12 @@ object Generators {
             Gen.oneOf(Seq(inputsNotInUtxoAttack))
         }
 
+        // TODO: improve
+        def genEventId: Gen[LedgerEventId] = for {
+            peerNumber <- Gen.choose(0, 10)
+            eventNumber <- Gen.choose(0, 1024)
+        } yield LedgerEventId(peerNumber, eventNumber)
+
         /** NOTE: These will generate _fully_ arbitrary data. It is probably not what you want, but
           * may be a good starting point. For example, an arbitrary payout obligation may be for a
           * different network than the one you intend.
@@ -510,6 +518,18 @@ object Generators {
                       scriptRef = None
                     )
                 } yield Payout.Obligation(l2UtxoId = l2Input, utxo = output)
+            }
+
+            given Arbitrary[LedgerEvent] = Arbitrary {
+                for {
+                    eventId <- genEventId
+                    // genesisObligation <-genGenesisObligation()
+                    event <- Gen.frequency(
+                      // TODO: improve
+                      2 -> Gen.const(TxL2Event(eventId, Array.empty))
+                      // 8 -> Gen.const(RegisterDeposit(eventId, Array.empty))
+                    )
+                } yield event
             }
         }
     }

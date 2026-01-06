@@ -5,7 +5,8 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
 import com.suprnation.actor.test as _
-import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, RegisterDeposit, StartBlock}
+import hydrozoa.UtxoIdL1
+import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq
@@ -14,6 +15,7 @@ import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.Version.Full
+import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import java.time.Instant
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
@@ -46,10 +48,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         def registerDeposit(
             serializedDeposit: Array[Byte],
-            eventId: LedgerEvent.Id,
+            eventId: LedgerEventId,
             virtualOutputs: NonEmptyList[GenesisObligation]
         ): TestM[Unit] =
-            registerDeposit(RegisterDeposit(serializedDeposit, eventId, virtualOutputs))
+            registerDeposit(RegisterDeposit(eventId, serializedDeposit, virtualOutputs))
 
         def registerDeposit(req: RegisterDeposit): TestM[Unit] = {
             for {
@@ -62,15 +64,16 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             ask.flatMap(env => liftR(env.jointLedger ! req))
 
         def startBlock(
+            blockNum: Block.Number,
             blockCreationTime: Instant,
         ): TestM[Unit] =
-            startBlock(StartBlock(blockCreationTime))
+            startBlock(StartBlock(blockNum, blockCreationTime))
 
         /** Start the block at the current real time */
-        val startBlockNow: TestM[Instant] =
+        def startBlockNow(blockNum: Block.Number): TestM[Instant] =
             for {
-                startTime <- liftR(IO.realTime).map(t => t.toEpochInstant)
-                _ <- startBlock(startTime)
+                startTime <- liftR(IO.realTimeInstant)
+                _ <- startBlock(blockNum, startTime)
             } yield startTime
 
         // TODO: State should always be "Done" after complete block regular
@@ -82,10 +85,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         def completeBlockRegular(
             referenceBlock: Option[Block],
-            pollResults: Set[LedgerEvent.Id]
+            pollResults: Set[UtxoIdL1]
         ): TestM[Unit] =
             completeBlockRegular(
-              CompleteBlockRegular(referenceBlock, pollResults: Set[LedgerEvent.Id])
+              CompleteBlockRegular(referenceBlock, pollResults: Set[UtxoIdL1])
             )
 
         def completeBlockFinal(req: CompleteBlockFinal): TestM[Unit] =
@@ -96,10 +99,11 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
         def completeBlockFinal(
             referenceBlock: Option[Block],
-            pollResults: Set[LedgerEvent.Id]
+            // FIXME: These can be removed
+            pollResults: Set[UtxoIdL1]
         ): TestM[Unit] =
             completeBlockFinal(
-              CompleteBlockFinal(referenceBlock = referenceBlock, pollResults = pollResults)
+              CompleteBlockFinal(referenceBlock = referenceBlock)
             )
 
     }
@@ -170,7 +174,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     RegisterDeposit(
                       serializedDeposit = serializedDeposit,
                       virtualOutputs = virtualOutputs,
-                      eventId = LedgerEvent.Id(0, 1)
+                      eventId = LedgerEventId(0, 1)
                     )
 
                 _ <- registerDeposit(req)
@@ -185,7 +189,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             env <- ask
 
             // Put the joint ledger in producing mode
-            startTime <- startBlockNow
+            startTime <- startBlockNow(Block.Number.first)
 
             // Generate a deposit and observe that it appears in the dapp ledger correctly
             firstDepositValidityEnd = startTime + 10.minutes
@@ -231,16 +235,17 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                             .asInstanceOf[Block.Major]
                     _ <- assertWith(
                       msg = "Block deposits should be correct",
-                      condition = majorBlock.body.depositsRejected.isEmpty
-                          && majorBlock.body.depositsRefunded.isEmpty
-                          && majorBlock.body.depositsRegistered == List(depositReq.eventId)
+                      condition = majorBlock.body.depositsRefunded.isEmpty
                           && majorBlock.body.depositsAbsorbed.isEmpty
                     )
                 } yield ()
 
             // Complete another block, assume the deposit shows up in the poll results -- but its not mature yet
-            _ <- startBlockNow
-            _ <- completeBlockRegular(None, Set(depositReq.eventId))
+            _ <- startBlockNow(Block.Number.first.increment)
+            _ <- completeBlockRegular(
+              None,
+              Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+            )
             _ <- for {
                 jointLedgerState <- getState
                 _ <- assertWith(
@@ -253,8 +258,14 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             } yield ()
 
             // Complete another block, including the deposit in the state.
-            _ <- startBlock(firstDepositValidityEnd + env.txTiming.depositMaturityDuration)
-            _ <- completeBlockRegular(None, Set(depositReq.eventId))
+            _ <- startBlock(
+              Block.Number.first.increment.increment,
+              firstDepositValidityEnd + env.txTiming.depositMaturityDuration
+            )
+            _ <- completeBlockRegular(
+              None,
+              Set(UtxoIdL1(depositRefundTxSeq.depositTx.depositProduced.toUtxo.input))
+            )
 
             _ <- for {
                 jlState <- getState
@@ -266,9 +277,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 _ <- assertWith(
                   msg = "Deposits should be correct with absorbed deposit",
                   condition = majorBlock.body.depositsAbsorbed == List(depositReq.eventId) &&
-                      majorBlock.body.depositsRefunded == List.empty &&
-                      majorBlock.body.depositsRejected == List.empty &&
-                      majorBlock.body.depositsRegistered == List.empty
+                      majorBlock.body.depositsRefunded == List.empty
                 )
 
                 expectedUtxos = L2EventGenesis(
@@ -306,7 +315,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             } yield ()
 
             // Step 5: Finalize
-            _ <- startBlockNow
+            _ <- startBlockNow(Block.Number.first.increment.increment.increment)
             _ <- completeBlockFinal(None, Set.empty)
         } yield true)
 }

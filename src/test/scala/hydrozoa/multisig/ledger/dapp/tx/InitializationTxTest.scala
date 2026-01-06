@@ -54,7 +54,7 @@ val minInitTreasuryAda: Coin = {
 // See InitializationTxSeqTest.scala
 val genInitTxRecipe: Gen[InitializationTx.Recipe] =
     for {
-        peers <- genTestPeers
+        peers <- genTestPeers()
 
         hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
 
