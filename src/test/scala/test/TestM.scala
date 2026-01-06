@@ -12,6 +12,7 @@ import hydrozoa.maxNonPlutusTxFee
 import hydrozoa.multisig.ledger.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
@@ -123,7 +124,7 @@ object TestM {
             )
 
             txTiming = TxTiming.default
-            initializedOn <- monadForPropM[ET].pure(java.time.Instant.now())
+            initializedOn <- PropertyM.run(EitherT.right(IO.realTimeInstant))
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -179,7 +180,9 @@ object TestM {
                     treasuryTokenName = config.tokenNames.headTokenName,
                     initialTreasury = initTx.initializationTx.treasuryProduced,
                     config = config,
-                    txTiming = txTiming
+                    txTiming = txTiming,
+                    initialFallbackValidityStart =
+                        initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
                   )
                 )
               )

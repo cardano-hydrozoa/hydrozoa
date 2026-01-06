@@ -72,7 +72,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val _ = p.runIO(system.actorOf(BlockWeaver(config)))
 
         def aroundNow(other: Instant): Boolean = {
-            val now = p.runIO(IO.monotonic.map(_.toEpochInstant))
+            val now = p.runIO(IO.realTimeInstant)
             now - (1.second) < other && now + (1.second) > other
         }
 
@@ -84,7 +84,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           p.runIO(handleBoolean(expectMsgPF(jointLedgerMockActor, 5.second) {
               case s: StartBlock if aroundNow(s.blockCreationTime) => ()
           })),
-          "weaver should start the block with sensible creation time"
+          "weaver should start the block with sensible creation time."
         )
 
         p.assert(
