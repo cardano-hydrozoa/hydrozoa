@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.IORuntime
+import cats.effect.unsafe.implicits.*
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
@@ -14,11 +15,10 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming, minInitTreasuryAda}
-import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, InitializationTxSeq}
+import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.rulebased.ledger.dapp.tx.genEquityShares
-import org.scalacheck.Prop.propBoolean
-import org.scalacheck.PropertyM.{monadForPropM, monadic}
+import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.ByteString
@@ -54,12 +54,7 @@ case class TestR(
     txTiming: TxTiming // Move to HeadConfig
 )
 
-type TestError =
-    InitializationTxSeq.Builder.Error | DepositRefundTxSeq.Builder.Error |
-        DappLedgerM.Error.RegisterDepositError
-
-private type ET[A] = EitherT[IO, TestError, A]
-private type PT[A] = PropertyM[ET, A]
+private type PT[A] = PropertyM[IO, A]
 private type RT[A] = ReaderT[PT, TestR, A]
 
 /** Describes a computation that:
@@ -85,13 +80,14 @@ object TestM {
     // TODO: Right now, this generates everything. In the future, we can provide arguments like
     // `peers :: Option[NonEmptyList[TestPeer]]` such that we set the peers exactly to the option,
     // or generate otherwise. This goes along with the comment on [[run]] for passing initializers directly to run
-    private val defaultInitializer: PropertyM[ET, TestR] = {
+    private val defaultInitializer: PropertyM[IO, TestR] = {
         for {
-            peers <- PropertyM.pick[ET, NonEmptyList[TestPeer]](genTestPeers().label("Test Peers"))
+
+            peers <- PropertyM.pick[IO, NonEmptyList[TestPeer]](genTestPeers().label("Test Peers"))
 
             // We make sure that the seed utxo has at least enough for the treasury and multisig witness UTxO, plus
             // a max non-plutus fee
-            seedUtxo <- PropertyM.pick[ET, Utxo](
+            seedUtxo <- PropertyM.pick[IO, Utxo](
               genAdaOnlyPubKeyUtxo(
                 peers.head,
                 minimumCoin = minInitTreasuryAda
@@ -99,7 +95,7 @@ object TestM {
               ).map(x => Utxo(x._1, x._2)).label("Initialization: seed utxo")
             )
 
-            otherSpentUtxos <- PropertyM.pick[ET, List[Utxo]](
+            otherSpentUtxos <- PropertyM.pick[IO, List[Utxo]](
               Gen
                   .listOf(genAdaOnlyPubKeyUtxo(peers.head))
                   .map(_.map(x => Utxo(x._1, x._2)))
@@ -111,7 +107,7 @@ object TestM {
             // Initial deposit must be at least enough for the minAda of the treasury, and no more than the
             // sum of the seed utxos, while leaving enough left for the estimated fee and the minAda of the change
             // output
-            initialDeposit <- PropertyM.pick[ET, Coin](
+            initialDeposit <- PropertyM.pick[IO, Coin](
               Gen
                   .choose(
                     minInitTreasuryAda.value,
@@ -124,7 +120,8 @@ object TestM {
             )
 
             txTiming = TxTiming.default
-            initializedOn <- PropertyM.run(EitherT.right(IO.realTimeInstant))
+
+            initializedOn <- PropertyM.run(IO.realTimeInstant)
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -144,14 +141,8 @@ object TestM {
 
             hns = HeadMultisigScript(peers.map(_.wallet.exportVerificationKeyBytes))
 
-            system <- PropertyM.run(
-              EitherT.right[TestError](ActorSystem[IO]("DappLedger").allocated.map(_._1))
-            )
-            initTx <- PropertyM.run(
-              EitherT
-                  .fromEither[IO](InitializationTxSeq.Builder.build(initTxArgs))
-                  .leftWiden[TestError]
-            )
+            system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
+            initTx <- PropertyM.run(InitializationTxSeq.Builder.build(initTxArgs).liftTo[IO])
 
             config = Tx.Builder.Config(
               headNativeScript = hns,
@@ -162,28 +153,26 @@ object TestM {
               validators = nonSigningNonValidityChecksValidators
             )
 
-            equityShares <- PropertyM.pick[ET, EquityShares](
+            equityShares <- PropertyM.pick[IO, EquityShares](
               genEquityShares(peers).label("Equity shares")
             )
 
             jointLedger <- PropertyM.run(
-              EitherT.right[TestError](
-                system.actorOf(
-                  JointLedger(
-                    peerLiaisons = Seq.empty,
-                    tallyFeeAllowance = Coin.ada(2),
-                    initialBlockTime = initializedOn,
-                    initialBlockKzg = KzgCommitment.empty,
-                    equityShares = equityShares,
-                    multisigRegimeUtxo = config.multisigRegimeUtxo,
-                    votingDuration = FiniteDuration(24, HOURS),
-                    treasuryTokenName = config.tokenNames.headTokenName,
-                    initialTreasury = initTx.initializationTx.treasuryProduced,
-                    config = config,
-                    txTiming = txTiming,
-                    initialFallbackValidityStart =
-                        initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
-                  )
+              system.actorOf(
+                JointLedger(
+                  peerLiaisons = Seq.empty,
+                  tallyFeeAllowance = Coin.ada(2),
+                  initialBlockTime = initializedOn,
+                  initialBlockKzg = KzgCommitment.empty,
+                  equityShares = equityShares,
+                  multisigRegimeUtxo = config.multisigRegimeUtxo,
+                  votingDuration = FiniteDuration(24, HOURS),
+                  treasuryTokenName = config.tokenNames.headTokenName,
+                  initialTreasury = initTx.initializationTx.treasuryProduced,
+                  config = config,
+                  txTiming = txTiming,
+                  initialFallbackValidityStart =
+                      initializedOn + txTiming.minSettlementDuration + txTiming.inactivityMarginDuration + txTiming.silenceDuration
                 )
               )
             )
@@ -231,42 +220,21 @@ object TestM {
         ioRuntime: IORuntime
     ): Prop = {
 
-        // The runner tries to eliminate the EitherT[IO, TestError, Prop] to get an Prop.
-        // If it gets a Left[TestError], it means no property could be extracted, so we consider it a test failure and
-        // report the error.
-        // If we can generate a prop, we just return it.
-        def runner(mProp: ET[Prop]): Prop =
-            Prop.secure(mProp.value.unsafeRunSync() match {
-                case Left(e) =>
-                    s"Failed: $e" |: false
-                case Right(p) => p
-            })
-
-        monadic(
-          runner = runner,
-          m =
-              // This runs the initialization within the `PropertyM` first, in order to give the computation in `TestM`
-              // access to the fully-initialized environment
-              for {
-                  env <- initializer
-                  res <- testM.unTestM.run(env)
-              } yield res
+        monadicIO(
+          // This runs the initialization within the `PropertyM` first, in order to give the computation in `TestM`
+          // access to the fully-initialized environment
+          for {
+              env <- initializer
+              res <- testM.unTestM.run(env)
+          } yield res
         )
     }
 
     // ===================================
     // Lifts
     // ===================================
-    def liftR[A](io: IO[A]): TestM[A] = {
-        TestM(
-          unTestM = Kleisli.liftF(PropertyM.run(EitherT.right(io)))
-        )
-    }
 
-    def liftL[A](io: IO[TestError]): TestM[A] =
-        TestM(Kleisli.liftF(PropertyM.run(EitherT.left(io))))
-
-    def lift[A](e: Either[TestError, A]): TestM[A] =
-        TestM(Kleisli.liftF(PropertyM.run(EitherT.fromEither(e))))
+    def lift[A](e: IO[A]): TestM[A] =
+        TestM(Kleisli.liftF(PropertyM.run(e)))
 
 }

@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration, MILLISECONDS}
 import scalus.cardano.ledger.{Slot, SlotConfig}
 
@@ -71,6 +72,11 @@ object TxTiming:
           */
         def toEpochFiniteDuration: FiniteDuration =
             FiniteDuration(instant.toEpochMilli, MILLISECONDS)
+    }
+
+    extension (duration: java.time.Duration) {
+        def toFiniteDuration: FiniteDuration =
+            FiniteDuration(duration.toNanos, TimeUnit.NANOSECONDS)
     }
 
     extension (slot: Slot) {

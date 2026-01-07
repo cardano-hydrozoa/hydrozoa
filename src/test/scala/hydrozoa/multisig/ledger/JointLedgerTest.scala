@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.*
+import cats.implicits.catsSyntaxEither
 import com.suprnation.actor.test as _
 import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
@@ -43,7 +44,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         val getState: TestM[JointLedger.State] =
             for {
                 env <- ask
-                state <- liftR(env.jointLedger ?: JointLedger.Requests.GetState)
+                state <- lift(env.jointLedger ?: JointLedger.Requests.GetState)
             } yield state
 
         def registerDeposit(
@@ -56,12 +57,12 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         def registerDeposit(req: RegisterDeposit): TestM[Unit] = {
             for {
                 jl <- asks(_.jointLedger)
-                _ <- liftR(jl ? req)
+                _ <- lift(jl ? req)
             } yield ()
         }
 
         def startBlock(req: StartBlock): TestM[Unit] =
-            ask.flatMap(env => liftR(env.jointLedger ! req))
+            ask.flatMap(env => lift(env.jointLedger ! req))
 
         def startBlock(
             blockNum: Block.Number,
@@ -72,7 +73,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         /** Start the block at the current real time */
         def startBlockNow(blockNum: Block.Number): TestM[Instant] =
             for {
-                startTime <- liftR(IO.realTimeInstant)
+                startTime <- lift(IO.realTimeInstant)
                 _ <- startBlock(blockNum, startTime)
             } yield startTime
 
@@ -80,7 +81,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         def completeBlockRegular(req: CompleteBlockRegular): TestM[Unit] =
             for {
                 jl <- asks(_.jointLedger)
-                _ <- liftR(jl ! req)
+                _ <- lift(jl ! req)
             } yield ()
 
         def completeBlockRegular(
@@ -94,7 +95,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
         def completeBlockFinal(req: CompleteBlockFinal): TestM[Unit] =
             for {
                 jl <- asks(_.jointLedger)
-                _ <- liftR(jl ! req)
+                _ <- lift(jl ! req)
             } yield ()
 
         def completeBlockFinal(
@@ -165,7 +166,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   validityEnd = validityEnd
                 )
 
-                depositRefundTxSeq <- lift(depositRefundSeqBuilder.build)
+                depositRefundTxSeq <- lift(depositRefundSeqBuilder.build.liftTo[IO])
 
                 signedTx = signTx(peer, depositRefundTxSeq.depositTx.tx)
 
@@ -185,7 +186,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Joint Ledger Happy Path") =
         import Requests.*
         import Scenarios.*
-        run(for {
+        run(testM = for {
             env <- ask
 
             // Put the joint ledger in producing mode
