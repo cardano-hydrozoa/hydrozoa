@@ -33,9 +33,7 @@ object ConsensusActor {
         eventSequencer: EventSequencer.EventSequencerRef,
     )
 
-    type Request =
-        AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final | AckBlock.Minor |
-            AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 | AckBlock.Final2
+    type Request = AugmentedBlock.Next | AckBlock
 
     def apply(config: Config): IO[ConsensusActor] = {
         IO(new ConsensusActor(config = config) {})
@@ -52,16 +50,11 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         } yield ()
 
     override def receive: Receive[IO, Request] = {
-        case augBlock: (AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final) =>
-            handleAugBlock(augBlock)
-        case ack: (AckBlock.Minor | AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 |
-                AckBlock.Final2) =>
-            handleAck(ack)
+        case augBlock: AugmentedBlock.Next => handleAugBlock(augBlock)
+        case ack: AckBlock                 => handleAck(ack)
     }
 
-    def handleAugBlock(
-        augBlock: AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final
-    ): IO[Unit] = for {
+    def handleAugBlock(augBlock: AugmentedBlock.Next): IO[Unit] = for {
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- augBlock match {
@@ -74,9 +67,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         }
     } yield ()
 
-    def handleAck(
-        ack: AckBlock.Minor | AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 | AckBlock.Final2
-    ): IO[Unit] = for {
+    def handleAck(ack: AckBlock): IO[Unit] = for {
         state <- stateRef.get
         // This is a bit annoying but Scala cannot infer types unless we PM explicitly
         _ <- ack match {
@@ -85,11 +76,17 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
             case major1: AckBlock.Major1 =>
                 state.withConsensusFor(major1)(_.applyAck(major1))
             case major2: AckBlock.Major2 =>
-                state.withConsensusFor(major2)(_.applyAck(major2))
+                state.withConsensusFor(major2) {
+                    case round1: MajorBlockRoundOne => round1.applyAck(major2)
+                    case round2: MajorBlockRoundTwo => round2.applyAck(major2)
+                }
             case final1: AckBlock.Final1 =>
                 state.withConsensusFor(final1)(_.applyAck(final1))
             case final2: AckBlock.Final2 =>
-                state.withConsensusFor(final2)(_.applyAck(final2))
+                state.withConsensusFor(final2) {
+                    case round1: FinalBlockRoundOne => round1.applyAck(final2)
+                    case round2: FinalBlockRoundTwo => round2.applyAck(final2)
+                }
         }
     } yield ()
 
@@ -117,24 +114,18 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     // Actor's state
     // ===================================
 
-    /** In its simplest form of the currently supported unanimous consensus, there might be no more
-      * than two block involved.
-      *
-      * Invariants:
-      *   - If slotA is None then slotB must be None as well
-      *   - if both are present, slotB.blockNum = slotA.blockNum + 1
-      *   - if slotA is FinalBlockConsensus then slotB must be None
-      *
-      * @param blockA
-      * @param blockB
+    /** In the currently supported unanimous consensus, there might be no more than N-1 blocks
+      * involved in the worst-case scenario, so we need to use map here. Currently, we don't limit
+      * the size of the map. Every cell can contain a consensus object for a particular block.
       */
     final case class State(
-        blockA: Option[BlockConsensus[_]],
-        blockB: Option[BlockConsensus[_]]
+        cells: Map[Block.Number, BlockConsensus[_]]
     ) {
 
-        /**   - Gives access to blockA/blockB consensus or raise an error if it can't be done
-          *   - Afterwards checks whether the consensus is complete and tries to finalize it
+        /**   - Gives access to a consensus cell or raise an error if it can't be done
+          *   - Afterwards checks whether the cell is saturated and tries to complete it which leads
+          *     the either a new round in the cell or to the final result, so we can eliminate the
+          *     cell.
           */
         def withConsensusFor(
             msg: AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final |
@@ -143,91 +134,60 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         )(
             f: ConsensusFor[msg.type] => IO[ConsensusFor[msg.type]]
         ): IO[Unit] = {
-            import Error.*
-
-            def updateBlockA(c: BlockConsensus[?] | Void): State = c match {
-                case bc: BlockConsensus[?] => this.copy(blockA = Some(bc))
-                case _: Void               =>
-                    // Void means no next round, this should not happen
-                    throw new IllegalStateException("Cannot update with Void consensus")
-            }
-            def updateBlockB(c: BlockConsensus[?] | Void): State = c match {
-                case bc: BlockConsensus[?] => this.copy(blockB = Some(bc))
-                case _: Void               =>
-                    // Void means no next round, this should not happen
-                    throw new IllegalStateException("Cannot update with Void consensus")
-            }
-
-            def completeBlockA(c: BlockConfirmed | Void): IO[State] = for {
-                // TODO handle the result
-                _ <- IO.pure(())
-            } yield this.copy(blockA = this.blockB, blockB = None)
-
-            // I believe this is not possible
-            def completeBlockB(c: BlockConfirmed | Void): IO[State] = ???
 
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
-                foo <-
-                    (this.blockA.map(_.blockNum), this.blockB.map(_.blockNum)) match {
-                        case (None, None) => IO.pure((spawn(msg), updateBlockA, completeBlockA))
-                        case (Some(blockNumA), None) =>
-                            blockNumA match {
-                                case any if any == blockNum =>
-                                    IO.pure((this.blockA.get, updateBlockA, completeBlockA))
-                                case any if any.increment == blockNumA =>
-                                    IO.pure((spawn(msg), updateBlockB, completeBlockB))
-                                case _ => IO.raiseError(UnexpectedBlockNumber)
-                            }
-                        case (Some(_), Some(blockNumB)) =>
-                            if blockNumB == blockNum
-                            then IO.pure((this.blockB.get, updateBlockB, completeBlockB))
-                            else IO.raiseError(UnexpectedBlockNumber)
-                        case (None, Some(_)) => IO.raiseError(MalformedState)
+                tryCastCell1 = tryCastCell(msg)
+                cellAndCallbacks <-
+                    this.cells.get(blockNum) match {
+                        case None =>
+                            spawnCell(msg)
+                                .flatMap(newCell =>
+                                    IO.pure((newCell, updateCell(blockNum), completeCell(blockNum)))
+                                )
+                        case Some(cell) =>
+                            tryCastCell1(cell)
+                                .flatMap(typedCell =>
+                                    IO.pure(
+                                      (typedCell, updateCell(blockNum), completeCell(blockNum))
+                                    )
+                                )
                     }
 
-                (consensus: ConsensusFor[msg.type], updateCallback, completeCallback) = foo
+                (consensus, updateCell, completeCell) = cellAndCallbacks
 
                 consensus1 <- f(consensus)
                 _ <-
                     if consensus1.isSaturated
-                    then
+                    then {
+                        // Complete the round/cell
                         for {
                             ret <- consensus1.complete
                             _ <- ret match {
-                                case Left(newRound) => stateRef.set(updateCallback(newRound))
+                                // Next round
+                                case Left(newRound) =>
+                                    stateRef.set(updateCell(newRound))
+                                // Complete cell
                                 case Right(result) =>
                                     for {
-                                        state1 <- completeCallback(result)
+                                        state1 <- completeCell(result)
                                         _ <- stateRef.set(state1)
                                     } yield ()
                             }
                         } yield ()
-                    else {
+                    } else {
                         // Update the state, set back
-                        stateRef.set(updateCallback(consensus1))
+                        stateRef.set(updateCell(consensus1))
                     }
             } yield ()
         }
 
-        private def msgBlockNum(
-            msg: AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final |
-                AckBlock.Minor | AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 |
-                AckBlock.Final2
-        ): Block.Number = msg match {
-            case augBlock: (AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final) =>
-                augBlock.block.id
-            case ack: (AckBlock.Minor | AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 |
-                    AckBlock.Final2) =>
-                ack.blockNum
+        private def msgBlockNum(msg: AugmentedBlock.Next | AckBlock): Block.Number = msg match {
+            case augBlock: AugmentedBlock.Next => augBlock.block.id
+            case ack: AckBlock                 => ack.blockNum
         }
 
-        private def spawn(
-            msg: AugmentedBlock.Minor | AugmentedBlock.Major | AugmentedBlock.Final |
-                AckBlock.Minor | AckBlock.Major1 | AckBlock.Major2 | AckBlock.Final1 |
-                AckBlock.Final2
-        ): IO[ConsensusFor[msg.type]] = {
-            import Error.*
+        private def spawnCell(msg: AugmentedBlock.Next | AckBlock): IO[ConsensusFor[msg.type]] = {
 
             for {
                 blockNum <- IO.pure(msgBlockNum(msg))
@@ -237,31 +197,80 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                     case _: (AugmentedBlock.Major | AckBlock.Major1) =>
                         IO.pure(???)
                     case _: AckBlock.Major2 =>
-                        IO.raiseError(UnexpectedMajor2)
+                        IO.pure(???)
                     case _: (AugmentedBlock.Final | AckBlock.Final1) =>
                         IO.pure(???)
                     case _: AckBlock.Final2 =>
-                        IO.raiseError(UnexpectedFinal2)
+                        IO.pure(???)
                 }
             } yield result.asInstanceOf[ConsensusFor[msg.type]]
         }
 
+        private def tryCastCell(
+            msg: AugmentedBlock.Next | AckBlock
+        )(cell: BlockConsensus[?]): IO[ConsensusFor[msg.type]] = {
+            import Error.*
+
+            msg match {
+                case _: (AugmentedBlock.Minor | AckBlock.Minor) =>
+                    cell match {
+                        case c: MinorBlockConsensus =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case _ => IO.raiseError(MsgCellMismatch)
+                    }
+                case _: (AugmentedBlock.Major | AckBlock.Major1) =>
+                    cell match {
+                        case c: MajorBlockRoundOne =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case _ => IO.raiseError(MsgCellMismatch)
+                    }
+                case _: AckBlock.Major2 =>
+                    cell match {
+                        case c: MajorBlockRoundOne =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case c: MajorBlockRoundTwo =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case _ => IO.raiseError(MsgCellMismatch)
+                    }
+                case _: (AugmentedBlock.Final | AckBlock.Final1) =>
+                    cell match {
+                        case c: FinalBlockRoundOne =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case _ => IO.raiseError(MsgCellMismatch)
+                    }
+                case _: AckBlock.Final2 =>
+                    cell match {
+                        case c: FinalBlockRoundOne =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case c: FinalBlockRoundTwo =>
+                            IO.pure(c.asInstanceOf[ConsensusFor[msg.type]])
+                        case _ => IO.raiseError(MsgCellMismatch)
+                    }
+            }
+        }
+
+        private def updateCell(blockNum: Block.Number)(c: BlockConsensus[?] | Void): State =
+            c match {
+                case bc: BlockConsensus[?] => this.copy(cells = cells.updated(blockNum, bc))
+                case _: Void               => throw new IllegalStateException("Void value is real!")
+            }
+
+        private def completeCell(blockNum: Block.Number)(c: BlockConfirmed | Void): IO[State] =
+            for {
+                // TODO: handle the block confirmed
+                _ <- IO.pure(())
+            } yield this.copy(cells = cells - blockNum)
+
         enum Error extends Throwable:
-            // Cannot spawn MajorBlockRoundTwo directly from Major2 ack
-            case UnexpectedMajor2
-            // Cannot spawn FinalBlockRoundTwo directly from Final2 ack
-            case UnexpectedFinal2
-            case UnexpectedBlockNumber
-            case MalformedState
+            case MsgCellMismatch
     }
 
     object State:
-        def mkInitialState: State = State(None, None)
+        def mkInitialState: State = State(Map.empty)
 
     /** Represents the state of the consensus on any (except Initial) block [[blockNum]].
       */
     sealed trait BlockConsensus[+T]:
-
         type AugBlockType
         type AckType
         type NextRound <: BlockConsensus[?] | Void
@@ -280,14 +289,11 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         case AckBlock.Minor       => MinorBlockConsensus
         case AugmentedBlock.Major => MajorBlockRoundOne
         case AckBlock.Major1      => MajorBlockRoundOne
-        case AckBlock.Major2      => MajorBlockRoundTwo
+        case AckBlock.Major2      => MajorBlockRoundOne | MajorBlockRoundTwo
         case AugmentedBlock.Final => FinalBlockRoundOne
         case AckBlock.Final1      => FinalBlockRoundOne
-        case AckBlock.Final2      => FinalBlockRoundTwo
+        case AckBlock.Final2      => FinalBlockRoundOne | FinalBlockRoundTwo
     }
-
-    object BlockNumX:
-        def unapply(state: State): (Option[Block.Number], Option[Block.Number]) = ???
 
     /** Minor block consensus, may start off by receiving a local augmented block (and local ack) or
       * someone else's acknowledgment.
@@ -373,26 +379,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
           Map(verificationKey -> ack)
         )
 
-        // def apply(augmentedBlock: AugmentedBlock.Minor): IO[MinorBlockConsensus] =
-        //    IO.pure(
-        //      MinorBlockConsensus(
-        //        augmentedBlock.block.id,
-        //        Some(augmentedBlock),
-        //        Map.empty
-        //      )
-        //    )
-        //
-        // def apply(ack: AckBlock.Minor): IO[MinorBlockConsensus] = for {
-        //    peerNum <- IO.pure(ack.id.peerNum)
-        //    verificationKey <- config.verificationKeys
-        //        .get(peerNum)
-        //        .liftTo[IO](UnexpectedPeer(peerNum))
-        // } yield MinorBlockConsensus(
-        //  ack.blockNum,
-        //  None,
-        //  Map(verificationKey -> ack)
-        // )
-
     enum CollectingError extends Throwable:
         case UnexpectedBlockNumber(roundBlockNumber: Block.Number, blockNumber: Block.Number)
         case UnexpectedAck(blockNum: Block.Number, peerId: Peer.Number)
@@ -419,16 +405,17 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     final case class MajorBlockRoundOne(
         override val blockNum: Block.Number,
         augmentedBlock: Option[AugmentedBlock.Major],
-        acks1: Set[AckBlock.Major1]
+        acks1: Set[AckBlock.Major1],
+        acks2: Set[AckBlock.Major2]
     ) extends MajorBlockConsensus[MajorBlockRoundOne] {
         override type AugBlockType = AugmentedBlock.Major
-        override type AckType = AckBlock.Major1
+        override type AckType = AckBlock.Major1 | AckBlock.Major2
         override type NextRound = MajorBlockRoundTwo
         override type ResultType = Void
 
         override def applyAugBlock(augBlock: AugmentedBlock.Major): IO[MajorBlockRoundOne] = ???
 
-        override def applyAck(ack: AckBlock.Major1): IO[MajorBlockRoundOne] = ???
+        override def applyAck(ack: AckBlock.Major1 | AckBlock.Major2): IO[MajorBlockRoundOne] = ???
 
         override def isSaturated: Boolean = ???
 
@@ -460,16 +447,17 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     final case class FinalBlockRoundOne(
         override val blockNum: Block.Number,
         augmentedBlock: Option[AugmentedBlock.Final],
-        acks1: Set[AckBlock.Final1]
+        acks1: Set[AckBlock.Final1],
+        acks2: Set[AckBlock.Final2]
     ) extends FinalBlockConsensus[FinalBlockRoundOne] {
         override type AugBlockType = AugmentedBlock.Final
-        override type AckType = AckBlock.Final1
+        override type AckType = AckBlock.Final1 | AckBlock.Final2
         override type NextRound = FinalBlockRoundTwo
         override type ResultType = Void
 
         override def applyAugBlock(augBlock: AugmentedBlock.Final): IO[FinalBlockRoundOne] = ???
 
-        override def applyAck(ack: AckBlock.Final1): IO[FinalBlockRoundOne] = ???
+        override def applyAck(ack: AckBlock.Final1 | AckBlock.Final2): IO[FinalBlockRoundOne] = ???
 
         override def isSaturated: Boolean = ???
 

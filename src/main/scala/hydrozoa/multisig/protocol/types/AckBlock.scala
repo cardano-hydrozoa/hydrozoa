@@ -12,12 +12,6 @@ enum AckBlock:
     def id: AckBlock.Id
     def blockNum: Block.Number
 
-    case Initial(
-        override val id: AckBlock.Id,
-        override val blockNum: Block.Number,
-        override val initialization: BlockEffect.Signature
-    ) extends AckBlock, Initialization
-
     case Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
@@ -62,10 +56,6 @@ object AckBlock {
     object Fields {
         sealed trait MinorHeaderSignature {
             def headerSignature: String
-        }
-
-        sealed trait Initialization {
-            def initialization: BlockEffect.Signature
         }
 
         sealed trait Settlement {
