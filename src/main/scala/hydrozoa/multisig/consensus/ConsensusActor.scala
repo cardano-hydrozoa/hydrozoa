@@ -119,7 +119,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
       * the size of the map. Every cell can contain a consensus object for a particular block.
       */
     final case class State(
-        cells: Map[Block.Number, BlockConsensus[_]]
+        cells: Map[Block.Number, BlockConsensus[?]]
     ) {
 
         /**   - Gives access to a consensus cell or raise an error if it can't be done
@@ -193,15 +193,15 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 blockNum <- IO.pure(msgBlockNum(msg))
                 result <- msg match {
                     case _: (AugmentedBlock.Minor | AckBlock.Minor) =>
-                        IO.pure(MinorBlockConsensus.apply(blockNum))
+                        MinorBlockConsensus.apply(blockNum)
                     case _: (AugmentedBlock.Major | AckBlock.Major1) =>
-                        IO.pure(???)
+                        MajorBlockRoundOne.apply(blockNum)
                     case _: AckBlock.Major2 =>
-                        IO.pure(???)
+                        MajorBlockRoundOne.apply(blockNum)
                     case _: (AugmentedBlock.Final | AckBlock.Final1) =>
-                        IO.pure(???)
+                        FinalBlockRoundOne.apply(blockNum)
                     case _: AckBlock.Final2 =>
-                        IO.pure(???)
+                        FinalBlockRoundOne.apply(blockNum)
                 }
             } yield result.asInstanceOf[ConsensusFor[msg.type]]
         }
@@ -405,41 +405,132 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     final case class MajorBlockRoundOne(
         override val blockNum: Block.Number,
         augmentedBlock: Option[AugmentedBlock.Major],
-        acks1: Set[AckBlock.Major1],
-        acks2: Set[AckBlock.Major2]
+        acks1: Map[VerificationKeyBytes, AckBlock.Major1],
+        acks2: Map[VerificationKeyBytes, AckBlock.Major2]
     ) extends MajorBlockConsensus[MajorBlockRoundOne] {
+        import CollectingError.*
+
         override type AugBlockType = AugmentedBlock.Major
         override type AckType = AckBlock.Major1 | AckBlock.Major2
         override type NextRound = MajorBlockRoundTwo
         override type ResultType = Void
 
-        override def applyAugBlock(augBlock: AugmentedBlock.Major): IO[MajorBlockRoundOne] = ???
+        override def applyAugBlock(augmentedBlock: AugmentedBlock.Major): IO[MajorBlockRoundOne] =
+            for {
+                blockNumber <- IO.pure(augmentedBlock.block.id)
+                _ <- IO.raiseWhen(this.blockNum != blockNumber)(
+                  UnexpectedBlockNumber(this.blockNum, blockNumber)
+                )
+                _ <- IO.raiseWhen(this.augmentedBlock.isDefined)(
+                  UnexpectedAugmentedBlock(this.blockNum)
+                )
+                newRound = this.copy(augmentedBlock = Some(augmentedBlock))
+            } yield newRound
 
-        override def applyAck(ack: AckBlock.Major1 | AckBlock.Major2): IO[MajorBlockRoundOne] = ???
+        override def applyAck(ack: AckBlock.Major1 | AckBlock.Major2): IO[MajorBlockRoundOne] =
+            ack match {
+                case ack1: AckBlock.Major1 => applyAck1(ack1)
+                case ack2: AckBlock.Major2 => applyAck2(ack2)
+            }
 
-        override def isSaturated: Boolean = ???
+        private def applyAck1(ack: AckBlock.Major1): IO[MajorBlockRoundOne] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks1.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks1 = this.acks1 + (verificationKey -> ack))
+        } yield newRound
 
-        override def complete: IO[Either[MajorBlockRoundTwo, Void]] = ???
+        private def applyAck2(ack: AckBlock.Major2): IO[MajorBlockRoundOne] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks2.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
+        } yield newRound
+
+        override def isSaturated: Boolean =
+            this.augmentedBlock.isDefined &&
+                this.acks1.keySet == config.verificationKeys.values.toSet
+
+        override def complete: IO[Either[MajorBlockRoundTwo, Void]] = for {
+            augBlock <- this.augmentedBlock.liftTo[IO](
+              new IllegalStateException("Cannot complete without augmented block")
+            )
+            roundTwo = MajorBlockRoundTwo(
+              blockNum = this.blockNum,
+              augmentedBlock = augBlock,
+              acks1 = this.acks1,
+              acks2 = this.acks2
+            )
+        } yield Left(roundTwo)
     }
+
+    object MajorBlockRoundOne:
+        import CollectingError.*
+
+        def apply(blockNum: Block.Number): IO[MajorBlockRoundOne] =
+            IO.pure(
+              MajorBlockRoundOne(
+                blockNum,
+                None,
+                Map.empty,
+                Map.empty
+              )
+            )
 
     final case class MajorBlockRoundTwo(
         override val blockNum: Block.Number,
         augmentedBlock: AugmentedBlock.Major,
-        acks1: Set[AckBlock.Major1],
-        acks2: Set[AckBlock.Major2]
+        acks1: Map[VerificationKeyBytes, AckBlock.Major1],
+        acks2: Map[VerificationKeyBytes, AckBlock.Major2]
     ) extends MajorBlockConsensus[MajorBlockRoundTwo] {
+        import CollectingError.*
+
         override type AugBlockType = Void
         override type AckType = AckBlock.Major2
         override type NextRound = Void
         override type ResultType = BlockConfirmed.Major
 
-        override def applyAugBlock(augBlock: Void): IO[MajorBlockRoundTwo] = ???
+        override def applyAugBlock(augBlock: Void): IO[MajorBlockRoundTwo] =
+            IO.raiseError(
+              new IllegalStateException("MajorBlockRoundTwo does not accept augmented blocks")
+            )
 
-        override def applyAck(ack: AckBlock.Major2): IO[MajorBlockRoundTwo] = ???
+        override def applyAck(ack: AckBlock.Major2): IO[MajorBlockRoundTwo] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks2.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
+        } yield newRound
 
-        override def isSaturated: Boolean = ???
+        override def isSaturated: Boolean =
+            this.acks2.keySet == config.verificationKeys.values.toSet
 
-        override def complete: IO[Either[Void, BlockConfirmed.Major]] = ???
+        override def complete: IO[Either[Void, BlockConfirmed.Major]] = {
+
+            /** TODO:
+              *   - verify signatures
+              *   - produce the result
+              */
+            IO.pure(Right(BlockConfirmed.Major()))
+        }
     }
 
     sealed trait FinalBlockConsensus[T] extends BlockConsensus[T]
@@ -447,40 +538,131 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     final case class FinalBlockRoundOne(
         override val blockNum: Block.Number,
         augmentedBlock: Option[AugmentedBlock.Final],
-        acks1: Set[AckBlock.Final1],
-        acks2: Set[AckBlock.Final2]
+        acks1: Map[VerificationKeyBytes, AckBlock.Final1],
+        acks2: Map[VerificationKeyBytes, AckBlock.Final2]
     ) extends FinalBlockConsensus[FinalBlockRoundOne] {
+        import CollectingError.*
+
         override type AugBlockType = AugmentedBlock.Final
         override type AckType = AckBlock.Final1 | AckBlock.Final2
         override type NextRound = FinalBlockRoundTwo
         override type ResultType = Void
 
-        override def applyAugBlock(augBlock: AugmentedBlock.Final): IO[FinalBlockRoundOne] = ???
+        override def applyAugBlock(augmentedBlock: AugmentedBlock.Final): IO[FinalBlockRoundOne] =
+            for {
+                blockNumber <- IO.pure(augmentedBlock.block.id)
+                _ <- IO.raiseWhen(this.blockNum != blockNumber)(
+                  UnexpectedBlockNumber(this.blockNum, blockNumber)
+                )
+                _ <- IO.raiseWhen(this.augmentedBlock.isDefined)(
+                  UnexpectedAugmentedBlock(this.blockNum)
+                )
+                newRound = this.copy(augmentedBlock = Some(augmentedBlock))
+            } yield newRound
 
-        override def applyAck(ack: AckBlock.Final1 | AckBlock.Final2): IO[FinalBlockRoundOne] = ???
+        override def applyAck(ack: AckBlock.Final1 | AckBlock.Final2): IO[FinalBlockRoundOne] =
+            ack match {
+                case ack1: AckBlock.Final1 => applyAck1(ack1)
+                case ack2: AckBlock.Final2 => applyAck2(ack2)
+            }
 
-        override def isSaturated: Boolean = ???
+        private def applyAck1(ack: AckBlock.Final1): IO[FinalBlockRoundOne] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks1.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks1 = this.acks1 + (verificationKey -> ack))
+        } yield newRound
 
-        override def complete: IO[Either[FinalBlockRoundTwo, Void]] = ???
+        private def applyAck2(ack: AckBlock.Final2): IO[FinalBlockRoundOne] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks2.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
+        } yield newRound
+
+        override def isSaturated: Boolean =
+            this.augmentedBlock.isDefined &&
+                this.acks1.keySet == config.verificationKeys.values.toSet
+
+        override def complete: IO[Either[FinalBlockRoundTwo, Void]] = for {
+            augBlock <- this.augmentedBlock.liftTo[IO](
+              new IllegalStateException("Cannot complete without augmented block")
+            )
+            roundTwo = FinalBlockRoundTwo(
+              blockNum = this.blockNum,
+              augmentedBlock = augBlock,
+              acks1 = this.acks1,
+              acks2 = this.acks2
+            )
+        } yield Left(roundTwo)
     }
+
+    object FinalBlockRoundOne:
+        import CollectingError.*
+
+        def apply(blockNum: Block.Number): IO[FinalBlockRoundOne] =
+            IO.pure(
+              FinalBlockRoundOne(
+                blockNum,
+                None,
+                Map.empty,
+                Map.empty
+              )
+            )
 
     final case class FinalBlockRoundTwo(
         override val blockNum: Block.Number,
         augmentedBlock: AugmentedBlock.Final,
-        acks1: Set[AckBlock.Final1],
-        acks2: Set[AckBlock.Final2]
+        acks1: Map[VerificationKeyBytes, AckBlock.Final1],
+        acks2: Map[VerificationKeyBytes, AckBlock.Final2]
     ) extends FinalBlockConsensus[FinalBlockRoundTwo] {
+        import CollectingError.*
+
         override type AugBlockType = Void
         override type AckType = AckBlock.Final2
         override type NextRound = Void
         override type ResultType = BlockConfirmed.Final
 
-        override def applyAugBlock(augBlock: Void): IO[FinalBlockRoundTwo] = ???
+        override def applyAugBlock(augBlock: Void): IO[FinalBlockRoundTwo] =
+            IO.raiseError(
+              new IllegalStateException("FinalBlockRoundTwo does not accept augmented blocks")
+            )
 
-        override def applyAck(ack: AckBlock.Final2): IO[FinalBlockRoundTwo] = ???
+        override def applyAck(ack: AckBlock.Final2): IO[FinalBlockRoundTwo] = for {
+            blockNum <- IO.pure(ack.blockNum)
+            _ <- IO.raiseWhen(this.blockNum != blockNum)(
+              UnexpectedBlockNumber(this.blockNum, blockNum)
+            )
+            peerNum = ack.id.peerNum
+            verificationKey <- config.verificationKeys
+                .get(peerNum)
+                .liftTo[IO](UnexpectedPeer(peerNum))
+            _ <- this.acks2.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
+            newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
+        } yield newRound
 
-        override def isSaturated: Boolean = ???
+        override def isSaturated: Boolean =
+            this.acks2.keySet == config.verificationKeys.values.toSet
 
-        override def complete: IO[Either[Void, BlockConfirmed.Final]] = ???
+        override def complete: IO[Either[Void, BlockConfirmed.Final]] = {
+
+            /** TODO:
+              *   - verify signatures
+              *   - produce the result
+              */
+            IO.pure(Right(BlockConfirmed.Final()))
+        }
     }
 }
