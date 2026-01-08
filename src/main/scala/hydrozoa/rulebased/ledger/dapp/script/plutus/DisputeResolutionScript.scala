@@ -50,9 +50,7 @@ object DisputeResolutionValidator extends Validator {
       * decided to go for having a separate type to use onchain. Mostly because opaque types don't
       * seem to work well with deriving machinery.
       *
-      * TODO: implement the function: onchainBlockHeader :: BlockHeaderMinor -> OnchainBlockHeader
-      *
-      * NB: The signing function should use this type.
+      * NB: The minor block header signing function should use this type.
       */
     case class OnchainBlockHeader(
         blockNum: BigInt,

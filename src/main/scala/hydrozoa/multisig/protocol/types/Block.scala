@@ -4,6 +4,10 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
+import scalus.builtin.Builtins.serialiseData
+import scalus.builtin.ByteString
+import scalus.builtin.Data.toData
 
 enum Block {
     def id: Block.Number = this.header.blockNum
@@ -147,6 +151,28 @@ object Block {
               timeCreation = newTime
             )
     }
+
+    extension (minor: Header.Minor)
+
+        // TODO: Factor our MS/RB common types into a separate "bridge" module.
+        def mkOnchainBlockHeader =
+            // Convert block header into its onchain representation
+            OnchainBlockHeader(
+              BigInt(minor.blockNum),
+              BlockTypeL2.Minor,
+              minor.timeCreation.toEpochMilli,
+              BigInt(minor.blockVersion.major),
+              BigInt(minor.blockVersion.minor),
+              ByteString.fromArray(IArray.genericWrapArray(minor.commitment).toArray)
+            )
+
+        def mkMessage: IArray[Byte] = {
+            val blockHeader = minor.mkOnchainBlockHeader
+            // Convert to Data, serialize and get bytes
+            // TODO: shall we use ByteString?
+            val msg = serialiseData(blockHeader.toData)
+            IArray.from(msg.bytes)
+        }
 
     object HeaderFields {
         sealed trait Mandatory {

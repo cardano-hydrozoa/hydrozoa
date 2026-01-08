@@ -2,14 +2,19 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.{IO, Ref}
 import cats.implicits.*
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.VerificationKeyBytes
 import hydrozoa.multisig.consensus.ConsensusActor.{Config, Request}
-import hydrozoa.multisig.ledger.dapp.tx.RefundTx
+import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, Tx}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
+import hydrozoa.multisig.protocol.types.AckBlock.{Ed25519Signature, TxSignature}
+import hydrozoa.multisig.protocol.types.AckBlock.Ed25519SignatureHex.Ed25519SignatureHex
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.TransactionHash
+
+import scala.Function.tupled
 
 /** Consensus actor:
   */
@@ -115,9 +120,8 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
 
         final case class Minor(
             augBlock: AugmentedBlock.Minor,
-            headerSignatures: Set[ByteString],
-            // Fully signed txs
-            immediateRefundsSigned: List[RefundTx.Immediate],
+            // Verified header signatures
+            headerSignatures: Set[Ed25519SignatureHex],
             // Fully signed txs
             postDatedRefundsSigned: List[RefundTx.PostDated]
         ) extends BlockConfirmed
@@ -427,13 +431,40 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
 
         override def complete: IO[Either[(Void, Void), BlockConfirmed.Minor]] = {
 
-            /** TODO:
-              *   - verify header signatures
-              *   - zip immediate refunds with signatures and verify them
-              *   - zip post-dated refunds with signatures and verify them
-              *   - produce the result
-              */
-            ???
+            def validateHeaderSignature(
+                msg: IArray[Byte]
+            )(vk: VerificationKeyBytes, sig: Ed25519Signature): IO[Unit] = {
+                // TODO: wire in Wallet here, the function to validate the signatures is already there
+                ???
+            }
+
+            def validateAndAttachTxSignature[T <: Tx](tx: T, sigs: List[TxSignature]): IO[T] = ???
+
+            for {
+                augBlock <- IO.pure(this.augBlock.get)
+                block = augBlock.block
+
+                // 1. Verify header signatures
+                validate = validateHeaderSignature(block.header.mkMessage)
+                vksAndSigs <- IO.pure(this.acks.map((vk, ack) => vk -> ack.headerSignature).toList)
+                _ <- IO.traverse_(vksAndSigs)((vk, sig) =>
+                    validate(vk, Ed25519Signature(IArray.from(HexUtil.decodeHexString(sig))))
+                )
+
+                // 2. Zip post-dated refunds with signatures, verify them, and embed into the transactions
+                refunds = augBlock.effects.postDatedRefunds
+                // TODO: can we use transpose or is it too permissive?
+                sigSets = this.acks.values.map(_.postDatedRefunds).toList.transpose
+                postDatedRefundsSigned <- refunds
+                    .zip(sigSets)
+                    .traverse(tupled(validateAndAttachTxSignature[RefundTx.PostDated]))
+            } yield Right(
+              BlockConfirmed.Minor(
+                augBlock = augBlock,
+                headerSignatures = vksAndSigs.map(_._2).toSet,
+                postDatedRefundsSigned = postDatedRefundsSigned
+              )
+            )
         }
     }
 

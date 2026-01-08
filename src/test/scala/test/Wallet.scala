@@ -1,17 +1,19 @@
 package test
 
-import co.nstant.in.cbor.model.{Array as CborArray, ByteString as CborByteString, Map, UnsignedInteger}
+import co.nstant.in.cbor.model.{Map, UnsignedInteger, Array as CborArray, ByteString as CborByteString}
 import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
+import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
-import hydrozoa.*
-import hydrozoa.given
+import hydrozoa.multisig.protocol.types.AckBlock.Ed25519Signature
+import hydrozoa.{*, given}
 import io.bullet.borer.Cbor
-import scala.language.implicitConversions
 import scalus.builtin.ByteString
 import scalus.cardano.ledger.{OriginalCborByteArray, Transaction, VKeyWitness}
+
+import scala.language.implicitConversions
 
 case class WalletId(name: String)
 
@@ -58,6 +60,12 @@ trait WalletModule:
         signingKey: SigningKey
     ): Ed25519Signature
 
+    def validateEd25519Signature(
+        msg: IArray[Byte],
+        vk: VerificationKey,
+        sig: Ed25519Signature
+    ): Boolean
+
 class Wallet(
     name: String,
     walletModule: WalletModule,
@@ -79,7 +87,15 @@ class Wallet(
     def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =
         walletModule.createEd25519Signature(msg, signingKey)
 
+    def validateEd25519Signature(
+        msg: IArray[Byte],
+        sig: Ed25519Signature
+    ): Boolean =
+        walletModule.validateEd25519Signature(msg, verificationKey, sig)
+
 object WalletModuleBloxbean extends WalletModule:
+
+    protected val signingProvider: SigningProvider = CryptoConfiguration.INSTANCE.getSigningProvider
 
     override type VerificationKey = HdPublicKey
     override type SigningKey = HdPrivateKey
@@ -97,7 +113,6 @@ object WalletModuleBloxbean extends WalletModule:
         // See BloxBean's TransactionSigner.class
         val txBytes = TransactionBytes(tx.toCbor)
         val txnBodyHash = Blake2bUtil.blake2bHash256(txBytes.getTxBodyBytes)
-        val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
         val signature = signingProvider.signExtended(txnBodyHash, signingKey.getKeyData)
         VKeyWitness(
           signature = ByteString.fromArray(signature),
@@ -108,9 +123,19 @@ object WalletModuleBloxbean extends WalletModule:
         msg: IArray[Byte],
         signingKey: SigningKey
     ): Ed25519Signature =
-        val signingProvider = CryptoConfiguration.INSTANCE.getSigningProvider
         val signature = signingProvider.signExtended(
           IArray.genericWrapArray(msg).toArray,
           signingKey.getKeyData
         )
         Ed25519Signature(IArray.from(signature))
+
+    override def validateEd25519Signature(
+        msg: IArray[Byte],
+        vk: HdPublicKey,
+        sig: Ed25519Signature
+    ): Boolean =
+        signingProvider.verify(
+          IArray.genericWrapArray(sig.untagged).toArray,
+          IArray.genericWrapArray(msg).toArray,
+          vk.getKeyData
+        )

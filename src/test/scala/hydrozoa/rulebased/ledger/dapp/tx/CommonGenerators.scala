@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
+import hydrozoa.multisig.protocol.types.AckBlock.Ed25519Signature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved

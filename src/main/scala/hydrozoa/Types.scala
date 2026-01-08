@@ -84,25 +84,6 @@ type Address[L <: AnyLayer] = Address.Address[L]
 type AddressL1 = Address.Address[L1]
 type AddressL2 = Address.Address[L2]
 
-///////////////////////////////////////////////////////
-// Ed25519 Signatures
-
-object Ed25519Signature:
-    opaque type Ed25519Signature = IArray[Byte]
-    def apply(signature: IArray[Byte]): Ed25519Signature = signature
-    given Conversion[Ed25519Signature, IArray[Byte]] = identity
-    given Conversion[Ed25519Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
-    extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
-
-type Ed25519Signature = Ed25519Signature.Ed25519Signature
-
-object Ed25519SignatureHex:
-    opaque type Ed25519SignatureHex = String
-    def apply(signature: String): Ed25519SignatureHex = signature
-    given Conversion[Ed25519SignatureHex, String] = identity
-    extension (signature: Ed25519SignatureHex) def untagged: String = identity(signature)
-
-type Ed25519SignatureHex = Ed25519SignatureHex.Ed25519SignatureHex
 
 //////////////////////////////////////////////////////////////////
 // UtxoId, TxIx

@@ -27,6 +27,7 @@ sealed trait RefundTx extends Tx {
 }
 
 object RefundTx {
+    // TODO: shall we keep it for now?
     final case class Immediate(override val tx: Transaction) extends RefundTx
     final case class PostDated(override val tx: Transaction, startTime: java.time.Instant)
         extends RefundTx
