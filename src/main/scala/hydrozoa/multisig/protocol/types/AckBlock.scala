@@ -101,6 +101,7 @@ object AckBlock {
 
         extension (self: Id)
             def increment: Id = Id(self._1, self._2 + 1)
+            // TODO: rename peerId (or rename all peerId to peerNum
             def peerNum: Peer.Number = Peer.Number(self._1)
             def ackNum: Number = Number(self._2)
     }
