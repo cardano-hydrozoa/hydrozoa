@@ -21,6 +21,8 @@ import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import java.time.Instant
 import monocle.Focus.focus
@@ -31,7 +33,7 @@ import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
-    events: List[(LedgerEventId, Boolean)],
+    events: List[(LedgerEventId, ValidityFlag)],
     blockWithdrawnUtxos: Vector[Payout.Obligation]
 )
 
@@ -139,15 +141,15 @@ final case class JointLedger(
         for {
 
             _ <- this.runDappLedgerM(
-              action = DappLedgerM.registerDeposit(serializedDeposit, eventId, virtualOutputs),
+              action = DappLedgerM.registerDeposit(req),
               // Left == deposit rejected
-              // FIXME: This should probably be returned as  sum type in the Right
+              // FIXME: This should probably be returned as sum type in the Right
               onFailure = _ =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, false)))
+                          .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
                   } yield (),
               onSuccess = _ =>
@@ -155,7 +157,7 @@ final case class JointLedger(
                       oldState <- unsafeGetProducing
                       newState = oldState
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, true)))
+                          .modify(_.appended((eventId, Valid)))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -180,7 +182,7 @@ final case class JointLedger(
                       p <- unsafeGetProducing
                       newState = p
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, true)))
+                          .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
                   } yield (),
               // Valid transaction continuation
@@ -189,7 +191,7 @@ final case class JointLedger(
                       p <- unsafeGetProducing
                       newState = p
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, false)))
+                          .modify(_.appended((eventId, Valid)))
                           .focus(_.nextBlockData.blockWithdrawnUtxos)
                           .modify(v => v ++ payoutObligations)
                       _ <- state.set(newState)
@@ -276,8 +278,6 @@ final case class JointLedger(
                     .nextBlock(
                       newBody = nextBlockBody,
                       newTime = p.startTime,
-                      // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
-                      // calling out to the virtual ledger
                       newCommitment = IArray.unsafeFromArray(
                         settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.datum.commit.bytes
                       )

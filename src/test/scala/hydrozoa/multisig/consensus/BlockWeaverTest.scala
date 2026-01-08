@@ -10,6 +10,7 @@ import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 import java.time.Instant
@@ -286,7 +287,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                       commitment = KzgCommitment.empty
                     ),
                     Block.Body.Minor(
-                      events = firstBlockEvents.map(e => (e.eventId, true)).toList,
+                      events = firstBlockEvents.map(e => (e.eventId, Valid)).toList,
                       depositsRefunded = List.empty
                     )
                   )
@@ -295,7 +296,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   newTime <- IO.realTimeInstant
                   secondBlock: Block = firstBlock.nextBlock(
                     Block.Body.Minor(
-                      events = secondBlockEvents.map(e => (e.eventId, true)).toList,
+                      events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,
                       depositsRefunded = List.empty
                     ),
                     newTime = newTime,

@@ -5,10 +5,18 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import scalus.cardano.ledger.Coin
 
 type LedgerEventId = LedgerEventId.Id
 
 object LedgerEventId {
+
+    /** Used in the transient fields to indicate whether an event is valid or invalid. (This type is
+      * solely here to avoid boolean blindness)
+      */
+    enum ValidityFlag:
+        case Valid
+        case Invalid
 
     opaque type Id = (Int, Int)
 
@@ -57,13 +65,12 @@ object LedgerEvent {
         tx: Array[Byte]
     ) extends LedgerEvent
 
-    // FIXME: This should include the refundTxBytes
-    // FIXME: The virtual outputs should not be parsed yet (i.e. Array[Byte])
     final case class RegisterDeposit(
-        override val eventId: LedgerEventId,
         serializedDeposit: Array[Byte],
-        // TODO: Pop up [[GenesisObligation]]?
-        virtualOutputs: NonEmptyList[GenesisObligation]
+        refundTxBytes: Array[Byte],
+        eventId: LedgerEventId,
+        virtualOutputsBytes: Array[Byte],
+        donationToTreasury: Coin
     ) extends LedgerEvent
 
     // TODO: do we still need it?

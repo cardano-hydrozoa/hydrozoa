@@ -5,13 +5,15 @@ import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseDepositError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
+import hydrozoa.multisig.ledger.dapp.txseq
+import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
@@ -73,28 +75,33 @@ object DappLedgerM {
     private def lift[A](e: Either[DappLedgerM.Error, A]): DappLedgerM[A] =
         DappLedgerM(Kleisli.liftF(StateT.liftF(e)))
 
-    /** Check that a deposit tx is valid and add the deposit utxo it produces to the ledger's state.
+    /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
+      * ledger's state.
+      *
+      * NOTE: This does not check time bounds. This is simply checking whether the deposit is
+      * well-formed and informing the DappLedger of it
       */
     // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
-    def registerDeposit(
-        serializedDeposit: Array[Byte],
-        eventId: LedgerEventId,
-        virtualOutputs: NonEmptyList[GenesisObligation]
-    ): DappLedgerM[Unit] = {
+    def registerDeposit(req: RegisterDeposit): DappLedgerM[Unit] = {
+        import req.*
         for {
             config <- ask
             // FIXME: DepositTx's parser does not check all the invariants.
             //  Use DepositRefundTxSeq's parser, instead.
             parseRes =
-                DepositTx
-                    .parse(serializedDeposit, config, virtualOutputs)
+                DepositRefundTxSeq
+                    .parse(
+                      depositTxBytes = serializedDeposit,
+                      refundTxBytes = refundTxBytes,
+                      config = config,
+                      virtualOutputsBytes = virtualOutputsBytes,
+                      donationToTreasury = donationToTreasury
+                    )
                     .left
-                    .map(ParseDepositError(_))
-            depositTx <- lift(parseRes)
-
-            // _ <- EitherT(validateTimeBounds(depositTx))
+                    .map(ParseError(_))
+            depositRefundTxSeq <- lift(parseRes)
             s <- get
-            newState = s.appendToQueue((eventId, depositTx.depositProduced))
+            newState = s.appendToQueue((eventId, depositRefundTxSeq.depositTx.depositProduced))
             _ <- set(newState)
         } yield ()
     }
@@ -231,12 +238,10 @@ object DappLedgerM {
 
         sealed trait RegisterDepositError extends DappLedgerM.Error
 
-        final case class ParseDepositError(wrapped: DepositTx.ParseError)
+        final case class ParseError(wrapped: txseq.DepositRefundTxSeq.ParseError)
             extends RegisterDepositError
 
         final case class InvalidTimeBound(msg: String) extends RegisterDepositError
-
-        final case class ParseRefundPostDatedError(wrapped: String) extends RegisterDepositError
 
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
             extends DappLedgerM.Error
