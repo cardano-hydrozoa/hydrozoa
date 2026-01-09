@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RolloutTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -250,7 +250,7 @@ final case class JointLedger(
 
         } yield AugmentedBlock.Minor(
           nextBlock,
-          BlockEffects.Minor(nextBlock.id, List.empty, List.empty)
+          BlockEffects.Minor(nextBlock.id, List.empty)
         )
 
         def augmentedBlockMajor(
@@ -294,7 +294,6 @@ final case class JointLedger(
                         r.rolloutTxSeq.notLast.appended(r.rolloutTxSeq.last).toList
                 },
                 fallback = settleLedgerRes.fallBack,
-                immediateRefunds = List.empty,
                 postDatedRefunds = List.empty
               )
             )
@@ -506,19 +505,24 @@ final case class JointLedger(
 
                 val blockEffects: BlockEffects.Final = {
                     import FinalizationTxSeq.*
-                    val rollouts: List[RolloutTx] = finalizationTxSeq match {
-                        case _: Monolithic => List.empty
-                        case _: WithDeinit => List.empty
-                        case x: FinalizationTxSeq.WithRollouts =>
-                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                        case x: WithDeinitAndRollouts =>
-                            x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                    }
+                    val (rollouts: List[RolloutTx], deinit: Option[DeinitTx]) =
+                        finalizationTxSeq match {
+                            case _: Monolithic => (List.empty, None)
+                            case x: WithDeinit => (List.empty, Some(x.deinitTx))
+                            case x: FinalizationTxSeq.WithRollouts =>
+                                val rollouts: List[RolloutTx] =
+                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                                (rollouts, None)
+                            case x: WithDeinitAndRollouts =>
+                                val rollouts: List[RolloutTx] =
+                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                                (rollouts, Some(x.deinitTx))
+                        }
                     BlockEffects.Final(
                       nextBlock.id,
                       finalizationTxSeq.finalizationTx,
                       rollouts = rollouts,
-                      immediateRefunds = List.empty
+                      deinit = deinit
                     )
                 }
 

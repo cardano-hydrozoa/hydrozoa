@@ -61,9 +61,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockWeaver.Ref]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
             pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
-            pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.TransactionSequencer.Ref]
+            pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.EventSequencer.Ref]
 
-            blockProducer <- {
+            blockWeaver <- {
                 import BlockWeaver.Config
                 context.actorOf(
                   BlockWeaver(
@@ -138,19 +138,19 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                   TransactionSequencer(
                     Config(peerId = config.peerId, persistence = config.persistence),
                     ConnectionsPending(
-                      blockProducer = pendingBlockProducer,
+                      blockWeaver = pendingBlockProducer,
                       peerLiaisons = pendingLocalPeerLiaisons
                     )
                   )
                 )
             }
 
-            _ <- pendingBlockProducer.complete(blockProducer)
+            _ <- pendingBlockProducer.complete(blockWeaver)
             _ <- pendingLocalPeerLiaisons.complete(localPeerLiaisons)
             _ <- pendingCardanoLiaison.complete(cardanoLiaison)
             _ <- pendingTransactionSequencer.complete(transactionSequencer)
 
-            _ <- context.watch(blockProducer, TerminatedChild(Actors.BlockProducer, blockProducer))
+            _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
                 context.watch(r, TerminatedChild(Actors.PeerLiaison, r))
             )
@@ -160,7 +160,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             )
             _ <- context.watch(
               transactionSequencer,
-              TerminatedChild(Actors.TransactionSequencer, transactionSequencer)
+              TerminatedChild(Actors.EventSequencer, transactionSequencer)
             )
 
             // TODO: Store the deferred remote comm actor refs (cas._2) for later
@@ -170,14 +170,18 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
         PartialFunction.fromFunction {
             case TerminatedChild(childType, _) =>
                 childType match {
-                    case Actors.BlockProducer =>
-                        IO.println("Terminated block actor")
+                    case Actors.BlockWeaver =>
+                        IO.println("Terminated block weaver actor")
                     case Actors.CardanoLiaison =>
-                        IO.println("Terminated Cardano event actor")
+                        IO.println("Terminated Cardano liaison actor")
+                    case Actors.Consensus =>
+                        IO.println("Terminated consensus actor")
+                    case Actors.JointLedger =>
+                        IO.println("Terminated joint ledger actor")
                     case Actors.PeerLiaison =>
-                        IO.println("Terminated comm actor")
-                    case Actors.TransactionSequencer =>
-                        IO.println("Terminated ledger event actor")
+                        IO.println("Terminated peer liaison actor")
+                    case Actors.EventSequencer =>
+                        IO.println("Terminated event sequencer actor")
                 }
             case TerminatedDependency(dependencyType, _) =>
                 dependencyType match {

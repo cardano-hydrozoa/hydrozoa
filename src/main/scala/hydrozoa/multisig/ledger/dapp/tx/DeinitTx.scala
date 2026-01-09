@@ -7,6 +7,7 @@ import hydrozoa.lib.cardano.value.coin.Coin.Unbounded
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explain}
 import hydrozoa.multisig.ledger.dapp.utxo.ResidualTreasuryUtxo
 import monocle.Focus.focus
+import monocle.{Focus, Lens}
 import scala.Function.const
 import scalus.cardano.ledger.{Coin as OldCoin, KeepRaw, Sized, Transaction, TransactionOutput, Value}
 import scalus.cardano.txbuilder.*
@@ -30,8 +31,9 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
   */
 case class DeinitTx(
     override val residualTreasurySpent: ResidualTreasuryUtxo,
-    override val tx: Transaction
-) extends Tx,
+    override val tx: Transaction,
+    override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx)
+) extends Tx[DeinitTx],
       ResidualTreasuryUtxo.Spent
 
 object DeinitTx:

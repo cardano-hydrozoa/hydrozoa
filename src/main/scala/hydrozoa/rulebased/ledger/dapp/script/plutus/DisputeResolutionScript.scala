@@ -15,7 +15,7 @@ import scala.annotation.tailrec
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}
@@ -50,9 +50,7 @@ object DisputeResolutionValidator extends Validator {
       * decided to go for having a separate type to use onchain. Mostly because opaque types don't
       * seem to work well with deriving machinery.
       *
-      * TODO: implement the function: onchainBlockHeader :: BlockHeaderMinor -> OnchainBlockHeader
-      *
-      * NB: The signing function should use this type.
+      * NB: The minor block header signing function should use this type.
       */
     case class OnchainBlockHeader(
         blockNum: BigInt,

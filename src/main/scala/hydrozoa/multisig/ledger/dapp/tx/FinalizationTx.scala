@@ -9,6 +9,7 @@ import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.prebalancedLovelaceDiffHandler
 import monocle.Focus.focus
 import monocle.Monocle.refocus
+import monocle.{Focus, Lens}
 import scala.Function.const
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -19,13 +20,16 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, S
 import scalus.|>
 
 sealed trait FinalizationTx
-    extends Tx,
+    extends Tx[FinalizationTx],
       Block.Version.Major.Produced,
       MultisigTreasuryUtxo.Spent,
       ResidualTreasuryUtxo.MbProduced,
       RolloutUtxo.MbProduced,
       HasResolvedUtxos,
-      HasValidityEnd
+      HasValidityEnd {
+    def tx: Transaction
+    def txLens: Lens[FinalizationTx, Transaction]
+}
 
 object FinalizationTx {
 
@@ -41,7 +45,9 @@ object FinalizationTx {
         override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[NoPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends WithDeinit,
           MergedDeinit
 
@@ -50,7 +56,9 @@ object FinalizationTx {
         override val tx: Transaction,
         override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[NoPayoutsMerged](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends Monolithic,
           MergedDeinit
 
@@ -60,7 +68,9 @@ object FinalizationTx {
         override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends WithDeinit
 
     case class WithOnlyDirectPayoutsMerged(
@@ -68,7 +78,9 @@ object FinalizationTx {
         override val tx: Transaction,
         override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[WithOnlyDirectPayoutsMerged](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends Monolithic,
           MergedDeinit
 
@@ -79,7 +91,9 @@ object FinalizationTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val residualTreasuryProduced: ResidualTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[WithRollouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends FinalizationTx,
           ResidualTreasuryUtxo.Produced,
           RolloutUtxo.Produced,
@@ -91,7 +105,9 @@ object FinalizationTx {
         override val validityEnd: java.time.Instant,
         override val treasurySpent: MultisigTreasuryUtxo,
         override val rolloutProduced: RolloutUtxo,
-        override val resolvedUtxos: ResolvedUtxos
+        override val resolvedUtxos: ResolvedUtxos,
+        override val txLens: Lens[FinalizationTx, Transaction] =
+            Focus[WithRolloutsMerged](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
     ) extends FinalizationTx,
           RolloutUtxo.Produced,
           MergedDeinit

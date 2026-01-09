@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.Config
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{CardanoBackendError, GetCardanoHeadState, GetTxInfo, Request, SubmitL1Effects}
 import hydrozoa.multisig.protocol.ConsensusProtocol.{ConfirmFinalBlock, ConfirmMajorBlock}
@@ -329,7 +329,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                                   s"deposits: ${settlementTx.depositsSpent.length}, " +
                                   s"rollouts: ${rolloutTxSeq.notLast.length + 1}"
                             )
-                            val rollouts = rolloutTxSeq.notLast :+ rolloutTxSeq.last
+                            val rollouts: Vector[RolloutTx] =
+                                rolloutTxSeq.notLast :+ rolloutTxSeq.last
                             rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
                             println(
                               s"\t=> Fallback ${settlementTx.majorVersionProduced}: " +
@@ -354,7 +355,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                           s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
                               s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
                         )
-                        val rollouts = rolloutTxSeq.notLast :+ rolloutTxSeq.last
+                        val rollouts: Vector[RolloutTx] = rolloutTxSeq.notLast :+ rolloutTxSeq.last
                         rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
                     case FinalizationTxSeq.WithDeinitAndRollouts(
                           finalizationTx,
@@ -365,7 +366,7 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                           s"Finalization: ${finalizationTx.tx.id}, TTL: ${finalizationTx.validityEnd}" +
                               s", rollouts: ${rolloutTxSeq.notLast.length + 1}"
                         )
-                        val rollouts = rolloutTxSeq.notLast :+ rolloutTxSeq.last
+                        val rollouts: Vector[RolloutTx] = rolloutTxSeq.notLast :+ rolloutTxSeq.last
                         rollouts.foreach(r => println(s"\t\t - rollout: ${r.tx.id}"))
                         println(s"Deinit: ${deinitTx.tx.id}")
                 }

@@ -33,7 +33,7 @@ case class PeerSection(
 /** Fully parsed head config.
   */
 case class HeadConfig(
-    // Mapping form alphabetically assigned UByte index
+    // Mapping form alphabetically assigned UByte index - FIXME: we decided to give up automatic sorting
     verificationKeys: Map[UByte, VerificationKeyBytes],
     // Collective contingency
     collectiveContingency: CollectiveContingency,

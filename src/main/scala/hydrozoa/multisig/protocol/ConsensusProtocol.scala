@@ -17,11 +17,11 @@ object ConsensusProtocol {
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
       */
     enum Actors:
-        case BlockProducer, CardanoLiaison, PeerLiaison, TransactionSequencer
+        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
 
     // TODO: move to the weaver sources
     object BlockWeaver {
-        type BlockProducerRef = Ref
+        type BlockWeaverRef = Ref
         type Ref = ActorRef[IO, Request]
         // TODO: use Block.Next not Block here
         type Request = LedgerEvent | Block | BlockConfirmed | PollResults
@@ -61,8 +61,8 @@ object ConsensusProtocol {
             RemoteBroadcast.Request | GetMsgBatch | NewMsgBatch
     }
 
-    object TransactionSequencer {
-        type TransactionSequencerRef = Ref
+    object EventSequencer {
+        type EventSequencerRef = Ref
         type Ref = ActorRef[IO, Request]
         type Request =
             SubmitLedgerEvent | ConfirmBlock
