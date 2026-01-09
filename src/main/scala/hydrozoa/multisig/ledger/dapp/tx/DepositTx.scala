@@ -31,7 +31,6 @@ object DepositTx {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant,
         txTiming: TxTiming
     ) extends Tx.Builder {
         def build(): Either[(SomeBuildError, String), DepositTx] = {
@@ -81,7 +80,11 @@ object DepositTx {
               )
             )
 
-            val ttl = ValidityEndSlot(validityEnd.toSlot(config.env.slotConfig).slot)
+            val ttl = ValidityEndSlot(
+              (Instant.ofEpochMilli(
+                partialRefundTx.refundInstructions.startTime.toLong
+              ) - txTiming.silenceDuration).toEpochMilli
+            )
 
             for {
                 ctx <- TransactionBuilder
@@ -112,7 +115,12 @@ object DepositTx {
                   rawDepositProduced.value,
                   virtualOutputs
                 )
-            } yield DepositTx(depositProduced, validityEnd, tx)
+            } yield DepositTx(
+              depositProduced,
+              Instant.ofEpochMilli(refundInstructions.startTime.toLong)
+                  - txTiming.silenceDuration,
+              tx
+            )
         }
     }
 

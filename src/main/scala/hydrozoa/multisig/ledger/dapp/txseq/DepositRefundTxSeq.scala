@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.+
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -23,6 +24,7 @@ object DepositRefundTxSeq {
         object Error {
             final case class Deposit(e: (SomeBuildError, String)) extends Builder.Error
             final case class Refund(e: (SomeBuildError, String)) extends Builder.Error
+            case object TimingIncoherence extends Builder.Error
 
             final case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
                 extends Builder.Error
@@ -37,7 +39,6 @@ object DepositRefundTxSeq {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant,
         txTiming: TxTiming
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
@@ -55,7 +56,6 @@ object DepositRefundTxSeq {
                   virtualOutputs,
                   donationToTreasury,
                   changeAddress,
-                  validityEnd,
                   txTiming = txTiming
                 )
                 .build()
@@ -80,6 +80,37 @@ object DepositRefundTxSeq {
                   depositValue == expectedDepositValue,
                   (),
                   Builder.Error.DepositValueMismatch(depositValue, virtualValue)
+                )
+
+            /*
+            Obnoxious timing note (sorry):
+
+            The Deposit tx validity end, deposit utxo absorption period, and post-dated refund tx timing are
+            all intertwined as follows:
+
+            deposit(i).absorption_start = deposit(i).validity_end + deposit_maturity_duration
+            deposit(i).absorption_end = deposit(i).absorption_start + deposit_absorption_duration
+                                      = deposit(i).validity_end + deposit_maturity_duration + deposit_absorption_duration
+
+            refund(i).validity_start = deposit(i).absorption_end + silence_duration
+            refund(i).validity_end = ∅
+
+            The question becomes: which is authoritative? The refund validity start or the deposit validity end?
+            And where do we store this data in our program?
+
+            We have to, unfortunately, store this information in three places, and they have to be coherent.
+            When we get a DepositRefundTxSeq, we need the individual transactions to have coherent timing, but we
+            _also_ need to store the refund validity start time in the datum of the deposit (for use in the forthcoming
+            guard script.)
+             */
+            // TODO: This assertion also needs to appear in the parser
+            _ <- Either
+                .cond(
+                  depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
+                      == refundTx.startTime
+                      && refundTx.startTime.toEpochMilli == depositTx.depositProduced.datum.refundInstructions.startTime.toLong,
+                  (),
+                  Builder.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                 )
         } yield DepositRefundTxSeq(depositTx, refundTx)
     }
