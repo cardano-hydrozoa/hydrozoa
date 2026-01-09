@@ -2,13 +2,12 @@ package hydrozoa.rulebased.ledger.dapp.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.multisig.protocol.types.AckBlock.Ed25519Signature
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, OnchainBlockHeader, VoteRedeemer}
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteStatus.*
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.dapp.utxo.{OwnVoteUtxo, RuleBasedTreasuryUtxo, VoteUtxoCast}
-
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.builtin.{ByteString, Data}
@@ -37,7 +36,7 @@ object VoteTx {
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: Utxo[L1],
         blockHeader: OnchainBlockHeader,
-        signatures: List[Ed25519Signature],
+        signatures: List[HeaderSignature],
         validityEndSlot: Long,
         network: Network,
         protocolParams: ProtocolParams,

@@ -22,10 +22,8 @@ import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
-
 import java.time.Instant
 import monocle.Focus.focus
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.{ByteString, platform}
@@ -507,16 +505,19 @@ final case class JointLedger(
 
                 val blockEffects: BlockEffects.Final = {
                     import FinalizationTxSeq.*
-                    val (rollouts: List[RolloutTx], deinit: Option[DeinitTx]) = finalizationTxSeq match {
-                        case _: Monolithic => (List.empty, None)
-                        case x: WithDeinit => (List.empty, Some(x.deinitTx))
-                        case x: FinalizationTxSeq.WithRollouts =>
-                            val rollouts = x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                            (rollouts, None)
-                        case x: WithDeinitAndRollouts =>
-                            val rollouts = x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                            (rollouts, Some(x.deinitTx))
-                    }
+                    val (rollouts: List[RolloutTx], deinit: Option[DeinitTx]) =
+                        finalizationTxSeq match {
+                            case _: Monolithic => (List.empty, None)
+                            case x: WithDeinit => (List.empty, Some(x.deinitTx))
+                            case x: FinalizationTxSeq.WithRollouts =>
+                                val rollouts: List[RolloutTx] =
+                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                                (rollouts, None)
+                            case x: WithDeinitAndRollouts =>
+                                val rollouts: List[RolloutTx] =
+                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
+                                (rollouts, Some(x.deinitTx))
+                        }
                     BlockEffects.Final(
                       nextBlock.id,
                       finalizationTxSeq.finalizationTx,

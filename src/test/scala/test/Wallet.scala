@@ -7,7 +7,7 @@ import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
 import com.bloxbean.cardano.client.crypto.config.CryptoConfiguration
 import com.bloxbean.cardano.client.transaction.util.TransactionBytes
-import hydrozoa.multisig.protocol.types.AckBlock.Ed25519Signature
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.{*, given}
 import io.bullet.borer.Cbor
 import scalus.builtin.ByteString
@@ -16,31 +16,6 @@ import scalus.cardano.ledger.{OriginalCborByteArray, Transaction, VKeyWitness}
 import scala.language.implicitConversions
 
 case class WalletId(name: String)
-
-// Pure function to add a key witness to a transaction.
-def addWitness(tx: Transaction, wit: VKeyWitness): Transaction =
-    val txBytes = TransactionBytes(tx.toCbor)
-    val witnessSetDI = CborSerializationUtil.deserialize(txBytes.getTxWitnessBytes)
-    val witnessSetMap = witnessSetDI.asInstanceOf[Map]
-
-    val vkWitnessArrayDI = witnessSetMap.get(UnsignedInteger(0))
-
-    val vkWitnessArray: CborArray =
-        if vkWitnessArrayDI != null then vkWitnessArrayDI.asInstanceOf[CborArray]
-        else new CborArray
-
-    if vkWitnessArrayDI == null then witnessSetMap.put(new UnsignedInteger(0), vkWitnessArray): Unit
-
-    val vkeyWitness = new CborArray
-    vkeyWitness.add(CborByteString(wit.vkey.bytes))
-    vkeyWitness.add(CborByteString(wit.signature.bytes))
-
-    vkWitnessArray.add(vkeyWitness)
-
-    val txWitnessBytes = CborSerializationUtil.serialize(witnessSetMap, false)
-    val txBytesSigned = txBytes.withNewWitnessSetBytes(txWitnessBytes).getTxBytes
-    given OriginalCborByteArray = OriginalCborByteArray(txBytesSigned)
-    Cbor.decode(txBytesSigned).to[Transaction].value
 
 trait WalletModule:
 
@@ -55,15 +30,15 @@ trait WalletModule:
         signingKey: SigningKey
     ): VKeyWitness
 
-    def createEd25519Signature(
+    def createHeaderSignature(
         msg: IArray[Byte],
         signingKey: SigningKey
-    ): Ed25519Signature
+    ): HeaderSignature
 
-    def validateEd25519Signature(
+    def validateHeaderSignature(
         msg: IArray[Byte],
         vk: VerificationKey,
-        sig: Ed25519Signature
+        sig: HeaderSignature
     ): Boolean
 
 class Wallet(
@@ -84,14 +59,14 @@ class Wallet(
 
     def getName: String = name
 
-    def createEd25519Signature(msg: IArray[Byte]): Ed25519Signature =
-        walletModule.createEd25519Signature(msg, signingKey)
+    def createHeaderSignature(msg: IArray[Byte]): HeaderSignature =
+        walletModule.createHeaderSignature(msg, signingKey)
 
-    def validateEd25519Signature(
+    def validateHeaderSignature(
         msg: IArray[Byte],
-        sig: Ed25519Signature
+        sig: HeaderSignature
     ): Boolean =
-        walletModule.validateEd25519Signature(msg, verificationKey, sig)
+        walletModule.validateHeaderSignature(msg, verificationKey, sig)
 
 object WalletModuleBloxbean extends WalletModule:
 
@@ -119,20 +94,20 @@ object WalletModuleBloxbean extends WalletModule:
           vkey = ByteString.fromArray(verificationKey.getKeyData)
         )
 
-    override def createEd25519Signature(
+    override def createHeaderSignature(
         msg: IArray[Byte],
         signingKey: SigningKey
-    ): Ed25519Signature =
+    ): HeaderSignature =
         val signature = signingProvider.signExtended(
           IArray.genericWrapArray(msg).toArray,
           signingKey.getKeyData
         )
-        Ed25519Signature(IArray.from(signature))
+        HeaderSignature(IArray.from(signature))
 
-    override def validateEd25519Signature(
+    override def validateHeaderSignature(
         msg: IArray[Byte],
         vk: HdPublicKey,
-        sig: Ed25519Signature
+        sig: HeaderSignature
     ): Boolean =
         signingProvider.verify(
           IArray.genericWrapArray(sig.untagged).toArray,

@@ -15,7 +15,7 @@ import scala.annotation.tailrec
 import scalus.*
 import scalus.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.builtin.ByteString.hex
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, Data, FromData, ToData}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Language, Script}

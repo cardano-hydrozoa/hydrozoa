@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.virtual.commitment.TrustedSetup
-import hydrozoa.multisig.protocol.types.AckBlock.Ed25519Signature
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionValidator.{BlockTypeL2, OnchainBlockHeader, given}
 import hydrozoa.rulebased.ledger.dapp.script.plutus.RuleBasedTreasuryScript
 import hydrozoa.rulebased.ledger.dapp.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
@@ -168,9 +168,9 @@ object CommonGenerators {
     def signBlockHeader(
         blockHeader: OnchainBlockHeader,
         peers: NonEmptyList[TestPeer]
-    ): List[Ed25519Signature] = {
+    ): List[HeaderSignature] = {
         val bs = blockHeader.toData |> serialiseData |> (_.bytes) |> IArray.from
-        peers.toList.map(peer => peer.wallet.createEd25519Signature(bs))
+        peers.toList.map(peer => peer.wallet.createHeaderSignature(bs))
     }
 
     /** Generator for Shelley address */

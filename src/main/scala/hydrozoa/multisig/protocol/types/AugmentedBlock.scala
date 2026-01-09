@@ -8,10 +8,10 @@ enum AugmentedBlock(val blockType: Block.Type) {
     def effects: BlockEffects
 
     // TODO: This is not used anywhere currently.
-    //case Initial(
+    // case Initial(
     //    override val block: Block.Initial,
     //    override val effects: BlockEffects.Initial
-    //) extends AugmentedBlock(Type.Initial)
+    // ) extends AugmentedBlock(Type.Initial)
 
     case Minor(
         override val block: Block.Minor,
@@ -19,7 +19,7 @@ enum AugmentedBlock(val blockType: Block.Type) {
     ) extends AugmentedBlock(Type.Minor)
 
     case Major(
-        override val block: Block.Major, 
+        override val block: Block.Major,
         override val effects: BlockEffects.Major
     ) extends AugmentedBlock(Type.Major)
 

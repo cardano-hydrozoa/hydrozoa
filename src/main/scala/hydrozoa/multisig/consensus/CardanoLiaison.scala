@@ -119,6 +119,14 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     private type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | DeinitTx |
         RolloutTx
 
+    extension (effect: HappyPathEffect)
+        def tx: Transaction = effect match
+            case e: InitializationTx => e.tx
+            case e: SettlementTx     => e.tx
+            case e: FinalizationTx   => e.tx
+            case e: DeinitTx         => e.tx
+            case e: RolloutTx        => e.tx
+
     /** Internal state of the actor. */
     private final case class State(
         /** L1 target state */

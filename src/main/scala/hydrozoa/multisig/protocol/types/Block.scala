@@ -166,12 +166,12 @@ object Block {
               ByteString.fromArray(IArray.genericWrapArray(minor.commitment).toArray)
             )
 
-        def mkMessage: IArray[Byte] = {
+        def mkMessage: HeaderMsg = {
             val blockHeader = minor.mkOnchainBlockHeader
             // Convert to Data, serialize and get bytes
             // TODO: shall we use ByteString?
             val msg = serialiseData(blockHeader.toData)
-            IArray.from(msg.bytes)
+            HeaderMsg(IArray.from(msg.bytes))
         }
 
     object HeaderFields {
@@ -343,4 +343,20 @@ object Block {
             extension (self: Minor) def increment: Minor = Minor(self + 1)
         }
     }
+
+    // TODO: this is used in the rule-based regime as well, so maybe it should live in the "common" module
+    object HeaderMsg:
+        opaque type HeaderMsg = IArray[Byte]
+
+        def apply(msg: IArray[Byte]): HeaderMsg = msg
+
+        given Conversion[HeaderMsg, IArray[Byte]] = identity
+
+        given Conversion[HeaderMsg, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
+
+        given Conversion[HeaderMsg, ByteString] = msg => ByteString.fromArray(msg)
+
+        extension (msg: HeaderMsg) def untagged: IArray[Byte] = identity(msg)
+
+    type HeaderMsg = HeaderMsg.HeaderMsg
 }

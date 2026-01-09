@@ -4,8 +4,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.protocol.types.AckBlock.Fields.*
-import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
-import scalus.cardano.ledger.VKeyWitness
+import scalus.builtin.ByteString
 
 type AckBlockId = AckBlock.Id
 
@@ -48,7 +47,7 @@ enum AckBlock:
     ) extends AckBlock, Finalization
 
 object AckBlock {
-    
+
     type Id = Id.Id
     type Number = Number.Number
     type Subscriber = ActorRef[IO, AckBlock]
@@ -79,7 +78,7 @@ object AckBlock {
         sealed trait Finalization {
             def finalization: TxSignature
         }
-        
+
         sealed trait Deinit {
             def deinit: Option[TxSignature]
         }
@@ -122,40 +121,52 @@ object AckBlock {
     }
 
     // ===================================
-    // Transactions signatures
+    // Transactions signatures (Ed25519) - this type doesn't contain vkey as VKeyWitness does.
     // ===================================
 
-    case class TxSignature(
-        signature: VKeyWitness
-    )
+    object TxSignature:
+        opaque type TxSignature = IArray[Byte]
+
+        def apply(signature: IArray[Byte]): TxSignature = signature
+
+        given Conversion[TxSignature, IArray[Byte]] = identity
+
+        given Conversion[TxSignature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
+
+        given Conversion[TxSignature, ByteString] = sig => ByteString.fromArray(sig)
+
+        extension (signature: TxSignature) def untagged: IArray[Byte] = identity(signature)
+
+    type TxSignature = TxSignature.TxSignature
 
     // ===================================
-    // Ed25519 signatures (used for minor block headers)
+    // Minor block header signatures (also Ed25519)
     // ===================================
 
-    type HeaderSignature = Ed25519SignatureHex.Ed25519SignatureHex
+    // type HeaderSignatureHex = HeaderSignatureHex.HeaderSignatureHex
+    //
+    // object HeaderSignatureHex:
+    //    opaque type HeaderSignatureHex = String
+    //
+    //    def apply(signature: String): HeaderSignatureHex = signature
+    //
+    //    given Conversion[HeaderSignatureHex, String] = identity
+    //
+    //    extension (signature: HeaderSignatureHex) def untagged: String = identity(signature)
 
-    object Ed25519SignatureHex:
-        opaque type Ed25519SignatureHex = String
+    // TODO: this is used in the rule-based regime as well, so maybe it should live in the "common" module
+    object HeaderSignature:
+        opaque type HeaderSignature = IArray[Byte]
 
-        def apply(signature: String): Ed25519SignatureHex = signature
+        def apply(signature: IArray[Byte]): HeaderSignature = signature
 
-        given Conversion[Ed25519SignatureHex, String] = identity
+        given Conversion[HeaderSignature, IArray[Byte]] = identity
 
-        extension (signature: Ed25519SignatureHex) def untagged: String = identity(signature)
+        given Conversion[HeaderSignature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
 
-    // TODO: this is used in the rule-based regime as well, so maybe it should live in the "bridge" module
-    object Ed25519Signature:
-        opaque type Ed25519Signature = IArray[Byte]
+        given Conversion[HeaderSignature, ByteString] = sig => ByteString.fromArray(sig)
 
-        def apply(signature: IArray[Byte]): Ed25519Signature = signature
+        extension (signature: HeaderSignature) def untagged: IArray[Byte] = identity(signature)
 
-        given Conversion[Ed25519Signature, IArray[Byte]] = identity
-
-        given Conversion[Ed25519Signature, Array[Byte]] = sig => IArray.genericWrapArray(sig).toArray
-
-        extension (signature: Ed25519Signature) def untagged: IArray[Byte] = identity(signature)
-
-    type Ed25519Signature = Ed25519Signature.Ed25519Signature
-
+    type HeaderSignature = HeaderSignature.HeaderSignature
 }

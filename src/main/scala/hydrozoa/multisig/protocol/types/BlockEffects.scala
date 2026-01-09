@@ -6,10 +6,10 @@ enum BlockEffects(val blockType: Block.Type) {
     def id: Block.Number
 
     // TODO: This is not used anywhere currently.
-    //case Initial(
+    // case Initial(
     //    override val id: Block.Number,
     //    override val initialization: InitializationTx
-    //) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
+    // ) extends BlockEffects(Block.Type.Initial), BlockEffects.Fields.Initial
 
     case Minor(
         override val id: Block.Number,
@@ -41,11 +41,7 @@ object BlockEffects {
 
         sealed trait Minor extends Refunds.PostDated
 
-        sealed trait Major
-            extends Settlement,
-              Rollouts,
-              Fallback,
-              Refunds.PostDated
+        sealed trait Major extends Settlement, Rollouts, Fallback, Refunds.PostDated
 
         sealed trait Final extends Finalization, Rollouts, Deinit
 

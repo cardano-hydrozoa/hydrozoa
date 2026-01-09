@@ -2,19 +2,18 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.{IO, Ref}
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
-import hydrozoa.VerificationKeyBytes
 import hydrozoa.multisig.consensus.ConsensusActor.{Config, Request}
 import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, Tx}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.types.AckBlock.{Ed25519Signature, TxSignature}
-import hydrozoa.multisig.protocol.types.AckBlock.Ed25519SignatureHex.Ed25519SignatureHex
+import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
+import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
-import scalus.builtin.ByteString
-import scalus.cardano.ledger.TransactionHash
-
+import hydrozoa.{VerificationKeyBytes, attachWitnesses}
 import scala.Function.tupled
+import scala.util.control.NonFatal
+import scalus.builtin.{ByteString, platform}
+import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
 
 /** Consensus actor:
   */
@@ -121,7 +120,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         final case class Minor(
             augBlock: AugmentedBlock.Minor,
             // Verified header signatures
-            headerSignatures: Set[Ed25519SignatureHex],
+            headerSignatures: Set[HeaderSignature],
             // Fully signed txs
             postDatedRefundsSigned: List[RefundTx.PostDated]
         ) extends BlockConfirmed
@@ -379,6 +378,35 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         case AckBlock.Final2      => FinalBlockRoundOne | FinalBlockRoundTwo
     }
 
+    /** TDOO: find better place, it's used in all type of cells
+      *
+      * @param someTx
+      * @param vkeysAndSigs
+      * @tparam T
+      * @return
+      */
+    def validateAndAttachTxSignature[T <: Tx[T]](
+        someTx: T,
+        vkeysAndSigs: List[(VerificationKeyBytes, TxSignature)]
+    ): IO[T] = {
+        import someTx.*
+        for {
+            txId <- IO.pure(tx.id)
+            vkeyWitnesses <- IO.pure(
+              vkeysAndSigs.map((vk, sig) => VKeyWitness.apply(vk.bytes, sig))
+            )
+            _ <- IO.traverse_(vkeyWitnesses)(w =>
+                IO.delay(platform.verifyEd25519Signature(w.vkey, txId, w.signature))
+                    .handleErrorWith {
+                        case NonFatal(_) =>
+                            IO.raiseError(CompletionError.WrongTxSignature(txId, w.vkey))
+                        case e => IO.raiseError(e)
+                    }
+            )
+            signedTx = attachWitnesses(tx, vkeyWitnesses)
+        } yield txLens.replace(signedTx)(someTx)
+    }
+
     /** Minor block consensus, may start off by receiving a local augmented block (and local ack) or
       * someone else's acknowledgment.
       *
@@ -432,13 +460,15 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override def complete: IO[Either[(Void, Void), BlockConfirmed.Minor]] = {
 
             def validateHeaderSignature(
-                msg: IArray[Byte]
-            )(vk: VerificationKeyBytes, sig: Ed25519Signature): IO[Unit] = {
-                // TODO: wire in Wallet here, the function to validate the signatures is already there
-                ???
-            }
-
-            def validateAndAttachTxSignature[T <: Tx](tx: T, sigs: List[TxSignature]): IO[T] = ???
+                msg: Block.HeaderMsg
+            )(vk: VerificationKeyBytes, sig: HeaderSignature): IO[Unit] =
+                IO.delay(platform.verifyEd25519Signature(vk.bytes, msg, sig))
+                    .handleErrorWith {
+                        case NonFatal(_) =>
+                            IO.raiseError(CompletionError.WrongHeaderSignature(vk.bytes))
+                        case e => IO.raiseError(e)
+                    }
+                    .void
 
             for {
                 augBlock <- IO.pure(this.augBlock.get)
@@ -447,16 +477,17 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 // 1. Verify header signatures
                 validate = validateHeaderSignature(block.header.mkMessage)
                 vksAndSigs <- IO.pure(this.acks.map((vk, ack) => vk -> ack.headerSignature).toList)
-                _ <- IO.traverse_(vksAndSigs)((vk, sig) =>
-                    validate(vk, Ed25519Signature(IArray.from(HexUtil.decodeHexString(sig))))
-                )
+                _ <- IO.traverse_(vksAndSigs)((vk, sig) => validate(vk, sig))
 
-                // 2. Zip post-dated refunds with signatures, verify them, and embed into the transactions
+                // 2. Zip post-dated refunds with signatures, verify them, and attach to the transactions
                 refunds = augBlock.effects.postDatedRefunds
                 // TODO: can we use transpose or is it too permissive?
-                sigSets = this.acks.values.map(_.postDatedRefunds).toList.transpose
+                witnessSets = this.acks
+                    .map((vk, ack) => ack.postDatedRefunds.map(vk -> _))
+                    .toList
+                    .transpose
                 postDatedRefundsSigned <- refunds
-                    .zip(sigSets)
+                    .zip(witnessSets)
                     .traverse(tupled(validateAndAttachTxSignature[RefundTx.PostDated]))
             } yield Right(
               BlockConfirmed.Minor(
@@ -508,9 +539,10 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 s"Unexpected peer number: $peer"
         }
 
-    enum CompletionError:
-        case WrongHeaderSignature(blockNum: Block.Number, peerId: Peer.Number)
-        case WrongTxSignature(blockNum: Block.Number, peerId: Peer.Number, txId: TransactionHash)
+    // TODO: add block numbers / peer numbers
+    enum CompletionError extends Throwable:
+        case WrongHeaderSignature(vkey: ByteString)
+        case WrongTxSignature(txId: TransactionHash, vkey: ByteString)
 
     sealed trait MajorBlockConsensus[T] extends BlockConsensus[T]
 

@@ -84,7 +84,6 @@ type Address[L <: AnyLayer] = Address.Address[L]
 type AddressL1 = Address.Address[L1]
 type AddressL2 = Address.Address[L2]
 
-
 //////////////////////////////////////////////////////////////////
 // UtxoId, TxIx
 
@@ -244,6 +243,7 @@ extension (utxo: UTxO)
 // Keys
 
 // A verification key of a peer, used on both L1 and L2
+// TODO: review, I think it's strange. Shall we use opaque type instead?
 case class VerificationKeyBytes(bytes: ByteString) {
     def verKeyHash: AddrKeyHash = Hash(blake2b_224(bytes))
     def pubKeyHash: PubKeyHash = PubKeyHash(blake2b_224(bytes))
@@ -253,13 +253,15 @@ object VerificationKeyBytes:
     def applyI(bytes: IArray[Byte]): VerificationKeyBytes =
         new VerificationKeyBytes(ByteString.fromArray(IArray.genericWrapArray(bytes).toArray))
 
-// A signing key of a peer, used on both L1 and L2
-// TODO: why ByteString? This is never used onchain.
-case class SigningKeyBytes(bytes: ByteString)
+// TODO: remove?
+//// A signing key of a peer, used on both L1 and L2
+//// TODO: why ByteString? This is never used onchain.
+//case class SigningKeyBytes(bytes: ByteString)
 
-// UDiffTime
-opaque type UDiffTimeMilli = BigInt
-
-object UDiffTimeMilli:
-    inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
-extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x
+// TODO: remove?
+//// UDiffTime
+//opaque type UDiffTimeMilli = BigInt
+//
+//object UDiffTimeMilli:
+//    inline def apply(i: Int): UDiffTimeMilli = BigInt.apply(i)
+//extension (x: UDiffTimeMilli) def +(i: UDiffTimeMilli): UDiffTimeMilli = i + x
