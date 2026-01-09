@@ -251,9 +251,13 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 case Some(cell) =>
                     cell match {
                         case minor: MinorBlockConsensus =>
-                            minor.applyPostponedAck(ack).flatMap(cell => updateCell(cell))
+                            minor
+                                .applyPostponedAck(ack)
+                                .flatMap(c => updateCell(c.asInstanceOf[BlockConsensus[?]]))
                         case major: MajorBlockConsensus[?] =>
-                            major.applyPostponedAck(ack).flatMap(cell => updateCell(cell))
+                            major
+                                .applyPostponedAck(ack)
+                                .flatMap(c => updateCell(c.asInstanceOf[BlockConsensus[?]]))
                         case _ => IO.raiseError(Error.UnexpectedPreviousBlockCell)
                     }
                 case None => announceAck(ack)
@@ -444,7 +448,8 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         augBlock: Option[AugmentedBlock.Minor],
         acks: Map[VerificationKeyBytes, AckBlock.Minor],
         postponedNextBlockOwnAck: Option[RoundOneAck]
-    ) extends BlockConsensus[MinorBlockConsensus] {
+    ) extends BlockConsensus[MinorBlockConsensus]
+        with PostponedAckSupport[MinorBlockConsensus] {
         import CollectingError.*
 
         override type AugBlockType = AugmentedBlock.Minor
@@ -452,6 +457,9 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override type NextRound = Void
         override type OwnAck = Void
         override type ResultType = BlockConfirmed.Minor
+
+        override protected def withPostponedAck(ack: RoundOneAck): MinorBlockConsensus =
+            copy(postponedNextBlockOwnAck = Some(ack))
 
         override def applyAugBlock(
             augmentedBlock: AugmentedBlock.Minor
@@ -483,17 +491,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 _ <- this.acks.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
                 newRound = copy(acks = acks + (verificationKey -> ack))
             } yield newRound
-
-        def applyPostponedAck(ack: RoundOneAck): IO[BlockConsensus[MinorBlockConsensus]] =
-            postponedNextBlockOwnAck match {
-                case Some(value) => IO.raiseError(CollectingError.PostponedAckAlreadySet)
-                case None        =>
-                    // Check block number again and set the ack into the cell
-                    IO.raiseWhen(ack.blockNum != blockNum.increment)(
-                      CollectingError.UnexpectedPosponedAck
-                    ) >>
-                        IO.pure(copy(postponedNextBlockOwnAck = Some(ack)))
-            }
 
         override def isSaturated: Boolean =
             augBlock.isDefined && acks.keys == config.verificationKeys.values
@@ -583,9 +580,31 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         case WrongHeaderSignature(vkey: ByteString)
         case WrongTxSignature(txId: TransactionHash, vkey: ByteString)
 
-    sealed trait MajorBlockConsensus[T] extends BlockConsensus[T] {
-        def applyPostponedAck(ack: RoundOneAck): IO[MajorBlockConsensus[T]]
+    /** Trait for consensus cells that support postponing acks for the next block. This is
+      * applicable to Minor blocks and Major blocks, but not Final blocks.
+      */
+    trait PostponedAckSupport[Self] {
+        self: BlockConsensus[Self] =>
+
+        def postponedNextBlockOwnAck: Option[RoundOneAck]
+
+        /** Common implementation for applying postponed acks. Returns a new instance with the
+          * postponed ack set.
+          */
+        protected def withPostponedAck(ack: RoundOneAck): Self
+
+        def applyPostponedAck(ack: RoundOneAck): IO[Self] =
+            postponedNextBlockOwnAck match {
+                case Some(_) => IO.raiseError(CollectingError.PostponedAckAlreadySet)
+                case None =>
+                    IO.raiseWhen(ack.blockNum != blockNum.increment)(
+                      CollectingError.UnexpectedPosponedAck
+                    ) >>
+                        IO.pure(withPostponedAck(ack))
+            }
     }
+
+    sealed trait MajorBlockConsensus[T] extends BlockConsensus[T] with PostponedAckSupport[T]
 
     final case class MajorBlockRoundOne(
         override val blockNum: Block.Number,
@@ -601,6 +620,9 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override type NextRound = MajorBlockRoundTwo
         override type OwnAck = AckBlock.Major2
         override type ResultType = Void
+
+        override protected def withPostponedAck(ack: RoundOneAck): MajorBlockRoundOne =
+            copy(postponedNextBlockOwnAck = Some(ack))
 
         override def applyAugBlock(
             augmentedBlock: AugmentedBlock.Major
@@ -652,19 +674,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
             } yield newRound
 
-        override def applyPostponedAck(
-            ack: RoundOneAck
-        ): IO[MajorBlockConsensus[MajorBlockRoundOne]] =
-            postponedNextBlockOwnAck match {
-                case Some(value) => IO.raiseError(CollectingError.PostponedAckAlreadySet)
-                case None        =>
-                    // Check block number again and set the ack into the cell
-                    IO.raiseWhen(ack.blockNum != blockNum.increment)(
-                      CollectingError.UnexpectedPosponedAck
-                    ) >>
-                        IO.pure(copy(postponedNextBlockOwnAck = Some(ack)))
-            }
-
         override def isSaturated: Boolean =
             this.augmentedBlock.isDefined &&
                 this.acks1.keySet == config.verificationKeys.values.toSet
@@ -705,7 +714,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         augmentedBlock: AugmentedBlock.Major,
         acks1: Map[VerificationKeyBytes, AckBlock.Major1],
         acks2: Map[VerificationKeyBytes, AckBlock.Major2],
-        postponedNextBlockOwnAck: Option[AckBlock]
+        postponedNextBlockOwnAck: Option[RoundOneAck]
     ) extends MajorBlockConsensus[MajorBlockRoundTwo] {
         import CollectingError.*
 
@@ -714,6 +723,9 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override type NextRound = Void
         override type OwnAck = Void
         override type ResultType = BlockConfirmed.Major
+
+        override protected def withPostponedAck(ack: RoundOneAck): MajorBlockRoundTwo =
+            copy(postponedNextBlockOwnAck = Some(ack))
 
         override def applyAugBlock(augBlock: Void): IO[MajorBlockConsensus[MajorBlockRoundTwo]] =
             IO.raiseError(
@@ -733,19 +745,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 _ <- this.acks2.get(verificationKey).liftTo[IO](UnexpectedAck(blockNum, peerNum))
                 newRound = this.copy(acks2 = this.acks2 + (verificationKey -> ack))
             } yield newRound
-
-        override def applyPostponedAck(
-            ack: RoundOneAck
-        ): IO[MajorBlockConsensus[MajorBlockRoundTwo]] =
-            postponedNextBlockOwnAck match {
-                case Some(value) => IO.raiseError(CollectingError.PostponedAckAlreadySet)
-                case None        =>
-                    // Check block number again and set the ack into the cell
-                    IO.raiseWhen(ack.blockNum != blockNum.increment)(
-                      CollectingError.UnexpectedPosponedAck
-                    ) >>
-                        IO.pure(copy(postponedNextBlockOwnAck = Some(ack)))
-            }
 
         override def isSaturated: Boolean =
             this.acks2.keySet == config.verificationKeys.values.toSet
