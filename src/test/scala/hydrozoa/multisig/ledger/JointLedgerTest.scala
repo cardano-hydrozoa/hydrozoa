@@ -291,7 +291,8 @@ object JointLedgerTestHelpers {
           */
         def deposit(
             validityEnd: Instant,
-            eventId: LedgerEventId
+            eventId: LedgerEventId,
+            blockStartTime: Instant
         ): JLTest[(DepositRefundTxSeq, RegisterDeposit)] = {
             import Requests.*
             for {
@@ -346,7 +347,8 @@ object JointLedgerTestHelpers {
                   virtualOutputs = virtualOutputs,
                   changeAddress = peer.address(),
                   utxosFunding = utxosFunding,
-                  validityEnd = validityEnd
+                  validityEnd = validityEnd,
+                  txTiming = env.txTiming
                 )
 
                 depositRefundTxSeq <- lift(depositRefundSeqBuilder.build.liftTo[IO])
@@ -357,7 +359,9 @@ object JointLedgerTestHelpers {
                       refundTxBytes = signTx(peer, depositRefundTxSeq.refundTx.tx).toCbor,
                       donationToTreasury = Coin.zero,
                       virtualOutputsBytes = virtualOutputsBytes,
-                      eventId = eventId
+                      eventId = eventId,
+                      txTiming = env.txTiming,
+                      blockStartTime = blockStartTime
                     )
 
                 _ <- registerDeposit(req)
@@ -533,8 +537,9 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               // thus
               // depositValidity_end < blockStartTime - deposit_maturity_duration - deposit_absorption_duration
               seqAndReq <- deposit(
-                blockStartTime - env.txTiming.depositMaturityDuration - env.txTiming.depositAbsorptionDuration - 1.nanoseconds,
-                LedgerEventId(0, 1)
+                blockStartTime - env.txTiming.depositMaturityDuration - env.txTiming.depositAbsorptionDuration - 1.seconds,
+                LedgerEventId(0, 1),
+                blockStartTime
               )
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing
@@ -554,7 +559,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           _ <- for {
               seqAndReq <- deposit(
                 blockStartTime - env.txTiming.depositMaturityDuration - env.txTiming.depositAbsorptionDuration,
-                LedgerEventId(0, 2)
+                LedgerEventId(0, 2),
+                blockStartTime
               )
               (depositRefundTxSeq, depositReq) = seqAndReq
               jlState <- unsafeGetProducing

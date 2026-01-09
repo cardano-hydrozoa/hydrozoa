@@ -1,10 +1,10 @@
 package hydrozoa.multisig.protocol.types
 
-import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming
+import java.time.Instant
 import scalus.cardano.ledger.Coin
 
 type LedgerEventId = LedgerEventId.Id
@@ -70,7 +70,9 @@ object LedgerEvent {
         refundTxBytes: Array[Byte],
         eventId: LedgerEventId,
         virtualOutputsBytes: Array[Byte],
-        donationToTreasury: Coin
+        donationToTreasury: Coin,
+        txTiming: TxTiming,
+        blockStartTime: Instant
     ) extends LedgerEvent
 
     // TODO: do we still need it?

@@ -62,7 +62,7 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
 def genDepositUtxo(
     network: Network = testNetwork,
     params: ProtocolParams = blockfrost544Params,
-    headAddress: Option[ShelleyAddress] = None
+    headAddress: Option[ShelleyAddress] = None,
 ): Gen[DepositUtxo] =
     for {
         txId <- arbitrary[TransactionInput]
@@ -84,12 +84,29 @@ def genDepositUtxo(
         // NOTE: these genesis obligations are completely arbitrary and WILL NOT be coherent with the
         // deposit amount
         vos <- Gen.nonEmptyListOf(genGenesisObligation(Alice)).map(NonEmptyList.fromListUnsafe)
+
+        absorptionStart <- Gen
+            .posNum[Long]
+            .map(offsetFromZero =>
+                // Generate some offset to the "zero slot" time.
+                // This is necessary because scalus can't currently support negative numbers as slots
+                Instant.ofEpochMilli(
+                  testTxBuilderEnvironment.slotConfig
+                      .slotToTime(testTxBuilderEnvironment.slotConfig.zeroSlot)
+                      + offsetFromZero
+                )
+            )
+        // The end is SPECIFIED as the start, plus the deposit absorption duration. If you need to pass in
+        // a non-default tx timing in the future, feel free.
+        absorptionEnd = absorptionStart + TxTiming.default.depositAbsorptionDuration
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
-      virtualOutputs = vos
+      virtualOutputs = vos,
+      absorptionStart = absorptionStart,
+      absorptionEnd = absorptionEnd
     )
 
 /** Generate a "standalone" settlement tx. */

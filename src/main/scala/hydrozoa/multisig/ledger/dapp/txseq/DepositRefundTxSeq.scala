@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
@@ -37,7 +37,8 @@ object DepositRefundTxSeq {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant
+        validityEnd: java.time.Instant,
+        txTiming: TxTiming
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
             partialRefundTx <- RefundTx.Builder
@@ -54,7 +55,8 @@ object DepositRefundTxSeq {
                   virtualOutputs,
                   donationToTreasury,
                   changeAddress,
-                  validityEnd
+                  validityEnd,
+                  txTiming = txTiming
                 )
                 .build()
                 .left
@@ -118,7 +120,8 @@ object DepositRefundTxSeq {
         refundTxBytes: Tx.Serialized,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
-        config: Tx.Builder.Config
+        config: Tx.Builder.Config,
+        txTiming: TxTiming,
     ): Either[ParseError, DepositRefundTxSeq] = for {
         virtualOutputs: NonEmptyList[GenesisObligation] <- for {
             parsed <- Cbor
@@ -137,7 +140,12 @@ object DepositRefundTxSeq {
         virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
 
         depositTx <- DepositTx
-            .parse(depositTxBytes, config, virtualOutputs)
+            .parse(
+              txBytes = depositTxBytes,
+              config = config,
+              virtualOutputs = virtualOutputs,
+              txTiming = txTiming
+            )
             .left
             .map(ParseError.Deposit(_))
 

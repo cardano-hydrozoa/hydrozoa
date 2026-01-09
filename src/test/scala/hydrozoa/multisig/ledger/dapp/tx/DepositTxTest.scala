@@ -105,7 +105,8 @@ def genDepositRecipe(
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
       changeAddress = depositor.address(testNetwork),
-      validityEnd = java.time.Instant.now() + 10.minutes // TODO: generate
+      validityEnd = (java.time.Instant.now() + 10.minutes).truncateToSeconds, // TODO: generate,
+      txTiming = TxTiming.default
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -145,6 +146,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     DepositTx.parse(
                       depositTx.tx.toCbor,
                       depositTxBuilder.config,
+                      TxTiming.default,
                       depositTx.depositProduced.virtualOutputs
                     ) match {
                         case Left(e) =>

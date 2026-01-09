@@ -29,7 +29,8 @@ object DepositTx {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant
+        validityEnd: java.time.Instant,
+        txTiming: TxTiming
     ) extends Tx.Builder {
         def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
@@ -107,7 +108,10 @@ object DepositTx {
                   config.headAddress,
                   depositDatum,
                   rawDepositProduced.value,
-                  virtualOutputs
+                  virtualOutputs,
+                  absorptionStart = validityEnd + txTiming.depositMaturityDuration,
+                  absorptionEnd =
+                      validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
                 )
             } yield DepositTx(depositProduced, tx)
         }
@@ -136,6 +140,7 @@ object DepositTx {
     def parse(
         txBytes: Tx.Serialized,
         config: Tx.Builder.Config,
+        txTiming: TxTiming,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[ParseError, DepositTx] = {
         given ProtocolVersion = config.env.protocolParams.protocolVersion
@@ -173,15 +178,6 @@ object DepositTx {
                         .lift(depositUtxoIx)
                         .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                    depositUtxo <- DepositUtxo
-                        .fromUtxo(
-                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                          config.headAddress,
-                          virtualOutputs
-                        )
-                        .left
-                        .map(DepositUtxoError(_))
-
                     validityEnd <- Try(
                       java.time.Instant
                           .ofEpochMilli(config.env.slotConfig.slotToTime(tx.body.value.ttl.get))
@@ -189,6 +185,18 @@ object DepositTx {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)
                     }
+
+                    depositUtxo <- DepositUtxo
+                        .fromUtxo(
+                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          config.headAddress,
+                          virtualOutputs,
+                          absorptionStart = validityEnd + txTiming.depositMaturityDuration,
+                          absorptionEnd =
+                              validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
+                        )
+                        .left
+                        .map(DepositUtxoError(_))
 
                 } yield DepositTx(depositUtxo, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))

@@ -5,7 +5,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger
-import hydrozoa.multisig.ledger.DappLedgerM.Error.{ParseError, SettlementTxSeqBuilderError}
+import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
@@ -18,6 +18,7 @@ import monocle.syntax.all.*
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.language.implicitConversions
+import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
@@ -77,10 +78,11 @@ object DappLedgerM {
     /** Check that a deposit tx parses correctly and add the deposit utxo it produces to the
       * ledger's state.
       *
-      * NOTE: This does not check time bounds. This is simply checking whether the deposit is
-      * well-formed and informing the DappLedger of it
+      * NOTE: This checks SOME time bounds. Specifically, it checks whether the deposit's absorption
+      * validity period ended prior to the start of the current block.
       */
     // TODO: Return the produced deposit utxo and a post-dated refund transaction for it.
+    // Note from Peter (2026-01-09): I think the above TODO is stale?
     def registerDeposit(req: RegisterDeposit): DappLedgerM[Unit] = {
         import req.*
         for {
@@ -92,13 +94,19 @@ object DappLedgerM {
                       refundTxBytes = refundTxBytes,
                       config = config,
                       virtualOutputsBytes = virtualOutputsBytes,
-                      donationToTreasury = donationToTreasury
+                      donationToTreasury = donationToTreasury,
+                      txTiming = txTiming
                     )
                     .left
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
+            depositProduced <- lift(
+              if depositRefundTxSeq.depositTx.depositProduced.absorptionEnd < blockStartTime
+              then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
+              else Right(depositRefundTxSeq.depositTx.depositProduced)
+            )
             s <- get
-            newState = s.appendToQueue((eventId, depositRefundTxSeq.depositTx.depositProduced))
+            newState = s.appendToQueue((eventId, depositProduced))
             _ <- set(newState)
         } yield ()
     }
@@ -238,7 +246,15 @@ object DappLedgerM {
         final case class ParseError(wrapped: txseq.DepositRefundTxSeq.ParseError)
             extends RegisterDepositError
 
-        final case class InvalidTimeBound(msg: String) extends RegisterDepositError
+        /** This is raised during a call to `RegisterDeposit` if the deposit parses successfully,
+          * but reveals an absorption window that is already prior to the block's start time. In
+          * this case, the deposit will NOT be added to the dapp ledger's state.
+          */
+        // NOTE: I'm still returning the successfully-parsed TxSeq, but hesitantly... I'd usually prefer to not
+        // have such a value in scope, but it seems like it might be important to error handling.
+        // Don't do something dumb like pull this error from a Left and use the TxSeq as if it was valid
+        final case class AbsorptionPeriodExpired(depositRefundTxSeq: DepositRefundTxSeq)
+            extends RegisterDepositError
 
         final case class SettlementTxSeqBuilderError(wrapped: SettlementTxSeq.Builder.Error)
             extends DappLedgerM.Error
