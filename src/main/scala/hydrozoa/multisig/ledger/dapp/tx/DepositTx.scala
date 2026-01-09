@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
+import java.time.Instant
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
@@ -18,6 +19,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 
 final case class DepositTx private (
     depositProduced: DepositUtxo,
+    validityEnd: Instant,
     override val tx: Transaction,
 ) extends Tx
 
@@ -29,7 +31,7 @@ object DepositTx {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant
+        txTiming: TxTiming
     ) extends Tx.Builder {
         def build(): Either[(SomeBuildError, String), DepositTx] = {
             import partialRefundTx.refundInstructions
@@ -78,7 +80,11 @@ object DepositTx {
               )
             )
 
-            val ttl = ValidityEndSlot(validityEnd.toSlot(config.env.slotConfig).slot)
+            val ttl = ValidityEndSlot(
+              (Instant.ofEpochMilli(
+                partialRefundTx.refundInstructions.startTime.toLong
+              ) - txTiming.silenceDuration).toEpochMilli
+            )
 
             for {
                 ctx <- TransactionBuilder
@@ -109,7 +115,12 @@ object DepositTx {
                   rawDepositProduced.value,
                   virtualOutputs
                 )
-            } yield DepositTx(depositProduced, tx)
+            } yield DepositTx(
+              depositProduced,
+              Instant.ofEpochMilli(refundInstructions.startTime.toLong)
+                  - txTiming.silenceDuration,
+              tx
+            )
         }
     }
 
@@ -136,6 +147,7 @@ object DepositTx {
     def parse(
         txBytes: Tx.Serialized,
         config: Tx.Builder.Config,
+        txTiming: TxTiming,
         virtualOutputs: NonEmptyList[GenesisObligation]
     ): Either[ParseError, DepositTx] = {
         given ProtocolVersion = config.env.protocolParams.protocolVersion
@@ -173,15 +185,6 @@ object DepositTx {
                         .lift(depositUtxoIx)
                         .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                    depositUtxo <- DepositUtxo
-                        .fromUtxo(
-                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
-                          config.headAddress,
-                          virtualOutputs
-                        )
-                        .left
-                        .map(DepositUtxoError(_))
-
                     validityEnd <- Try(
                       java.time.Instant
                           .ofEpochMilli(config.env.slotConfig.slotToTime(tx.body.value.ttl.get))
@@ -190,7 +193,19 @@ object DepositTx {
                         case Success(v)         => Right(v)
                     }
 
-                } yield DepositTx(depositUtxo, tx)
+                    depositUtxo <- DepositUtxo
+                        .fromUtxo(
+                          Utxo(TransactionInput(tx.id, depositUtxoIx), depositOutput.value),
+                          config.headAddress,
+                          virtualOutputs,
+                          absorptionStart = validityEnd + txTiming.depositMaturityDuration,
+                          absorptionEnd =
+                              validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
+                        )
+                        .left
+                        .map(DepositUtxoError(_))
+
+                } yield DepositTx(depositUtxo, validityEnd, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 

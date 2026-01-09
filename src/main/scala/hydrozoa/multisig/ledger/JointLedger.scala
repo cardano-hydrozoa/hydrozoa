@@ -21,6 +21,8 @@ import hydrozoa.multisig.ledger.virtual.{GenesisObligation, L2EventGenesis}
 import hydrozoa.multisig.protocol.types.*
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.LedgerEvent.*
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
 import java.time.Instant
 import monocle.Focus.focus
@@ -31,7 +33,7 @@ import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 
 // Fields of a work-in-progress block, with an additional field for dealing with withdrawn utxos
 private case class TransientFields(
-    events: List[(LedgerEventId, Boolean)],
+    events: List[(LedgerEventId, ValidityFlag)],
     blockWithdrawnUtxos: Vector[Payout.Obligation]
 )
 
@@ -61,7 +63,8 @@ final case class JointLedger(
     // derived from init tx (which is in the config)
     treasuryTokenName: AssetName,
     // derived from init tx (which is in the config)
-    initialTreasury: MultisigTreasuryUtxo
+    initialTreasury: MultisigTreasuryUtxo,
+    initialFallbackValidityStart: Instant
 ) extends Actor[IO, Requests.Request] {
 
     val state: Ref[IO, JointLedger.State] =
@@ -70,7 +73,7 @@ final case class JointLedger(
             producedBlock = Block.Initial(
               Block.Header.Initial(timeCreation = initialBlockTime, commitment = initialBlockKzg)
             ),
-            lastFallbackValidityStart = None,
+            lastFallbackValidityStart = initialFallbackValidityStart,
             dappLedgerState = DappLedgerM.State(initialTreasury, Queue.empty),
             virtualLedgerState = VirtualLedgerM.State.empty
           )
@@ -138,15 +141,15 @@ final case class JointLedger(
         for {
 
             _ <- this.runDappLedgerM(
-              action = DappLedgerM.registerDeposit(serializedDeposit, eventId, virtualOutputs),
+              action = DappLedgerM.registerDeposit(req),
               // Left == deposit rejected
-              // FIXME: This should probably be returned as  sum type in the Right
+              // FIXME: This should probably be returned as sum type in the Right
               onFailure = _ =>
                   for {
                       oldState <- unsafeGetProducing
                       newState = oldState
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, false)))
+                          .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
                   } yield (),
               onSuccess = _ =>
@@ -154,7 +157,7 @@ final case class JointLedger(
                       oldState <- unsafeGetProducing
                       newState = oldState
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, true)))
+                          .modify(_.appended((eventId, Valid)))
                       _ <- state.set(newState)
                   } yield ()
             )
@@ -179,7 +182,7 @@ final case class JointLedger(
                       p <- unsafeGetProducing
                       newState = p
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, true)))
+                          .modify(_.appended((eventId, Invalid)))
                       _ <- state.set(newState)
                   } yield (),
               // Valid transaction continuation
@@ -188,7 +191,7 @@ final case class JointLedger(
                       p <- unsafeGetProducing
                       newState = p
                           .focus(_.nextBlockData.events)
-                          .modify(_.appended((eventId, false)))
+                          .modify(_.appended((eventId, Valid)))
                           .focus(_.nextBlockData.blockWithdrawnUtxos)
                           .modify(v => v ++ payoutObligations)
                       _ <- state.set(newState)
@@ -275,8 +278,6 @@ final case class JointLedger(
                     .nextBlock(
                       newBody = nextBlockBody,
                       newTime = p.startTime,
-                      // FIXME: This is not currently the CORRECT commitment. See the comment in DappLedger regarding
-                      // calling out to the virtual ledger
                       newCommitment = IArray.unsafeFromArray(
                         settleLedgerRes.settlementTxSeq.settlementTx.treasuryProduced.datum.commit.bytes
                       )
@@ -380,9 +381,8 @@ final case class JointLedger(
                         depositValidityEnd + txTiming.depositMaturityDuration
                     val depositAbsorptionEnd: java.time.Instant =
                         depositAbsorptionStart + txTiming.depositAbsorptionDuration
-                    // FIXME: This is partial and will probably crash on the initial block
-                    val settlementValidityEnd: Option[java.time.Instant] =
-                        producing.competingFallbackValidityStart.map(_ - txTiming.silenceDuration)
+                    val settlementValidityEnd: java.time.Instant =
+                        producing.competingFallbackValidityStart - txTiming.silenceDuration
                     {
                         if depositAbsorptionStart.isAfter(producing.startTime)
                         // Not yet mature
@@ -391,7 +391,7 @@ final case class JointLedger(
                         (depositAbsorptionStart.isBefore(
                           producing.startTime
                         ) || depositAbsorptionStart == producing.startTime) &&
-                        (settlementValidityEnd.isEmpty || settlementValidityEnd.get.isBefore(
+                        (settlementValidityEnd.isBefore(
                           depositAbsorptionEnd
                         ) || settlementValidityEnd.get == depositAbsorptionEnd)
                         // Eligible for absorption
@@ -400,7 +400,7 @@ final case class JointLedger(
                           producing.startTime
                         ) || depositAbsorptionStart == producing.startTime)
                             && !pollResults.contains(UtxoIdL1(deposit._2.toUtxo.input))) ||
-                        (settlementValidityEnd.isEmpty || settlementValidityEnd.get
+                        (settlementValidityEnd
                             .isAfter(depositAbsorptionEnd))
                         // Never eligible for absorption
                         then acc.focus(_._3).modify(_.appended(deposit))
@@ -414,14 +414,14 @@ final case class JointLedger(
 
             // For a description of timing, see GitHub issue #296
             forceUpgradeToMajor: Boolean =
-                if producing.competingFallbackValidityStart.isEmpty
-                then true
-                else
-                    txTiming.minSettlementDuration.toMillis >=
+                // First block is always major
+                initialFallbackValidityStart == producing.competingFallbackValidityStart ||
+                    // Upgrade if we are too close to fallback
+                    (txTiming.minSettlementDuration.toMillis >=
                         // FIXME: This time handling is a bit wonky because of the java <> scala mix
-                        producing.competingFallbackValidityStart.get.toEpochMilli
+                        producing.competingFallbackValidityStart.toEpochMilli
                         - txTiming.silenceDuration.toMillis
-                        - producing.startTime.toEpochMilli
+                        - producing.startTime.toEpochMilli)
 
             isMinorBlock: Boolean =
                 (eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
@@ -547,10 +547,10 @@ final case class JointLedger(
         actualBlock: AugmentedBlock
     ): IO[Unit] = for {
         p <- unsafeGetProducing
-        fallbackValidityStart: Option[java.time.Instant] =
+        fallbackValidityStart: java.time.Instant =
             actualBlock match {
                 case major: types.AugmentedBlock.Major =>
-                    Some(major.effects.fallback.validityStart)
+                    major.effects.fallback.validityStart
                 case _ => p.competingFallbackValidityStart
             }
 
@@ -640,7 +640,7 @@ object JointLedger {
     final case class Done(
         producedBlock: Block,
         // None for the first block
-        lastFallbackValidityStart: Option[java.time.Instant],
+        lastFallbackValidityStart: java.time.Instant,
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State
     ) extends State
@@ -650,7 +650,7 @@ object JointLedger {
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
         // None for the first block
-        competingFallbackValidityStart: Option[java.time.Instant],
+        competingFallbackValidityStart: java.time.Instant,
         startTime: java.time.Instant,
         nextBlockData: TransientFields
     ) extends State

@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
+import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 
 enum Block {
     def id: Block.Number = this.header.blockNum
@@ -177,18 +178,18 @@ object Block {
         case Initial extends Body
 
         case Minor(
-            override val events: List[(LedgerEventId, Boolean)],
+            override val events: List[(LedgerEventId, ValidityFlag)],
             override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Minor
 
         case Major(
-            override val events: List[(LedgerEventId, Boolean)],
+            override val events: List[(LedgerEventId, ValidityFlag)],
             override val depositsAbsorbed: List[LedgerEventId],
             override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Major
 
         case Final(
-            override val events: List[(LedgerEventId, Boolean)],
+            override val events: List[(LedgerEventId, ValidityFlag)],
             override val depositsRefunded: List[LedgerEventId]
         ) extends Body, BodyFields.Final
     }
@@ -216,7 +217,7 @@ object Block {
               *
               * TODO: invariant: the list should be unique
               */
-            def events: List[(LedgerEventId, Boolean)]
+            def events: List[(LedgerEventId, ValidityFlag)]
         }
 
         object Deposits {

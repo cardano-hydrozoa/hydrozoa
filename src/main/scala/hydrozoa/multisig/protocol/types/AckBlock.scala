@@ -10,12 +10,6 @@ enum AckBlock:
     def id: AckBlock.Id
     def blockNum: Block.Number
 
-    case Initial(
-        override val id: AckBlock.Id,
-        override val blockNum: Block.Number,
-        override val initialization: BlockEffect.Signature
-    ) extends AckBlock, Initialization
-
     case Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,

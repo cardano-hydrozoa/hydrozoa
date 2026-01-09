@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.dapp.utxo
 import cats.data.NonEmptyList
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
+import java.time.Instant
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -14,12 +15,16 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.ledger.api.v3.{Address, PosixTime}
 import scalus.prelude.Option as ScalusOption
 
+/** NOTE: absorptionEnd must be absorptionStart + absorptionDuration for some [[TxTiming]] and
+  * [[SlotConfig]] Perhaps we want to make this more opaque and carry around those configuration
+  * values?
+  */
 final case class DepositUtxo(
     l1Input: TransactionInput,
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
     l1OutputValue: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation],
+    virtualOutputs: NonEmptyList[GenesisObligation]
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -112,7 +117,9 @@ object DepositUtxo {
     def fromUtxo(
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
-        virtualOutputs: NonEmptyList[GenesisObligation]
+        virtualOutputs: NonEmptyList[GenesisObligation],
+        absorptionStart: Instant,
+        absorptionEnd: Instant
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {

@@ -12,7 +12,7 @@ import hydrozoa.{Utxo as _, *}
 import scala.collection.immutable.SortedMap
 import scala.util.Try
 import scalus.builtin.Data
-import scalus.builtin.ToData.toData
+import scalus.builtin.Data.toData
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*

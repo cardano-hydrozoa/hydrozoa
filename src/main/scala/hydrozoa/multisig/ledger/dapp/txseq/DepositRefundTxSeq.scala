@@ -1,17 +1,16 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.+
+import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.Cbor
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{Coin, Script, ScriptRef, TransactionOutput, Utxo, Value}
+import monocle.syntax.all.*
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
-import scalus.prelude.Option as SOption
 
 final case class DepositRefundTxSeq(
     depositTx: DepositTx,
@@ -25,6 +24,7 @@ object DepositRefundTxSeq {
         object Error {
             final case class Deposit(e: (SomeBuildError, String)) extends Builder.Error
             final case class Refund(e: (SomeBuildError, String)) extends Builder.Error
+            case object TimingIncoherence extends Builder.Error
 
             final case class DepositValueMismatch(depositValue: Value, expectedDepositValue: Value)
                 extends Builder.Error
@@ -39,7 +39,7 @@ object DepositRefundTxSeq {
         virtualOutputs: NonEmptyList[GenesisObligation],
         donationToTreasury: Coin,
         changeAddress: ShelleyAddress,
-        validityEnd: java.time.Instant
+        txTiming: TxTiming
     ) {
         def build: Either[Builder.Error, DepositRefundTxSeq] = for {
             partialRefundTx <- RefundTx.Builder
@@ -56,7 +56,7 @@ object DepositRefundTxSeq {
                   virtualOutputs,
                   donationToTreasury,
                   changeAddress,
-                  validityEnd
+                  txTiming = txTiming
                 )
                 .build()
                 .left
@@ -80,6 +80,37 @@ object DepositRefundTxSeq {
                   depositValue == expectedDepositValue,
                   (),
                   Builder.Error.DepositValueMismatch(depositValue, virtualValue)
+                )
+
+            /*
+            Obnoxious timing note (sorry):
+
+            The Deposit tx validity end, deposit utxo absorption period, and post-dated refund tx timing are
+            all intertwined as follows:
+
+            deposit(i).absorption_start = deposit(i).validity_end + deposit_maturity_duration
+            deposit(i).absorption_end = deposit(i).absorption_start + deposit_absorption_duration
+                                      = deposit(i).validity_end + deposit_maturity_duration + deposit_absorption_duration
+
+            refund(i).validity_start = deposit(i).absorption_end + silence_duration
+            refund(i).validity_end = ∅
+
+            The question becomes: which is authoritative? The refund validity start or the deposit validity end?
+            And where do we store this data in our program?
+
+            We have to, unfortunately, store this information in three places, and they have to be coherent.
+            When we get a DepositRefundTxSeq, we need the individual transactions to have coherent timing, but we
+            _also_ need to store the refund validity start time in the datum of the deposit (for use in the forthcoming
+            guard script.)
+             */
+            // TODO: This assertion also needs to appear in the parser
+            _ <- Either
+                .cond(
+                  depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
+                      == refundTx.startTime
+                      && refundTx.startTime.toEpochMilli == depositTx.depositProduced.datum.refundInstructions.startTime.toLong,
+                  (),
+                  Builder.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                 )
         } yield DepositRefundTxSeq(depositTx, refundTx)
     }
@@ -120,7 +151,8 @@ object DepositRefundTxSeq {
         refundTxBytes: Tx.Serialized,
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
-        config: Tx.Builder.Config
+        config: Tx.Builder.Config,
+        txTiming: TxTiming,
     ): Either[ParseError, DepositRefundTxSeq] = for {
         virtualOutputs: NonEmptyList[GenesisObligation] <- for {
             parsed <- Cbor
@@ -133,45 +165,18 @@ object DepositRefundTxSeq {
             nonEmpty <- NonEmptyList.fromList(parsed).toRight(ParseError.NoVirtualOutputs)
             // This whole inner traverse could probably be factored out just to parse a genesis obligation from
             // a transaction output
-            genesisObligations <- nonEmpty.traverse {
-                case o: TransactionOutput.Babbage =>
-                    for {
-                        shelleyAddress: ShelleyAddress <- o.address match {
-                            case sa: ShelleyAddress
-                                if sa.delegation == ShelleyDelegationPart.Null =>
-                                Right(sa)
-                            case _ => Left(ParseError.VirtualOutputNotShelleyAddress(o))
-                        }
-                        datum <- o.datumOption match {
-                            case None            => Right(SOption.None)
-                            case Some(i: Inline) => Right(SOption.Some(i.data))
-                            case Some(_)         => Left(ParseError.VirtualOutputDatumNotInline(o))
-                        }
-                        coin <-
-                            if o.value.assets.isEmpty
-                            then Right(o.value.coin)
-                            else Left(ParseError.VirtualOutputMultiAssetNotEmpty(o))
-                        refScript: Option[Native | Script.PlutusV3] <- o.scriptRef match {
-                            case None                                => Right(None)
-                            case Some(ScriptRef(s: Script.PlutusV3)) => Right(Some(s))
-                            case Some(ScriptRef(s: Native))          => Right(Some(s))
-                            case Some(_) => Left(VirtualOutputRefScriptInvalid(o))
-                        }
-                    } yield GenesisObligation(
-                      l2OutputPaymentAddress = shelleyAddress.payment,
-                      l2OutputNetwork = shelleyAddress.network,
-                      l2OutputDatum = datum,
-                      l2OutputValue = coin,
-                      l2OutputRefScript = refScript,
-                    )
-                case o: TransactionOutput.Shelley => Left(ParseError.NonBabbageVirtualOutput(o))
-            }
+            genesisObligations <- nonEmpty.traverse(GenesisObligation.fromTransactionOutput)
         } yield genesisObligations
 
         virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
 
         depositTx <- DepositTx
-            .parse(depositTxBytes, config, virtualOutputs)
+            .parse(
+              txBytes = depositTxBytes,
+              config = config,
+              virtualOutputs = virtualOutputs,
+              txTiming = txTiming
+            )
             .left
             .map(ParseError.Deposit(_))
 
@@ -204,7 +209,7 @@ object DepositRefundTxSeq {
         )
 
         _ <- Either.cond(
-          refundTx == expectedRefundTx,
+          refundTx.focus(_.tx.witnessSet).replace(TransactionWitnessSet.empty) == expectedRefundTx,
           (),
           ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
         )

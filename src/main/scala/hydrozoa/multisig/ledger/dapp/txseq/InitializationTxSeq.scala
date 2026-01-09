@@ -5,7 +5,6 @@ import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{Metadata as _, *}
-import hydrozoa.multisig.ledger.dapp.txseq.InitializationTxSeq.Builder.Error.InitializationTxError
 import hydrozoa.multisig.ledger.dapp.utxo.MultisigTreasuryUtxo
 import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
@@ -122,34 +121,7 @@ object InitializationTxSeq {
                     )
 
             // Check validity ranges are correct and match each other
-            // 1. Fallback starts in a reasonable slot
-            preciseFallbackValidityStart =
-                initializationRequestTimestamp + txTiming.minSettlementDuration +
-                    txTiming.inactivityMarginDuration
-
-            possibleRange = (
-              (preciseFallbackValidityStart - txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              ),
-              (preciseFallbackValidityStart + txTiming.initializationFallbackDeviation).toSlot(
-                env.slotConfig
-              )
-            )
-
-            _ <-
-                if fallbackValidityStartSlot < possibleRange._1 || fallbackValidityStartSlot > possibleRange._2
-                then
-                    Left(
-                      FallbackTxValidityStartError(
-                        possibleRange._1,
-                        possibleRange._2,
-                        fallbackValidityStartSlot
-                      )
-                    )
-                else Right(())
-
-            // 2. Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
-            // TODO: Do we need a tolerance window here as well?
+            // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
                 (iTx.validityEnd + txTiming.silenceDuration).toSlot(slotConfig = env.slotConfig)
 
@@ -308,7 +280,7 @@ object InitializationTxSeq {
                 initializationTx <- InitializationTx
                     .build(initializationTxRecipe)
                     .left
-                    .map(Error.InitializationTxError(_))
+                    .map(InitializationTxError(_))
 
                 config = Tx.Builder.Config(
                   headNativeScript = hns,
@@ -330,17 +302,17 @@ object InitializationTxSeq {
                 fallbackTx <- FallbackTx
                     .build(fallbackTxRecipe)
                     .left
-                    .map(Error.FallbackTxError(_))
+                    .map(FallbackTxError(_))
 
             } yield InitializationTxSeq(initializationTx, fallbackTx)
         }
 
         // TODO: Make the individual builders actually throw these (typed) errors
-        enum Error {
-            case FallbackPRError(e: SomeBuildError)
-            case InitializationTxError(e: SomeBuildError)
-            case FallbackTxError(e: SomeBuildError)
-        }
+        sealed trait Error extends Throwable
+
+        case class FallbackPRError(e: SomeBuildError) extends Error
+        case class InitializationTxError(e: SomeBuildError) extends Error
+        case class FallbackTxError(e: SomeBuildError) extends Error
 
         final case class Args(
             spentUtxos: InitializationTx.SpentUtxos,

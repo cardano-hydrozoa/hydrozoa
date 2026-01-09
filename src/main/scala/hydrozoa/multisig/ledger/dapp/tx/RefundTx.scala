@@ -264,7 +264,7 @@ object RefundTx {
 
     def parse(
         txBytes: Tx.Serialized,
-        env: Environment
+        env: CardanoInfo
     ): Either[ParseError, RefundTx] = {
         given ProtocolVersion = env.protocolParams.protocolVersion
         given OriginalCborByteArray = OriginalCborByteArray(txBytes)
