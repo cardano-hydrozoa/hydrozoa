@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration, MILLISECONDS}
+import scala.concurrent.duration.{DurationInt, FiniteDuration, SECONDS}
 import scalus.cardano.ledger.{Slot, SlotConfig}
 
 /** TODO: This should be derived from Hydrozoa parameters.
@@ -49,6 +49,25 @@ final case class TxTiming(
     depositAbsorptionDuration: FiniteDuration,
 )
 
+/** Timing is hard. The precision we have to use is going to be dependent on the slot config.
+  *
+  * For example, when we're parsing a PostDated refund tx, we need to extract a start time. That
+  * start time right now is represented as an Instant, and without additional mitigations, we'll get
+  * a parse failure because the expected start time is generated in the test suite from
+  * IO.realTimeInstant in nanosecond precision.
+  *
+  * But when we convert to a slot, we're necessarily doing to things: (1) truncation due to integer
+  * division, (2) adopting a precision dictated by the SlotConfig.slotLength field
+  *
+  * So using the current slot length of 1000 that appears for Mainnet, Preview, and Preprod we can
+  * use millisecond precision, but that goes away if that changes
+  *
+  * We can use milliseconds for now, but the right way to handle this would probably be some sort of
+  * opaque time object that will only spit out values of Instant, Slot, FiniteDuration, etc that are
+  * exactly at the precision of some given slot config
+  *
+  * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
+  */
 object TxTiming:
     val default = TxTiming(
       minSettlementDuration = 12.hours,
@@ -60,23 +79,24 @@ object TxTiming:
 
     extension (instant: java.time.Instant) {
         def +(duration: FiniteDuration): java.time.Instant =
-            instant.plusNanos(duration.toNanos)
+            instant.plusSeconds(duration.toSeconds)
         def -(duration: FiniteDuration): java.time.Instant =
-            instant.minusNanos(duration.toNanos)
-        def toSlot(slotConfig: SlotConfig): Slot = {
+            instant.minusSeconds(duration.toSeconds)
+        def toSlot(slotConfig: SlotConfig): Slot =
             Slot(slotConfig.timeToSlot(instant.toEpochMilli))
-        }
+        def truncateToSeconds: java.time.Instant =
+            java.time.Instant.ofEpochSecond(instant.getEpochSecond)
 
         /** Convert into a FiniteDuration from the unix epoch (jan 1st 1970)
           * @return
           */
         def toEpochFiniteDuration: FiniteDuration =
-            FiniteDuration(instant.toEpochMilli, MILLISECONDS)
+            FiniteDuration(instant.getEpochSecond, SECONDS)
     }
 
     extension (duration: java.time.Duration) {
         def toFiniteDuration: FiniteDuration =
-            FiniteDuration(duration.toNanos, TimeUnit.NANOSECONDS)
+            FiniteDuration(duration.getSeconds, TimeUnit.SECONDS)
     }
 
     extension (slot: Slot) {
@@ -91,5 +111,8 @@ object TxTiming:
           * @return
           */
         def toEpochInstant: java.time.Instant =
-            java.time.Instant.ofEpochMilli(fd.toMillis)
+            java.time.Instant.ofEpochSecond(fd.toSeconds)
+
+        /** Truncate everything beyond millisecond precision */
+        def truncateToMillis: FiniteDuration = FiniteDuration(fd.toSeconds, SECONDS)
     }

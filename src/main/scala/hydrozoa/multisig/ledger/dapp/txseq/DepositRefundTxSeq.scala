@@ -6,12 +6,10 @@ import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.Virtual
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.Cbor
-import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.Script.Native
-import scalus.cardano.ledger.{Coin, Script, ScriptRef, TransactionOutput, Utxo, Value}
+import monocle.syntax.all.*
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.{Coin, TransactionOutput, TransactionWitnessSet, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
-import scalus.prelude.Option as SOption
 
 final case class DepositRefundTxSeq(
     depositTx: DepositTx,
@@ -133,39 +131,7 @@ object DepositRefundTxSeq {
             nonEmpty <- NonEmptyList.fromList(parsed).toRight(ParseError.NoVirtualOutputs)
             // This whole inner traverse could probably be factored out just to parse a genesis obligation from
             // a transaction output
-            genesisObligations <- nonEmpty.traverse {
-                case o: TransactionOutput.Babbage =>
-                    for {
-                        shelleyAddress: ShelleyAddress <- o.address match {
-                            case sa: ShelleyAddress
-                                if sa.delegation == ShelleyDelegationPart.Null =>
-                                Right(sa)
-                            case _ => Left(ParseError.VirtualOutputNotShelleyAddress(o))
-                        }
-                        datum <- o.datumOption match {
-                            case None            => Right(SOption.None)
-                            case Some(i: Inline) => Right(SOption.Some(i.data))
-                            case Some(_)         => Left(ParseError.VirtualOutputDatumNotInline(o))
-                        }
-                        coin <-
-                            if o.value.assets.isEmpty
-                            then Right(o.value.coin)
-                            else Left(ParseError.VirtualOutputMultiAssetNotEmpty(o))
-                        refScript: Option[Native | Script.PlutusV3] <- o.scriptRef match {
-                            case None                                => Right(None)
-                            case Some(ScriptRef(s: Script.PlutusV3)) => Right(Some(s))
-                            case Some(ScriptRef(s: Native))          => Right(Some(s))
-                            case Some(_) => Left(VirtualOutputRefScriptInvalid(o))
-                        }
-                    } yield GenesisObligation(
-                      l2OutputPaymentAddress = shelleyAddress.payment,
-                      l2OutputNetwork = shelleyAddress.network,
-                      l2OutputDatum = datum,
-                      l2OutputValue = coin,
-                      l2OutputRefScript = refScript,
-                    )
-                case o: TransactionOutput.Shelley => Left(ParseError.NonBabbageVirtualOutput(o))
-            }
+            genesisObligations <- nonEmpty.traverse(GenesisObligation.fromTransactionOutput)
         } yield genesisObligations
 
         virtualValue = Value.combine(virtualOutputs.toList.map(vo => Value(vo.l2OutputValue)))
@@ -204,7 +170,7 @@ object DepositRefundTxSeq {
         )
 
         _ <- Either.cond(
-          refundTx == expectedRefundTx,
+          refundTx.focus(_.tx.witnessSet).replace(TransactionWitnessSet.empty) == expectedRefundTx,
           (),
           ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
         )

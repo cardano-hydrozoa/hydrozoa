@@ -11,7 +11,6 @@ import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
@@ -86,8 +85,6 @@ object DappLedgerM {
         import req.*
         for {
             config <- ask
-            // FIXME: DepositTx's parser does not check all the invariants.
-            //  Use DepositRefundTxSeq's parser, instead.
             parseRes =
                 DepositRefundTxSeq
                     .parse(

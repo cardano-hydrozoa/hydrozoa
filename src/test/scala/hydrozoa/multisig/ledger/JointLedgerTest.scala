@@ -29,6 +29,7 @@ import io.bullet.borer.Cbor
 import java.time.Instant
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
+import org.scalacheck.rng.Seed
 import org.scalacheck.{Gen, Prop, PropertyM, *}
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
@@ -120,7 +121,7 @@ object JointLedgerTestHelpers {
 
             txTiming = TxTiming.default
 
-            initializedOn <- PropertyM.run(IO.realTimeInstant)
+            initializedOn <- PropertyM.run(IO.realTimeInstant.map(_.truncateToSeconds))
 
             initTxArgs =
                 InitializationTxSeq.Builder.Args(
@@ -215,7 +216,7 @@ object JointLedgerTestHelpers {
         /** Start the block at the current real time */
         def startBlockNow(blockNum: Block.Number): JLTest[Instant] =
             for {
-                startTime <- lift(IO.realTimeInstant)
+                startTime <- lift(IO.realTimeInstant.map(_.truncateToSeconds))
                 _ <- startBlock(blockNum, startTime)
             } yield startTime
 
@@ -300,7 +301,7 @@ object JointLedgerTestHelpers {
                     pick(
                       Gen.nonEmptyListOf(genGenesisObligation(peer, minimumCoin = Coin.ada(5)))
                           .map(NonEmptyList.fromListUnsafe)
-                          .label("Virtual Outputs")
+                          .label(s"Virtual Outputs for deposit $eventId")
                     )
 
                 virtualOutputsBytes =
@@ -319,14 +320,14 @@ object JointLedgerTestHelpers {
                       .listOf(
                         genAdaOnlyPubKeyUtxo(peer, minimumCoin = Coin.ada(5))
                       )
-                      .label("Funding Utxos: Tail")
+                      .label(s"Funding Utxos: Tail for deposit $eventId")
                 )
 
                 utxosFundingHead <- pick(
                   genAdaOnlyPubKeyUtxo(
                     peer,
                     minimumCoin = virtualOutputsValue.coin
-                  ).label("Funding Utxos: Head")
+                  ).label(s"Funding Utxos: Head for deposit $eventId")
                 )
 
                 utxosFunding = NonEmptyList(utxosFundingHead, utxosFundingTail)
@@ -373,6 +374,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p
             .withMinSuccessfulTests(100)
+            .withInitialSeed(Seed.fromBase64("gdO0NTVBnIw7qSblAKDfCEZzGQ_ZbF2-RJwKkC-_8SP=").get)
     }
 
 //    val _ = property("Joint Ledger Happy Path") =
@@ -388,7 +390,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 //
 //              // Generate a deposit and observe that it appears in the dapp ledger correctly
 //              firstDepositValidityEnd = startTime + 10.minutes
-//              seqAndReq <- deposit(firstDepositValidityEnd)
+//              seqAndReq <- deposit(firstDepositValidityEnd, LedgerEventId(0, 1))
 //              (depositRefundTxSeq, depositReq) = seqAndReq
 //
 //              _ <- for {
