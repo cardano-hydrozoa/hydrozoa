@@ -4,16 +4,17 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.consensus.ConsensusActor.{Config, Request}
-import hydrozoa.multisig.ledger.dapp.tx.{RefundTx, Tx}
+import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
 import hydrozoa.{VerificationKeyBytes, attachWitnesses}
-import scala.Function.tupled
-import scala.util.control.NonFatal
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{TransactionHash, VKeyWitness}
+
+import scala.Function.tupled
+import scala.util.control.NonFatal
 
 /** Consensus actor:
   */
@@ -122,12 +123,25 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
             // Verified header signatures
             headerSignatures: Set[HeaderSignature],
             // Fully signed txs
-            postDatedRefundsSigned: List[RefundTx.PostDated]
+            postDatedRefundsSigned: List[RefundTx.PostDated],
+            finalizationRequested: Boolean
         ) extends BlockConfirmed
 
-        final case class Major() extends BlockConfirmed
+        final case class Major(
+            augBlock: AugmentedBlock.Major,
+            fallbackSigned: FallbackTx,
+            rolloutsSigned: List[RolloutTx],
+            postDatedRefundsSigned: List[RefundTx.PostDated],
+            settlementSigned: SettlementTx,
+            finalizationRequested: Boolean
+        ) extends BlockConfirmed
 
-        final case class Final() extends BlockConfirmed
+        final case class Final(
+            augBlock: AugmentedBlock.Final,
+            rolloutsSigned: List[RolloutTx],
+            deinitSigned: Option[DeinitTx],
+            finalizationSigned: FinalizationTx
+        ) extends BlockConfirmed
 
     // ===================================
     // Actor's state
@@ -489,11 +503,15 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                 postDatedRefundsSigned <- refunds
                     .zip(witnessSets)
                     .traverse(tupled(validateAndAttachTxSignature[RefundTx.PostDated]))
+
+                // 3. Check whether someone requested the head to finalize
+                finalizationRequested = this.acks.values.foldLeft(false)(_ || _.finalizationRequested)
             } yield Right(
               BlockConfirmed.Minor(
                 augBlock = augBlock,
                 headerSignatures = vksAndSigs.map(_._2).toSet,
-                postDatedRefundsSigned = postDatedRefundsSigned
+                postDatedRefundsSigned = postDatedRefundsSigned,
+                finalizationRequested = finalizationRequested
               )
             )
         }
@@ -677,7 +695,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
               *   - verify signatures
               *   - produce the result
               */
-            IO.pure(Right(BlockConfirmed.Major()))
+            IO.pure(Right(???))
         }
     }
 
@@ -814,7 +832,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
               *   - verify signatures
               *   - produce the result
               */
-            IO.pure(Right(BlockConfirmed.Final()))
+            IO.pure(Right(???))
         }
     }
 }

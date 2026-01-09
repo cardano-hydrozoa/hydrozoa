@@ -15,35 +15,37 @@ enum AckBlock:
     case Minor(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val headerSignature: HeaderSignature,
-        override val postDatedRefunds: List[TxSignature]
-    ) extends AckBlock, MinorHeaderSignature, Refunds.PostDated
+        override val headerSignature: AckBlock.HeaderSignature,
+        override val postDatedRefunds: List[AckBlock.TxSignature],
+        override val finalizationRequested: Boolean
+    ) extends AckBlock, MinorHeaderSignature, Refunds.PostDated, FinalizationRequested
 
     case Major1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val fallback: TxSignature,
-        override val rollouts: List[TxSignature],
-        override val postDatedRefunds: List[TxSignature]
-    ) extends AckBlock, Rollouts, Fallback, Refunds.PostDated
+        override val fallback: AckBlock.TxSignature,
+        override val rollouts: List[AckBlock.TxSignature],
+        override val postDatedRefunds: List[AckBlock.TxSignature],
+        override val finalizationRequested: Boolean
+    ) extends AckBlock, Rollouts, Fallback, Refunds.PostDated, FinalizationRequested
 
     case Major2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val settlement: TxSignature
+        override val settlement: AckBlock.TxSignature
     ) extends AckBlock, Settlement
 
     case Final1(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val rollouts: List[TxSignature],
-        override val deinit: Option[TxSignature]
+        override val rollouts: List[AckBlock.TxSignature],
+        override val deinit: Option[AckBlock.TxSignature]
     ) extends AckBlock, Rollouts, Deinit
 
     case Final2(
         override val id: AckBlock.Id,
         override val blockNum: Block.Number,
-        override val finalization: TxSignature
+        override val finalization: AckBlock.TxSignature
     ) extends AckBlock, Finalization
 
 object AckBlock {
@@ -81,6 +83,10 @@ object AckBlock {
 
         sealed trait Deinit {
             def deinit: Option[TxSignature]
+        }
+
+        sealed trait FinalizationRequested {
+            def finalizationRequested: Boolean
         }
     }
 
@@ -142,17 +148,6 @@ object AckBlock {
     // ===================================
     // Minor block header signatures (also Ed25519)
     // ===================================
-
-    // type HeaderSignatureHex = HeaderSignatureHex.HeaderSignatureHex
-    //
-    // object HeaderSignatureHex:
-    //    opaque type HeaderSignatureHex = String
-    //
-    //    def apply(signature: String): HeaderSignatureHex = signature
-    //
-    //    given Conversion[HeaderSignatureHex, String] = identity
-    //
-    //    extension (signature: HeaderSignatureHex) def untagged: String = identity(signature)
 
     // TODO: this is used in the rule-based regime as well, so maybe it should live in the "common" module
     object HeaderSignature:
