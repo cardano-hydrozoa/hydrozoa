@@ -24,7 +24,8 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 
 // TODO: why don't we have direct payouts here?
 sealed trait SettlementTx
-    extends Block.Version.Major.Produced,
+    extends Tx[SettlementTx],
+      Block.Version.Major.Produced,
       MultisigTreasuryUtxo.Spent,
       MultisigTreasuryUtxo.Produced,
       DepositUtxo.Many.Spent,
@@ -32,6 +33,7 @@ sealed trait SettlementTx
       HasResolvedUtxos,
       HasValidityEnd {
     def tx: Transaction
+    def txLens: Lens[SettlementTx, Transaction]
 }
 
 object SettlementTx {
@@ -49,9 +51,9 @@ object SettlementTx {
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val resolvedUtxos: ResolvedUtxos,
-        override val txLens: Lens[NoPayouts, Transaction] = Focus[NoPayouts](_.tx)
-    ) extends NoRollouts,
-          Tx[NoPayouts]
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[NoPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
+    ) extends NoRollouts
 
     case class WithOnlyDirectPayouts(
         override val validityEnd: Instant,
@@ -61,11 +63,10 @@ object SettlementTx {
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: Vector[DepositUtxo],
         override val resolvedUtxos: ResolvedUtxos,
-        override val txLens: Lens[WithOnlyDirectPayouts, Transaction] =
-            Focus[WithOnlyDirectPayouts](_.tx)
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends WithPayouts,
-          NoRollouts,
-          Tx[WithOnlyDirectPayouts]
+          NoRollouts
 
     case class WithRollouts(
         override val validityEnd: Instant,
@@ -76,10 +77,10 @@ object SettlementTx {
         override val depositsSpent: Vector[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
         override val resolvedUtxos: ResolvedUtxos,
-        override val txLens: Lens[WithRollouts, Transaction] = Focus[WithRollouts](_.tx)
+        override val txLens: Lens[SettlementTx, Transaction] =
+            Focus[WithRollouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
     ) extends WithPayouts,
-          RolloutUtxo.Produced,
-          Tx[WithRollouts]
+          RolloutUtxo.Produced
 
     object Builder {
         final case class NoPayouts(override val config: Tx.Builder.Config)

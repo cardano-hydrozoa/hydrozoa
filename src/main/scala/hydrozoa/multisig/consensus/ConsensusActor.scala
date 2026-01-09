@@ -360,6 +360,10 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     object State:
         def mkInitialState: State = State(cells = Map.empty)
 
+    // ===================================
+    // Consensus cells
+    // ===================================
+
     /** Represents the state of the consensus on any (except Initial) block [[blockNum]]. The
       * content of the consensus actors cells.
       */
@@ -436,6 +440,10 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
             signedTx = attachWitnesses(tx, vkeyWitnesses)
         } yield txLens.replace(signedTx)(someTx)
     }
+
+    // ===================================
+    // Minor cell
+    // ===================================
 
     /** Minor block consensus, may start off by receiving a local augmented block (and local ack) or
       * someone else's acknowledgment.
@@ -520,7 +528,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
 
                 // 2. Zip post-dated refunds with signatures, verify them, and attach to the transactions
                 refunds = augBlock.effects.postDatedRefunds
-                // TODO: can we use transpose or is it too permissive?
                 witnessSets = acks
                     .map((vk, ack) => ack.postDatedRefunds.map(vk -> _))
                     .toList
@@ -579,6 +586,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     enum CompletionError extends Throwable:
         case WrongHeaderSignature(vkey: ByteString)
         case WrongTxSignature(txId: TransactionHash, vkey: ByteString)
+        case MissingDeinitSignature
 
     /** Trait for consensus cells that support postponing acks for the next block. This is
       * applicable to Minor blocks and Major blocks, but not Final blocks.
@@ -603,6 +611,10 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
                         IO.pure(withPostponedAck(ack))
             }
     }
+
+    // ===================================
+    // Major cells
+    // ===================================
 
     sealed trait MajorBlockConsensus[T] extends BlockConsensus[T] with PostponedAckSupport[T]
 
@@ -686,7 +698,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
             )
             roundTwo = MajorBlockRoundTwo(
               blockNum = this.blockNum,
-              augmentedBlock = augBlock,
+              augBlock = augBlock,
               acks1 = this.acks1,
               acks2 = this.acks2,
               postponedNextBlockOwnAck = postponedNextBlockOwnAck
@@ -696,8 +708,6 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
     }
 
     private object MajorBlockRoundOne:
-        import CollectingError.*
-
         def apply(blockNum: Block.Number): IO[MajorBlockRoundOne] =
             IO.pure(
               MajorBlockRoundOne(
@@ -711,7 +721,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
 
     final case class MajorBlockRoundTwo(
         override val blockNum: Block.Number,
-        augmentedBlock: AugmentedBlock.Major,
+        augBlock: AugmentedBlock.Major,
         acks1: Map[VerificationKeyBytes, AckBlock.Major1],
         acks2: Map[VerificationKeyBytes, AckBlock.Major2],
         postponedNextBlockOwnAck: Option[RoundOneAck]
@@ -749,16 +759,61 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override def isSaturated: Boolean =
             this.acks2.keySet == config.verificationKeys.values.toSet
 
-        override def complete
-            : IO[Either[(Void, Void), (BlockConfirmed.Major, Option[AckBlock])]] = {
+        override def complete: IO[Either[(Void, Void), (BlockConfirmed.Major, Option[AckBlock])]] =
+            for {
 
-            /** TODO:
-              *   - verify signatures
-              *   - produce the result
-              */
-            IO.pure(Right(???))
-        }
+                // 1.Fallback
+                fallbackWitnessSet <- IO.pure(acks1.map((vk, ack) => vk -> ack.fallback).toList)
+                fallbackTxSigned <- validateAndAttachTxSignature(
+                  augBlock.effects.fallback,
+                  fallbackWitnessSet
+                )
+
+                // 2.Rollouts
+                rolloutWitnessSets = acks1
+                    .map((vk, ack) => ack.rollouts.map(vk -> _))
+                    .toList
+                    .transpose
+                rolloutsSigned <- augBlock.effects.rollouts
+                    .zip(rolloutWitnessSets)
+                    .traverse(tupled(validateAndAttachTxSignature[RolloutTx]))
+
+                // 3. Post-dated refunds
+                postDatedRefundsWitnessSets = acks1
+                    .map((vk, ack) => ack.postDatedRefunds.map(vk -> _))
+                    .toList
+                    .transpose
+                postDatedRefundsSigned <- augBlock.effects.postDatedRefunds
+                    .zip(postDatedRefundsWitnessSets)
+                    .traverse(tupled(validateAndAttachTxSignature[RefundTx.PostDated]))
+
+                // 4. Settlement
+                settlementWitnessSet <- IO.pure(acks2.map((vk, ack) => vk -> ack.settlement).toList)
+                settlementTxSigned <- validateAndAttachTxSignature(
+                  augBlock.effects.settlement,
+                  settlementWitnessSet
+                )
+
+                // 5. Check whether someone requested the head to finalize
+                finalizationRequested = acks1.values
+                    .foldLeft(false)(_ || _.finalizationRequested)
+
+            } yield Right(
+              BlockConfirmed.Major(
+                augBlock = augBlock,
+                fallbackSigned = fallbackTxSigned,
+                rolloutsSigned = rolloutsSigned,
+                postDatedRefundsSigned = postDatedRefundsSigned,
+                settlementSigned = settlementTxSigned,
+                finalizationRequested = finalizationRequested
+              ),
+              postponedNextBlockOwnAck
+            )
     }
+
+    // ===================================
+    // Final cells
+    // ===================================
 
     sealed trait FinalBlockConsensus[T] extends BlockConsensus[T]
 
@@ -833,7 +888,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
             )
             roundTwo = FinalBlockRoundTwo(
               blockNum = this.blockNum,
-              augmentedBlock = augBlock,
+              augBlock = augBlock,
               acks1 = this.acks1,
               acks2 = this.acks2
             )
@@ -857,7 +912,7 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
 
     final case class FinalBlockRoundTwo(
         override val blockNum: Block.Number,
-        augmentedBlock: AugmentedBlock.Final,
+        augBlock: AugmentedBlock.Final,
         acks1: Map[VerificationKeyBytes, AckBlock.Final1],
         acks2: Map[VerificationKeyBytes, AckBlock.Final2]
     ) extends FinalBlockConsensus[FinalBlockRoundTwo] {
@@ -891,14 +946,51 @@ trait ConsensusActor(config: Config) extends Actor[IO, Request] {
         override def isSaturated: Boolean =
             this.acks2.keySet == config.verificationKeys.values.toSet
 
-        override def complete
-            : IO[Either[(Void, Void), (BlockConfirmed.Final, Option[AckBlock])]] = {
+        override def complete: IO[Either[(Void, Void), (BlockConfirmed.Final, Option[AckBlock])]] =
+            for {
 
-            /** TODO:
-              *   - verify signatures
-              *   - produce the result
-              */
-            IO.pure(Right(???))
-        }
+                // 1.Rollouts
+                rolloutWitnessSets <- IO.pure(
+                  acks1
+                      .map((vk, ack) => ack.rollouts.map(vk -> _))
+                      .toList
+                      .transpose
+                )
+                rolloutsSigned <- augBlock.effects.rollouts
+                    .zip(rolloutWitnessSets)
+                    .traverse(tupled(validateAndAttachTxSignature[RolloutTx]))
+
+                // 2. Finalization
+                finalizationWitnessSet <- IO.pure(
+                  acks2.map((vk, ack) => vk -> ack.finalization).toList
+                )
+                finalizationSigned <- validateAndAttachTxSignature(
+                  augBlock.effects.finalization,
+                  finalizationWitnessSet
+                )
+
+                // 3. Optional deinit
+                mbDeinitSigned <- augBlock.effects.deinit match {
+                    case None => IO.pure(None)
+                    case Some(deinit) =>
+                        for {
+                            deinitWitnessSet <- acks1.toList.traverse { case (vk, ack) =>
+                                ack.deinit
+                                    .liftTo[IO](CompletionError.MissingDeinitSignature)
+                                    .map(vk -> _)
+                            }
+                            deinitSigned <- validateAndAttachTxSignature(deinit, deinitWitnessSet)
+                        } yield Some(deinitSigned)
+                }
+            } yield Right(
+              BlockConfirmed.Final(
+                augBlock = augBlock,
+                rolloutsSigned = rolloutsSigned,
+                finalizationSigned = finalizationSigned,
+                deinitSigned = mbDeinitSigned
+              ),
+              None
+            )
+
     }
 }

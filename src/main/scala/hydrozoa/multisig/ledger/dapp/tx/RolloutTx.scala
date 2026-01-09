@@ -17,8 +17,9 @@ import scalus.cardano.ledger.{Coin, ProtocolParams, Transaction, TransactionHash
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 
-sealed trait RolloutTx extends RolloutUtxo.Spent, RolloutUtxo.MbProduced {
+sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction
+    def txLens: Lens[RolloutTx, Transaction]
 }
 
 object RolloutTx {
@@ -29,9 +30,9 @@ object RolloutTx {
     final case class Last(
         override val tx: Transaction,
         override val rolloutSpent: RolloutUtxo,
-        override val txLens: Lens[Last, Transaction] = Focus[Last](_.tx)
-    ) extends RolloutTx,
-          Tx[Last]
+        override val txLens: Lens[RolloutTx, Transaction] =
+            Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
+    ) extends RolloutTx
 
     /** A rollout tx preceding the last one in the sequence. It both spends and produces a rollout
       * utxo.
@@ -42,10 +43,10 @@ object RolloutTx {
         override val tx: Transaction,
         override val rolloutSpent: RolloutUtxo,
         override val rolloutProduced: RolloutUtxo,
-        override val txLens: Lens[NotLast, Transaction] = Focus[NotLast](_.tx)
+        override val txLens: Lens[RolloutTx, Transaction] =
+            Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]]
     ) extends RolloutTx,
-          RolloutUtxo.Produced,
-          Tx[NotLast]
+          RolloutUtxo.Produced
 
     import Builder.*
     import BuilderOps.*
