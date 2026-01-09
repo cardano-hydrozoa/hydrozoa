@@ -104,9 +104,7 @@ def genDepositUtxo(
       l1OutputAddress = headAddress_,
       l1OutputDatum = dd,
       l1OutputValue = depositAmount,
-      virtualOutputs = vos,
-      absorptionStart = absorptionStart,
-      absorptionEnd = absorptionEnd
+      virtualOutputs = vos
     )
 
 /** Generate a "standalone" settlement tx. */

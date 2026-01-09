@@ -24,9 +24,7 @@ final case class DepositUtxo(
     l1OutputAddress: ShelleyAddress,
     l1OutputDatum: DepositUtxo.Datum,
     l1OutputValue: Value,
-    virtualOutputs: NonEmptyList[GenesisObligation],
-    absorptionStart: Instant,
-    absorptionEnd: Instant
+    virtualOutputs: NonEmptyList[GenesisObligation]
 ) {
     def toUtxo: Utxo =
         Utxo(
@@ -151,8 +149,6 @@ object DepositUtxo {
           l1OutputAddress = addr,
           l1OutputDatum = datum,
           l1OutputValue = babbage.value,
-          virtualOutputs = virtualOutputs,
-          absorptionStart = absorptionStart,
-          absorptionEnd = absorptionEnd
+          virtualOutputs = virtualOutputs
         )
 }

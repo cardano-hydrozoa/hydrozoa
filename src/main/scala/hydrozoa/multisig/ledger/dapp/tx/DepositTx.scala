@@ -8,6 +8,7 @@ import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
+import java.time.Instant
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
@@ -18,6 +19,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 
 final case class DepositTx private (
     depositProduced: DepositUtxo,
+    validityEnd: Instant,
     override val tx: Transaction,
 ) extends Tx
 
@@ -108,12 +110,9 @@ object DepositTx {
                   config.headAddress,
                   depositDatum,
                   rawDepositProduced.value,
-                  virtualOutputs,
-                  absorptionStart = validityEnd + txTiming.depositMaturityDuration,
-                  absorptionEnd =
-                      validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration
+                  virtualOutputs
                 )
-            } yield DepositTx(depositProduced, tx)
+            } yield DepositTx(depositProduced, validityEnd, tx)
         }
     }
 
@@ -198,7 +197,7 @@ object DepositTx {
                         .left
                         .map(DepositUtxoError(_))
 
-                } yield DepositTx(depositUtxo, tx)
+                } yield DepositTx(depositUtxo, validityEnd, tx)
             case Failure(e) => Left(TxCborDeserializationFailed(e))
         }
 

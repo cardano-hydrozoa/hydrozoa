@@ -7,6 +7,7 @@ import hydrozoa.config.EquityShares
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
+import hydrozoa.multisig.ledger.dapp.tx.TxTiming.+
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -101,7 +102,9 @@ object DappLedgerM {
                     .map(ParseError(_))
             depositRefundTxSeq <- lift(parseRes)
             depositProduced <- lift(
-              if depositRefundTxSeq.depositTx.depositProduced.absorptionEnd < blockStartTime
+              if depositRefundTxSeq.depositTx.validityEnd
+                      + txTiming.depositMaturityDuration
+                      + txTiming.depositAbsorptionDuration < blockStartTime
               then Left(AbsorptionPeriodExpired(depositRefundTxSeq))
               else Right(depositRefundTxSeq.depositTx.depositProduced)
             )
