@@ -100,6 +100,7 @@ object ConsensusProtocol {
             } yield SubmitLedgerEvent(time, event, eventOutcome)
     }
 
+    // TODO: move to cardano liaison
     /** L2 block confirmations (local-only signal) */
     sealed trait ConfirmBlock {
         def id: Block.Number

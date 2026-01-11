@@ -48,6 +48,13 @@ object Block {
     type Next = Block.Minor | Block.Major | Block.Final
 
     extension (next: Next)
+
+        def blockNum: Block.Number = next match {
+            case b: Block.Minor => b.id
+            case b: Block.Major => b.id
+            case b: Block.Final => b.id
+        }
+
         def blockEvents: List[LedgerEventId] = next match {
             case Block.Minor(_, body) => body.events.map(_._1)
             case Block.Major(_, body) => body.events.map(_._1)
@@ -125,7 +132,7 @@ object Block {
             newCommitment: KzgCommitment
         ): Header.Minor =
             Header.Minor(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMinor,
               timeCreation = newTime,
               commitment = newCommitment
@@ -136,7 +143,7 @@ object Block {
             newCommitment: KzgCommitment
         ): Header.Major =
             Header.Major(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMajor,
               timeCreation = newTime,
               commitment = newCommitment
@@ -146,7 +153,7 @@ object Block {
             newTime: java.time.Instant
         ): Header.Final =
             Header.Final(
-              blockNum = blockNum.increment,
+              blockNum = this.blockNum.increment,
               blockVersion = blockVersion.incrementMajor,
               timeCreation = newTime
             )
@@ -154,7 +161,7 @@ object Block {
 
     extension (minor: Header.Minor)
 
-        // TODO: Factor our MS/RB common types into a separate "bridge" module.
+        // TODO: Factor our MS/RB common types into a separate "common" module.
         def mkOnchainBlockHeader =
             // Convert block header into its onchain representation
             OnchainBlockHeader(

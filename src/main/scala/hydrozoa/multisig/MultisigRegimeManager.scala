@@ -133,9 +133,9 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
             }
 
             transactionSequencer <- {
-                import TransactionSequencer.{Config, ConnectionsPending}
+                import EventSequencer.{Config, ConnectionsPending}
                 context.actorOf(
-                  TransactionSequencer(
+                  EventSequencer(
                     Config(peerId = config.peerId, persistence = config.persistence),
                     ConnectionsPending(
                       blockWeaver = pendingBlockProducer,

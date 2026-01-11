@@ -4,7 +4,7 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.consensus.TransactionSequencer.{Config, ConnectionsPending}
+import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.EventSequencer.*
@@ -12,10 +12,10 @@ import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
 
-/** Transaction sequencer receives local submissions of new ledger events and emits them
-  * sequentially into the consensus system.
+/** Event sequencer receives local submissions of new ledger events and emits them sequentially into
+  * the consensus system.
   */
-object TransactionSequencer {
+object EventSequencer {
     final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
 
     final case class ConnectionsPending(
@@ -23,12 +23,11 @@ object TransactionSequencer {
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
-    def apply(config: Config, connections: ConnectionsPending): IO[TransactionSequencer] =
-        IO(new TransactionSequencer(config, connections) {})
+    def apply(config: Config, connections: ConnectionsPending): IO[EventSequencer] =
+        IO(new EventSequencer(config, connections) {})
 }
 
-trait TransactionSequencer(config: Config, connections: ConnectionsPending)
-    extends Actor[IO, Request] {
+trait EventSequencer(config: Config, connections: ConnectionsPending) extends Actor[IO, Request] {
     private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
     private val state = State()
 
