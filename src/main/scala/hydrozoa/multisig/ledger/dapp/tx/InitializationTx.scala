@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.token.CIP67.TokenNames
@@ -25,7 +26,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 
 final case class InitializationTx(
-    override val validityEnd: java.time.Instant,
+    override val validityEnd: QuantizedInstant,
     treasuryProduced: MultisigTreasuryUtxo,
     multisigRegimeWitness: MultisigRegimeUtxo,
     tokenNames: TokenNames,
@@ -118,7 +119,7 @@ object InitializationTx {
             )
 
         // Not sure why we use Long in the builder step not Slot
-        val validityEndSlot = ValidityEndSlot(validityEnd.toSlot(env.slotConfig).slot)
+        val validityEndSlot = ValidityEndSlot(validityEnd.toSlot.slot)
 
         val steps = spendAllUtxos
             :+ mintTreasuryToken
@@ -359,7 +360,9 @@ object InitializationTx {
                     )
 
             // ttl should be present
-            validityEnd <- mbTtl.map(Slot.apply(_).toInstant(slotConfig)).toRight(TtlIsMissing)
+            validityEnd <- mbTtl
+                .map(Slot.apply(_).toQuantizedInstant(slotConfig))
+                .toRight(TtlIsMissing)
 
             //////
             // Check mint coherence: only a single head token and MR token should be minted
@@ -418,7 +421,7 @@ object InitializationTx {
 
     // TODO: rename to Args for consistency?
     final case class Recipe(
-        validityEnd: java.time.Instant,
+        validityEnd: QuantizedInstant,
         spentUtxos: SpentUtxos,
         headNativeScript: HeadMultisigScript,
         initialDeposit: Coin,

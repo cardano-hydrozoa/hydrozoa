@@ -3,8 +3,8 @@ package hydrozoa.multisig.protocol.types
 import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming
-import java.time.Instant
 import scalus.cardano.ledger.Coin
 
 type LedgerEventId = LedgerEventId.Id
@@ -72,7 +72,7 @@ object LedgerEvent {
         virtualOutputsBytes: Array[Byte],
         donationToTreasury: Coin,
         txTiming: TxTiming,
-        blockStartTime: Instant
+        blockStartTime: QuantizedInstant
     ) extends LedgerEvent
 
     // TODO: do we still need it?

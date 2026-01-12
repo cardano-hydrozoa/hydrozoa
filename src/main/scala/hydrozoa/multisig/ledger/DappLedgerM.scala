@@ -4,10 +4,10 @@ import cats.data.*
 import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.EquityShares
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.DappLedgerM.Error.{AbsorptionPeriodExpired, ParseError, SettlementTxSeqBuilderError}
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.+
 import hydrozoa.multisig.ledger.dapp.txseq
 import hydrozoa.multisig.ledger.dapp.txseq.{DepositRefundTxSeq, FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
@@ -17,9 +17,7 @@ import hydrozoa.multisig.protocol.types.LedgerEvent.RegisterDeposit
 import hydrozoa.multisig.protocol.types.{Block, LedgerEventId}
 import monocle.syntax.all.*
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.FiniteDuration
 import scala.language.implicitConversions
-import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.*
 
 private type E[A] = Either[DappLedgerM.Error, A]
@@ -126,10 +124,10 @@ object DappLedgerM {
         validDeposits: Queue[(LedgerEventId, DepositUtxo)],
         payoutObligations: Vector[Payout.Obligation],
         tallyFeeAllowance: Coin,
-        votingDuration: FiniteDuration,
+        votingDuration: QuantizedFiniteDuration,
         immatureDeposits: Queue[(LedgerEventId, DepositUtxo)],
-        blockCreatedOn: java.time.Instant,
-        competingFallbackValidityStart: java.time.Instant,
+        blockCreatedOn: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant,
         txTiming: TxTiming
     ): DappLedgerM[SettleLedger.Result] = {
 
@@ -195,8 +193,8 @@ object DappLedgerM {
         payoutObligationsRemaining: Vector[Payout.Obligation],
         multisigRegimeUtxoToSpend: MultisigRegimeUtxo,
         equityShares: EquityShares,
-        blockCreatedOn: java.time.Instant,
-        competingFallbackValidityStart: java.time.Instant,
+        blockCreatedOn: QuantizedInstant,
+        competingFallbackValidityStart: QuantizedInstant,
         txTiming: TxTiming
     ): DappLedgerM[FinalizationTxSeq] = {
         for {

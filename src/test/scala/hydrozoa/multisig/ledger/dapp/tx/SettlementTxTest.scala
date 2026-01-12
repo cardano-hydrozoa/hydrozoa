@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -11,7 +11,7 @@ import hydrozoa.{+ as _, *}
 import java.time.Instant
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
-import scala.concurrent.duration.{DurationInt, FiniteDuration, HOURS}
+import scala.concurrent.duration.{FiniteDuration, HOURS}
 import scalus.builtin.Data.toData
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -49,7 +49,10 @@ def genDepositDatum(network: Network = testNetwork): Gen[DepositUtxo.Datum] = {
       DepositUtxo.Refund.Instructions(
         address = refundAddress,
         datum = refundDatum,
-        startTime = deadline
+        startTime = QuantizedInstant(
+          testTxBuilderEnvironment.slotConfig,
+          java.time.Instant.ofEpochMilli(deadline.toLong)
+        )
       )
     )
 }
@@ -98,7 +101,8 @@ def genDepositUtxo(
             )
         // The end is SPECIFIED as the start, plus the deposit absorption duration. If you need to pass in
         // a non-default tx timing in the future, feel free.
-        absorptionEnd = absorptionStart + TxTiming.default.depositAbsorptionDuration
+        absorptionEnd = absorptionStart.quantize(testTxBuilderEnvironment.slotConfig)
+            + TxTiming.default(testTxBuilderEnvironment.slotConfig).depositAbsorptionDuration
     } yield DepositUtxo(
       l1Input = txId,
       l1OutputAddress = headAddress_,
@@ -115,9 +119,12 @@ def genSettlementTxSeqBuilder(
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None,
-    fallbackValidityStart: Instant = java.time.Instant.now() + 3_600_000.milliseconds,
-    blockCreatedOn: Instant = java.time.Instant.now(),
-    txTiming: TxTiming = TxTiming.default
+    fallbackValidityStart: QuantizedInstant = java.time.Instant
+        .ofEpochMilli(java.time.Instant.now().toEpochMilli + 3_600_000)
+        .quantize(testTxBuilderEnvironment.slotConfig),
+    blockCreatedOn: QuantizedInstant =
+        java.time.Instant.now().quantize(testTxBuilderEnvironment.slotConfig),
+    txTiming: TxTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
 ): Gen[(SettlementTxSeq.Builder, SettlementTxSeq.Builder.Args, NonEmptyList[TestPeer])] = {
     // A helper to generator empty, small, medium, large (up to 1000)
     def genHelper[T](gen: Gen[T]): Gen[Vector[T]] = Gen.sized(size =>
@@ -164,7 +171,7 @@ def genSettlementTxSeqBuilder(
         payoutObligationsRemaining = payouts,
         treasuryToSpend = utxo,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS),
+        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
         txTiming = txTiming
@@ -182,8 +189,8 @@ def genSettlementTxSeqBuilder(
   */
 def genNextSettlementTxSeqBuilder(
     treasuryToSpend: MultisigTreasuryUtxo,
-    fallbackValidityStart: Instant,
-    blockCreatedOn: Instant,
+    fallbackValidityStart: QuantizedInstant,
+    blockCreatedOn: QuantizedInstant,
     majorVersion: Int,
     headNativeScript: HeadMultisigScript,
     builderConfig: Tx.Builder.Config,
@@ -240,7 +247,7 @@ def genNextSettlementTxSeqBuilder(
         payoutObligationsRemaining = infimum,
         treasuryToSpend = treasuryToSpend,
         tallyFeeAllowance = Coin.ada(2),
-        votingDuration = FiniteDuration(24, HOURS),
+        votingDuration = FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
         competingFallbackValidityStart = fallbackValidityStart,
         blockCreatedOn = blockCreatedOn,
         txTiming = txTiming

@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.+
+import hydrozoa.lib.cardano.scalus.QuantizedTime.toEpochQuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.{DepositTx, RefundTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.DepositRefundTxSeq.ParseError.VirtualOutputRefScriptInvalid
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
@@ -103,12 +103,12 @@ object DepositRefundTxSeq {
             _also_ need to store the refund validity start time in the datum of the deposit (for use in the forthcoming
             guard script.)
              */
-            // TODO: This assertion also needs to appear in the parser
             _ <- Either
                 .cond(
                   depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
                       == refundTx.startTime
-                      && refundTx.startTime.toEpochMilli == depositTx.depositProduced.datum.refundInstructions.startTime.toLong,
+                      && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
+                          .toEpochQuantizedInstant(config.env.slotConfig),
                   (),
                   Builder.Error.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
                 )
@@ -135,6 +135,7 @@ object DepositRefundTxSeq {
         final case class VirtualOutputMultiAssetNotEmpty(output: TransactionOutput)
             extends ParseError
         final case class VirtualOutputRefScriptInvalid(output: TransactionOutput) extends ParseError
+        case object TimingIncoherence extends ParseError
     }
 
     /** VirtualOutputs are encoded in CBOR as a list of Babbage outputs. Internally, they are
@@ -213,6 +214,16 @@ object DepositRefundTxSeq {
           (),
           ParseError.RefundTxMismatch(refundTx, expectedRefundTx)
         )
+
+        _ <- Either
+            .cond(
+              depositTx.validityEnd + txTiming.depositMaturityDuration + txTiming.depositAbsorptionDuration + txTiming.silenceDuration
+                  == refundTx.startTime
+                  && refundTx.startTime == depositTx.depositProduced.datum.refundInstructions.startTime
+                      .toEpochQuantizedInstant(config.env.slotConfig),
+              (),
+              ParseError.TimingIncoherence // we don't return a DepositRefundTxSeq, because it's not valid
+            )
 
     } yield DepositRefundTxSeq(depositTx, refundTx)
 }

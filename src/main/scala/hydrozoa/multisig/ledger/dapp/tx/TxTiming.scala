@@ -1,8 +1,8 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration, SECONDS}
-import scalus.cardano.ledger.{Slot, SlotConfig}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.SlotConfig
 
 /** TODO: This should be derived from Hydrozoa parameters.
   *
@@ -42,11 +42,11 @@ import scalus.cardano.ledger.{Slot, SlotConfig}
   *   initializationFallbackDeviation; calculatedTime + initializationFallbackDeviation].
   */
 final case class TxTiming(
-    minSettlementDuration: FiniteDuration,
-    inactivityMarginDuration: FiniteDuration,
-    silenceDuration: FiniteDuration,
-    depositMaturityDuration: FiniteDuration,
-    depositAbsorptionDuration: FiniteDuration,
+    minSettlementDuration: QuantizedFiniteDuration,
+    inactivityMarginDuration: QuantizedFiniteDuration,
+    silenceDuration: QuantizedFiniteDuration,
+    depositMaturityDuration: QuantizedFiniteDuration,
+    depositAbsorptionDuration: QuantizedFiniteDuration,
 )
 
 /** Timing is hard. The precision we have to use is going to be dependent on the slot config.
@@ -69,50 +69,10 @@ final case class TxTiming(
   * For now, we just have to be careful to ensure that we're using millisecond precision everywhere
   */
 object TxTiming:
-    val default = TxTiming(
-      minSettlementDuration = 12.hours,
-      inactivityMarginDuration = 24.hours,
-      silenceDuration = 5.minutes,
-      depositMaturityDuration = 1.hours,
-      depositAbsorptionDuration = 48.hours,
+    def default(slotConfig: SlotConfig) = TxTiming(
+      minSettlementDuration = 12.hours.quantize(slotConfig),
+      inactivityMarginDuration = 24.hours.quantize(slotConfig),
+      silenceDuration = 5.minutes.quantize(slotConfig),
+      depositMaturityDuration = 1.hours.quantize(slotConfig),
+      depositAbsorptionDuration = 48.hours.quantize(slotConfig),
     )
-
-    extension (instant: java.time.Instant) {
-        def +(duration: FiniteDuration): java.time.Instant =
-            instant.plusSeconds(duration.toSeconds)
-        def -(duration: FiniteDuration): java.time.Instant =
-            instant.minusSeconds(duration.toSeconds)
-        def toSlot(slotConfig: SlotConfig): Slot =
-            Slot(slotConfig.timeToSlot(instant.toEpochMilli))
-        def truncateToSeconds: java.time.Instant =
-            java.time.Instant.ofEpochSecond(instant.getEpochSecond)
-
-        /** Convert into a FiniteDuration from the unix epoch (jan 1st 1970)
-          * @return
-          */
-        def toEpochFiniteDuration: FiniteDuration =
-            FiniteDuration(instant.getEpochSecond, SECONDS)
-    }
-
-    extension (duration: java.time.Duration) {
-        def toFiniteDuration: FiniteDuration =
-            FiniteDuration(duration.getSeconds, TimeUnit.SECONDS)
-    }
-
-    extension (slot: Slot) {
-        def toInstant(slotConfig: SlotConfig): java.time.Instant =
-            java.time.Instant.ofEpochMilli(slotConfig.slotToTime(slot.slot))
-    }
-
-    extension (fd: FiniteDuration) {
-
-        /** Convert an finite duration to an Instant given as the number of milliseconds from Jan
-          * 1st 1970
-          * @return
-          */
-        def toEpochInstant: java.time.Instant =
-            java.time.Instant.ofEpochSecond(fd.toSeconds)
-
-        /** Truncate everything beyond millisecond precision */
-        def truncateToMillis: FiniteDuration = FiniteDuration(fd.toSeconds, SECONDS)
-    }

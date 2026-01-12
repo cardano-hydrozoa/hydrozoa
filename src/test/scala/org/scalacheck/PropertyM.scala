@@ -301,13 +301,18 @@ object PropertyMTest extends Properties("PropertyM") {
         prop
 }
 
+// TODO: Assertions have color codes and emoji for visibility on color-capable terminals.
+// These should be configurable (i.e., disabled) to make logs easier to parse
 object PropertyM:
     /** Like 'assert' but allows caller to specify an explicit message to show on failure.
       */
     def assertWith[M[_]](condition: Boolean, msg: String)(using
         monadM: Monad[M]
     ): PropertyM[M, Unit] = {
-        val prefix = if condition then "Passed: " else "Failed: "
+        val prefix =
+            if condition
+            then Console.GREEN + "\t✅  " + Console.RESET
+            else Console.RED + "\t❌ " + Console.RESET
         for {
             _ <- monitor(prop => (prefix ++ msg) |: prop)
             _ <- assert(condition)
@@ -317,11 +322,8 @@ object PropertyM:
     /** Allows embedding non-monadic properties into monadic ones.
       */
     def assert[M[_]](bool: Boolean)(using Monad[M]): PropertyM[M, Unit] = {
-        // CHECK ME: I assume this is what we want, but I'm not positive.
-        // In quickcheck, unit is `Testable`, but in scalacheck it isn't.
-        given propUnit: (Unit => Prop) = _ => Prop(false)
-
-        if bool then monadForPropM.pure(()) else fail_("Assertion failed")
+        if bool then monadForPropM.pure(())
+        else fail_(Console.RED ++ "Assertion(s) FAILED" ++ Console.RED)
     }
 
     /** Short-circuit execution and fail with the given message.

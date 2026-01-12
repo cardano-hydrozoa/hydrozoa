@@ -74,6 +74,7 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       blockLeadTurn = ???,
                       recoveredMempool = BlockWeaver.Mempool.empty,
                       jointLedger = ???,
+                      slotConfig = ???
                       // persistence = config.persistence
                     ),
                     // ConnectionsPending(

@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
 import hydrozoa.ensureMinAda
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
@@ -12,7 +13,6 @@ import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.dapp.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.dapp.utxo.RuleBasedTreasuryUtxo
 import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.Data
 import scalus.builtin.Data.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
@@ -27,7 +27,7 @@ import scalus.ledger.api.v1.PubKeyHash
 import scalus.prelude.List as SList
 
 final case class FallbackTx(
-    override val validityStart: java.time.Instant,
+    override val validityStart: QuantizedInstant,
     treasurySpent: MultisigTreasuryUtxo,
     // FIXME: I think this needs to be a different type than just TreasuryUtxo,
     // because its a rules-based treasury utxo.
@@ -86,7 +86,7 @@ object FallbackTx {
           disputeId = voteTokenName.bytes,
           peers = SList.from(hns.requiredSigners.map(_.hash)),
           peersN = hns.numSigners,
-          deadlineVoting = recipe.votingDuration.toMillis,
+          deadlineVoting = recipe.votingDuration.finiteDuration.toMillis,
           versionMajor = multisigDatum.versionMajor.toInt,
           params = multisigDatum.paramsHash,
           // TODO: pull in N first elements of G2 CRS
@@ -213,7 +213,8 @@ object FallbackTx {
             val txId = finalized.transaction.id
             FallbackTx(
               // This is safe since we always set it
-              validityStart = Slot(setStartSlot.slot).toInstant(recipe.config.env.slotConfig),
+              validityStart =
+                  Slot(setStartSlot.slot).toQuantizedInstant(recipe.config.env.slotConfig),
               treasurySpent = treasuryUtxoSpent,
               treasuryProduced = RuleBasedTreasuryUtxo(
                 treasuryTokenName = recipe.config.tokenNames.headTokenName,
@@ -265,7 +266,7 @@ object FallbackTx {
         tallyFeeAllowance: Coin,
         // Voting duration from head parameters.
         // TODO: see https://github.com/cardano-hydrozoa/hydrozoa/issues/129//
-        votingDuration: FiniteDuration,
+        votingDuration: QuantizedFiniteDuration,
         // This is specified in slots rather than in the millis, since the builder
         // is used in fallback tx parsing, and we have to be able to specify precisely
         // the slot we see in the incoming exogenous fallback tx.

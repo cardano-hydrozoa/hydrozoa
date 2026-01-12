@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
@@ -10,7 +11,6 @@ import hydrozoa.rulebased.ledger.dapp.script.plutus.DisputeResolutionScript
 import hydrozoa.rulebased.ledger.dapp.state.VoteDatum as VD
 import hydrozoa.{VerificationKeyBytes, ensureMinAda, maxNonPlutusTxFee, given}
 import scala.collection.immutable.SortedMap
-import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.Data
 import scalus.builtin.Data.toData
 import scalus.cardano.address.*
@@ -63,12 +63,12 @@ object InitializationTxSeq {
         expectedNetwork: Network,
         peerKeys: NonEmptyList[VerificationKeyBytes],
         expectedTallyFeeAllowance: Coin,
-        expectedVotingDuration: FiniteDuration,
+        expectedVotingDuration: QuantizedFiniteDuration,
         env: CardanoInfo,
         evaluator: PlutusScriptEvaluator,
         validators: Seq[Validator],
         resolver: Seq[TransactionInput] => ResolvedUtxos,
-        initializationRequestTimestamp: java.time.Instant,
+        initializationRequestTimestamp: QuantizedInstant,
         txTiming: TxTiming
     ): Either[ParseError, InitializationTxSeq] = {
 
@@ -123,7 +123,7 @@ object InitializationTxSeq {
             // Check validity ranges are correct and match each other
             // Silence period is respected: fallbackTx.validityStart -initializationTx.ttl > txTiming.
             expectedFallbackValidityStart: Slot =
-                (iTx.validityEnd + txTiming.silenceDuration).toSlot(slotConfig = env.slotConfig)
+                (iTx.validityEnd + txTiming.silenceDuration).toSlot
 
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
@@ -296,7 +296,7 @@ object InitializationTxSeq {
                   treasuryUtxoSpent = initializationTx.treasuryProduced,
                   tallyFeeAllowance = args.tallyFeeAllowance,
                   votingDuration = args.votingDuration,
-                  validityStart = fallbackTxValidityStart.toSlot(config.env.slotConfig)
+                  validityStart = fallbackTxValidityStart.toSlot
                 )
 
                 fallbackTx <- FallbackTx
@@ -325,12 +325,12 @@ object InitializationTxSeq {
             tallyFeeAllowance: Coin,
             // TODO: use FiniteDuration?
             // TODO: move to TxTiming?
-            votingDuration: FiniteDuration,
+            votingDuration: QuantizedFiniteDuration,
             txTiming: TxTiming,
             // This is the zero point against which we calculate validity
             // ranges. For initialization tx it corresponds to the time
             // an initialization request was received.
-            initializedOn: java.time.Instant
+            initializedOn: QuantizedInstant
         )
     }
 }

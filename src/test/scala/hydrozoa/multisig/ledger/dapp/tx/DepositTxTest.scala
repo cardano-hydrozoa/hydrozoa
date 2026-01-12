@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
@@ -45,7 +46,10 @@ def genDepositRecipe(
           DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = refundData,
-            startTime = deadline
+            startTime = QuantizedInstant(
+              instant = java.time.Instant.ofEpochMilli(deadline.toLong),
+              slotConfig = testTxBuilderEnvironment.slotConfig
+            )
           )
         )
 
@@ -92,8 +96,12 @@ def genDepositRecipe(
           refundInstructions = DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = SOption.None,
-            startTime = 0
-          )
+            startTime = QuantizedInstant(
+              testTxBuilderEnvironment.slotConfig,
+              java.time.Instant.ofEpochMilli(0)
+            )
+          ),
+          slotConfig = config.env.slotConfig
         )
 
     } yield DepositTx.Builder(
@@ -103,7 +111,7 @@ def genDepositRecipe(
       virtualOutputs = virtualOutputs,
       donationToTreasury = Coin(0), // TODO: generate non-zero
       changeAddress = depositor.address(testNetwork),
-      txTiming = TxTiming.default
+      txTiming = TxTiming.default(config.env.slotConfig)
     )
 
 class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
@@ -143,7 +151,7 @@ class DepositTxTest extends AnyFunSuite with ScalaCheckPropertyChecks {
                     DepositTx.parse(
                       depositTx.tx.toCbor,
                       depositTxBuilder.config,
-                      TxTiming.default,
+                      TxTiming.default(testTxBuilderEnvironment.slotConfig),
                       depositTx.depositProduced.virtualOutputs
                     ) match {
                         case Left(e) =>

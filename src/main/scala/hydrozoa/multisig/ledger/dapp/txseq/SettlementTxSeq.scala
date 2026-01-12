@@ -1,14 +1,13 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyVector
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
-import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.Coin
 import scalus.cardano.txbuilder.SomeBuildError
 
@@ -55,8 +54,7 @@ object SettlementTxSeq {
                           votingDuration = args.votingDuration,
                           validityStart = (args.blockCreatedOn
                               + args.txTiming.minSettlementDuration
-                              + args.txTiming.inactivityMarginDuration)
-                              .toSlot(config.env.slotConfig)
+                              + args.txTiming.inactivityMarginDuration).toSlot
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -104,8 +102,7 @@ object SettlementTxSeq {
                           validityStart = (args.blockCreatedOn
                               + args.txTiming.minSettlementDuration
                               + args.txTiming.inactivityMarginDuration
-                              + args.txTiming.silenceDuration)
-                              .toSlot(config.env.slotConfig)
+                              + args.txTiming.silenceDuration).toSlot
                         )
                         fallbackTx <- FallbackTx
                             .build(ftxRecipe)
@@ -143,9 +140,9 @@ object SettlementTxSeq {
             payoutObligationsRemaining: Vector[Payout.Obligation],
             kzgCommitment: KzgCommitment,
             tallyFeeAllowance: Coin,
-            votingDuration: FiniteDuration,
-            competingFallbackValidityStart: java.time.Instant,
-            blockCreatedOn: java.time.Instant,
+            votingDuration: QuantizedFiniteDuration,
+            competingFallbackValidityStart: QuantizedInstant,
+            blockCreatedOn: QuantizedInstant,
             txTiming: TxTiming
         )
         // TODO: confirm: this one is not needed

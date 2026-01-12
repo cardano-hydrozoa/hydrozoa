@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe, toEpochQuantizedInstant}
 import hydrozoa.lib.cardano.scalus.ledger.api.TransactionOutputEncoders.given
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.explainConst
@@ -8,7 +9,6 @@ import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
 import io.bullet.borer.{Cbor, Encoder}
-import java.time.Instant
 import scala.util.{Failure, Success, Try}
 import scalus.builtin.Data.toData
 import scalus.builtin.{ByteString, platform}
@@ -19,7 +19,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 
 final case class DepositTx private (
     depositProduced: DepositUtxo,
-    validityEnd: Instant,
+    validityEnd: QuantizedInstant,
     override val tx: Transaction,
 ) extends Tx
 
@@ -80,11 +80,14 @@ object DepositTx {
               )
             )
 
-            val ttl = ValidityEndSlot(
-              (Instant.ofEpochMilli(
-                partialRefundTx.refundInstructions.startTime.toLong
-              ) - txTiming.silenceDuration).toEpochMilli
-            )
+            val validityEndQuantizedInstant =
+                partialRefundTx.refundInstructions.startTime.toEpochQuantizedInstant(
+                  config.env.slotConfig
+                )
+                    - txTiming.depositAbsorptionDuration
+                    - txTiming.depositMaturityDuration
+                    - txTiming.silenceDuration
+            val ttl = ValidityEndSlot(validityEndQuantizedInstant.instant.toEpochMilli)
 
             for {
                 ctx <- TransactionBuilder
@@ -117,8 +120,7 @@ object DepositTx {
                 )
             } yield DepositTx(
               depositProduced,
-              Instant.ofEpochMilli(refundInstructions.startTime.toLong)
-                  - txTiming.silenceDuration,
+              validityEndQuantizedInstant,
               tx
             )
         }
@@ -187,7 +189,8 @@ object DepositTx {
 
                     validityEnd <- Try(
                       java.time.Instant
-                          .ofEpochMilli(config.env.slotConfig.slotToTime(tx.body.value.ttl.get))
+                          .ofEpochMilli(tx.body.value.ttl.get)
+                          .quantizeLosslessUnsafe(config.env.slotConfig)
                     ) match {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)

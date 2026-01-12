@@ -1,9 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.utxo
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo.DepositUtxoConversionError.*
 import hydrozoa.multisig.ledger.virtual.GenesisObligation
-import java.time.Instant
 import scala.util.{Failure, Success, Try}
 import scalus.*
 import scalus.builtin.Data.{FromData, ToData, fromData, toData}
@@ -65,12 +65,22 @@ object DepositUtxo {
           *   starting at this time, the head must refund the deposit's funds and must not attempt
           *   to absorb them into the head's treasury. -
           */
-        final case class Instructions(
+        final case class Instructions private (
             address: Address,
             datum: ScalusOption[Data],
             startTime: PosixTime,
         ) derives FromData,
               ToData
+
+        object Instructions {
+            def apply(
+                address: Address,
+                datum: ScalusOption[Data],
+                startTime: QuantizedInstant
+            ): Instructions =
+                new Instructions(address, datum, startTime.instant.toEpochMilli)
+        }
+
     }
 
     trait Spent {
@@ -118,8 +128,8 @@ object DepositUtxo {
         utxo: Utxo,
         headNativeScriptAddress: ShelleyAddress,
         virtualOutputs: NonEmptyList[GenesisObligation],
-        absorptionStart: Instant,
-        absorptionEnd: Instant
+        absorptionStart: QuantizedInstant,
+        absorptionEnd: QuantizedInstant
     ): Either[DepositUtxoConversionError, DepositUtxo] =
         for {
             babbage <- utxo._2 match {

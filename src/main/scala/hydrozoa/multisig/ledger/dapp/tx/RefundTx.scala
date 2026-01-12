@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, explainConst}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
@@ -20,7 +21,7 @@ import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, ReferenceOutput, Send, Spend, ValidityStartSlot}
 
 sealed trait RefundTx extends Tx {
-    def mStartTime: Option[java.time.Instant] = this match {
+    def mStartTime: Option[QuantizedInstant] = this match {
         case self: RefundTx.PostDated => Some(self.startTime)
         case _                        => None
     }
@@ -28,7 +29,7 @@ sealed trait RefundTx extends Tx {
 
 object RefundTx {
     final case class Immediate(override val tx: Transaction) extends RefundTx
-    final case class PostDated(override val tx: Transaction, startTime: java.time.Instant)
+    final case class PostDated(override val tx: Transaction, startTime: QuantizedInstant)
         extends RefundTx
 
     object Builder {
@@ -51,10 +52,10 @@ object RefundTx {
         final case class PostDated(
             override val config: Tx.Builder.Config,
             override val refundInstructions: DepositUtxo.Refund.Instructions,
-            override val refundValue: Value
+            override val refundValue: Value,
         ) extends Builder[RefundTx.PostDated] {
-            override val mValidityStart: Some[java.time.Instant] =
-                Some(java.time.Instant.ofEpochMilli(refundInstructions.startTime.toLong))
+            override val mValidityStart: Some[QuantizedInstant] =
+                Some(refundInstructions.startTime.toEpochQuantizedInstant(config.env.slotConfig))
             override val stepRefundMetadata =
                 ModifyAuxiliaryData(_ => Some(MD(MD.Refund(headAddress = config.headAddress))))
 
@@ -62,7 +63,7 @@ object RefundTx {
                 ctx: TransactionBuilder.Context,
                 valueNeeded: Value
             ): PartialResult.PostDated =
-                PartialResult.PostDated(ctx, valueNeeded, refundInstructions)
+                PartialResult.PostDated(ctx, valueNeeded, refundInstructions, config.env.slotConfig)
         }
 
         sealed trait PartialResult[T <: RefundTx]
@@ -113,12 +114,13 @@ object RefundTx {
             final case class PostDated(
                 override val ctx: TransactionBuilder.Context,
                 override val inputValueNeeded: Value,
-                override val refundInstructions: DepositUtxo.Refund.Instructions
+                override val refundInstructions: DepositUtxo.Refund.Instructions,
+                slotConfig: SlotConfig,
             ) extends PartialResult[RefundTx.PostDated] {
                 override def postProcess(ctx: TransactionBuilder.Context): RefundTx.PostDated =
                     RefundTx.PostDated(
                       ctx.transaction,
-                      java.time.Instant.ofEpochMilli(refundInstructions.startTime.toLong)
+                      refundInstructions.startTime.toEpochQuantizedInstant(slotConfig)
                     )
             }
         }
@@ -138,7 +140,7 @@ object RefundTx {
         def refundInstructions: DepositUtxo.Refund.Instructions
         def refundValue: Value
 
-        def mValidityStart: Option[java.time.Instant]
+        def mValidityStart: Option[QuantizedInstant]
         def stepRefundMetadata: ModifyAuxiliaryData
 
         def mkPartialResult(
@@ -282,7 +284,10 @@ object RefundTx {
                     refundTx = tx.body.value.validityStartSlot match {
                         case None => RefundTx.Immediate(tx)
                         case Some(startSlot) =>
-                            RefundTx.PostDated(tx, Slot(startSlot).toInstant(env.slotConfig))
+                            RefundTx.PostDated(
+                              tx,
+                              Slot(startSlot).toQuantizedInstant(env.slotConfig)
+                            )
                     }
                 } yield refundTx
             case Failure(e) => Left(TxCborDeserializationFailed(e))

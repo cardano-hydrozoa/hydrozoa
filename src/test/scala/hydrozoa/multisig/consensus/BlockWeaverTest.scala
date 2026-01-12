@@ -6,9 +6,9 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
@@ -17,10 +17,9 @@ import java.time.Instant
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
-import scala.math.Ordered.orderingToOrdered
 import scala.util.Random
 import test.Generators.Hydrozoa.ArbitraryInstances.given
-import test.genTestPeers
+import test.{genTestPeers, testTxBuilderEnvironment}
 
 object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
@@ -67,6 +66,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           blockLeadTurn = turn,
           recoveredMempool = BlockWeaver.Mempool.apply(events),
           jointLedger = jointLedgerMockActor,
+          slotConfig = testTxBuilderEnvironment.slotConfig
         )
 
         // Weaver
@@ -74,7 +74,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         def aroundNow(other: Instant): Boolean = {
             val now = p.runIO(IO.realTimeInstant)
-            now - (1.second) < other && now + (1.second) > other
+            now.toEpochMilli - (1.second.toMillis) < other.toEpochMilli &&
+            now.toEpochMilli + (1.second.toMillis) > other.toEpochMilli
         }
 
         // If the next block is the peer's turn...
@@ -83,7 +84,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // then ...
         p.assert(
           p.runIO(handleBoolean(expectMsgPF(jointLedgerMockActor, 5.second) {
-              case s: StartBlock if aroundNow(s.blockCreationTime) => ()
+              case s: StartBlock if aroundNow(s.blockCreationTime.instant) => ()
           })),
           "weaver should start the block with sensible creation time."
         )
@@ -126,6 +127,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               blockLeadTurn = turn,
               recoveredMempool = BlockWeaver.Mempool.empty,
               jointLedger = jointLedgerMockActor,
+              slotConfig = testTxBuilderEnvironment.slotConfig
             )
 
             // Weaver
@@ -176,6 +178,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               blockLeadTurn = turn,
               recoveredMempool = BlockWeaver.Mempool.empty,
               jointLedger = jointLedgerMockActor,
+              slotConfig = testTxBuilderEnvironment.slotConfig
             )
 
             // Weaver
@@ -234,6 +237,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           blockLeadTurn = turn,
           recoveredMempool = BlockWeaver.Mempool.empty,
           jointLedger = jointLedgerMockActor,
+          slotConfig = testTxBuilderEnvironment.slotConfig
         )
 
         // Weaver
@@ -278,7 +282,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   _ <- IO.traverse_(immediateEvents)(weaverActor ! _)
 
                   // First block
-                  now <- IO.realTimeInstant
+                  now <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
                   firstBlock: Block = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
@@ -293,7 +297,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   )
 
                   // Second block
-                  newTime <- IO.realTimeInstant
+                  newTime <- realTimeQuantizedInstant(testTxBuilderEnvironment.slotConfig)
                   secondBlock: Block = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, Valid)).toList,

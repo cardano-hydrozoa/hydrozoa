@@ -1,15 +1,14 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toQuantizedInstant}
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.tx.Metadata.Settlement
 import hydrozoa.multisig.ledger.dapp.tx.Tx.Builder.{BuildErrorOr, HasCtx, explainConst}
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.Block
 import hydrozoa.multisig.protocol.types.Block.Version.Major
-import java.time.Instant
 import scala.annotation.tailrec
 import scala.collection.immutable.Vector
 import scalus.builtin.ByteString
@@ -40,7 +39,7 @@ object SettlementTx {
     sealed trait NoRollouts extends SettlementTx
 
     case class NoPayouts(
-        override val validityEnd: Instant,
+        override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -50,7 +49,7 @@ object SettlementTx {
     ) extends NoRollouts
 
     case class WithOnlyDirectPayouts(
-        override val validityEnd: Instant,
+        override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -61,7 +60,7 @@ object SettlementTx {
           NoRollouts
 
     case class WithRollouts(
-        override val validityEnd: Instant,
+        override val validityEnd: QuantizedInstant,
         override val tx: Transaction,
         override val majorVersionProduced: Block.Version.Major,
         override val treasurySpent: MultisigTreasuryUtxo,
@@ -167,7 +166,7 @@ object SettlementTx {
                 // reset the fallback timer.
                 // We want a better approach for this in the future
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val validityEnd: java.time.Instant
+                override val validityEnd: QuantizedInstant
             ) extends Args(kzgCommitment)
 
             final case class WithPayouts(
@@ -175,7 +174,7 @@ object SettlementTx {
                 override val majorVersionProduced: Block.Version.Major,
                 override val treasuryToSpend: MultisigTreasuryUtxo,
                 override val depositsToSpend: Vector[DepositUtxo],
-                override val validityEnd: java.time.Instant,
+                override val validityEnd: QuantizedInstant,
                 rolloutTxSeqPartial: RolloutTxSeq.Builder.PartialResult
             ) extends Args(kzgCommitment)
 
@@ -293,7 +292,7 @@ object SettlementTx {
                   referenceHNS(config),
                   consumeTreasury(config, args.treasuryToSpend),
                   sendTreasury(args),
-                  validityEndSlot(args.validityEnd.toSlot(config.env.slotConfig)),
+                  validityEndSlot(args.validityEnd.toSlot),
                 )
 
             private def stepSettlementMetadata(config: Tx.Builder.Config): ModifyAuxiliaryData =
@@ -402,7 +401,7 @@ object SettlementTx {
 
                 val settlementTx: SettlementTx.NoPayouts = SettlementTx.NoPayouts(
                   validityEnd =
-                      Slot(state.ctx.transaction.body.value.ttl.get).toInstant(slotConfig),
+                      Slot(state.ctx.transaction.body.value.ttl.get).toQuantizedInstant(slotConfig),
                   tx = state.ctx.transaction,
                   majorVersionProduced = args.majorVersionProduced,
                   treasurySpent = args.treasuryToSpend,
@@ -454,7 +453,7 @@ object SettlementTx {
                         depositsSpent = state.depositsSpent,
                         tx = tx,
                         // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get).toInstant(slotConfig),
+                        validityEnd = Slot(tx.body.value.ttl.get).toQuantizedInstant(slotConfig),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,
@@ -475,7 +474,7 @@ object SettlementTx {
                         rolloutProduced = unsafeGetRolloutProduced(state.ctx),
                         tx = tx,
                         // this is safe since we always set ttl
-                        validityEnd = Slot(tx.body.value.ttl.get).toInstant(slotConfig),
+                        validityEnd = Slot(tx.body.value.ttl.get).toQuantizedInstant(slotConfig),
                         resolvedUtxos = state.ctx.resolvedUtxos
                       ),
                       depositsSpent = state.depositsSpent,

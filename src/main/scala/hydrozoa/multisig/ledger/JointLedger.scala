@@ -6,11 +6,11 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.config.EquityShares
 import hydrozoa.lib.actor.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.multisig.ledger.DappLedgerM.runDappLedgerM
 import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{RolloutTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
@@ -24,10 +24,8 @@ import hydrozoa.multisig.protocol.types.LedgerEvent.*
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.protocol.{ConsensusProtocol, types}
-import java.time.Instant
 import monocle.Focus.focus
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.FiniteDuration
 import scalus.builtin.{ByteString, platform}
 import scalus.cardano.ledger.{AssetName, Coin, TransactionHash}
 
@@ -45,7 +43,7 @@ final case class JointLedger(
     // private val blockSigner
     //// Static config fields
     // in head config
-    initialBlockTime: java.time.Instant,
+    initialBlockTime: QuantizedInstant,
     // derived
     initialBlockKzg: KzgCommitment,
     // derived
@@ -59,12 +57,12 @@ final case class JointLedger(
     // derived from init tx (which is in the config)
     multisigRegimeUtxo: MultisigRegimeUtxo,
     // in head config (move into TxTiming)
-    votingDuration: FiniteDuration,
+    votingDuration: QuantizedFiniteDuration,
     // derived from init tx (which is in the config)
     treasuryTokenName: AssetName,
     // derived from init tx (which is in the config)
     initialTreasury: MultisigTreasuryUtxo,
-    initialFallbackValidityStart: Instant
+    initialFallbackValidityStart: QuantizedInstant
 ) extends Actor[IO, Requests.Request] {
 
     val state: Ref[IO, JointLedger.State] =
@@ -374,14 +372,19 @@ final case class JointLedger(
                   )
                 )((acc, deposit) =>
                     val depositValidityEnd =
-                        java.time.Instant.ofEpochMilli(
-                          deposit._2.datum.refundInstructions.startTime.toLong
-                        ) - txTiming.silenceDuration
-                    val depositAbsorptionStart: java.time.Instant =
+                        deposit._2.datum.refundInstructions.startTime
+                            .toEpochQuantizedInstant(config.env.slotConfig)
+                            - txTiming.depositMaturityDuration
+                            - txTiming.depositAbsorptionDuration
+                            - txTiming.silenceDuration
+
+                    val depositAbsorptionStart: QuantizedInstant =
                         depositValidityEnd + txTiming.depositMaturityDuration
-                    val depositAbsorptionEnd: java.time.Instant =
+
+                    val depositAbsorptionEnd: QuantizedInstant =
                         depositAbsorptionStart + txTiming.depositAbsorptionDuration
-                    val settlementValidityEnd: java.time.Instant =
+
+                    val settlementValidityEnd: QuantizedInstant =
                         producing.competingFallbackValidityStart - txTiming.silenceDuration
                     {
                         if depositAbsorptionStart.isAfter(producing.startTime)
@@ -393,7 +396,7 @@ final case class JointLedger(
                         ) || depositAbsorptionStart == producing.startTime) &&
                         (settlementValidityEnd.isBefore(
                           depositAbsorptionEnd
-                        ) || settlementValidityEnd.get == depositAbsorptionEnd)
+                        ) || settlementValidityEnd == depositAbsorptionEnd)
                         // Eligible for absorption
                         then acc.focus(_._2).modify(_.appended(deposit))
                         else if ((depositAbsorptionStart.isBefore(
@@ -417,11 +420,10 @@ final case class JointLedger(
                 // First block is always major
                 initialFallbackValidityStart == producing.competingFallbackValidityStart ||
                     // Upgrade if we are too close to fallback
-                    (txTiming.minSettlementDuration.toMillis >=
+                    (txTiming.minSettlementDuration >=
                         // FIXME: This time handling is a bit wonky because of the java <> scala mix
-                        producing.competingFallbackValidityStart.toEpochMilli
-                        - txTiming.silenceDuration.toMillis
-                        - producing.startTime.toEpochMilli)
+                        producing.competingFallbackValidityStart - txTiming.silenceDuration
+                        - producing.startTime)
 
             isMinorBlock: Boolean =
                 (eligibleForAbsorption.isEmpty && producing.nextBlockData.blockWithdrawnUtxos.isEmpty)
@@ -547,7 +549,7 @@ final case class JointLedger(
         actualBlock: AugmentedBlock
     ): IO[Unit] = for {
         p <- unsafeGetProducing
-        fallbackValidityStart: java.time.Instant =
+        fallbackValidityStart: QuantizedInstant =
             actualBlock match {
                 case major: types.AugmentedBlock.Major =>
                     major.effects.fallback.validityStart
@@ -605,7 +607,7 @@ object JointLedger {
 
         case class StartBlock(
             blockNum: Block.Number,
-            blockCreationTime: Instant
+            blockCreationTime: QuantizedInstant
         )
 
         /** @param referenceBlock
@@ -640,7 +642,7 @@ object JointLedger {
     final case class Done(
         producedBlock: Block,
         // None for the first block
-        lastFallbackValidityStart: java.time.Instant,
+        lastFallbackValidityStart: QuantizedInstant,
         override val dappLedgerState: DappLedgerM.State,
         override val virtualLedgerState: VirtualLedgerM.State
     ) extends State
@@ -650,8 +652,8 @@ object JointLedger {
         override val virtualLedgerState: VirtualLedgerM.State,
         previousBlock: Block,
         // None for the first block
-        competingFallbackValidityStart: java.time.Instant,
-        startTime: java.time.Instant,
+        competingFallbackValidityStart: QuantizedInstant,
+        startTime: QuantizedInstant,
         nextBlockData: TransientFields
     ) extends State
 }

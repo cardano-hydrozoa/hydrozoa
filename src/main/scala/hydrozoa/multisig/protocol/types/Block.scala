@@ -3,6 +3,7 @@ package hydrozoa.multisig.protocol.types
 import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag
 
@@ -33,7 +34,7 @@ enum Block {
 
     def nextBlock(
         newBody: Block.Body.Next,
-        newTime: java.time.Instant,
+        newTime: QuantizedInstant,
         newCommitment: KzgCommitment
     ): Block =
         header.nextBlock(newBody, newTime, newCommitment)
@@ -62,28 +63,28 @@ object Block {
     enum Header(val blockType: Type) extends HeaderFields.Mandatory {
         case Initial(
             // TODO: this seems to be the same as `initializedOn`
-            override val timeCreation: java.time.Instant,
+            override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Initial), HeaderFields.InitialHeaderFields, HeaderFields.Commitment
 
         case Minor(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: java.time.Instant,
+            override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Minor), HeaderFields.Commitment
 
         case Major(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: java.time.Instant,
+            override val timeCreation: QuantizedInstant,
             override val commitment: KzgCommitment
         ) extends Header(Type.Major), HeaderFields.Commitment
 
         case Final(
             override val blockNum: Number,
             override val blockVersion: Version.Full,
-            override val timeCreation: java.time.Instant
+            override val timeCreation: QuantizedInstant
         ) extends Header(Type.Final)
 
         def nextBlockNumber: Block.Number = this match {
@@ -95,7 +96,7 @@ object Block {
 
         def nextHeader(
             newBlockType: Type.Next,
-            newTime: java.time.Instant,
+            newTime: QuantizedInstant,
             newCommitment: KzgCommitment
         ): Header = newBlockType match {
             case Type.Minor => nextHeaderMinor(newTime, newCommitment)
@@ -105,7 +106,7 @@ object Block {
 
         def nextBlock(
             body: Body.Next,
-            newTime: java.time.Instant,
+            newTime: QuantizedInstant,
             newCommitment: KzgCommitment
         ): Block =
             body match {
@@ -118,7 +119,7 @@ object Block {
             }
 
         private def nextHeaderMinor(
-            newTime: java.time.Instant,
+            newTime: QuantizedInstant,
             newCommitment: KzgCommitment
         ): Header.Minor =
             Header.Minor(
@@ -129,7 +130,7 @@ object Block {
             )
 
         private def nextHeaderMajor(
-            newTime: java.time.Instant,
+            newTime: QuantizedInstant,
             newCommitment: KzgCommitment
         ): Header.Major =
             Header.Major(
@@ -140,7 +141,7 @@ object Block {
             )
 
         private def nextHeaderFinal(
-            newTime: java.time.Instant
+            newTime: QuantizedInstant
         ): Header.Final =
             Header.Final(
               blockNum = blockNum.increment,
@@ -153,7 +154,7 @@ object Block {
         sealed trait Mandatory {
             def blockNum: Number
             def blockVersion: Version.Full
-            def timeCreation: java.time.Instant
+            def timeCreation: QuantizedInstant
         }
 
         sealed trait Commitment {

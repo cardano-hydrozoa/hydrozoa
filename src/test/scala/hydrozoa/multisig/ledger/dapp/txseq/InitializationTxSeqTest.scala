@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.dapp.txseq
 
 import cats.data.NonEmptyList
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.dapp.token.CIP67
 import hydrozoa.multisig.ledger.dapp.tx.InitializationTx.SpentUtxos
@@ -39,7 +40,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
     // TODO: make the spentUtxos contain arbitrary assets, not just ada.
     def genArgs(
-        txTiming: TxTiming = default
+        txTiming: TxTiming = default(testTxBuilderEnvironment.slotConfig)
     ): Gen[(InitializationTxSeq.Builder.Args, NonEmptyList[TestPeer])] =
         for {
             peers <- genTestPeers()
@@ -87,9 +88,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
             initializationTxChangePP =
                 Key(AddrKeyHash.fromByteString(ByteString.fill(28, 1.toByte))),
             tallyFeeAllowance = Coin.ada(2),
-            votingDuration = FiniteDuration(24, HOURS),
+            votingDuration =
+                FiniteDuration(24, HOURS).quantize(testTxBuilderEnvironment.slotConfig),
             txTiming = txTiming,
-            initializedOn = initializedOn
+            initializedOn = initializedOn.quantize(testTxBuilderEnvironment.slotConfig)
           ),
           peers
         )
@@ -110,8 +112,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
     // All this to say: this test should not be considered exhaustive at this time. It's just here to give us
     // a reasonable level of confidence that this won't fall over the first time we run it.
 
-    val _ = property("Initialization Tx Seq Happy Path") = forAll(genArgs(default)) {
-        (args, testPeers) =>
+    val _ = property("Initialization Tx Seq Happy Path") =
+        forAll(genArgs(default(testTxBuilderEnvironment.slotConfig))) { (args, testPeers) =>
             {
                 // Collect all the props in a mutable buffer, and then combine them at the end
                 val props = mutable.Buffer.empty[Prop]
@@ -561,7 +563,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       validators = args.validators,
                       resolver = mockResolver,
                       initializationRequestTimestamp = args.initializedOn,
-                      txTiming = TxTiming.default
+                      txTiming = TxTiming.default(testTxBuilderEnvironment.slotConfig)
                     )
 
                     s"InitializationTxSeq should parse successfully $parseRes" |: parseRes.isRight
@@ -570,5 +572,5 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                 props.fold(Prop(true))(_ && _)
             }
 
-    }
+        }
 }

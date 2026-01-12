@@ -6,7 +6,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.consensus.CardanoLiaison.Config
 import hydrozoa.multisig.ledger.dapp.tx.*
-import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
@@ -337,9 +336,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                         then IO.pure(dueActions)
                         else {
                             lazy val initAction = {
-                                if l1State.currentSlot < config.initializationTx.validityEnd.toSlot(
-                                      config.slotConfig
-                                    )
+                                if l1State.currentSlot < config.initializationTx.validityEnd.toSlot
                                 then
                                     Seq(
                                       Action.InitializeHead(
@@ -509,7 +506,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                               fallbackValidityStart
                             ) match {
                                 // (1)
-                                case _ if currentSlot < happyPathTxTtl.toSlot(config.slotConfig) =>
+                                case _ if currentSlot < happyPathTxTtl.toSlot =>
                                     val effectTxs =
                                         state.happyPathEffects
                                             .rangeFrom(backboneEffectId)
@@ -518,17 +515,10 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                                     Right(PushForwardMultisig(effectTxs.map(_.tx)))
                                 // (2)
                                 case _
-                                    if currentSlot >= happyPathTxTtl.toSlot(
-                                      config.slotConfig
-                                    ) && currentSlot < fallbackValidityStart.toSlot(
-                                      config.slotConfig
-                                    ) =>
+                                    if currentSlot >= happyPathTxTtl.toSlot && currentSlot < fallbackValidityStart.toSlot =>
                                     Right(SilencePeriodNoop)
                                 // (3)
-                                case _
-                                    if currentSlot >= fallbackValidityStart.toSlot(
-                                      config.slotConfig
-                                    ) =>
+                                case _ if currentSlot >= fallbackValidityStart.toSlot =>
                                     Right(
                                       FallbackToRuleBased(
                                         mbCompetingFallbackEffect.get.tx
@@ -539,8 +529,8 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                                     Left(
                                       WrongValidityRange(
                                         currentSlot,
-                                        happyPathTxTtl.toSlot(config.slotConfig),
-                                        fallbackValidityStart.toSlot(config.slotConfig)
+                                        happyPathTxTtl.toSlot,
+                                        fallbackValidityStart.toSlot
                                       )
                                     )
                             }
