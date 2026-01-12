@@ -102,7 +102,7 @@ extension [K, V](map: mutable.Map[K, V])
 
 def signTx(peer: TestPeer, txUnsigned: STransaction): STransaction =
     val keyWitness = TestPeer.mkWallet(peer).createTxKeyWitness(txUnsigned)
-    attachWitnesses(txUnsigned, List(keyWitness))
+    attachVKeyWitnesses(txUnsigned, List(keyWitness))
 
 /** Creates a pubkey transaction yielding a single UTxO from a set of inputs */
 def l2EventTransactionFromInputsAndPeer(

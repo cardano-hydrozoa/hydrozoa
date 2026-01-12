@@ -8,7 +8,7 @@ import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
 import hydrozoa.multisig.protocol.types.AckBlock.{HeaderSignature, TxSignature}
 import hydrozoa.multisig.protocol.types.{AckBlock, AugmentedBlock, Block, Peer}
-import hydrozoa.{VerificationKeyBytes, attachWitnesses}
+import hydrozoa.{VerificationKeyBytes, attachVKeyWitnesses}
 import scala.Function.tupled
 import scala.util.control.NonFatal
 import scalus.builtin.{ByteString, platform}
@@ -30,7 +30,7 @@ type RoundTwoOwnAck = AckBlock.Major2 | AckBlock.Final2
 // Consensus cells - Top Level Traits
 // ===================================
 
-// Traits are defined here to prevent having instance-sbound types like ConsensusActor.this.type.
+// Traits are defined here to prevent having instance-bound types like ConsensusActor.this.type.
 
 /** Represents the state of the consensus on any (except Initial) block [[blockNum]]. The content of
   * the consensus actors cells.
@@ -245,7 +245,7 @@ object ConsensusActor {
         recoveredRequests: Seq[Request] = Seq.empty,
 
         // Actors
-        // TODO: should be many - a liaison pre peer
+        // TODO: should be many - a liaison per peer
         peerLiaison: PeerLiaison.PeerLiaisonRef,
         blockWeaver: BlockWeaver.BlockWeaverRef,
         cardanoLiaison: CardanoLiaison.CardanoLiaisonRef,
@@ -380,6 +380,12 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
                 case BlockConfirmed.Final(_, rolloutsSigned, deinitSigned, finalizationSigned, _) =>
                     Some(ConfirmFinalBlock(id = blockNum, finalizationTxSeq = ???))
                 case _ => None
+            }
+
+        final lazy val mbFinalBlockConfirmation: Option[Unit] =
+            this match {
+                case _: BlockConfirmed.Final => Some(())
+                case _                       => None
             }
 
         // TODO: types are not defined yet
@@ -610,6 +616,9 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
                 _ <- config.eventSequencer ! blockConfirmed.sequencerEvents
                 // Announce the ack if present
                 _ <- mbAck.traverse_(announceAck)
+                // Signal the peer liaison if that is the final block confirmation
+                // TODO: fill in the hole once we have a type for that
+                _ <- IO.traverse_(blockConfirmed.mbFinalBlockConfirmation)(???)
                 // Remove the cell
                 _ <- stateRef.set(state.copy(cells = state.cells - blockConfirmed.blockNum))
             } yield ()
@@ -673,7 +682,7 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
                             case e => IO.raiseError(e)
                         }
                 )
-                signedTx = attachWitnesses(tx, vkeyWitnesses)
+                signedTx = attachVKeyWitnesses(tx, vkeyWitnesses)
             } yield txLens.replace(signedTx)(someTx)
         }
 

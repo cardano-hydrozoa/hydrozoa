@@ -44,7 +44,7 @@ import scalus.{ledger, prelude, |>}
   * @return
   *   A new Transaction with all witnesses added
   */
-def attachWitnesses(tx: Transaction, witnesses: Iterable[VKeyWitness]): Transaction =
+def attachVKeyWitnesses(tx: Transaction, witnesses: Iterable[VKeyWitness]): Transaction =
     tx.focus(_.witnessSet.vkeyWitnesses)
         .modify(w => TaggedSortedSet(w.toSet ++ witnesses))
 

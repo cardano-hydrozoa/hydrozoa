@@ -13,7 +13,7 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{ChangeOutputDiffHandler, Environment, SomeBuildError, TransactionBuilder}
 import sourcecode.*
 
-trait Tx[Self <: Tx[Self]] {
+trait Tx[Self <: Tx[Self]] { self: Self =>
     def tx: Transaction
 
     /** Lens for accessing the transaction field. Implementations should use:
