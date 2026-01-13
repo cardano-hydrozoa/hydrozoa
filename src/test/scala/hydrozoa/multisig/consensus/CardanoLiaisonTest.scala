@@ -26,8 +26,8 @@ import hydrozoa.multisig.protocol.types.Block
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
 import org.scalacheck.Prop.forAll
-import scala.collection.JavaConverters.asScalaBufferConverter
 import scala.concurrent.duration.DurationInt
+import scala.jdk.CollectionConverters.*
 import scalus.cardano.ledger.*
 import test.Generators.Hydrozoa.*
 import test.{TestPeer, testTxBuilderEnvironment}
@@ -606,8 +606,8 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   FinalBlockConfirmed(
                     blockNum = Block.Number(skeleton._3.finalizationTx.majorVersionProduced),
                     finalizationSigned = skeleton._3.finalizationTx,
-                    rolloutsSigned = ???,
-                    mbDeinitSigned = ???
+                    rolloutsSigned = skeleton._3.mbRollouts,
+                    mbDeinitSigned = skeleton._3.mbDeinit
                   )
                 )
 

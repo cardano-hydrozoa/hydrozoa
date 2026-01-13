@@ -14,12 +14,13 @@ import hydrozoa.multisig.protocol.types.Block.blockEvents
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
 
 /** Block weaver actor.
-  *   - When the node is leading a block, packages known unprocessed and incoming events, i.e., L1
-  *     deposits and L2 txs into a new block.
-  *   - When follower, before any block arrives, simply store incoming events in the mempool,
-  *     keeping their order or arrival.
-  *   - When a block arrives, feeds all the block to the joint ledger or uses Awaiting mode to wait
-  *     till all events get through.
+  *   - When the node is leading a block, the weaver packages all known unprocessed (by the time
+  *     block is stared) and continue streaming all incoming events (until the block is completed)
+  *     into that block. These events include L1 deposits and L2 txs.
+  *   - When the node is a follower, before any block arrives, the weaver simply stores incoming
+  *     events in the mempool, keeping the order or arrival.
+  *   - When a block arrives, the weaver feeds all the block events to the joint ledger or switches
+  *     to Awaiting mode if some events are not here yet.
   *
   * There are several diagrams in the Hydrozoa docs that illustrate the work of the weaver.
   */
@@ -452,6 +453,7 @@ class BlockWeaver(
             for {
                 // _ <- IO.println(s"becoming leader for block: $nextBlockNum")
                 now <- IO.realTime.map(_.toEpochInstant)
+                // _ <- IO.println(s"weaver: now = $now")
                 _ <- config.jointLedger ! StartBlock(nextBlockNum, now)
                 _ <- IO.traverse_(mempool.receivingOrder)(event =>
                     config.jointLedger ! mempool.findById(event).get

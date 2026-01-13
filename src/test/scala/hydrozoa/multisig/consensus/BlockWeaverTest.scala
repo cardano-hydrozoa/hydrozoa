@@ -72,7 +72,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val _ = p.runIO(system.actorOf(BlockWeaver(config)))
 
         def aroundNow(other: Instant): Boolean = {
-            val now = p.runIO(IO.monotonic.map(_.toEpochInstant))
+            // FIXME: Peter please confirm
+            val now = p.runIO(IO.realTime.map(_.toEpochInstant))
+            // println(s"now=$now")
             now - (1.second) < other && now + (1.second) > other
         }
 
