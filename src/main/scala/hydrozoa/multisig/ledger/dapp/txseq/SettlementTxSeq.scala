@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.dapp.txseq
 import cats.data.NonEmptyVector
 import hydrozoa.multisig.ledger.dapp.tx
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, SettlementTx, Tx, TxTiming}
+import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, SettlementTx, Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.virtual.commitment.KzgCommitment.KzgCommitment
@@ -28,9 +28,10 @@ enum SettlementTxSeq {
 object SettlementTxSeq {
 
     extension (settlementTxSeq: SettlementTxSeq)
-        def mbRolloutSeq: Option[RolloutTxSeq] = settlementTxSeq match {
-            case SettlementTxSeq.NoRollouts(_)                 => None
-            case SettlementTxSeq.WithRollouts(_, rolloutTxSeq) => Some(rolloutTxSeq)
+
+        def mbRollouts: List[RolloutTx] = settlementTxSeq match {
+            case _: NoRollouts   => List.empty
+            case r: WithRollouts => r.rolloutTxSeq.mbRollouts
         }
 
     import Builder.*

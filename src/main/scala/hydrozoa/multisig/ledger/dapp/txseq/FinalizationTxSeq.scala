@@ -48,11 +48,18 @@ enum FinalizationTxSeq {
 object FinalizationTxSeq {
 
     extension (finalizationTxSeq: FinalizationTxSeq)
-        def mbRolloutSeq: Option[RolloutTxSeq] = finalizationTxSeq match {
-            case FinalizationTxSeq.Monolithic(_)                             => None
-            case FinalizationTxSeq.WithDeinit(_, deinitTx)                   => None
-            case FinalizationTxSeq.WithRollouts(_, rolloutTxSeq)             => Some(rolloutTxSeq)
-            case FinalizationTxSeq.WithDeinitAndRollouts(_, _, rolloutTxSeq) => Some(rolloutTxSeq)
+
+        def mbRollouts: List[RolloutTx] = finalizationTxSeq match {
+            case FinalizationTxSeq.WithRollouts(_, rolloutTxSeq) => rolloutTxSeq.mbRollouts
+            case FinalizationTxSeq.WithDeinitAndRollouts(_, _, rolloutTxSeq) =>
+                rolloutTxSeq.mbRollouts
+            case _ => List.empty
+        }
+
+        def mbDeinit: Option[DeinitTx] = finalizationTxSeq match {
+            case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx)  => Some(deinitTx)
+            case FinalizationTxSeq.WithDeinitAndRollouts(_, deinitTx, _) => Some(deinitTx)
+            case _                                                       => None
         }
 
     import Builder.*

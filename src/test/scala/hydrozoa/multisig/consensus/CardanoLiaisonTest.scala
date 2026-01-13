@@ -12,7 +12,7 @@ import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.CardanoLiaison.{ConfirmFinalBlock, ConfirmMajorBlock}
+import hydrozoa.multisig.consensus.CardanoLiaison.{FinalBlockConfirmed, MajorBlockConfirmed}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -178,19 +178,16 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
           finalizationTxSeq.fold(e => throw RuntimeException(e.toString), x => x)
         )
 
-        def mbRollouts(rolloutTxSeq: RolloutTxSeq): List[Transaction] =
-            rolloutTxSeq.notLast.map(_.tx).toList :+ rolloutTxSeq.last.tx
-
         extension (skeleton: Skeleton)
 
-            /** Returns all happypath txs of the skeleton, i.e. all but post dated fallback txs. */
+            /** Returns all happy path txs of the skeleton, i.e. all but post dated fallback txs. */
             def happyPathTxs: Set[Transaction] = {
 
                 def settlementTxs(r: SettlementTxSeq.Builder.Result): List[Transaction] =
                     r.settlementTxSeq match {
                         case SettlementTxSeq.NoRollouts(settlementTx) => List(settlementTx.tx)
                         case SettlementTxSeq.WithRollouts(settlementTx, rolloutTxSeq) =>
-                            settlementTx.tx +: mbRollouts(rolloutTxSeq)
+                            settlementTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx)
                     }
 
                 def finalizationTxs(seq: FinalizationTxSeq): List[Transaction] = seq match {
@@ -199,13 +196,13 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     case FinalizationTxSeq.WithDeinit(finalizationTx, deinitTx) =>
                         List(finalizationTx.tx, deinitTx.tx)
                     case FinalizationTxSeq.WithRollouts(finalizationTx, rolloutTxSeq) =>
-                        finalizationTx.tx +: mbRollouts(rolloutTxSeq)
+                        finalizationTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx)
                     case FinalizationTxSeq.WithDeinitAndRollouts(
                           finalizationTx,
                           deinitTx,
                           rolloutTxSeq
                         ) =>
-                        finalizationTx.tx +: mbRollouts(rolloutTxSeq) :+ deinitTx.tx
+                        finalizationTx.tx +: rolloutTxSeq.mbRollouts.map(_.tx) :+ deinitTx.tx
                 }
 
                 (
@@ -265,13 +262,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                     +:
                         skeleton._2
                             .map(node =>
-                                node.settlementTxSeq.settlementTx.tx.id -> node.settlementTxSeq.mbRolloutSeq
-                                    .map(mbRollouts)
-                                    .getOrElse(List.empty)
+                                node.settlementTxSeq.settlementTx.tx.id -> node.settlementTxSeq.mbRollouts
+                                    .map(_.tx)
                             )
-                        :+ skeleton._3.finalizationTx.tx.id -> skeleton._3.mbRolloutSeq
-                            .map(mbRollouts)
-                            .getOrElse(List.empty)
+                        :+ skeleton._3.finalizationTx.tx.id -> skeleton._3.mbRollouts.map(_.tx)
             }
 
             def rolloutSeqsBefore(
@@ -598,18 +592,22 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                 // Use protected handlers directly to present all effects
                 _ <- skeleton._2.traverse_(s =>
                     cardanoLiaison.handleMajorBlockL1Effects(
-                      ConfirmMajorBlock(
-                        Block.Number(s.settlementTxSeq.settlementTx.majorVersionProduced),
-                        s.settlementTxSeq,
-                        s.fallbackTx
+                      MajorBlockConfirmed(
+                        blockNum =
+                            Block.Number(s.settlementTxSeq.settlementTx.majorVersionProduced),
+                        settlementSigned = s.settlementTxSeq.settlementTx,
+                        rolloutsSigned = s.settlementTxSeq.mbRollouts,
+                        fallbackSigned = s.fallbackTx
                       )
                     )
                 )
 
                 _ <- cardanoLiaison.handleFinalBlockL1Effects(
-                  ConfirmFinalBlock(
-                    Block.Number(skeleton._3.finalizationTx.majorVersionProduced),
-                    skeleton._3
+                  FinalBlockConfirmed(
+                    blockNum = Block.Number(skeleton._3.finalizationTx.majorVersionProduced),
+                    finalizationSigned = skeleton._3.finalizationTx,
+                    rolloutsSigned = ???,
+                    mbDeinitSigned = ???
                   )
                 )
 

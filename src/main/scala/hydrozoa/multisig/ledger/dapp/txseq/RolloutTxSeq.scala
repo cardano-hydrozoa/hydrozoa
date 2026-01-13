@@ -28,6 +28,10 @@ final case class RolloutTxSeq(
 )
 
 object RolloutTxSeq {
+
+    extension (self: RolloutTxSeq)
+        def mbRollouts: List[RolloutTx] = self.notLast.appended(self.last).toList
+
     object Builder {
         sealed trait PartialResult:
             type FirstTxType <: RolloutTx

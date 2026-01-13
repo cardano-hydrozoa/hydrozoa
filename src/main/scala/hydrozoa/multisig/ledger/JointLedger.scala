@@ -11,8 +11,7 @@ import hydrozoa.multisig.ledger.JointLedger.*
 import hydrozoa.multisig.ledger.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.VirtualLedgerM.runVirtualLedgerM
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, RolloutTx, Tx, TxTiming}
-import hydrozoa.multisig.ledger.dapp.txseq.SettlementTxSeq.{NoRollouts, WithRollouts}
+import hydrozoa.multisig.ledger.dapp.tx.{Tx, TxTiming}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.ledger.dapp.utxo.{DepositUtxo, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -288,11 +287,7 @@ final case class JointLedger(
               BlockEffects.Major(
                 nextBlock.id,
                 settlement = settleLedgerRes.settlementTxSeq.settlementTx,
-                rollouts = settleLedgerRes.settlementTxSeq match {
-                    case _: NoRollouts => List.empty
-                    case r: WithRollouts =>
-                        r.rolloutTxSeq.notLast.appended(r.rolloutTxSeq.last).toList
-                },
+                rollouts = settleLedgerRes.settlementTxSeq.mbRollouts,
                 fallback = settleLedgerRes.fallBack,
                 postDatedRefunds = List.empty
               )
@@ -505,24 +500,12 @@ final case class JointLedger(
 
                 val blockEffects: BlockEffects.Final = {
                     import FinalizationTxSeq.*
-                    val (rollouts: List[RolloutTx], deinit: Option[DeinitTx]) =
-                        finalizationTxSeq match {
-                            case _: Monolithic => (List.empty, None)
-                            case x: WithDeinit => (List.empty, Some(x.deinitTx))
-                            case x: FinalizationTxSeq.WithRollouts =>
-                                val rollouts: List[RolloutTx] =
-                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                                (rollouts, None)
-                            case x: WithDeinitAndRollouts =>
-                                val rollouts: List[RolloutTx] =
-                                    x.rolloutTxSeq.notLast.appended(x.rolloutTxSeq.last).toList
-                                (rollouts, Some(x.deinitTx))
-                        }
+
                     BlockEffects.Final(
                       nextBlock.id,
                       finalizationTxSeq.finalizationTx,
-                      rollouts = rollouts,
-                      deinit = deinit
+                      rollouts = finalizationTxSeq.mbRollouts,
+                      deinit = finalizationTxSeq.mbDeinit
                     )
                 }
 

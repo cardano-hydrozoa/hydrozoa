@@ -7,7 +7,6 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
-import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
 import hydrozoa.multisig.protocol.types.Block
@@ -43,7 +42,6 @@ object CardanoLiaison:
 
     final case class Config(
         cardanoBackend: CardanoBackend.Ref,
-        // persistence: Persistence.Ref,
         initializationTx: InitializationTx,
         initializationFallbackTx: FallbackTx,
         receiveTimeout: FiniteDuration,
@@ -117,31 +115,29 @@ object CardanoLiaison:
     // Request + ActorRef + apply
     // ===================================
 
-    /** L2 block confirmations (local-only signal) */
-    sealed trait ConfirmBlock {
-        def id: Block.Number
+    /** L2 block confirmations. This is a local signal coming from the consensus actor. */
+    sealed trait BlockConfirmed {
+        def blockNum: Block.Number
+        def rolloutsSigned: List[RolloutTx]
     }
 
-    final case class ConfirmMajorBlock(
-        override val id: Block.Number,
-        // The settlement tx + optional rollouts
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        settlementTxSeq: SettlementTxSeq,
-        // The fallback tx
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        fallbackTx: FallbackTx
-    ) extends ConfirmBlock
+    final case class MajorBlockConfirmed(
+        override val blockNum: Block.Number,
+        settlementSigned: SettlementTx,
+        override val rolloutsSigned: List[RolloutTx],
+        fallbackSigned: FallbackTx
+    ) extends BlockConfirmed
 
-    final case class ConfirmFinalBlock(
-        override val id: Block.Number,
-        // The finalization tx + optional rollout txs
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        finalizationTxSeq: FinalizationTxSeq,
-    ) extends ConfirmBlock
+    final case class FinalBlockConfirmed(
+        override val blockNum: Block.Number,
+        finalizationSigned: FinalizationTx,
+        override val rolloutsSigned: List[RolloutTx],
+        mbDeinitSigned: Option[DeinitTx]
+    ) extends BlockConfirmed
 
     object Timeout
 
-    type Request = ConfirmMajorBlock | ConfirmFinalBlock | Timeout.type
+    type Request = MajorBlockConfirmed | FinalBlockConfirmed | Timeout.type
     type Handle = ActorRef[IO, Request]
 
     def apply(config: Config): IO[CardanoLiaison] = for {
@@ -160,9 +156,9 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
         } yield ()
 
     override def receive: Receive[IO, Request] = {
-        case effects: ConfirmMajorBlock =>
+        case effects: MajorBlockConfirmed =>
             handleMajorBlockL1Effects(effects) >> runEffects
-        case effects: ConfirmFinalBlock =>
+        case effects: FinalBlockConfirmed =>
             handleFinalBlockL1Effects(effects) >> runEffects
         case CardanoLiaison.Timeout => runEffects
     }
@@ -171,37 +167,39 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
     // Inbox handlers
     // ===================================
 
-    /** Handle [[ConfirmMajorBlock]] request:
+    /** Handle [[MajorBlockConfirmed]] request:
       *   - saves the effects in the internal actor's state
       */
-    protected[consensus] def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
+    protected[consensus] def handleMajorBlockL1Effects(block: MajorBlockConfirmed): IO[Unit] = for {
         _ <- IO.println("handleMajorBlockL1Effects")
-        // TODO: check effect uniqueness?
         _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
-                mkHappyPathEffectInputsAndEffects(block.settlementTxSeq)
+                mkHappyPathEffectInputsAndEffects(block.settlementSigned, block.rolloutsSigned)
             State(
               targetState = TargetState.Active(
-                UtxoIdL1(block.settlementTxSeq.settlementTx.treasuryProduced.utxoId)
+                UtxoIdL1(block.settlementSigned.treasuryProduced.utxoId)
               ),
               effectInputs = s.effectInputs ++ blockEffectInputs,
               happyPathEffects = s.happyPathEffects ++ blockEffects,
-              fallbackEffects = s.fallbackEffects + (block.id -> block.fallbackTx)
+              fallbackEffects = s.fallbackEffects + (block.blockNum -> block.fallbackSigned)
             )
         })
     } yield ()
 
-    /** Handle [[ConfirmFinalBlock]] request:
+    /** Handle [[FinalBlockConfirmed]] request:
       *   - saves the effects in the internal actor's state
       */
-    protected[consensus] def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
+    protected[consensus] def handleFinalBlockL1Effects(block: FinalBlockConfirmed): IO[Unit] = for {
         _ <- IO.println("handleFinalBlockL1Effects")
-        // TODO: check effect uniqueness?
         _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
-                mkHappyPathEffectInputsAndEffects(block.finalizationTxSeq)
+                mkHappyPathEffectInputsAndEffects(
+                  block.finalizationSigned,
+                  block.rolloutsSigned,
+                  block.mbDeinitSigned
+                )
             s.copy(
-              targetState = TargetState.Finalized(block.finalizationTxSeq.finalizationTx.tx.id),
+              targetState = TargetState.Finalized(block.finalizationSigned.tx.id),
               effectInputs = s.effectInputs ++ blockEffectInputs,
               happyPathEffects = s.happyPathEffects ++ blockEffects
             )
@@ -209,37 +207,26 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
     } yield ()
 
     private def mkHappyPathEffectInputsAndEffects(
-        settlementTxSeq: SettlementTxSeq
+        settlementTx: SettlementTx,
+        rollouts: List[RolloutTx]
     ): (
         Seq[(UtxoIdL1, EffectId)],
         Seq[(EffectId, HappyPathEffect)]
     ) = {
-        val settlementTx = settlementTxSeq.settlementTx
         val treasurySpent = settlementTx.treasurySpent
+        val effects: List[(TransactionInput, HappyPathEffect)] =
+            List(treasurySpent.utxoId -> settlementTx)
+            // TODO: add utxoId
+                ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
         val blockNumber = Block.Number(settlementTx.majorVersionProduced)
-        settlementTxSeq match {
-            case _: SettlementTxSeq.NoRollouts =>
-                (
-                  Seq(UtxoIdL1(treasurySpent.utxoId) -> (blockNumber -> 0)),
-                  Seq((blockNumber -> 0) -> settlementTx)
-                )
-            case withRollouts: SettlementTxSeq.WithRollouts =>
-                val last = withRollouts.rolloutTxSeq.last
-                val vector: Vector[(TransactionInput, HappyPathEffect)] =
-                    (treasurySpent.utxoId -> settlementTx)
-                        +: withRollouts.rolloutTxSeq.notLast.map(rolloutTx =>
-                            rolloutTx.rolloutSpent.utxo.input -> rolloutTx
-                        )
-                        :+ (last.rolloutSpent.utxo.input -> last)
-                indexWithEffectId(vector, blockNumber).unzip
-        }
+        indexWithEffectId(effects, blockNumber).unzip
     }
 
     private def indexWithEffectId(
-        vector: Vector[(TransactionInput, HappyPathEffect)],
+        effects: List[(TransactionInput, HappyPathEffect)],
         blockNumber: Block.Number
-    ): Vector[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
-        vector.zipWithIndex
+    ): List[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] =
+        effects.zipWithIndex
             .map((utxoIdAndEffect, index) => {
                 val effectId = blockNumber -> index
                 (UtxoIdL1(
@@ -248,65 +235,29 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
             })
 
     private def mkHappyPathEffectInputsAndEffects(
-        finalizationTxSeq: FinalizationTxSeq
+        finalizationTx: FinalizationTx,
+        rollouts: List[RolloutTx],
+        mbDeinitTx: Option[DeinitTx]
     ): (
         Seq[(UtxoIdL1, EffectId)],
         Seq[(EffectId, HappyPathEffect)]
     ) =
-        val finalizationTx = finalizationTxSeq.finalizationTx
         val treasurySpent = finalizationTx.treasurySpent
         val blockNumber = Block.Number(finalizationTx.majorVersionProduced)
-        val finalizationEffectId = blockNumber -> 0
-        val finalizationInputEntry = UtxoIdL1(treasurySpent.utxoId) -> finalizationEffectId
-        val finalizationEffectEntry = finalizationEffectId -> finalizationTx
-        val deinitEffectId = blockNumber.increment -> 0
 
-        def mkWithRollout(
-            rolloutTxSeq: RolloutTxSeq
-        ): Vector[((UtxoIdL1, EffectId), (EffectId, HappyPathEffect))] = {
-            val last = rolloutTxSeq.last
-            val vector = (treasurySpent.utxoId -> finalizationTx)
-                +: rolloutTxSeq.notLast.map(rolloutTx =>
-                    rolloutTx.rolloutSpent.utxo.input -> rolloutTx
-                )
-                :+ (last.rolloutSpent.utxo.input -> last)
-            indexWithEffectId(vector, blockNumber)
-        }
+        val effects: List[(TransactionInput, HappyPathEffect)] =
+            List(treasurySpent.utxoId -> finalizationTx)
+            // TODO: add utxoId
+                ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
 
-        finalizationTxSeq match {
+        val ret = indexWithEffectId(effects, blockNumber).unzip
 
-            case _: FinalizationTxSeq.Monolithic =>
-                (
-                  Seq(finalizationInputEntry),
-                  Seq(finalizationEffectEntry)
-                )
+        val deinitEffect = indexWithEffectId(
+          mbDeinitTx.toList.map(d => d.residualTreasurySpent.utxoId -> d),
+          blockNumber.increment
+        ).unzip
 
-            case withDeinit: FinalizationTxSeq.WithDeinit =>
-                val deinitInputEffectEntry = UtxoIdL1(
-                  withDeinit.deinitTx.residualTreasurySpent.utxoId
-                ) -> deinitEffectId
-                val deinitEffectEntry = deinitEffectId -> withDeinit.deinitTx
-
-                (
-                  Seq(
-                    finalizationInputEntry,
-                    deinitInputEffectEntry
-                  ),
-                  Seq(
-                    finalizationEffectEntry,
-                    deinitEffectEntry
-                  )
-                )
-
-            case withRollouts: FinalizationTxSeq.WithRollouts =>
-                mkWithRollout(withRollouts.rolloutTxSeq).unzip
-
-            case withDeinitAndRollout: FinalizationTxSeq.WithDeinitAndRollouts =>
-                (mkWithRollout(withDeinitAndRollout.rolloutTxSeq) :+
-                    ((UtxoIdL1(
-                      withDeinitAndRollout.deinitTx.residualTreasurySpent.utxoId
-                    ) -> deinitEffectId) -> (deinitEffectId -> withDeinitAndRollout.deinitTx))).unzip
-        }
+        (ret._1 ++ deinitEffect._1, ret._2 ++ deinitEffect._2)
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *
@@ -473,7 +424,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
 
     private def mkDirectAction(state: State, currentSlot: Slot)(
         effectId: EffectId
-    ): Either[EffectError, DirectAction] =
+    ): Either[EffectError, DirectAction] = {
         import Action.*
         import EffectError.*
 
@@ -576,8 +527,7 @@ class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLia
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
                 Right(Rollout(effectTxs.map(_.tx)))
         }
-
-    end mkDirectAction
+    }
 
     private enum EffectError extends Throwable:
         case UnexpectedRolloutEffect(effectId: EffectId)

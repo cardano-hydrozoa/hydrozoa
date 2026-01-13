@@ -370,7 +370,7 @@ class ConsensusActor(
 
         // TODO: refactor liaison, fill in the holes
         final lazy val mbCardanoLiaisonEffects
-            : Option[CardanoLiaison.ConfirmMajorBlock | CardanoLiaison.ConfirmFinalBlock] =
+            : Option[CardanoLiaison.MajorBlockConfirmed | CardanoLiaison.FinalBlockConfirmed] =
             this match {
                 case BlockConfirmed.Major(
                       _,
@@ -381,14 +381,22 @@ class ConsensusActor(
                       _
                     ) =>
                     Some(
-                      CardanoLiaison.ConfirmMajorBlock(
-                        id = blockNum,
-                        settlementTxSeq = ???,
-                        fallbackTx = fallbackSigned
+                      CardanoLiaison.MajorBlockConfirmed(
+                        blockNum = blockNum,
+                        settlementSigned = settlementSigned,
+                        rolloutsSigned = rolloutsSigned,
+                        fallbackSigned = fallbackSigned
                       )
                     )
                 case BlockConfirmed.Final(_, rolloutsSigned, deinitSigned, finalizationSigned, _) =>
-                    Some(CardanoLiaison.ConfirmFinalBlock(id = blockNum, finalizationTxSeq = ???))
+                    Some(
+                      CardanoLiaison.FinalBlockConfirmed(
+                        blockNum = blockNum,
+                        finalizationSigned = finalizationSigned,
+                        rolloutsSigned = rolloutsSigned,
+                        mbDeinitSigned = deinitSigned
+                      )
+                    )
                 case _ => None
             }
 
@@ -430,9 +438,9 @@ class ConsensusActor(
             override val block: Block.Final,
             // Fully signed txs
             rolloutsSigned: List[RolloutTx],
-            deinitSigned: Option[DeinitTx],
+            mbDeinitSigned: Option[DeinitTx],
             finalizationSigned: FinalizationTx,
-            final override val finalizationRequested: Boolean = false
+            override val finalizationRequested: Boolean = false
         ) extends BlockConfirmed
 
     // ===================================
@@ -1224,7 +1232,7 @@ class ConsensusActor(
                     block = augBlock.block,
                     rolloutsSigned = rolloutsSigned,
                     finalizationSigned = finalizationSigned,
-                    deinitSigned = mbDeinitSigned
+                    mbDeinitSigned = mbDeinitSigned
                   ),
                   None
                 )
