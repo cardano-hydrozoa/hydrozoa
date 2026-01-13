@@ -73,7 +73,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
 
             // Use [Preview.zeroTime..now] as the initialization timestamp
             initializedOn <- Gen.choose(
-              java.time.Instant.ofEpochMilli(SlotConfig.Preview.zeroTime),
+              java.time.Instant.ofEpochMilli(testTxBuilderEnvironment.slotConfig.zeroTime),
               java.time.Instant.now()
             )
 
@@ -336,7 +336,9 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq") {
                       expectedNetwork = testNetwork,
                       tx = iTx.tx,
                       resolver = mockResolver,
-                      slotConfig = config.env.slotConfig
+                      slotConfig = config.env.slotConfig,
+                      txTiming = txTiming,
+                      initializationRequestTimestamp = args.initializedOn
                     )
 
                     "Semantic transaction parsed from generic transaction in unexpected way." +

@@ -87,7 +87,7 @@ object DepositTx {
                     - txTiming.depositAbsorptionDuration
                     - txTiming.depositMaturityDuration
                     - txTiming.silenceDuration
-            val ttl = ValidityEndSlot(validityEndQuantizedInstant.instant.toEpochMilli)
+            val ttl = ValidityEndSlot(validityEndQuantizedInstant.toSlot.slot)
 
             for {
                 ctx <- TransactionBuilder
@@ -187,11 +187,12 @@ object DepositTx {
                         .lift(depositUtxoIx)
                         .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
-                    validityEnd <- Try(
-                      java.time.Instant
-                          .ofEpochMilli(tx.body.value.ttl.get)
-                          .quantizeLosslessUnsafe(config.env.slotConfig)
-                    ) match {
+                    validityEnd <- Try {
+                        val ttlSlot = tx.body.value.ttl.get
+                        val ttlPosixMillis = config.env.slotConfig.slotToTime(ttlSlot)
+                        val instant = java.time.Instant.ofEpochMilli(ttlPosixMillis)
+                        instant.quantizeLosslessUnsafe(config.env.slotConfig)
+                    } match {
                         case Failure(exception) => Left(ValidityEndParseError(exception))
                         case Success(v)         => Right(v)
                     }

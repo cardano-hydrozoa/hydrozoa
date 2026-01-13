@@ -1,7 +1,9 @@
 package hydrozoa.multisig.ledger.dapp.tx
 
 import cats.data.NonEmptyList
+import cats.effect.unsafe.implicits.global
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.ledger.dapp.tx.Metadata as MD
 import hydrozoa.multisig.ledger.dapp.utxo.DepositUtxo
 import java.util.concurrent.atomic.AtomicLong
@@ -96,10 +98,8 @@ def genDepositRecipe(
           refundInstructions = DepositUtxo.Refund.Instructions(
             address = LedgerToPlutusTranslation.getAddress(refundAddr),
             datum = SOption.None,
-            startTime = QuantizedInstant(
-              testTxBuilderEnvironment.slotConfig,
-              java.time.Instant.ofEpochMilli(0)
-            )
+            // TODO: move to propertyM
+            startTime = realTimeQuantizedInstant(config.env.slotConfig).unsafeRunSync()
           ),
           slotConfig = config.env.slotConfig
         )

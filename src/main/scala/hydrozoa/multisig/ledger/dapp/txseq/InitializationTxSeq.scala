@@ -82,7 +82,9 @@ object InitializationTxSeq {
                   expectedNetwork = expectedNetwork,
                   tx = initializationTx,
                   resolver = resolver,
-                  slotConfig = env.slotConfig
+                  slotConfig = env.slotConfig,
+                  initializationRequestTimestamp = initializationRequestTimestamp,
+                  txTiming = txTiming
                 )
                 .left
                 .map(InitializationTxParseError(_))
@@ -125,6 +127,7 @@ object InitializationTxSeq {
             expectedFallbackValidityStart: Slot =
                 (iTx.validityEnd + txTiming.silenceDuration).toSlot
 
+            // TODO: Should this be in the fallback parser?
             _ <-
                 if fallbackValidityStartSlot == expectedFallbackValidityStart
                 then Right(())

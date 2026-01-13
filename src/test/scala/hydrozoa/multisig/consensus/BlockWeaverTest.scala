@@ -14,7 +14,6 @@ import hydrozoa.multisig.protocol.types.LedgerEventId.ValidityFlag.Valid
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, Peer}
 import hydrozoa.rulebased.ledger.dapp.tx.CommonGenerators.genVersion
 import java.time.Instant
-import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
 import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
@@ -26,7 +25,6 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     override def overrideParameters(p: Test.Parameters): Test.Parameters = {
         p.withMinSuccessfulTests(100)
             .withWorkers(1)
-            .withInitialSeed(Seed.fromBase64("S1yaoAo2hR_-qsUw5RiTWJqVKpqmDVCIiBrRizSlpzJ=").get)
     }
 
     val _ = property(
