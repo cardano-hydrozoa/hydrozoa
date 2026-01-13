@@ -597,7 +597,7 @@ final case class JointLedger(
   */
 object JointLedger {
 
-    type Ref = ActorRef[IO, Requests.Request]
+    type Handle = ActorRef[IO, Requests.Request]
 
     final case class CompleteBlockError() extends Throwable
 

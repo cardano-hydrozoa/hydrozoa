@@ -13,7 +13,6 @@ import hydrozoa.multisig.protocol.CardanoBackendProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol
 import hydrozoa.multisig.protocol.ConsensusProtocol.Actors
 import hydrozoa.multisig.protocol.ManagerProtocol.Manager.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.Peer
 import scala.concurrent.duration.DurationInt
 import scala.language.postfixOps
@@ -26,7 +25,6 @@ object MultisigRegimeManager {
         peerId: Peer.Number,
         peers: List[Peer.Number],
         cardanoBackend: CardanoBackend.Ref,
-        persistence: Persistence.Ref,
         initializationTx: InitializationTx,
         fallbackTx: FallbackTx,
         slotConfig: SlotConfig
@@ -53,15 +51,11 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
               config.cardanoBackend,
               TerminatedDependency(Dependencies.CardanoBackend, config.cardanoBackend)
             )
-            _ <- context.watch(
-              config.persistence,
-              TerminatedDependency(Dependencies.Persistence, config.persistence)
-            )
 
-            pendingBlockProducer <- Deferred[IO, ConsensusProtocol.BlockWeaver.Ref]
+            pendingBlockWeaver <- Deferred[IO, BlockWeaver.Handle]
             pendingLocalPeerLiaisons <- Deferred[IO, List[ConsensusProtocol.PeerLiaison.Ref]]
-            pendingCardanoLiaison <- Deferred[IO, ConsensusProtocol.CardanoLiaison.Ref]
-            pendingTransactionSequencer <- Deferred[IO, ConsensusProtocol.EventSequencer.Ref]
+            pendingCardanoLiaison <- Deferred[IO, CardanoLiaison.Handle]
+            pendingEventSequencer <- Deferred[IO, ConsensusProtocol.EventSequencer.Ref]
 
             blockWeaver <- {
                 import BlockWeaver.Config
@@ -73,14 +67,8 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                       numberOfPeers = ???,
                       blockLeadTurn = ???,
                       recoveredMempool = BlockWeaver.Mempool.empty,
-                      jointLedger = ???,
-                      // persistence = config.persistence
-                    ),
-                    // ConnectionsPending(
-                    //  cardanoLiaison = pendingCardanoLiaison,
-                    //  peerLiaisons = pendingLocalPeerLiaisons,
-                    //  transactionSequencer = pendingTransactionSequencer
-                    // )
+                      jointLedger = ???
+                    )
                   )
                 )
             }
@@ -99,11 +87,10 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                               PeerLiaison(
                                 Config(
                                   peerId = config.peerId,
-                                  remotePeerId = pid,
-                                  persistence = config.persistence
+                                  remotePeerId = pid
                                 ),
                                 ConnectionsPending(
-                                  blockWeaver = pendingBlockProducer,
+                                  blockWeaver = pendingBlockWeaver,
                                   remotePeerLiaison = pendingRemotePeerLiaison
                                 )
                               )
@@ -136,19 +123,19 @@ trait MultisigRegimeManager(config: Config) extends Actor[IO, Request] {
                 import EventSequencer.{Config, ConnectionsPending}
                 context.actorOf(
                   EventSequencer(
-                    Config(peerId = config.peerId, persistence = config.persistence),
+                    Config(peerId = config.peerId),
                     ConnectionsPending(
-                      blockWeaver = pendingBlockProducer,
+                      blockWeaver = pendingBlockWeaver,
                       peerLiaisons = pendingLocalPeerLiaisons
                     )
                   )
                 )
             }
 
-            _ <- pendingBlockProducer.complete(blockWeaver)
+            _ <- pendingBlockWeaver.complete(blockWeaver)
             _ <- pendingLocalPeerLiaisons.complete(localPeerLiaisons)
             _ <- pendingCardanoLiaison.complete(cardanoLiaison)
-            _ <- pendingTransactionSequencer.complete(transactionSequencer)
+            _ <- pendingEventSequencer.complete(transactionSequencer)
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>

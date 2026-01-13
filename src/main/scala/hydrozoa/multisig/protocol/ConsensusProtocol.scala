@@ -2,9 +2,7 @@ package hydrozoa.multisig.protocol
 
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.UtxoIdL1
-import hydrozoa.multisig.ledger.dapp.tx.FallbackTx
-import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, SettlementTxSeq}
+import hydrozoa.multisig.consensus.BlockWeaver
 import hydrozoa.multisig.protocol.types.Block.*
 import hydrozoa.multisig.protocol.types.{AckBlock, Batch, Block, LedgerEvent, LedgerEventId}
 import scala.concurrent.duration.FiniteDuration
@@ -19,41 +17,6 @@ object ConsensusProtocol {
     enum Actors:
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer
 
-    // TODO: move to the weaver sources
-    object BlockWeaver {
-        type BlockWeaverRef = Ref
-        type Ref = ActorRef[IO, Request]
-        // TODO: use Block.Next not Block here
-        type Request = LedgerEvent | Block | BlockConfirmed | PollResults
-
-        /** Block confirmation.
-          *
-          * @param blockNumber
-          */
-        final case class BlockConfirmed(
-            blockNumber: Block.Number,
-            finalizationRequested: Boolean = false
-        )
-
-        /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at
-          * the multisig head address.
-          *
-          * @param utxos
-          *   all utxos found
-          */
-        final case class PollResults(utxos: Set[UtxoIdL1])
-    }
-
-    /** TODO: I would like to have it in the CardanoLiaison.scala and not here.
-      */
-    object CardanoLiaison {
-        type CardanoLiaisonRef = Ref
-        type Ref = ActorRef[IO, Request]
-
-        import hydrozoa.multisig.consensus.CardanoLiaison as ThatCardanoLiaison
-        type Request = ConfirmMajorBlock | ConfirmFinalBlock | ThatCardanoLiaison.Timeout.type
-    }
-
     object PeerLiaison {
         type PeerLiaisonRef = Ref
         type Ref = ActorRef[IO, Request]
@@ -66,16 +29,12 @@ object ConsensusProtocol {
         type Ref = ActorRef[IO, Request]
         type Request =
             SubmitLedgerEvent | ConfirmBlock
-    }
 
-    object Persisted {
-        type Request =
-            LedgerEvent | Block | AckBlock | ConfirmBlock | NewMsgBatch
+        type ConfirmBlock = Void
     }
 
     object RemoteBroadcast {
-        type Request =
-            BlockWeaver.Request
+        type Request = BlockWeaver.Request
     }
 
     /** Submit a new ledger event to the head via a peer's ledger event actor. */
@@ -99,45 +58,6 @@ object ConsensusProtocol {
                 eventOutcome <- Deferred[IO, Unit] // FIXME: LedgerEventOutcome]
             } yield SubmitLedgerEvent(time, event, eventOutcome)
     }
-
-    // TODO: move to cardano liaison
-    /** L2 block confirmations (local-only signal) */
-    sealed trait ConfirmBlock {
-        def id: Block.Number
-    }
-
-    object ConfirmBlock {
-        type Subscriber = ActorRef[IO, ConfirmBlock]
-    }
-
-    final case class ConfirmMinorBlock(
-        override val id: Block.Number
-        // TODO: add block signatures
-    ) extends ConfirmBlock
-
-    object ConfirmMajorFinalBlock {
-        type Subscriber = ActorRef[IO, ConfirmMajorBlock | ConfirmFinalBlock]
-    }
-
-    final case class ConfirmMajorBlock(
-        override val id: Block.Number,
-        // The settlement tx + optional rollouts
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        settlementTxSeq: SettlementTxSeq,
-        // The fallback tx
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        fallbackTx: FallbackTx
-    ) extends ConfirmBlock
-
-    /** TODO: this is a message that the cardano liaison expects to see once a final block gets
-      * confirmed.
-      */
-    final case class ConfirmFinalBlock(
-        override val id: Block.Number,
-        // The finalization tx + optional rollout txs
-        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
-        finalizationTxSeq: FinalizationTxSeq,
-    ) extends ConfirmBlock
 
     /** Request by a comm actor to its remote comm-actor counterpart for a batch of events, blocks,
       * or block acknowledgements originating from the remote peer.

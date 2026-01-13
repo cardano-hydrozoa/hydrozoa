@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.ledger.dapp.tx.{DeinitTx, FallbackTx, FinalizationTx, RefundTx, RolloutTx, SettlementTx, Tx}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.types.AckBlock.HeaderSignature.given
@@ -232,7 +233,7 @@ sealed trait FinalConsensusCell[T] extends ConsensusCell[T]
   * @see
   *   [[PostponedAckSupport]] for postponed ack handling
   */
-object ConsensusActor {
+object ConsensusActor:
 
     final case class Config(
         /** Own peer number */
@@ -247,12 +248,10 @@ object ConsensusActor {
         // Actors
         // TODO: should be many - a liaison per peer
         peerLiaison: PeerLiaison.PeerLiaisonRef,
-        blockWeaver: BlockWeaver.BlockWeaverRef,
-        cardanoLiaison: CardanoLiaison.CardanoLiaisonRef,
+        blockWeaver: BlockWeaver.Handle,
+        cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.EventSequencerRef,
     )
-
-    type Request = AugmentedBlock.Next | AckBlock
 
     // ===================================
     // Actor's state
@@ -270,15 +269,25 @@ object ConsensusActor {
     object State:
         def mkInitialState: State = State(cells = Map.empty)
 
-    def apply(config: Config): IO[ConsensusActor] = {
+    // ===================================
+    // Request + ActorRef + apply
+    // ===================================
+
+    type Request = AugmentedBlock.Next | AckBlock
+
+    type Handle = ActorRef[IO, Request]
+
+    def apply(config: Config): IO[ConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.mkInitialState)
-        } yield new ConsensusActor(config = config, stateRef = stateRef) {}
-    }
-}
+        } yield new ConsensusActor(config = config, stateRef = stateRef)
 
-class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
-    extends Actor[IO, Request] {
+end ConsensusActor
+
+class ConsensusActor(
+    config: ConsensusActor.Config,
+    stateRef: Ref[IO, ConsensusActor.State]
+) extends Actor[IO, ConsensusActor.Request]:
     import ConsensusActor.*
     import ConsensusCell.*
 
@@ -360,7 +369,8 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
             )
 
         // TODO: refactor liaison, fill in the holes
-        final lazy val mbCardanoLiaisonEffects: Option[ConfirmMajorBlock | ConfirmFinalBlock] =
+        final lazy val mbCardanoLiaisonEffects
+            : Option[CardanoLiaison.ConfirmMajorBlock | CardanoLiaison.ConfirmFinalBlock] =
             this match {
                 case BlockConfirmed.Major(
                       _,
@@ -371,14 +381,14 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
                       _
                     ) =>
                     Some(
-                      ConfirmMajorBlock(
+                      CardanoLiaison.ConfirmMajorBlock(
                         id = blockNum,
                         settlementTxSeq = ???,
                         fallbackTx = fallbackSigned
                       )
                     )
                 case BlockConfirmed.Final(_, rolloutsSigned, deinitSigned, finalizationSigned, _) =>
-                    Some(ConfirmFinalBlock(id = blockNum, finalizationTxSeq = ???))
+                    Some(CardanoLiaison.ConfirmFinalBlock(id = blockNum, finalizationTxSeq = ???))
                 case _ => None
             }
 
@@ -392,7 +402,7 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
         //  - blockNum
         //  - events with flags
         //  - post-dated refunds
-        final lazy val sequencerEvents: ConfirmBlock = ???
+        final lazy val sequencerEvents: EventSequencer.ConfirmBlock = ???
     }
 
     object BlockConfirmed:
@@ -1247,4 +1257,4 @@ class ConsensusActor(config: Config, stateRef: Ref[IO, ConsensusActor.State])
             case MissingDeinitSignature
 
     end ConsensusCell
-}
+end ConsensusActor

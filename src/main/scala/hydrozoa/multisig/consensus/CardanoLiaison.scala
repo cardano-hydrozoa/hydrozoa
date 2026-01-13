@@ -3,17 +3,14 @@ package hydrozoa.multisig.consensus
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.UtxoIdL1
-import hydrozoa.multisig.consensus.CardanoLiaison.Config
 import hydrozoa.multisig.ledger.dapp.tx.*
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{GetCardanoHeadState, GetTxInfo, SubmitL1Effects}
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.CardanoLiaison.*
 import hydrozoa.multisig.protocol.types.Block
-import scala.annotation.unused
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Slot, SlotConfig, Transaction, TransactionHash, TransactionInput}
@@ -42,9 +39,7 @@ import scalus.cardano.ledger.{Slot, SlotConfig, Transaction, TransactionHash, Tr
   *   - In every run the liaison tries to handle all utxos found with known effects pushing L1
   *     towards the known target state.
   */
-object CardanoLiaison {
-
-    object Timeout
+object CardanoLiaison:
 
     final case class Config(
         cardanoBackend: CardanoBackend.Ref,
@@ -55,69 +50,28 @@ object CardanoLiaison {
         slotConfig: SlotConfig
     )
 
-    final case class ConnectionsPending()
-
-    def apply(config: Config): IO[CardanoLiaison] = {
-        IO(new CardanoLiaison(config) {})
-    }
-}
-
-trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
-    private val subscribers = Ref.unsafe[IO, Option[Subscribers]](None)
-    private val state: Ref[IO, State] = Ref.unsafe[IO, State](State.initialState)
-
-    private final case class Subscribers()
-
-    override def preStart: IO[Unit] =
-        for {
-            _ <- subscribers.set(Some(Subscribers()))
-            _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
-        } yield ()
-
-    override def receive: Receive[IO, Request] =
-        PartialFunction.fromFunction(req =>
-            subscribers.get.flatMap {
-                case Some(subs) =>
-                    this.receiveTotal(req, subs)
-                case _ =>
-                    Error(
-                      "Impossible: Cardano event actor is receiving before its preStart provided subscribers."
-                    ).raiseError
-            }
-        )
-
-    private def receiveTotal(req: Request, @unused _subs: Subscribers): IO[Unit] =
-        req match {
-            case effects: ConfirmMajorBlock =>
-                handleMajorBlockL1Effects(effects) >> runEffects
-            case effects: ConfirmFinalBlock =>
-                handleFinalBlockL1Effects(effects) >> runEffects
-            case CardanoLiaison.Timeout => runEffects
-        }
-
     // ===================================
-    // Internal state
+    // Actor's Internal state
     // ===================================
 
     /** The second part of the EffectId is a number:
       *   - 0 - settlement
       *   - 1,2,3,... - rollouts
       */
-    private type EffectId = (Block.Number, Int)
+    type EffectId = (Block.Number, Int)
 
-    private object EffectId:
+    object EffectId:
         val initializationEffectId: EffectId = Block.Number(0) -> 0
 
     /** The state we want to achieve on L1. */
-    private enum TargetState:
+    enum TargetState:
         /** Regular state of an active head represented by id of the treasury utxo. */
         case Active(treasuryUtxoId: UtxoIdL1)
 
         /** Final state of a head, represented by the transaction hash of the finalization tx. */
         case Finalized(finalizationTxHash: TransactionHash)
 
-    private type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | DeinitTx |
-        RolloutTx
+    type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | DeinitTx | RolloutTx
 
     extension (effect: HappyPathEffect)
         def tx: Transaction = effect match
@@ -128,7 +82,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
             case e: RolloutTx        => e.tx
 
     /** Internal state of the actor. */
-    private final case class State(
+    final case class State(
         /** L1 target state */
         targetState: TargetState,
 
@@ -147,8 +101,8 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         fallbackEffects: Map[Block.Number, FallbackTx]
     )
 
-    private object State:
-        def initialState: State = {
+    object State:
+        def initialState(config: Config): State = {
             State(
               targetState =
                   TargetState.Active(UtxoIdL1(config.initializationTx.treasuryProduced.utxoId)),
@@ -160,6 +114,60 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
         }
 
     // ===================================
+    // Request + ActorRef + apply
+    // ===================================
+
+    /** L2 block confirmations (local-only signal) */
+    sealed trait ConfirmBlock {
+        def id: Block.Number
+    }
+
+    final case class ConfirmMajorBlock(
+        override val id: Block.Number,
+        // The settlement tx + optional rollouts
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
+        settlementTxSeq: SettlementTxSeq,
+        // The fallback tx
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
+        fallbackTx: FallbackTx
+    ) extends ConfirmBlock
+
+    final case class ConfirmFinalBlock(
+        override val id: Block.Number,
+        // The finalization tx + optional rollout txs
+        // TODO: (with all signatures, the idea is to put signatures right into `Transaction`s)
+        finalizationTxSeq: FinalizationTxSeq,
+    ) extends ConfirmBlock
+
+    object Timeout
+
+    type Request = ConfirmMajorBlock | ConfirmFinalBlock | Timeout.type
+    type Handle = ActorRef[IO, Request]
+
+    def apply(config: Config): IO[CardanoLiaison] = for {
+        stateRef <- Ref[IO].of(State.initialState(config))
+    } yield new CardanoLiaison(config, stateRef)
+
+end CardanoLiaison
+
+class CardanoLiaison(config: CardanoLiaison.Config, stateRef: Ref[IO, CardanoLiaison.State])
+    extends Actor[IO, CardanoLiaison.Request]:
+    import CardanoLiaison.*
+
+    override def preStart: IO[Unit] =
+        for {
+            _ <- context.setReceiveTimeout(config.receiveTimeout, CardanoLiaison.Timeout)
+        } yield ()
+
+    override def receive: Receive[IO, Request] = {
+        case effects: ConfirmMajorBlock =>
+            handleMajorBlockL1Effects(effects) >> runEffects
+        case effects: ConfirmFinalBlock =>
+            handleFinalBlockL1Effects(effects) >> runEffects
+        case CardanoLiaison.Timeout => runEffects
+    }
+
+    // ===================================
     // Inbox handlers
     // ===================================
 
@@ -169,7 +177,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     protected[consensus] def handleMajorBlockL1Effects(block: ConfirmMajorBlock): IO[Unit] = for {
         _ <- IO.println("handleMajorBlockL1Effects")
         // TODO: check effect uniqueness?
-        _ <- state.update(s => {
+        _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
                 mkHappyPathEffectInputsAndEffects(block.settlementTxSeq)
             State(
@@ -189,7 +197,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
     protected[consensus] def handleFinalBlockL1Effects(block: ConfirmFinalBlock): IO[Unit] = for {
         _ <- IO.println("handleFinalBlockL1Effects")
         // TODO: check effect uniqueness?
-        _ <- state.update(s => {
+        _ <- stateRef.update(s => {
             val (blockEffectInputs, blockEffects) =
                 mkHappyPathEffectInputsAndEffects(block.finalizationTxSeq)
             s.copy(
@@ -325,7 +333,7 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                 for {
 
                     // 2. Based on the local state, find all due actions
-                    state <- state.get
+                    state <- stateRef.get
 
                     // _ <- IO.println(state.effectInputs)
                     // _ <- IO.println(state.happyPathEffects.keys)
@@ -592,4 +600,5 @@ trait CardanoLiaison(config: Config) extends Actor[IO, Request] {
                     s" happy path tx TTL: $happyPathTtl" +
                     s" fallback validity start: $fallbackValidityStart"
         }
-}
+
+end CardanoLiaison

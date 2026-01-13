@@ -6,7 +6,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.multisig.consensus.PeerLiaison.{Config, ConnectionsPending, MaxEvents}
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.PeerLiaison.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.*
 import scala.annotation.targetName
 import scala.collection.immutable.Queue
@@ -22,12 +21,11 @@ object PeerLiaison {
     final case class Config(
         peerId: Peer.Number,
         remotePeerId: Peer.Number,
-        maxLedgerEventsPerBatch: MaxEvents = 25,
-        persistence: Persistence.Ref
+        maxLedgerEventsPerBatch: MaxEvents = 25
     )
 
     final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Handle],
         remotePeerLiaison: Deferred[IO, PeerLiaisonRef]
     )
 
@@ -113,7 +111,6 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 } yield ()
             case x: NewMsgBatch =>
                 for {
-                    _ <- config.persistence ?: Persistence.PersistRequest(x)
                     _ <- subs.remotePeerLiaison ! x.nextGetMsgBatch
                     _ <- x.ack.traverse_(subs.ackBlock ! _)
                     _ <- x.block.traverse_(subs.newBlock ! _)

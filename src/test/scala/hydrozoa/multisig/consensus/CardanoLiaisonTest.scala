@@ -12,6 +12,7 @@ import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.UtxoIdL1
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.CardanoLiaison.{ConfirmFinalBlock, ConfirmMajorBlock}
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Rollback.SettlementTiming
 import hydrozoa.multisig.consensus.CardanoLiaisonTest.Skeleton.*
 import hydrozoa.multisig.ledger.dapp.script.multisig.HeadMultisigScript
@@ -21,7 +22,6 @@ import hydrozoa.multisig.ledger.dapp.tx.TxTiming.*
 import hydrozoa.multisig.ledger.dapp.tx.{FallbackTx, RolloutTx, Tx, TxTiming, genFinalizationTxSeqBuilder, genNextSettlementTxSeqBuilder}
 import hydrozoa.multisig.ledger.dapp.txseq.{FinalizationTxSeq, InitializationTxSeq, InitializationTxSeqTest, RolloutTxSeq, SettlementTxSeq}
 import hydrozoa.multisig.protocol.CardanoBackendProtocol.CardanoBackend.{CardanoBackendError, GetCardanoHeadState, GetTxInfo, Request, SubmitL1Effects}
-import hydrozoa.multisig.protocol.ConsensusProtocol.{ConfirmFinalBlock, ConfirmMajorBlock}
 import hydrozoa.multisig.protocol.types.Block
 import org.scalacheck.*
 import org.scalacheck.Gen.{choose, tailRecM}
@@ -590,7 +590,10 @@ object CardanoLiaisonTest extends Properties("Cardano Liaison"), TestKit {
                   slotConfig = testTxBuilderEnvironment.slotConfig
                 )
 
-                cardanoLiaison = new CardanoLiaison(config) {}
+                cardanoLiaison = new CardanoLiaison(
+                  config,
+                  Ref.unsafe[IO, CardanoLiaison.State](CardanoLiaison.State.initialState(config))
+                )
 
                 // Use protected handlers directly to present all effects
                 _ <- skeleton._2.traverse_(s =>

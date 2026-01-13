@@ -4,11 +4,11 @@ import cats.Monad
 import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.UtxoIdL1
 import hydrozoa.multisig.ledger.JointLedger
 import hydrozoa.multisig.ledger.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.dapp.tx.TxTiming.toEpochInstant
-import hydrozoa.multisig.protocol.ConsensusProtocol.*
-import hydrozoa.multisig.protocol.ConsensusProtocol.BlockWeaver.*
 import hydrozoa.multisig.protocol.types.Block.Number.first
 import hydrozoa.multisig.protocol.types.Block.blockEvents
 import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer}
@@ -23,7 +23,7 @@ import hydrozoa.multisig.protocol.types.{Block, LedgerEvent, LedgerEventId, Peer
   *
   * There are several diagrams in the Hydrozoa docs that illustrate the work of the weaver.
   */
-object BlockWeaver {
+object BlockWeaver:
 
     final case class Config(
         /** Normally this is always the initial block, the only block known to the head upfront. In
@@ -57,13 +57,8 @@ object BlockWeaver {
           * TODO: shall we use just Seq[LedgerEvent here] not to expose Mempool?
           */
         recoveredMempool: Mempool,
-        jointLedger: JointLedger.Ref,
-
-        // persistence: Persistence.Ref
+        jointLedger: JointLedger.Handle,
     )
-
-    def apply(config: Config): IO[BlockWeaver] =
-        IO(new BlockWeaver(config = config) {})
 
     // ===================================
     // Weaver internal state
@@ -87,7 +82,41 @@ object BlockWeaver {
         mempool: Mempool
     ) extends State
 
-    private def mkInitialState: Idle = Idle(Mempool.empty)
+    object State:
+        def mkInitialState: State = Idle(Mempool.empty)
+
+    // ===================================
+    // Request + ActorRef + apply
+    // ===================================
+
+    /** Block confirmation.
+      *
+      * @param blockNumber
+      */
+    final case class BlockConfirmed(
+        blockNumber: Block.Number,
+        finalizationRequested: Boolean = false
+    )
+
+    /** So-called "poll results" from the Cardano Liaison, i.e., a set of all utxos ids found at the
+      * multisig head address.
+      *
+      * @param utxos
+      *   all utxos found
+      */
+    final case class PollResults(utxos: Set[UtxoIdL1])
+
+    object PollResults:
+        val empty: PollResults = PollResults(Set.empty)
+
+    type Handle = ActorRef[IO, Request]
+    // TODO: use Block.Next not Block here
+    type Request = LedgerEvent | Block | BlockConfirmed | PollResults
+
+    def apply(config: Config): IO[BlockWeaver] = for {
+        stateRef <- Ref[IO].of(State.mkInitialState)
+        pollResultsRef <- Ref[IO].of(PollResults.empty)
+    } yield new BlockWeaver(config = config, stateRef = stateRef, pollResultsRef = pollResultsRef)
 
     // ===================================
     // Immutable mempool state
@@ -162,16 +191,15 @@ object BlockWeaver {
 
             def isEmpty: Boolean = mempool.events.isEmpty
     }
-}
+end BlockWeaver
 
-trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
-
-    import hydrozoa.multisig.consensus.BlockWeaver.*
-
-    private val stateRef: Ref[IO, State] = Ref.unsafe(mkInitialState)
-
+class BlockWeaver(
+    private val config: BlockWeaver.Config,
+    private val stateRef: Ref[IO, BlockWeaver.State],
     // Having this field separately rids of the need to weave it through state changes.
-    private val pollResultsRef: Ref[IO, PollResults] = Ref.unsafe(PollResults(Set.empty))
+    private val pollResultsRef: Ref[IO, BlockWeaver.PollResults]
+) extends Actor[IO, BlockWeaver.Request]:
+    import BlockWeaver.*
 
     override def preStart: IO[Unit] =
         if config.lastKnownBlock.toInt == 0 then
@@ -359,9 +387,7 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         import FeedResult.*
 
         for {
-
             // _ <- IO.println(s"tryFeedBlock: start with: $startWith")
-
             blockEvents <- IO.pure(block.blockEvents)
 
             eventsToFeed = startWith match {
@@ -457,4 +483,5 @@ trait BlockWeaver(config: BlockWeaver.Config) extends Actor[IO, Request] {
         def msg: String = this match {
             case UnexpectedBlockAnnouncement => "Weaver got an unexpected new block announcement"
         }
-}
+
+end BlockWeaver

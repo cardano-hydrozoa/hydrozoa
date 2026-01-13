@@ -8,7 +8,6 @@ import hydrozoa.multisig.consensus.EventSequencer.{Config, ConnectionsPending}
 import hydrozoa.multisig.protocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.*
 import hydrozoa.multisig.protocol.ConsensusProtocol.EventSequencer.*
-import hydrozoa.multisig.protocol.PersistenceProtocol.*
 import hydrozoa.multisig.protocol.types.{LedgerEvent, LedgerEventId, Peer}
 import scala.collection.immutable.Queue
 
@@ -16,10 +15,10 @@ import scala.collection.immutable.Queue
   * the consensus system.
   */
 object EventSequencer {
-    final case class Config(peerId: Peer.Number, persistence: Persistence.Ref)
+    final case class Config(peerId: Peer.Number)
 
     final case class ConnectionsPending(
-        blockWeaver: Deferred[IO, BlockWeaver.Ref],
+        blockWeaver: Deferred[IO, BlockWeaver.Handle],
         peerLiaisons: Deferred[IO, List[PeerLiaison.Ref]]
     )
 
@@ -68,7 +67,6 @@ trait EventSequencer(config: Config, connections: ConnectionsPending) extends Ac
                     newId = LedgerEventId(config.peerId, newNum)
                     // FIXME: fill in
                     newEvent: LedgerEvent = ???
-                    _ <- config.persistence ?: Persistence.PersistRequest(newEvent)
                     _ <- (subs.newLedgerEvent ! newEvent).parallel
                 } yield ()
             case x: ConfirmBlock =>
