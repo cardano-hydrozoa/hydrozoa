@@ -278,7 +278,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // First block
                   now <- IO.realTimeInstant
-                  firstBlock: Block = Block.Minor(
+                  firstBlock: Block.Next = Block.Minor(
                     Block.Header.Minor(
                       blockNum = lastKnownBlock.increment,
                       blockVersion = version,
@@ -293,7 +293,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
                   // Second block
                   newTime <- IO.realTimeInstant
-                  secondBlock: Block = firstBlock.nextBlock(
+                  secondBlock: Block.Next = firstBlock.nextBlock(
                     Block.Body.Minor(
                       events = secondBlockEvents.map(e => (e.eventId, true)).toList,
                       depositsRefunded = List.empty

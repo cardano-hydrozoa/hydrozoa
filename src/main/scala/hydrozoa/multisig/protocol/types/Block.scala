@@ -38,12 +38,12 @@ enum Block {
         newBody: Block.Body.Next,
         newTime: java.time.Instant,
         newCommitment: KzgCommitment
-    ): Block =
+    ): Block.Next =
         header.nextBlock(newBody, newTime, newCommitment)
 }
 
 object Block {
-    type Subscriber = ActorRef[IO, Block]
+    type Subscriber = ActorRef[IO, Block.Next]
 
     type Next = Block.Minor | Block.Major | Block.Final
 
@@ -117,7 +117,7 @@ object Block {
             body: Body.Next,
             newTime: java.time.Instant,
             newCommitment: KzgCommitment
-        ): Block =
+        ): Block.Next =
             body match {
                 case b: Body.Minor =>
                     Block.Minor(header = nextHeaderMinor(newTime, newCommitment), body = b)

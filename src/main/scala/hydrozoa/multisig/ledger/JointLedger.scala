@@ -543,7 +543,7 @@ final case class JointLedger(
     private def sendAugmentedBlock(augmentedBlock: AugmentedBlock.Next): IO[Unit] =
         for {
             // _ <- blockSigner ! augmentedBlock
-            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.block))
+            _ <- IO.parSequence(peerLiaisons.map(_ ! augmentedBlock.blockNext))
         } yield ()
 
     private def checkReferenceBlock(

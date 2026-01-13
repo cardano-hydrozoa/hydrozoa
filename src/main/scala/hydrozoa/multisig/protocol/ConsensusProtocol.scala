@@ -103,7 +103,8 @@ object ConsensusProtocol {
         blockNum: Block.Number,
         eventNum: LedgerEventId.Number,
         ack: Option[AckBlock],
-        block: Option[Block],
+        // Next since initial blocks are not supposed to be sent over the peer network
+        block: Option[Block.Next],
         events: List[LedgerEvent]
     ) {
         def nextGetMsgBatch = GetMsgBatch(

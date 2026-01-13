@@ -110,8 +110,7 @@ object BlockWeaver:
         val empty: PollResults = PollResults(Set.empty)
 
     type Handle = ActorRef[IO, Request]
-    // TODO: use Block.Next not Block here
-    type Request = LedgerEvent | Block | BlockConfirmed | PollResults
+    type Request = LedgerEvent | Block.Next | BlockConfirmed | PollResults
 
     def apply(config: Config): IO[BlockWeaver] = for {
         stateRef <- Ref[IO].of(State.mkInitialState)

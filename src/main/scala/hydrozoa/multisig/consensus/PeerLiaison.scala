@@ -123,7 +123,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
         private val nBlock = Ref.unsafe[IO, Block.Number](Block.Number(0))
         private val nEvent = Ref.unsafe[IO, LedgerEventId.Number](LedgerEventId.Number(0))
         private val qAck = Ref.unsafe[IO, Queue[AckBlock]](Queue())
-        private val qBlock = Ref.unsafe[IO, Queue[Block]](Queue())
+        private val qBlock = Ref.unsafe[IO, Queue[Block.Next]](Queue())
         private val qEvent = Ref.unsafe[IO, Queue[LedgerEvent]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[Batch.Id]](None)
 
@@ -149,7 +149,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                 //        _ <- this.nAck.update(_.increment)
                 //        _ <- this.qAck.update(_ :+ y)
                 //    } yield ()
-                case y: Block =>
+                case y: Block.Next =>
                     for {
                         _ <- this.nBlock.update(_.increment)
                         _ <- this.qBlock.update(_ :+ y)
@@ -202,7 +202,7 @@ trait PeerLiaison(config: Config, connections: ConnectionsPending) extends Actor
                     //      None,
                     //      List()
                     //    )
-                    case y: Block =>
+                    case y: Block.Next =>
                         for {
                             nBlockNew <- this.nBlock.updateAndGet(_.increment)
                         } yield NewMsgBatch(
